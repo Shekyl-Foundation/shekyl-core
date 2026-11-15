@@ -15,10 +15,6 @@ use super::events::{HsDescAction, HsDescEvent, HsDescFailure};
 use super::onion::ServiceId;
 use super::vanguards::RelayFingerprint;
 
-/// The `Ended` counters are `u32`. A round tor runs is a handful of HSDirs. A
-/// count that does not fit is reported as this, and the round still closes.
-const COUNTER_CEILING: u32 = u32::MAX;
-
 /// The descriptor upload rounds of one onion address, coalesced from its `HS_DESC`
 /// events (`TSR-Q5`).
 ///
@@ -62,22 +58,28 @@ const COUNTER_CEILING: u32 = u32::MAX;
 /// (`TOR_SUPERVISOR.md` §4.5). The check asks all of them, not only those that
 /// confirmed: an upload whose connection failed reports nothing, and its
 /// directory is one a client may still ask (SO-D12's run 4, 2026-11-14). An
-/// `UPLOADED` names no descriptor, so it is paired with the earliest open upload to
-/// that directory.
+/// `UPLOADED` names no descriptor, so it is paired with the earliest upload to
+/// that directory that has not ended. One record is that upload, from the
+/// `UPLOAD` to its end: the round does not keep a second list to pair against.
 pub struct UploadRounds {
     address: ServiceId,
-    /// The open round's uploads not yet ended, each with its `UPLOAD`'s id.
-    open: Vec<(RelayFingerprint, Option<String>)>,
-    uploaded: u32,
-    failed: u32,
-    /// Of `failed`, the uploads a directory refused (`REASON=UPLOAD_REJECTED`).
-    refused: u32,
+    /// The open round, in the order its uploads began. An upload stays here
+    /// until the round ends. Empty when no round is open.
+    open_round: Vec<OpenUpload>,
+    /// This round's first success has been reported.
     triggered: bool,
-    /// The open round's uploads that named a descriptor, each with its end
-    /// so far.
-    current: Vec<RoundUpload>,
-    /// The latest ended round's uploads, from a round with a success.
+    /// Descriptor-bearing uploads of the latest ended round that had a success.
     last: Vec<RoundUpload>,
+}
+
+/// One upload of the open round. The check's list is the projection that
+/// named a descriptor ([`UploadRounds::directories`]).
+struct OpenUpload {
+    hsdir: RelayFingerprint,
+    /// The descriptor the `UPLOAD` named. `None` keeps the round open and is
+    /// not a directory the check can ask.
+    descriptor_id: Option<String>,
+    ended: UploadEnd,
 }
 
 /// One upload of a round: the directory, the descriptor its `UPLOAD` named,
@@ -148,34 +150,78 @@ impl UploadRounds {
     pub fn new(address: ServiceId) -> Self {
         Self {
             address,
-            open: Vec::new(),
-            uploaded: 0,
-            failed: 0,
-            refused: 0,
+            open_round: Vec::new(),
             triggered: false,
-            current: Vec::new(),
             last: Vec::new(),
         }
     }
 
-    /// Every upload of the latest round that reached a directory, each with
-    /// its descriptor and its end: the open round's while it has a success,
-    /// else the last ended round's that had one. A round with no success yet
-    /// says nothing about where the descriptor is. Empty before any upload
-    /// succeeded.
+    /// Every upload of the latest round that named a descriptor, each with
+    /// its end: the open round's while it has a success, else the last ended
+    /// round's that had one. A round with no success yet says nothing about
+    /// where the descriptor is. Empty before any upload succeeded. An upload
+    /// whose `UPLOAD` named no descriptor is not here: the check cannot ask
+    /// a directory it does not know the descriptor of.
     #[must_use]
-    pub fn directories(&self) -> &[RoundUpload] {
-        if self.uploaded > 0 {
-            &self.current
+    pub fn directories(&self) -> Vec<RoundUpload> {
+        if self
+            .open_round
+            .iter()
+            .any(|upload| upload.ended.confirmed())
+        {
+            Self::project(&self.open_round)
         } else {
-            &self.last
+            self.last.clone()
         }
     }
 
-    /// Whether a round is open.
+    /// Whether a round is open: an upload has begun and has not ended.
     #[must_use]
     pub fn in_round(&self) -> bool {
-        !self.open.is_empty()
+        self.open_round
+            .iter()
+            .any(|upload| upload.ended == UploadEnd::Open)
+    }
+
+    /// The descriptor-bearing uploads, in the round's order.
+    fn project(round: &[OpenUpload]) -> Vec<RoundUpload> {
+        round
+            .iter()
+            .filter_map(|upload| {
+                upload
+                    .descriptor_id
+                    .as_ref()
+                    .map(|descriptor_id| RoundUpload {
+                        hsdir: upload.hsdir,
+                        descriptor_id: descriptor_id.clone(),
+                        ended: upload.ended,
+                    })
+            })
+            .collect()
+    }
+
+    /// How the open round ended, counted from its records. Uploads still
+    /// open are unfinished. Called before those are relabeled, so an `Open`
+    /// here is one that reported no end.
+    fn tally(&self) -> (u32, u32, u32, u32) {
+        let mut uploaded = 0u32;
+        let mut failed = 0u32;
+        let mut refused = 0u32;
+        let mut unfinished = 0u32;
+        for upload in &self.open_round {
+            match upload.ended {
+                UploadEnd::Uploaded => uploaded = uploaded.saturating_add(1),
+                UploadEnd::Refused => {
+                    failed = failed.saturating_add(1);
+                    refused = refused.saturating_add(1);
+                }
+                UploadEnd::Failed => failed = failed.saturating_add(1),
+                UploadEnd::Open | UploadEnd::Unfinished => {
+                    unfinished = unfinished.saturating_add(1);
+                }
+            }
+        }
+        (uploaded, failed, refused, unfinished)
     }
 
     /// Whether this line is an upload's, so a directory check does not also
@@ -214,10 +260,12 @@ impl UploadRounds {
         }
     }
 
-    /// An open upload to `hsdir`, of `descriptor` when the end names one.
+    /// An upload to `hsdir` that has not ended, of `descriptor` when the end names one.
     fn matches_open(&self, hsdir: RelayFingerprint, descriptor: Option<&str>) -> bool {
-        self.open.iter().any(|(open, id)| {
-            *open == hsdir && descriptor.is_none_or(|wanted| id.as_deref() == Some(wanted))
+        self.open_round.iter().any(|upload| {
+            upload.ended == UploadEnd::Open
+                && upload.hsdir == hsdir
+                && descriptor.is_none_or(|wanted| upload.descriptor_id.as_deref() == Some(wanted))
         })
     }
 
@@ -236,20 +284,22 @@ impl UploadRounds {
                 let mut marks = Vec::new();
                 // The open round's uploads have begun to end, so this one is the next
                 // round's: tor starts a round's uploads before any of them ends.
-                if self.in_round() && (self.uploaded > 0 || self.failed > 0) {
+                if self.in_round()
+                    && self
+                        .open_round
+                        .iter()
+                        .any(|upload| upload.ended != UploadEnd::Open)
+                {
                     marks.push(self.end());
                 }
                 if !self.in_round() {
                     marks.push(RoundMark::Started);
                 }
-                self.open.push((hsdir, event.descriptor_id.clone()));
-                if let Some(descriptor_id) = &event.descriptor_id {
-                    self.current.push(RoundUpload {
-                        hsdir,
-                        descriptor_id: descriptor_id.clone(),
-                        ended: UploadEnd::Open,
-                    });
-                }
+                self.open_round.push(OpenUpload {
+                    hsdir,
+                    descriptor_id: event.descriptor_id.clone(),
+                    ended: UploadEnd::Open,
+                });
                 marks
             }
             HsDescAction::Uploaded => self.close(hsdir, None, UploadEnd::Uploaded),
@@ -261,46 +311,29 @@ impl UploadRounds {
         }
     }
 
-    /// End the earliest open upload to `hsdir`, of `descriptor` when the end
-    /// names one.
+    /// End the earliest upload to `hsdir` that has not ended, of `descriptor`
+    /// when the end names one. The record that began that upload is the one
+    /// that ends: there is no second list to keep in step.
     fn close(
         &mut self,
         hsdir: RelayFingerprint,
         descriptor: Option<&str>,
         ended: UploadEnd,
     ) -> Vec<RoundMark> {
-        let Some(at) = self.open.iter().position(|(open, id)| {
-            *open == hsdir && descriptor.is_none_or(|descriptor| id.as_deref() == Some(descriptor))
+        let Some(upload) = self.open_round.iter_mut().find(|upload| {
+            upload.ended == UploadEnd::Open
+                && upload.hsdir == hsdir
+                && descriptor.is_none_or(|wanted| upload.descriptor_id.as_deref() == Some(wanted))
         }) else {
             return Vec::new();
         };
-        // `remove`, not `swap_remove`: the earliest open upload to a directory
-        // is the one an end pairs with. Its record is the earliest still open
-        // to that directory for that descriptor, in the same order.
-        let (_, descriptor_id) = self.open.remove(at);
-        if let Some(record) = descriptor_id.and_then(|id| {
-            self.current.iter_mut().find(|record| {
-                record.hsdir == hsdir
-                    && record.descriptor_id == id
-                    && record.ended == UploadEnd::Open
-            })
-        }) {
-            record.ended = ended;
-        }
+        upload.ended = ended;
         let mut marks = Vec::new();
-        if ended.confirmed() {
-            self.uploaded += 1;
-            if !self.triggered {
-                self.triggered = true;
-                marks.push(RoundMark::FirstUploaded);
-            }
-        } else {
-            self.failed += 1;
-            if ended == UploadEnd::Refused {
-                self.refused += 1;
-            }
+        if ended.confirmed() && !self.triggered {
+            self.triggered = true;
+            marks.push(RoundMark::FirstUploaded);
         }
-        if self.open.is_empty() {
+        if !self.in_round() {
             marks.push(self.end());
         }
         marks
@@ -309,37 +342,33 @@ impl UploadRounds {
     /// End the open round now. The driver does this when the sink dropped
     /// events, and when the round has been open too long: the ends still
     /// missing will not be waited on, and the next round must be able to
-    /// trigger. `None` when no round is open. An upload still in `open` is
-    /// counted unfinished, which is not a failed round.
+    /// trigger. `None` when no round is open. An upload that has not ended
+    /// is counted unfinished, which is not a failed round.
     pub fn resync(&mut self) -> Option<RoundMark> {
         self.in_round().then(|| self.end())
     }
 
-    /// Report the open round as ended and start counting the next from nothing.
-    /// Its uploads still open are kept as unfinished. A round with a success
+    /// Report the open round as ended and start the next from nothing. Its
+    /// uploads still open are kept as unfinished. A round with a success
     /// becomes the last round; one without leaves the last round standing.
     fn end(&mut self) -> RoundMark {
-        let mark = RoundMark::Ended {
-            uploaded: self.uploaded,
-            failed: self.failed,
-            refused: self.refused,
-            unfinished: u32::try_from(self.open.len()).unwrap_or(COUNTER_CEILING),
-        };
-        for record in &mut self.current {
-            if record.ended == UploadEnd::Open {
-                record.ended = UploadEnd::Unfinished;
+        let (uploaded, failed, refused, unfinished) = self.tally();
+        for upload in &mut self.open_round {
+            if upload.ended == UploadEnd::Open {
+                upload.ended = UploadEnd::Unfinished;
             }
         }
-        let current = std::mem::take(&mut self.current);
-        if self.uploaded > 0 {
-            self.last = current;
+        let round = std::mem::take(&mut self.open_round);
+        if uploaded > 0 {
+            self.last = Self::project(&round);
         }
-        self.open.clear();
-        self.uploaded = 0;
-        self.failed = 0;
-        self.refused = 0;
         self.triggered = false;
-        mark
+        RoundMark::Ended {
+            uploaded,
+            failed,
+            refused,
+            unfinished,
+        }
     }
 }
 
@@ -860,5 +889,34 @@ mod tests {
             rounds.directories(),
             [to(1, "cur", Done), to(2, "cur", Unfinished)]
         );
+    }
+
+    /// **An upload that names no descriptor is not a directory the check asks.**
+    /// It still holds the round open. An `UPLOADED` names no descriptor either,
+    /// so it pairs with the earliest upload to that directory that has not
+    /// ended, which is the unnamed one, and the named upload stays open.
+    /// Fails if `directories` includes the unnamed upload, or if the named
+    /// one is closed in its place.
+    #[test]
+    fn an_upload_that_names_no_descriptor_is_not_asked() {
+        use HsDescAction::{Upload, Uploaded};
+        use UploadEnd::{Open, Uploaded as Done};
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        rounds.observe(&round_event_for(Upload, 2, None));
+        rounds.observe(&round_event_for(Upload, 2, Some("cur")));
+        rounds.observe(&round_event_for(Upload, 1, Some("cur")));
+        rounds.observe(&round_event_for(Uploaded, 1, None));
+        assert_eq!(
+            rounds.directories(),
+            [to(2, "cur", Open), to(1, "cur", Done)]
+        );
+        assert!(rounds.in_round(), "the unnamed upload holds the round open");
+        rounds.observe(&round_event_for(Uploaded, 2, None));
+        assert_eq!(
+            rounds.directories(),
+            [to(2, "cur", Open), to(1, "cur", Done)],
+            "the end paired with the unnamed upload"
+        );
+        assert!(rounds.in_round());
     }
 }
