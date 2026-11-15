@@ -344,7 +344,9 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(
             Store::open(dir.path()),
-            Err(StoreError::File(super::super::files::FileRefused::Exposed(..)))
+            Err(StoreError::File(super::super::files::FileRefused::Exposed(
+                ..
+            )))
         ));
     }
 
