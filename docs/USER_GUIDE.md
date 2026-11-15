@@ -160,9 +160,10 @@ refused.
 A file that holds a SOCKS username or password is read only by root, by
 the daemon's account, and by the daemon's group while that account is the
 group's only member (a service install keeps the file `root:shekyl`
-`0640`). The check reads the accounts the system enumerates, so accounts
-from a directory service that does not list its accounts are not seen by
-it: keep the daemon's group a local group.
+`0640`). The check reads the accounts the system enumerates. A directory
+service that is stopped, or that does not list its accounts, is treated as
+listing none of them, so its accounts are not seen: keep the daemon's group
+a local group.
 
 <!-- shekyld-example: begin -->
 # shekyld configuration file. Every key is an option's name, spelled
