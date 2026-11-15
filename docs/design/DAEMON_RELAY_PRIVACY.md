@@ -196,7 +196,8 @@ this lane.
      envelope, and a stem or an own-edge leaves immediately. On an open
      link the unrestricted origin is a stem slot, so it is slot-aligned
      with that channel. No cover on Tor by ruling (**REOPENED
-     2026-11-15**, banner: Tor sessions take the carrier); on
+     2026-11-15**, banner: ruled that Tor sessions take the carrier,
+     not yet built); on
      cover-bearing links the own-edge is slot-aligned.
 
    UPDATE 2026-10-02. Role, epoch, fluff, and ingress do not read the
@@ -17300,8 +17301,8 @@ Each item is open. Its carrier is the only thing that closes it.
    the interval before a dummy. The run takes at least 2,000 real
    sends. The labels (time, channel, real or dummy) come from the
    carrier through the measurement-spans feature only; a default build
-   never logs them. Real and dummy windows produce the same Tor cell
-   count. **The run is void** unless the instrument can see: with
+   never logs them. The run also confirms that real and dummy windows
+   produce the same Tor cell count. **The run is void** unless the instrument can see: with
    cover off, under the same load, transaction-carrying windows
    against all others give an AUC of at least 0.80; own and relayed
    sends are reported separately there. Reported against the same
@@ -18087,7 +18088,7 @@ state); P (persistent onion) is the sensitivity row.
 | **PM-1** identity | A requester polling the node's cached disclosure sample tries to name the node's own address or onion. The paper's step: the node's own onion was the last entry of each timed-sync reply (the `outgoing_to_same_zone` insertion, `net_node.inl:2730`); under the handshake-address ruling the own address is one uniform member of the sample with no position, and nothing is disclosed below the floor | Level 1 on the `shekyl-peerlist` sample instrument; Level 2 after PR-3 with per-boot and persistent onions, shortly after restart (A) and in steady state (B). Decides PWD-E7 | **100 % precision, 100 % recall** | A: — · B: — · P: — | One uniform guess among the disclosure population: `1 / (|W| + 1)` per guess; a sample of 12 contains the own address with probability `12 / (|W| + 1)` |
 | **PM-2a** connection occupation (TC-I) | Adversarial occupation of the 12 hidden outbound sessions over time, plus time to fill, under the attacker of 99.2 at the §97 knobs; D-S1's intake cap and the resulting `p_h` per connector are read off the same run | Level 1 on the `shekyl-peerlist` model plus the relay's hidden-slot draw (`simulate_two_slot_occupancy`, `simulate_hidden_slot_churn_exposure` extended with gray intake under D-S1 and the uniform white draw); Level 2 after PR-3 against the live dialer. **§96 item 3 is tracked here.** A clearnet variant with a many-address adversary (one `/24`, and many prefixes) is the reopen check for the dialer brief's no-subnet-grouping ruling (Rick, 2026-10-11): occupation beyond the attacker's share of honest addresses reopens it | **A: 7–11 of 12** hidden outbound occupied after restarts · **B: 8–10 of 10** within about 20 minutes under periodic replacement | A: — · B: — · P: — | The attacker's uniform share of white times 12, and a fill time set by the dialer's honest refill rate, not by its flood |
 | **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | Level 1 on the merged relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). The partition is `graph/hidden_slot_tests.rs` (#1022) | **Proxy selection raised from 15.3 % to 35.7 %** with one occupied connection | **Closed by construction** (§96 item 1): no height input exists. The candidate partition is exactly the established outbound sessions with an assessed transit (`stem_candidates_are_established_outbound_sessions_with_an_assessed_transit`). Profile-independent: no knob moves it | The attacker's uniform share of the hidden outbound sessions. One occupied connection of 12 is 1/12. A falsified height does not move that share: the relay never reads one |
-| **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | Level 3: a documented procedure under TRC-1 (`TOR_COVER_POSTURE.md` §8), after RD, against operator relay volume, run at milestones. **A check, not §96 item 4's test** (Rick, 2026-11-15): item 4 was restated that day with its own test, and this row stays open on its own. Relay volume is not cover (**REOPENED 2026-11-15**, `TOR_COVER_POSTURE.md` banner), so the procedure runs against the cover carrier | **100 % precision, 93.8 % recall** for onion-service nodes; **100 % precision, 91.4 % recall** for Tor-client nodes | A: — · B: — · P: — | The guard's base rate: the target's share of the circuits it carries, with no recall from the signal |
+| **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | Level 3: a documented procedure under TRC-1 (`TOR_COVER_POSTURE.md` §8), after RD, against operator relay volume, run at milestones. **A check, not §96 item 4's test** (Rick, 2026-11-15): item 4 was restated that day with its own test, and this row stays open on its own. Relay volume is not cover (**REOPENED 2026-11-15**, `TOR_COVER_POSTURE.md` banner) | **100 % precision, 93.8 % recall** for onion-service nodes; **100 % precision, 91.4 % recall** for Tor-client nodes | A: — · B: — · P: — | The guard's base rate: the target's share of the circuits it carries, with no recall from the signal |
 
 ### 99.4 The harness — three levels (stretch goal, Rick, 2026-10-09)
 

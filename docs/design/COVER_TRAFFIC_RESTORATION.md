@@ -377,7 +377,8 @@ to this axis we do not have.
 **REOPENED 2026-11-15 (banner).** Volume cover does not replace this carrier
 on Tor: TRC-1 measured relay volume and found no cover. The 2026-09-12
 supersession below no longer holds, so this section's ruling holds again on
-every encrypted link, Tor included, and Tor takes the carrier's envelope.
+every encrypted link, Tor included. That Tor takes the carrier's envelope is
+ruled (2026-11-15), not yet built.
 
 Ruled 2026-08-23 rather than measured later, because after the build it becomes
 an argument about sunk work. **Tor-zone substitution is SUPERSEDED 2026-09-12**
