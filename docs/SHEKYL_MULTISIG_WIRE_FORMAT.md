@@ -3,7 +3,7 @@
 > **Status:** normative for the ceremony file (§1, §4), the spend intent
 > (§2), the message types and their bodies (§3).
 >
-> **Spec version:** 2.1
+> **Spec version:** 2.2
 >
 > **Parent spec:** `PQC_MULTISIG.md`
 >
@@ -130,7 +130,10 @@ signing input from it. Its canonical serialization is the input to
 
 | Name | Value | Description |
 |------|-------|-------------|
-| `SPEND_INTENT_VERSION` | `0x02` | Current version |
+| `SPEND_INTENT_VERSION` | `0x03` | Current version |
+| `KIND_SINGLE` | `0x01` | A recipient that is a single-signer address (§2.3) |
+| `KIND_GROUP` | `0x02` | A recipient that is a multisig group (§2.3) |
+| `LABEL_PLAINTEXT_LEN` | `8` | The label block a single-signer recipient's output encrypts |
 | `MIN_MULTISIG_THRESHOLD` | `2` | The smallest `m` (R-11) |
 | `MAX_RECIPIENTS` | `16` | Maximum recipients per intent: the consensus output cap (`MAX_OUTPUTS`). Change is a recipient |
 | `MAX_INPUTS` | `8` | Maximum inputs per intent: the consensus cap (`MAX_FCMP_INPUTS`, CEN-I4) |
@@ -142,7 +145,7 @@ Fields are serialized in this order with no padding. Variable-length
 fields use a `u32 LE` length prefix.
 
 ```
-1        version                 0x02
+1        version                 0x03
 32       intent_id               random 32 bytes
 32       address_fingerprint     the group's identity
 1        proposer_index          0-indexed
@@ -162,30 +165,57 @@ m        signers                 member indices, strictly ascending
 ```
 
 A verifier with an `m`-of-`n` group refuses, each by name: a version other
-than `0x02`; `m < 2` or `m > n`; `proposer_index ≥ n`; a signer count
+than `0x03`; `m < 2` or `m > n`; `proposer_index ≥ n`; a signer count
 other than `m`; signers not strictly ascending; a signer `≥ n`; a
 proposer who is not a signer; a responder who is not a signer; a
 responder who is the proposer; an input count outside `1..=MAX_INPUTS`;
-more than `MAX_RECIPIENTS` recipients; an address longer than
-`MAX_ADDRESS_LEN`; recipients out of order or repeated.
+more than `MAX_RECIPIENTS` recipients; a recipient kind other than
+`KIND_SINGLE` or `KIND_GROUP`; an address longer than `MAX_ADDRESS_LEN`;
+recipients out of order or repeated; a recipient its group cannot pay
+(§2.3, by its index).
 
 ### 2.3 Recipient Encoding
+
+A recipient names its payee by kind, so every member builds its output
+from the intent alone (R-7):
+
+| Kind | Byte | `address` |
+|------|------|-----------|
+| single-signer address | `KIND_SINGLE` | the address's bech32m string, as its ASCII bytes |
+| group | `KIND_GROUP` | the group's address payload, as its canonical bytes (`PQC_MULTISIG.md` §5) |
 
 Each recipient is encoded as:
 
 ```
+1        kind           KIND_SINGLE or KIND_GROUP
 4        address_len    u32 LE (MUST be ≤ MAX_ADDRESS_LEN)
-A        address        Raw address bytes (A = address_len)
+A        address        A = address_len, per the kind
+8        label          KIND_SINGLE only: the block the output's label
+                        encrypts, a payment request's echo or the sentinel
 8        amount         u64 LE, atomic units
 ```
 
-**Sort order:** Recipients MUST be sorted by `(address, amount)` where
-`address` is compared as raw bytes via unsigned byte-wise lexicographic
-comparison (`memcmp` semantics: compare byte-by-byte from index 0;
-shorter address sorts before longer if they share a prefix). Ties are
-broken by `amount` as unsigned 64-bit integer, ascending.
+A group recipient carries no label: a group output always encrypts the
+sentinel. A spend's change is a recipient: the paying group's own
+address.
 
-Duplicate `(address, amount)` tuples are forbidden.
+**Output order:** the recipients' order is the outputs' order. Recipient
+`i` is the transaction's output `i`.
+
+**Sort order:** Recipients MUST be sorted by `(kind, address, label,
+amount)`: `kind` ascending; `address` as raw bytes by unsigned byte-wise
+lexicographic comparison (`memcmp` semantics: compare byte-by-byte from
+index 0; a shorter address sorts before a longer one sharing its
+prefix); `label` likewise, for two single-signer recipients; then
+`amount` as an unsigned 64-bit integer, ascending.
+
+Duplicate recipients are forbidden.
+
+**Resolution:** a member resolves every recipient on its group's network
+before it signs. A single-signer address must decode as a payable
+address on that network: the full form, not the classical display form.
+A group's payload must parse and name that network. A recipient that
+does not is refused by its index.
 
 ### 2.4 Intent Hash
 
@@ -373,7 +403,7 @@ An implementation claiming conformance MUST:
 
 1. Produce byte-identical canonical serialization (§2.2) for the same
    `SpendIntent`, and so the same `intent_hash`
-   (`docs/test_vectors/MULTISIG_INTENT_V2.json`, checked by
+   (`docs/test_vectors/MULTISIG_INTENT_V3.json`, checked by
    `scripts/kat/multisig_intent_oracle.py`).
 2. Open files produced by any other conforming implementation given the
    same transport secret, and derive the same group key (§4.1; the key
@@ -399,3 +429,4 @@ An implementation claiming conformance MUST:
 | 1.2 | 2026-11-12 | The E′ seal: XChaCha20-Poly1305 under an HKDF-SHA-512 key from the group transport secret, a random 24-byte nonce, a clear 66-byte header as associated data |
 | 2 | 2026-11-13 | R-6, R-9, R-10, R-12, R-13 (slice 3 PR-B): the header moves inside the ciphertext and a file shows only its version; one key per group and trial decryption on import; a sender signature under a per-member envelope key; intent version 2 with the signer set and responder, without the proposer signature or wall-clock expiry; the persisted message counter and the intent's `tx_counter` deleted (replay is the reference block's age, the per-intent held nonce and consensus key images); message types `0x0C`–`0x11`; files are the only transport |
 | 2.1 | 2026-11-14 | Slice 3 PR-C: each live type's body (§3.1); `0x09` and `0x0B` REJECTED. The file format byte is unchanged |
+| 2.2 | 2026-11-15 | Slice 4a-1: intent version 3, each recipient named by kind, a single-signer address with its output's label block or a group's payload (§2.3); the recipients' order is the outputs' order. The file format byte is unchanged |

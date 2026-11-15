@@ -3,7 +3,9 @@
 
 //! Adversarial test matrix: tests for attack vectors against V3.1 multisig.
 
-use crate::intent::{IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION};
+use crate::intent::{
+    IntentPayee, IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION,
+};
 use shekyl_units::AtomicUnits;
 
 #[test]
@@ -19,7 +21,7 @@ fn replay_detection_via_kem_seed() {
         reference_block_height: 900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
-            address: vec![1],
+            payee: IntentPayee::Group { address: vec![1] },
             amount: AtomicUnits::from_raw(100),
         }],
         fee: AtomicUnits::from_raw(10),
@@ -51,7 +53,7 @@ fn structural_validation_rejects_all_bad_inputs() {
         reference_block_height: 900,
         reference_block_hash: [0; 32],
         recipients: vec![IntentRecipient {
-            address: vec![1],
+            payee: IntentPayee::Group { address: vec![1] },
             amount: AtomicUnits::from_raw(100),
         }],
         fee: AtomicUnits::from_raw(10),

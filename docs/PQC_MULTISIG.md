@@ -762,7 +762,7 @@ open and one leaf commitment.
 
 ```
 SpendIntent {
-    version:                  u8 (= 2)
+    version:                  u8 (= 3)
     intent_id:                [u8; 32]   // random per intent
 
     // Group binding — the address fingerprint (§5.3)
@@ -780,8 +780,8 @@ SpendIntent {
 
     // Content
     recipients: [
-        { address: bytes, amount: u64 }
-    ]   // sorted
+        { kind: u8, address: bytes, label: [u8; 8] (single-signer only), amount: u64 }
+    ]   // sorted; recipient i is output i
     fee:                      u64
     input_global_indices:     [u64]
 
@@ -800,7 +800,7 @@ Its `sender_index` must equal `proposer_index`.
 
 ### 9.2 Invariants (verified before any signer signs; honest-signer invariant I1)
 
-1. `version == 2`
+1. `version == 3`
 2. `address_fingerprint` matches the verifier's group (§5.3)
 3. `2 ≤ m ≤ n` (R-11); `proposer_index < n_total`
 4. `signers` holds exactly `m` indices, strictly ascending, each `< n`,
@@ -821,8 +821,10 @@ Its `sender_index` must equal `proposer_index`.
    `reference_block_height` per the verifier's local view
 9. All `input_global_indices` are owned by the group, unspent, and in the
    tree at the reference height; `1 ≤ count ≤ MAX_INPUTS`
-10. Recipients are sorted; no duplicate (address, amount) tuples; at most
-    `MAX_RECIPIENTS`
+10. Recipients are sorted; none is repeated; at most `MAX_RECIPIENTS`;
+    each payable on the group's network (a single-signer address decodes
+    there in its full form, a group's payload names it;
+    `SHEKYL_MULTISIG_WIRE_FORMAT.md` §2.3)
 11. `sum(recipient.amount) + fee == sum(input.amount)` per local view
 12. `kem_randomness_seed` is unique within the group's history of
     `seen_intents` (replay/linkability prevention)
@@ -1908,7 +1910,7 @@ least two independent implementations before being locked.
      recipient list, fixed parameters
    - Output: canonical serialized SpendIntent, intent_hash,
      chain_state_fingerprint. The intent half is pinned:
-     `docs/test_vectors/MULTISIG_INTENT_V2.json`, checked by
+     `docs/test_vectors/MULTISIG_INTENT_V3.json`, checked by
      `scripts/kat/multisig_intent_oracle.py`
 
 4. **Full-construction vector**

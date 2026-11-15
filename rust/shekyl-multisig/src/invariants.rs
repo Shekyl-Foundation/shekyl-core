@@ -19,9 +19,10 @@
 
 use std::collections::HashSet;
 
+use shekyl_address::Network;
 use shekyl_units::AtomicUnits;
 
-use crate::intent::{SpendIntent, SpendIntentError};
+use crate::intent::{ResolvedRecipient, SpendIntent, SpendIntentError};
 
 /// What a member's own wallet knows that an intent is checked against.
 pub struct LedgerView<'a> {
@@ -31,6 +32,8 @@ pub struct LedgerView<'a> {
     pub n_total: u8,
     /// The group's threshold.
     pub m_required: u8,
+    /// The group's network: every recipient must be payable on it.
+    pub network: Network,
     /// This member's chain tip height.
     pub chain_tip_height: u64,
     /// The block hash at the intent's reference height, in this member's
@@ -57,6 +60,9 @@ pub enum IntentRefusal {
     /// I1: the reference block (§9.2 items 7–8).
     #[error("the intent's reference block does not hold here: {0}")]
     ReferenceBlock(SpendIntentError),
+    /// I1: a recipient cannot be paid on the group's network (§9.2 item 10).
+    #[error("the intent pays a recipient this group cannot: {0}")]
+    Recipient(SpendIntentError),
     /// I1: the amounts do not balance (§9.2 item 11).
     #[error("the intent does not balance: {0}")]
     Balance(SpendIntentError),
@@ -68,10 +74,12 @@ pub enum IntentRefusal {
     ChainState,
 }
 
-/// An intent that passed I1 and I2 against one member's ledger.
+/// An intent that passed I1 and I2 against one member's ledger, its
+/// recipients resolved on the group's network.
 #[derive(Debug, Clone)]
 pub struct ValidatedIntent {
     intent: SpendIntent,
+    recipients: Vec<ResolvedRecipient>,
     hash: [u8; 32],
 }
 
@@ -88,6 +96,9 @@ impl ValidatedIntent {
         intent
             .validate_structural(ledger.n_total, ledger.m_required)
             .map_err(IntentRefusal::Structure)?;
+        let recipients = intent
+            .resolve_recipients(ledger.network)
+            .map_err(IntentRefusal::Recipient)?;
         intent
             .validate_temporal(ledger.chain_tip_height, ledger.local_ref_block_hash)
             .map_err(IntentRefusal::ReferenceBlock)?;
@@ -101,13 +112,23 @@ impl ValidatedIntent {
             return Err(IntentRefusal::ChainState);
         }
         let hash = intent.intent_hash().map_err(IntentRefusal::Structure)?;
-        Ok(Self { intent, hash })
+        Ok(Self {
+            intent,
+            recipients,
+            hash,
+        })
     }
 
     /// The intent.
     #[must_use]
     pub fn intent(&self) -> &SpendIntent {
         &self.intent
+    }
+
+    /// Its recipients, resolved, in output order.
+    #[must_use]
+    pub fn recipients(&self) -> &[ResolvedRecipient] {
+        &self.recipients
     }
 
     /// Its hash, which every file of its ceremony carries.
@@ -120,7 +141,10 @@ impl ValidatedIntent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intent::{ChainStateFingerprint, IntentRecipient, SPEND_INTENT_VERSION};
+    use crate::intent::{
+        ChainStateFingerprint, IntentPayee, IntentRecipient, SPEND_INTENT_VERSION,
+    };
+    use crate::tests::group_payload;
 
     fn chain_fingerprint() -> [u8; 32] {
         ChainStateFingerprint {
@@ -144,7 +168,9 @@ mod tests {
             reference_block_height: 900,
             reference_block_hash: [0xCC; 32],
             recipients: vec![IntentRecipient {
-                address: vec![1, 2, 3],
+                payee: IntentPayee::Group {
+                    address: group_payload(Network::Testnet, 0x60).to_canonical_bytes(),
+                },
                 amount: AtomicUnits::from_raw(300),
             }],
             fee: AtomicUnits::from_raw(10),
@@ -164,6 +190,7 @@ mod tests {
                 our_address_fingerprint: &[0xBB; 32],
                 n_total: 3,
                 m_required: 2,
+                network: Network::Testnet,
                 chain_tip_height: 950,
                 local_ref_block_hash: &[0xCC; 32],
                 local_chain_state_fingerprint: &chain_fingerprint(),
@@ -177,6 +204,13 @@ mod tests {
     fn a_valid_intent_validates_and_carries_its_hash() {
         let validated = check(intent(), &HashSet::new()).unwrap();
         assert_eq!(*validated.hash(), intent().intent_hash().unwrap());
+        assert!(matches!(
+            validated.recipients(),
+            [ResolvedRecipient {
+                payee: crate::intent::ResolvedPayee::Group(_),
+                ..
+            }]
+        ));
     }
 
     /// Each refusal by name.
@@ -195,6 +229,17 @@ mod tests {
         assert!(matches!(
             refused(&|i| i.signers = vec![0]),
             Some(IntentRefusal::Structure(_))
+        ));
+        assert!(matches!(
+            refused(&|i| {
+                i.recipients[0].payee = IntentPayee::Group {
+                    address: group_payload(Network::Mainnet, 0x60).to_canonical_bytes(),
+                };
+            }),
+            Some(IntentRefusal::Recipient(SpendIntentError::Recipient {
+                index: 0,
+                ..
+            }))
         ));
         assert!(matches!(
             refused(&|i| i.reference_block_hash = [0xCD; 32]),

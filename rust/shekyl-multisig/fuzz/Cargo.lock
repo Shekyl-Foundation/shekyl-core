@@ -1429,8 +1429,8 @@ name = "shekyl-multisig-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
+ "shekyl-address",
  "shekyl-multisig",
- "shekyl-units",
 ]
 
 [[package]]

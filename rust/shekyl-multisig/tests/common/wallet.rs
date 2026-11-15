@@ -8,16 +8,19 @@
 //! checks a node runs on the result, from the wire.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use rand_core::{OsRng, RngCore};
 use zeroize::Zeroizing;
 
-use super::{found_group, paths, random_scalar, GroupOutputs, AMOUNTS, NET};
+use super::{paths, random_scalar, GroupOutputs, AMOUNTS, NET};
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::Scalar as DalekScalar;
 use shekyl_address::multisig_address::{address_fingerprint, MultisigAddressPayload};
-use shekyl_crypto_pq::kem::X25519_KEM_CT_LEN;
+use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
+use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation, X25519_KEM_CT_LEN};
+use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
-use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
 use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
@@ -25,17 +28,17 @@ use shekyl_fcmp::PqcKeyScalar;
 use shekyl_multisig::ceremony::context::ContextError;
 use shekyl_multisig::ceremony::nonce::{InputInUse, StoreError};
 use shekyl_multisig::intent::{
-    ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
+    ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
     import, HeldNonce, HeldNonceStore, Incoming, InputContext, LedgerView, LiveCeremonies,
     MemberFile, NonceCounterError, NonceCounterSink, ProposerInputs, SigningContext, UnsignedSpend,
     ValidatedIntent,
 };
+use shekyl_tx_builder::outputs::{build_output, BuiltOutput, Payee, RecipientKeys, SpendOutputs};
 use shekyl_types::{BlockHash, KeyImage};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::tx_extra::{self, KemCiphertext, MultisigEntry, TxExtraField};
-use shekyl_wire::{Ct, CtBase, Input, Output, Transaction};
+use shekyl_wire::{Ct, Input, Transaction};
 
 // ---------------------------------------------------------------------------
 // The capabilities a wallet injects, in memory
@@ -130,15 +133,34 @@ pub const REFERENCE_HASH: [u8; 32] = [0x77; 32];
 pub const FEE: u64 = 100;
 pub const GLOBAL_INDICES: [u64; 2] = [10, 11];
 
-/// The spend's outputs, in output order: a payment to another group, and
-/// the change back to the paying group. With the fee they balance the
-/// group's two inputs ([`AMOUNTS`]).
+/// The spend's outputs, in output order: a payment to a single-signer
+/// address, and the change back to the paying group, the intent's sort
+/// order (a single-signer recipient sorts first). With the fee they
+/// balance the group's two inputs ([`AMOUNTS`]).
 pub const PAYMENT: u64 = 800;
 pub const CHANGE: u64 = 300;
 pub const OUTPUT_AMOUNTS: [u64; 2] = [PAYMENT, CHANGE];
-/// The intent's recipients for them, in the intent's sort order.
-pub const PAYEE_ADDRESS: [u8; 8] = [0x5A; 8];
-pub const CHANGE_ADDRESS: [u8; 8] = [0x6B; 8];
+
+/// The single-signer address the spend pays: one per test binary, on the
+/// group's network.
+pub fn payee() -> &'static ShekylAddress {
+    static PAYEE: OnceLock<ShekylAddress> = OnceLock::new();
+    PAYEE.get_or_init(|| {
+        let point = || {
+            (&random_scalar() * ED25519_BASEPOINT_TABLE)
+                .compress()
+                .to_bytes()
+        };
+        let (kem, _) = HybridX25519MlKem.keypair_generate().unwrap();
+        ShekylAddress::new(
+            Network::Testnet,
+            point(),
+            point(),
+            [0; MSG_SIGN_PK_LEN],
+            kem.ml_kem,
+        )
+    })
+}
 
 /// What slice 4a derives from the intent and every member derives alike:
 /// the outputs and their fields, each input's pseudo-out blind and
@@ -150,21 +172,29 @@ pub struct Derived {
     pub out_masks: Vec<[u8; 32]>,
 }
 
-/// A spend of `group`'s two outputs: its outputs built by the production
-/// constructor and carried in `tx_extra` as the chain carries them, its
-/// pseudo-out blinds balancing the outputs' masks.
+/// A spend of `group`'s two outputs: its outputs built by the builder
+/// every spend uses and carried as the chain carries them, its pseudo-out
+/// blinds balancing the outputs' masks.
 pub fn derive(group: &MultisigAddressPayload) -> Derived {
-    let (payee, _) = found_group(2, 2);
-    let tx_key = random_scalar().to_bytes();
-    let outputs: Vec<MultisigOutputData> = [&payee, group]
+    let tx_key = random_scalar();
+    let tx_pubkey = (&tx_key * ED25519_BASEPOINT_TABLE).compress().to_bytes();
+    let payee_keys = RecipientKeys::of_address(payee()).unwrap();
+    let payees = [
+        payee_keys.payee(&SENTINEL_PLAINTEXT),
+        Payee::Group {
+            address: group,
+            network: &NET,
+        },
+    ];
+    let built: Vec<BuiltOutput> = payees
         .into_iter()
         .zip(OUTPUT_AMOUNTS)
         .zip(0u64..)
-        .map(|((address, amount), index)| {
-            construct_multisig_output(&tx_key, address, amount, index, &NET).unwrap()
+        .map(|((payee, amount), index)| {
+            build_output(&tx_key.to_bytes(), payee, amount, index).unwrap()
         })
         .collect();
-    let out_masks: Vec<[u8; 32]> = outputs.iter().map(|out| out.z).collect();
+    let out_masks: Vec<[u8; 32]> = built.iter().map(|out| out.info.commitment_mask).collect();
     let mask_sum: DalekScalar = out_masks
         .iter()
         .map(|z| DalekScalar::from_canonical_bytes(*z).unwrap())
@@ -175,27 +205,15 @@ pub fn derive(group: &MultisigAddressPayload) -> Derived {
     for seed in &mut seeds {
         OsRng.fill_bytes(seed);
     }
+    let SpendOutputs {
+        outputs,
+        extra,
+        base,
+    } = SpendOutputs::of(&tx_pubkey, &built).unwrap();
     let unsigned = UnsignedSpend {
-        outputs: outputs
-            .iter()
-            .map(|out| Output {
-                amount: 0,
-                key: out.output_key,
-                view_tag: out.view_tag_prefilter,
-            })
-            .collect(),
-        extra: extra_of(&outputs),
-        base: CtBase {
-            enc_amounts: outputs
-                .iter()
-                .map(|o| o.enc_amount_wire().to_bytes())
-                .collect(),
-            enc_labels: outputs
-                .iter()
-                .map(|o| o.enc_label_wire().to_bytes())
-                .collect(),
-            commitments: outputs.iter().map(|o| o.commitment).collect(),
-        },
+        outputs,
+        extra,
+        base,
     };
     Derived {
         unsigned,
@@ -203,42 +221,6 @@ pub fn derive(group: &MultisigAddressPayload) -> Derived {
         seeds,
         out_masks,
     }
-}
-
-/// `tx_extra` for `outputs`, each paying a group: the `0x06` ciphertexts,
-/// the `0x07` leaf entries and the `0x0D` member entries.
-fn extra_of(outputs: &[MultisigOutputData]) -> Vec<u8> {
-    let kem = outputs
-        .iter()
-        .flat_map(|o| [o.kem_ciphertext_x25519.as_slice(), &o.kem_ciphertext_ml_kem])
-        .flatten()
-        .copied()
-        .collect();
-    let leaf = outputs
-        .iter()
-        .flat_map(|o| o.pqc_leaf.entry_bytes())
-        .collect();
-    let entries = outputs
-        .iter()
-        .zip(0u8..)
-        .map(|(o, out_idx)| {
-            MultisigEntry::new(
-                out_idx,
-                o.member_kem_ciphertexts
-                    .iter()
-                    .map(|ct| KemCiphertext::from_bytes(ct.as_slice().try_into().unwrap()))
-                    .collect(),
-                o.enc_key_hashes.clone(),
-            )
-            .unwrap()
-        })
-        .collect();
-    tx_extra::serialize(&[
-        TxExtraField::PqcKemCiphertext(kem),
-        TxExtraField::PqcLeafEntries(leaf),
-        TxExtraField::PqcMultisig(entries),
-    ])
-    .unwrap()
 }
 
 pub fn chain_fingerprint() -> [u8; 32] {
@@ -273,11 +255,16 @@ pub fn intent(
         reference_block_hash: REFERENCE_HASH,
         recipients: vec![
             IntentRecipient {
-                address: PAYEE_ADDRESS.to_vec(),
+                payee: IntentPayee::Single {
+                    address: payee().encode().unwrap(),
+                    label_plaintext: SENTINEL_PLAINTEXT,
+                },
                 amount: AtomicUnits::from_raw(PAYMENT),
             },
             IntentRecipient {
-                address: CHANGE_ADDRESS.to_vec(),
+                payee: IntentPayee::Group {
+                    address: address.to_canonical_bytes(),
+                },
                 amount: AtomicUnits::from_raw(CHANGE),
             },
         ],
@@ -297,6 +284,7 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
             our_address_fingerprint: &address_fingerprint(address),
             n_total: address.n_total(),
             m_required: address.m_required(),
+            network: address.network(),
             chain_tip_height: TIP,
             local_ref_block_hash: &REFERENCE_HASH,
             local_chain_state_fingerprint: &chain_fingerprint(),

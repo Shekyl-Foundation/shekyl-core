@@ -6,7 +6,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_intent_hash(c: &mut Criterion) {
-    use shekyl_multisig::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
+    use shekyl_multisig::intent::{
+        IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
+    };
 
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
@@ -19,7 +21,9 @@ fn bench_intent_hash(c: &mut Criterion) {
         reference_block_height: 999900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
-            address: vec![0x01; 4],
+            payee: IntentPayee::Group {
+                address: vec![0x01; 4],
+            },
             amount: shekyl_units::AtomicUnits::from_raw(1_000_000_000),
         }],
         fee: shekyl_units::AtomicUnits::from_raw(1_000_000),
@@ -34,7 +38,9 @@ fn bench_intent_hash(c: &mut Criterion) {
 }
 
 fn bench_intent_serialization(c: &mut Criterion) {
-    use shekyl_multisig::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
+    use shekyl_multisig::intent::{
+        IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
+    };
 
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
@@ -47,7 +53,9 @@ fn bench_intent_serialization(c: &mut Criterion) {
         reference_block_height: 999900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
-            address: vec![0x01; 4],
+            payee: IntentPayee::Group {
+                address: vec![0x01; 4],
+            },
             amount: shekyl_units::AtomicUnits::from_raw(1_000_000_000),
         }],
         fee: shekyl_units::AtomicUnits::from_raw(1_000_000),
