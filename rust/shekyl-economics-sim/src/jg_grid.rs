@@ -576,13 +576,37 @@ pub fn run(
                     if rows.is_empty() {
                         continue;
                     }
+                    // A figure every seed has, as its spread; one some seed
+                    // lacks, seed by seed ("-" where it is absent); `None`
+                    // when no seed has it.
                     let pick = |f: &dyn Fn(&HonestRow) -> Option<f64>, d: usize| {
-                        let values: Vec<f64> = rows.iter().filter_map(|r| f(r)).collect();
-                        if values.len() < rows.len() {
-                            "none".to_string()
+                        let values: Vec<Option<f64>> = rows.iter().map(|r| f(r)).collect();
+                        let present: Vec<f64> = values.iter().flatten().copied().collect();
+                        if present.is_empty() {
+                            None
+                        } else if present.len() == values.len() {
+                            Some(show(&present, d))
                         } else {
-                            show(&values, d)
+                            Some(
+                                values
+                                    .iter()
+                                    .map(|v| v.map_or("-".into(), |v| format!("{v:.d$}")))
+                                    .collect::<Vec<_>>()
+                                    .join("/"),
+                            )
                         }
+                    };
+                    let fee = match (
+                        pick(&|r| r.year_one_standard_fee_skl, 4),
+                        pick(&|r| r.over_ceiling, 2),
+                    ) {
+                        (Some(f), Some(c)) => format!("{f} ({c}x)"),
+                        _ => "none carried".into(),
+                    };
+                    let settles = pick(&|r| r.step_settles_blocks.map(|b| b as f64), 0)
+                        .map_or("no move".into(), |b| format!("{b} blocks"));
+                    let always = |f: &dyn Fn(&HonestRow) -> f64, d: usize| {
+                        show(&rows.iter().map(|r| f(r)).collect::<Vec<_>>(), d)
                     };
                     let years: Vec<String> = rows
                         .iter()
@@ -593,20 +617,17 @@ pub fn run(
                         .collect();
                     write!(
                         out,
-                        "  {:<12} {:<8} {:<12} {:>9} B w_ref {:>5}: rests {} ; fee {} ({}x) ; fill a day {} ; design load {} ; step M_r {}->{} in {}",
+                        "  {:<12} {:<8} {:<12} {:>9} B w_ref {:>5}: rests {} ; fee {fee} ; fill a day {} ; design load {} ; step M_r {}->{} in {settles}",
                         signal.name(),
                         kind.name(),
                         zone.label,
                         zone.bytes,
                         w,
-                        pick(&|r| Some(r.resting_ratio), 3),
-                        pick(&|r| r.year_one_standard_fee_skl, 4),
-                        pick(&|r| r.over_ceiling, 2),
-                        pick(&|r| Some(r.fill_a_day_skl), 1),
+                        always(&|r| r.resting_ratio, 3),
+                        always(&|r| r.fill_a_day_skl, 1),
                         years.join("/"),
-                        pick(&|r| Some(r.step_m_r.0), 3),
-                        pick(&|r| Some(r.step_m_r.1), 3),
-                        pick(&|r| r.step_settles_blocks.map(|b| b as f64), 0),
+                        always(&|r| r.step_m_r.0, 3),
+                        always(&|r| r.step_m_r.1, 3),
                     )?;
                     if kind == Kind::Variable {
                         for row in &rows {
@@ -762,12 +783,22 @@ pub fn run(
                             let pick = |f: &dyn Fn(&CampaignRow) -> f64, d: usize| {
                                 show(&rows.iter().map(|r| f(r)).collect::<Vec<_>>(), d)
                             };
+                            // Every seed's, as its spread; seed by seed where
+                            // some seed listed no bodies ("-").
                             let even: Vec<f64> =
                                 rows.iter().filter_map(|r| r.break_even_burn_pct).collect();
-                            let even = if even.len() < rows.len() {
+                            let even = if even.len() == rows.len() {
+                                show(&even, 0)
+                            } else if even.is_empty() {
                                 "-".to_string()
                             } else {
-                                show(&even, 0)
+                                rows.iter()
+                                    .map(|r| {
+                                        r.break_even_burn_pct
+                                            .map_or("-".into(), |b| format!("{b:.0}"))
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("/")
                             };
                             writeln!(
                                 out,
