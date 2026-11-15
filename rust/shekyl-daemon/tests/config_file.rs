@@ -119,9 +119,8 @@ fn load_naming(
 fn refused(
     result: Result<shekyl_daemon_config::Loaded, Vec<shekyl_options::Diagnostic>>,
 ) -> shekyl_options::Diagnostic {
-    let mut ds = match result {
-        Ok(_) => panic!("the load was accepted"),
-        Err(ds) => ds,
+    let Err(mut ds) = result else {
+        panic!("the load was accepted")
     };
     assert_eq!(ds.len(), 1, "{ds:?}");
     ds.remove(0)
