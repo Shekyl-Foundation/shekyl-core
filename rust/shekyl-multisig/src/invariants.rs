@@ -17,6 +17,7 @@
 //! signs is one it assembled itself from its context and those verified
 //! proofs (`crate::ceremony`).
 
+use shekyl_crypto_pq::multisig_intent::IntentSeedFingerprint;
 use std::collections::HashSet;
 
 use shekyl_address::Network;
@@ -44,8 +45,9 @@ pub struct LedgerView<'a> {
     pub local_chain_state_fingerprint: &'a [u8; 32],
     /// The amounts of the intent's inputs, in this member's ledger.
     pub input_amounts: &'a [AtomicUnits],
-    /// Every `kem_randomness_seed` this member has seen in an intent.
-    pub seen_kem_seeds: &'a HashSet<[u8; 32]>,
+    /// The fingerprint of every `kem_randomness_seed` this member has seen
+    /// in an intent: never the seeds (`PQC_MULTISIG.md` §9.5).
+    pub seen_seeds: &'a HashSet<IntentSeedFingerprint>,
 }
 
 /// Why a member will not sign an intent. Each names one check.
@@ -105,7 +107,10 @@ impl ValidatedIntent {
         intent
             .validate_balance(ledger.input_amounts)
             .map_err(IntentRefusal::Balance)?;
-        if ledger.seen_kem_seeds.contains(&intent.kem_randomness_seed) {
+        if ledger
+            .seen_seeds
+            .contains(&intent.kem_randomness_seed.fingerprint())
+        {
             return Err(IntentRefusal::KemSeedReplay);
         }
         if intent.chain_state_fingerprint != *ledger.local_chain_state_fingerprint {
@@ -145,6 +150,7 @@ mod tests {
         ChainStateFingerprint, IntentPayee, IntentRecipient, SPEND_INTENT_VERSION,
     };
     use crate::tests::group_payload;
+    use shekyl_crypto_pq::multisig_intent::IntentSeed;
 
     fn chain_fingerprint() -> [u8; 32] {
         ChainStateFingerprint {
@@ -175,14 +181,14 @@ mod tests {
             }],
             fee: AtomicUnits::from_raw(10),
             input_global_indices: vec![42],
-            kem_randomness_seed: [0xDD; 32],
+            kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
             chain_state_fingerprint: chain_fingerprint(),
         }
     }
 
     fn check(
         intent: SpendIntent,
-        seen: &HashSet<[u8; 32]>,
+        seen: &HashSet<IntentSeedFingerprint>,
     ) -> Result<ValidatedIntent, IntentRefusal> {
         ValidatedIntent::validate(
             intent,
@@ -195,7 +201,7 @@ mod tests {
                 local_ref_block_hash: &[0xCC; 32],
                 local_chain_state_fingerprint: &chain_fingerprint(),
                 input_amounts: &[AtomicUnits::from_raw(310)],
-                seen_kem_seeds: seen,
+                seen_seeds: seen,
             },
         )
     }
@@ -253,10 +259,14 @@ mod tests {
             refused(&|i| i.chain_state_fingerprint = [0; 32]),
             Some(IntentRefusal::ChainState)
         ));
-        let seen = HashSet::from([[0xDD; 32]]);
+        // The replay set holds fingerprints: the intent's own seed's is
+        // refused, and the seed's bytes as a fingerprint are not one.
+        let seed = intent().kem_randomness_seed;
+        let seen = HashSet::from([seed.fingerprint()]);
         assert!(matches!(
             check(intent(), &seen).err(),
             Some(IntentRefusal::KemSeedReplay)
         ));
+        assert_ne!(seed.fingerprint().as_bytes(), &[0xDD; 32]);
     }
 }

@@ -860,6 +860,16 @@ jobs:
         if: '!cancelled()'
         run: python3 -I scripts/kat/multisig_intent_oracle.py
 
+      - name: Run the multisig intent derivation oracle
+        # R-14: every value a member derives from an intent's seed (the
+        # transaction key, the pseudo-out blinds with the last balancing,
+        # the rerandomization seeds, the replay fingerprint), recomputed
+        # with hand-written HKDF-SHA-512 and Ed25519, anchored; requires
+        # docs/test_vectors/MULTISIG_INTENT_DERIVE_V1.json to equal its
+        # output; exit 1 on a mismatch, 2 when the file pins nothing.
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/multisig_intent_derive_oracle.py
+
       - name: Run clatter production-graph gate
         # clatter is an independent implementation of the RPC channel's
         # handshake pattern, in the workspace as a test-only cross-check

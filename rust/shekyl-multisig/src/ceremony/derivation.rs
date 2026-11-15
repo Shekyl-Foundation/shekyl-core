@@ -57,7 +57,6 @@
 use shekyl_crypto_pq::kem::X25519_KEM_CT_LEN;
 use shekyl_crypto_pq::leaf_commitment::PQC_LEAF_POINT_LEN;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
-use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_crypto_pq::multisig_output::{
     recover_group_spend, GroupOutputSource, GroupSpendError, GroupSpendSecrets,
     MemberOwnCiphertext, MultisigGroupKey,
@@ -335,7 +334,7 @@ impl DerivedSpend {
             .map(|&global_index| spendable(ledger, key, global_index))
             .collect::<Result<Vec<_>, _>>()?;
         let tree = one_tree(&intent, &records)?;
-        let seed = IntentSeed::new(&intent.intent().kem_randomness_seed);
+        let seed = &intent.intent().kem_randomness_seed;
         let tx_key = seed.tx_key();
         let built = intent
             .recipients()
@@ -514,6 +513,7 @@ mod tests {
     use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
     use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
     use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
+    use shekyl_crypto_pq::multisig_intent::IntentSeed;
     use shekyl_crypto_pq::multisig_output::{
         construct_multisig_output, open_multisig_entry, MultisigEntryView, MultisigMemberView,
         MultisigOutputData,
@@ -651,7 +651,7 @@ mod tests {
             ],
             fee: AtomicUnits::from_raw(FEE),
             input_global_indices: indices,
-            kem_randomness_seed: seed,
+            kem_randomness_seed: IntentSeed::new(&seed),
             chain_state_fingerprint: fingerprint,
         };
         ValidatedIntent::validate(
@@ -665,7 +665,7 @@ mod tests {
                 local_ref_block_hash: &reference_block_hash,
                 local_chain_state_fingerprint: &fingerprint,
                 input_amounts: &amounts,
-                seen_kem_seeds: &HashSet::new(),
+                seen_seeds: &HashSet::new(),
             },
         )
         .unwrap()

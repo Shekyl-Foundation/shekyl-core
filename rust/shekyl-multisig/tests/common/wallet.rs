@@ -19,6 +19,7 @@ use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation, X25519_KEM_CT_LEN};
 use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
@@ -151,7 +152,7 @@ pub fn intent(
         ],
         fee: AtomicUnits::from_raw(FEE),
         input_global_indices: GLOBAL_INDICES.to_vec(),
-        kem_randomness_seed: seed,
+        kem_randomness_seed: IntentSeed::new(&seed),
         chain_state_fingerprint: chain_fingerprint(),
     }
 }
@@ -170,7 +171,7 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
             local_ref_block_hash: &REFERENCE_HASH,
             local_chain_state_fingerprint: &chain_fingerprint(),
             input_amounts: &AMOUNTS.map(AtomicUnits::from_raw),
-            seen_kem_seeds: &HashSet::new(),
+            seen_seeds: &HashSet::new(),
         },
     )
     .expect("the intent is valid for every member")

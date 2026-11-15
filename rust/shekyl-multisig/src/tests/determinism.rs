@@ -7,6 +7,7 @@
 
 use crate::intent::{ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent};
 use serde_json::Value;
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_units::AtomicUnits;
 
 const INTENT_VECTORS: &str = include_str!("../../../../docs/test_vectors/MULTISIG_INTENT_V3.json");
@@ -73,7 +74,7 @@ fn intent_of(v: &Value) -> SpendIntent {
             .iter()
             .map(u64_of)
             .collect(),
-        kem_randomness_seed: hex32(&v["kem_randomness_seed"]),
+        kem_randomness_seed: IntentSeed::new(&hex32(&v["kem_randomness_seed"])),
         chain_state_fingerprint: hex32(&v["chain_state_fingerprint"]),
     }
 }

@@ -4,6 +4,7 @@
 //! Performance benchmarks for V3.1 multisig protocol operations.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
 
 fn bench_intent_hash(c: &mut Criterion) {
     use shekyl_multisig::intent::{
@@ -28,7 +29,7 @@ fn bench_intent_hash(c: &mut Criterion) {
         }],
         fee: shekyl_units::AtomicUnits::from_raw(1_000_000),
         input_global_indices: vec![12345],
-        kem_randomness_seed: [0xDD; 32],
+        kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
         chain_state_fingerprint: [0xEE; 32],
     };
 
@@ -60,7 +61,7 @@ fn bench_intent_serialization(c: &mut Criterion) {
         }],
         fee: shekyl_units::AtomicUnits::from_raw(1_000_000),
         input_global_indices: vec![12345],
-        kem_randomness_seed: [0xDD; 32],
+        kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
         chain_state_fingerprint: [0xEE; 32],
     };
 

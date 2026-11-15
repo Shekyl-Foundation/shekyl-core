@@ -26,6 +26,7 @@ use shekyl_address::multisig_address::{
 };
 use shekyl_address::{AddressError, Network, PaymentAddress};
 use shekyl_crypto_pq::label::LABEL_PLAINTEXT_LEN;
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_curve_tree::reference;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -147,9 +148,6 @@ pub enum SpendIntentError {
 
     #[error("balance mismatch: inputs={inputs}, outputs+fee={outputs_plus_fee}")]
     BalanceMismatch { inputs: u64, outputs_plus_fee: u64 },
-
-    #[error("kem_randomness_seed reused (replay detected)")]
-    KemSeedReplay,
 
     #[error("chain_state_fingerprint mismatch")]
     ChainStateMismatch,
@@ -347,7 +345,7 @@ pub struct SpendIntent {
     pub fee: AtomicUnits,
     pub input_global_indices: Vec<u64>,
 
-    pub kem_randomness_seed: [u8; 32],
+    pub kem_randomness_seed: IntentSeed,
     pub chain_state_fingerprint: [u8; 32],
 }
 
@@ -438,7 +436,7 @@ impl SpendIntent {
             buf.extend_from_slice(&idx.to_le_bytes());
         }
 
-        buf.extend_from_slice(&self.kem_randomness_seed);
+        self.kem_randomness_seed.encode_into(&mut buf);
         buf.extend_from_slice(&self.chain_state_fingerprint);
         Ok(buf)
     }
@@ -524,7 +522,7 @@ impl SpendIntent {
         let input_global_indices = (0..n_inputs)
             .map(|_| u64_of(&mut bytes, "input_global_indices"))
             .collect::<Result<_, _>>()?;
-        let kem_randomness_seed = arr(&mut bytes, "kem_randomness_seed")?;
+        let kem_randomness_seed = IntentSeed::new(&arr(&mut bytes, "kem_randomness_seed")?);
         let chain_state_fingerprint = arr(&mut bytes, "chain_state_fingerprint")?;
         if !bytes.is_empty() {
             return Err(SpendIntentError::Malformed("trailing bytes"));
@@ -797,7 +795,7 @@ mod tests {
             ],
             fee: AtomicUnits::from_raw(10),
             input_global_indices: vec![42, 99],
-            kem_randomness_seed: [0xDD; 32],
+            kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
             chain_state_fingerprint: [0; 32],
         }
     }

@@ -827,8 +827,10 @@ Its `sender_index` must equal `proposer_index`.
     there in its full form, a group's payload names it;
     `SHEKYL_MULTISIG_WIRE_FORMAT.md` §2.3)
 11. `sum(recipient.amount) + fee == sum(input.amount)` per local view
-12. `kem_randomness_seed` is unique within the group's history of
-    `seen_intents` (replay/linkability prevention)
+12. `kem_randomness_seed` is unique within the group's history: its
+    fingerprint is not in the member's replay set, which holds each seen
+    seed's fingerprint and never a seed (§9.5; replay/linkability
+    prevention)
 13. `chain_state_fingerprint` matches the verifier's local fingerprint
     (see §9.3); mismatch → do not sign; trigger sync
 
@@ -888,6 +890,7 @@ table is what the ceremony and the builder both read:
 | The transaction key: it seeds every output's KEM encapsulation, and so every output key and every output commitment mask, under the solo labels (`shekyl-output-kem-v1`, `shekyl-output-mask`, …) | `shekyl/multisig-intent-tx-key-v1` | — |
 | Each input's pseudo-out blind `a_j`, but the last, which balances the commitments as solo does | `shekyl/multisig-intent-pseudo-out-blind-v1` | input position |
 | Each input's rerandomization (`RerandomizedOutput`'s blinds) | `shekyl/multisig-intent-rerandomize-v1` | input position |
+| The seed's replay fingerprint (§9.2 item 12) | `shekyl/multisig-intent-seed-fingerprint-v1` | — |
 
 Each value is an HKDF-SHA-512 expansion with no salt and the seed as the
 input key material (`shekyl_crypto_pq::multisig_intent::IntentSeed`):
@@ -898,7 +901,16 @@ input key material (`shekyl_crypto_pq::multisig_intent::IntentSeed`):
   `expand(label ‖ u64_le(j), 64)`, reduced wide; the last input's blind
   is the sum of the outputs' masks less every other blind
   (`balancing_pseudo_out_blind`, the solo signer's own balancer);
-- input `j`'s rerandomization seed: `expand(label ‖ u64_le(j), 32)`.
+- input `j`'s rerandomization seed: `expand(label ‖ u64_le(j), 32)`;
+- the seed's fingerprint: `expand(label, 32)`, one-way, so the replay set
+  that holds it opens nothing the seed does.
+
+The seed is a type, `IntentSeed`: wiped on drop, printed as nothing,
+cloned only as its intent is, and with no accessor for its bytes (it
+writes them into the intent's canonical encoding, which travels sealed).
+Every derivation above is a method on it, and the vectors
+(`docs/test_vectors/MULTISIG_INTENT_DERIVE_V1.json`) are written and
+checked by an independent oracle (`scripts/kat/multisig_intent_derive_oracle.py`).
 
 `j` is the input's position in the intent's `input_global_indices`, not
 in the transaction, so a member derives every value before it knows the

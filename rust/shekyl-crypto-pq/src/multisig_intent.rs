@@ -16,6 +16,7 @@
 //! | the transaction key (and so every output) | [`LABEL_INTENT_TX_KEY`] | — |
 //! | each input's pseudo-out blind but the last | [`LABEL_INTENT_PSEUDO_OUT_BLIND`] | the intent's input order |
 //! | each input's rerandomization seed | [`LABEL_INTENT_RERANDOMIZE`] | the intent's input order |
+//! | the seed's replay fingerprint | [`LABEL_INTENT_SEED_FINGERPRINT`] | — |
 //!
 //! The last input's blind balances the outputs' masks
 //! ([`crate::output::balancing_pseudo_out_blind`], the solo spend's own
@@ -24,7 +25,10 @@
 //! order the transaction's inputs.
 //!
 //! The seed is secret to the group: the intent travels only inside sealed
-//! ceremony files, so no outsider can derive these values. The range proof
+//! ceremony files, so no outsider can derive these values. A member keeps
+//! no seed after its ceremony: the set it refuses a replayed intent from
+//! holds each seed's fingerprint ([`IntentSeed::fingerprint`]), a one-way
+//! value under its own label, never the seed. The range proof
 //! and the membership proof's own blinds are not here: the proposer draws
 //! them, and every member verifies the proofs instead of rebuilding them.
 
@@ -43,6 +47,11 @@ pub const LABEL_INTENT_TX_KEY: &[u8] = b"shekyl/multisig-intent-tx-key-v1";
 pub const LABEL_INTENT_PSEUDO_OUT_BLIND: &[u8] = b"shekyl/multisig-intent-pseudo-out-blind-v1";
 /// HKDF info prefix of each input's rerandomization seed.
 pub const LABEL_INTENT_RERANDOMIZE: &[u8] = b"shekyl/multisig-intent-rerandomize-v1";
+/// HKDF info of the seed's replay fingerprint.
+pub const LABEL_INTENT_SEED_FINGERPRINT: &[u8] = b"shekyl/multisig-intent-seed-fingerprint-v1";
+
+/// The length of an intent's seed, as its canonical encoding carries it.
+pub const INTENT_SEED_LEN: usize = 32;
 
 /// A spend's transaction key, derived from its intent: the secret `r`,
 /// canonical, and its public key `r·G`.
@@ -54,8 +63,24 @@ pub struct IntentTxKey {
 }
 
 /// An intent's `kem_randomness_seed`, held as the root of every value the
-/// spend derives from it. Wiped on drop; never printed.
-pub struct IntentSeed(Zeroizing<[u8; 32]>);
+/// spend derives from it. Wiped on drop; never printed; cloned only as an
+/// intent is; no accessor returns its bytes ([`Self::encode_into`] writes
+/// them into the intent's canonical encoding, which travels sealed).
+#[derive(Clone)]
+pub struct IntentSeed(Zeroizing<[u8; INTENT_SEED_LEN]>);
+
+/// The one-way fingerprint of an [`IntentSeed`]: what a member's replay
+/// set holds in place of the seed. Public: it opens nothing the seed does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IntentSeedFingerprint([u8; 32]);
+
+impl IntentSeedFingerprint {
+    /// The fingerprint's bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 impl std::fmt::Debug for IntentSeed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -64,10 +89,25 @@ impl std::fmt::Debug for IntentSeed {
 }
 
 impl IntentSeed {
-    /// The seed an intent carries.
+    /// The seed an intent's canonical encoding carries.
     #[must_use]
-    pub fn new(seed: &[u8; 32]) -> Self {
+    pub fn new(seed: &[u8; INTENT_SEED_LEN]) -> Self {
         Self(Zeroizing::new(*seed))
+    }
+
+    /// Append the seed's bytes to `out`, an intent's canonical encoding.
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.0.as_ref());
+    }
+
+    /// The seed's replay fingerprint.
+    #[must_use]
+    pub fn fingerprint(&self) -> IntentSeedFingerprint {
+        let mut fingerprint = [0u8; 32];
+        self.hkdf()
+            .expand(LABEL_INTENT_SEED_FINGERPRINT, &mut fingerprint)
+            .expect("32 bytes is a valid HKDF-SHA-512 output length");
+        IntentSeedFingerprint(fingerprint)
     }
 
     fn hkdf(&self) -> Hkdf<Sha512> {
@@ -177,6 +217,34 @@ mod tests {
         }
         assert!(seed.pseudo_out_blinds(0, &masks).is_err());
         assert!(seed.pseudo_out_blinds(2, &[[0xFF; 32]]).is_err());
+    }
+
+    /// A seed's fingerprint is one-way and its own: it is not the seed,
+    /// nor any value the seed derives, and another seed's differs.
+    #[test]
+    fn the_fingerprint_is_none_of_the_seeds_values() {
+        let bytes = [0x81; INTENT_SEED_LEN];
+        let seed = IntentSeed::new(&bytes);
+        let fingerprint = *seed.fingerprint().as_bytes();
+        assert_eq!(fingerprint, *IntentSeed::new(&bytes).fingerprint().as_bytes());
+        assert_ne!(fingerprint, bytes);
+        assert_ne!(fingerprint, *seed.tx_key().secret);
+        assert_ne!(fingerprint, *seed.rerandomization_seed(0));
+        assert_ne!(
+            seed.fingerprint(),
+            IntentSeed::new(&[0x82; INTENT_SEED_LEN]).fingerprint()
+        );
+    }
+
+    /// The seed prints as nothing, and its encoding is its bytes.
+    #[test]
+    fn the_seed_never_prints() {
+        let seed = IntentSeed::new(&[0xAB; INTENT_SEED_LEN]);
+        let printed = format!("{seed:?}");
+        assert!(!printed.contains("ab") && !printed.contains("171"), "{printed}");
+        let mut encoded = Vec::new();
+        seed.clone().encode_into(&mut encoded);
+        assert_eq!(encoded, [0xAB; INTENT_SEED_LEN]);
     }
 
     /// The transaction key's public half is `r·G`.
