@@ -281,6 +281,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L19i
   - Target: pre-genesis
 
+- **`a_dialing_node_hands_its_tip_to_the_peer_it_dials` mined one block more than asked on a CI runner.** The first height check failed (`regtest_e2e_sync.rs:221`, "A mined 20 blocks on genesis": left 22, right 21, so `MINED + 1` came out one high) in the Ubuntu 24.04 job at #1372's head `af44244379` ([attempt 1](https://github.com/Shekyl-Foundation/shekyl-core/actions/runs/43653058850/job/132627605047)); the re-run of that job passed, as did three local runs. Look first at the test's opening loop, which reads a `mine.syncing` refusal of `dev_block_generate` as "no block mined" and asks again: a refusal returned after its block was made mines one extra. The harness's transport does not resend (its only retry is on the digest-authenticated path, and the regtest listener is unauthenticated).
+  - Owner: [`P2P_3_CHAIN_SYNC_BRIEF.md`](design/P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q2 step 8 (the opening the loop waits out)
+  - Target: pre-genesis
+
 - **The sync owner's relay is RD's, sent from the owner until RD's relay entry exists.** `Command::Relay` names a block the model relays (a block that connected as the new tip while the node is not `Behind`, however it arrived; `P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 7), and the owner encodes it as 2008, compact, and sends it to every established session but its supplier through `relay::fan_out`. When RD's relay entry lands, the owner's send moves behind it and this row closes. *Falsifier:* `rg -n 'fn relay' rust/shekyl-chain-sync-runtime/src/owner.rs` still calling `relay::fan_out` once RD's relay entry exists.
   - Owner: [`P2P_3_CHAIN_SYNC_BRIEF.md`](design/P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q10 (CS, with RD's relay entry)
   - Target: pre-genesis

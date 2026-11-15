@@ -385,8 +385,10 @@ impl Drop for StartedMiner {
 /// [`MiningFacts::refusal`] is `Some`, before the wait, or during it with the
 /// tip short of the target at the stop; the miner's refusal; `NotReady`
 /// when the node stops first. A withdrawal that comes with the block
-/// reaching the target is not an error: the chain at the stop decides, so a
-/// caller that retries on an error does not mine past its count.
+/// reaching the target is not an error: the chain decides, read after the
+/// stop and after the door has answered every block the miner delivered
+/// ([`MiningFacts::found_answered`]), so a caller that retries on an error
+/// does not mine past its count.
 pub async fn dev_block_generate(
     mining: &MiningHandle,
     door: &dyn DoorFacts,
@@ -446,6 +448,14 @@ pub async fn dev_block_generate(
         }),
     };
     started.stop().await?;
+    // A block the miner delivered before the stop can still be on its way
+    // through the door. The chain is read once the door has answered every
+    // delivered block, and a stopped miner delivers no more: the chain then
+    // shows everything this call's miner found. Read sooner, a withdrawal
+    // that won the race below reports a failure for a block that connects a
+    // moment later, and a caller that retries mines one more (CI on #1376:
+    // the dialing regtest gate's node stood at 22 blocks for 21).
+    on_a_blocking_thread(mining, |mining| mining.found_answered()).await?;
     let end = chain.chain_tip()?.chain_height;
     // The race above has two winners when the pass that connects the target
     // block also withdraws the job, and either can be polled first. The
@@ -615,6 +625,9 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(true)
         }
+        fn found_answered(&self) -> Result<(), FactsFault> {
+            Ok(())
+        }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
             unreachable!("dev_block_generate reads no status")
         }
@@ -733,6 +746,9 @@ mod tests {
         fn stop(&self) -> Result<bool, FactsFault> {
             Ok(true)
         }
+        fn found_answered(&self) -> Result<(), FactsFault> {
+            Ok(())
+        }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
             unreachable!("dev_block_generate reads no status")
         }
@@ -765,19 +781,30 @@ mod tests {
         }
     }
 
-    /// A chain of one block at the start's read, and `after` blocks at
-    /// every read after it: the stop's.
+    /// A chain of one block at the start's read, and [`Self::after`] blocks
+    /// at every read after it. `after` can move while the call runs: the
+    /// door's answer stores the connected count before the verdict's read.
     struct Grows {
         reads: std::sync::atomic::AtomicUsize,
-        after: u64,
+        after: std::sync::Arc<std::sync::atomic::AtomicU64>,
     }
 
     impl Grows {
         fn to(after: u64) -> Self {
             Self {
                 reads: std::sync::atomic::AtomicUsize::new(0),
-                after,
+                after: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(after)),
             }
+        }
+
+        /// The count every chain read after the first reports. The door's
+        /// answer stores into this before the verdict is read.
+        fn tip_after(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+            std::sync::Arc::clone(&self.after)
+        }
+
+        fn after(&self) -> u64 {
+            self.after.load(std::sync::atomic::Ordering::Acquire)
         }
     }
 
@@ -787,7 +814,11 @@ mod tests {
                 .reads
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(crate::chain_facts::ChainTip {
-                chain_height: ChainCount::from_raw(if read == 0 { 1 } else { self.after }),
+                chain_height: ChainCount::from_raw(if read == 0 {
+                    CHAIN_AT_THE_START
+                } else {
+                    self.after()
+                }),
                 top_hash: BlockHash::from_bytes([1; 32]),
                 target_height: None,
                 synchronized: true,
@@ -804,7 +835,7 @@ mod tests {
         ) -> Result<crate::chain_facts::BlockHashAt, FactsFault> {
             Ok(crate::chain_facts::BlockHashAt {
                 hash: Some(BlockHash::from_bytes([2; 32])),
-                chain_height: ChainCount::from_raw(self.after),
+                chain_height: ChainCount::from_raw(self.after()),
             })
         }
         fn block_header_at(
@@ -845,6 +876,98 @@ mod tests {
             .await
             .expect_err("no block connected");
         assert_eq!(refused.class, ErrorClass::NotReady);
+    }
+
+    /// One block already on the chain. The call mines one more.
+    const CHAIN_AT_THE_START: u64 = 1;
+    /// Chain count once that mined block has connected.
+    const CHAIN_ONCE_CONNECTED: u64 = 2;
+
+    /// A node whose job is withdrawn the moment the call waits, and whose
+    /// miner had delivered the target block before the stop: the door
+    /// answers that block only when [`MiningFacts::found_answered`] is
+    /// waited, and the chain's later reads show [`CHAIN_ONCE_CONNECTED`]
+    /// from then on.
+    struct AnsweredAfterTheStop {
+        /// [`Grows::tip_after`]: the count stored when the door answers.
+        tip_after: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        /// Chain count the verdict should read once the door has answered.
+        connected: u64,
+        /// Set by the stop: the wait must come after it.
+        stopped: std::sync::atomic::AtomicBool,
+    }
+
+    impl MiningFacts for AnsweredAfterTheStop {
+        fn running(&self) -> Result<bool, FactsFault> {
+            Ok(false)
+        }
+        fn template(
+            &self,
+        ) -> Result<Result<crate::mining_facts::PostedTemplate, Diagnostic>, FactsFault> {
+            unreachable!("dev_block_generate reads no template")
+        }
+        fn start(
+            &self,
+            _threads: Option<NonZeroUsize>,
+        ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            unreachable!("dev_block_generate bounds the miner it starts")
+        }
+        fn start_until(
+            &self,
+            _height: shekyl_types::BlockHeight,
+        ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            Ok(Ok(()))
+        }
+        fn stop(&self) -> Result<bool, FactsFault> {
+            self.stopped
+                .store(true, std::sync::atomic::Ordering::Release);
+            Ok(true)
+        }
+        fn found_answered(&self) -> Result<(), FactsFault> {
+            assert!(
+                self.stopped.load(std::sync::atomic::Ordering::Acquire),
+                "the wait comes after the stop: a running miner delivers more"
+            );
+            self.tip_after
+                .store(self.connected, std::sync::atomic::Ordering::Release);
+            Ok(())
+        }
+        fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
+            unreachable!("dev_block_generate reads no status")
+        }
+        fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
+            Ok(None)
+        }
+        fn withdrawn(&self) -> crate::mining_facts::Pending<'_, Diagnostic> {
+            Box::pin(async { Ok(Diagnostic::new(codes::SYNCING, "the node is not synced")) })
+        }
+    }
+
+    /// **The verdict is read after the door has answered what the miner
+    /// delivered.** The withdrawal wins the race while the target block,
+    /// delivered before the stop, is still on its way through the door: the
+    /// chain is one block at the stop and two once the door has answered.
+    /// The call waits for that answer, reads two, and succeeds with the
+    /// block, so a caller that retries on an error does not mine one more
+    /// (CI on #1376: the dialing regtest gate's node stood at 22 blocks for
+    /// 21, after its first call was refused `mine.syncing` for a block that
+    /// connected a moment later).
+    ///
+    /// Red edit: in `dev_block_generate`, drop the `found_answered` wait
+    /// after the stop: the chain reads one block, and the call is refused.
+    #[tokio::test]
+    async fn generateblocks_reads_the_chain_after_the_door_answers_what_the_miner_delivered() {
+        let chain = Grows::to(CHAIN_AT_THE_START);
+        let mining: MiningHandle = std::sync::Arc::new(AnsweredAfterTheStop {
+            tip_after: chain.tip_after(),
+            connected: CHAIN_ONCE_CONNECTED,
+            stopped: std::sync::atomic::AtomicBool::new(false),
+        });
+        let generated = dev_block_generate(&mining, &Unwoken, &chain, armed(), count(1))
+            .await
+            .expect("the delivered block connected before the verdict");
+        assert_eq!(generated.height, Height(1), "the new tip, an ordinal");
+        assert_eq!(generated.hash.len(), 1);
     }
 
     /// The miner `dev_block_generate` starts searches no block above the target.
@@ -897,6 +1020,9 @@ mod tests {
         }
         fn stop(&self) -> Result<bool, FactsFault> {
             unreachable!("a refused start stops nothing")
+        }
+        fn found_answered(&self) -> Result<(), FactsFault> {
+            unreachable!("a refused start waits for no block")
         }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
             unreachable!("dev_block_generate reads no status")
@@ -986,6 +1112,9 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::Release);
             Ok(true)
         }
+        fn found_answered(&self) -> Result<(), FactsFault> {
+            Ok(())
+        }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
             unreachable!("dev_block_generate reads no status")
         }
@@ -1074,6 +1203,9 @@ mod tests {
         }
         fn stop(&self) -> Result<bool, FactsFault> {
             unreachable!("this status stops nothing")
+        }
+        fn found_answered(&self) -> Result<(), FactsFault> {
+            unreachable!("this status waits for no block")
         }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
             Ok(crate::mining_facts::MiningState {
