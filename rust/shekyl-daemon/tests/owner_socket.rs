@@ -240,8 +240,12 @@ impl Drop for Node {
 /// "This computer"'s client, told the child's rendezvous directory: the
 /// rendezvous by the daemon's own naming (`RPC_CHANNEL.md` RT-15, §7.1).
 fn target(dir: &Path) -> LocalTarget {
-    LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(&rendezvous_dir(dir)))
-        .expect("a named directory")
+    LocalTarget::resolve(
+        Network::Regtest,
+        &Instance::Default,
+        Some(&rendezvous_dir(dir)),
+    )
+    .expect("a named directory")
 }
 
 /// One JSON-RPC call over the owner's leg at `rendezvous`, through the
