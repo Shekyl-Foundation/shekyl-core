@@ -195,10 +195,6 @@ pub fn sync_dir(dir: &Path) -> std::io::Result<()> {
 ///
 /// None on Windows; the Unix arm's signature.
 #[cfg(windows)]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the Unix arm's signature: callers handle both platforms the same way"
-)]
 pub fn sync_dir(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
