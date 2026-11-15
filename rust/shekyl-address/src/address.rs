@@ -53,8 +53,16 @@
 //! for accident resistance with generous margin. The short display form
 //! (113 B) omits the tag: it is a non-payable label with no PQC segments to
 //! bind.
+//!
+//! ## One string per address
+//!
+//! Every segment is written and read by `shekyl-encoding`'s one Bech32m
+//! codec, which accepts only the lowercase string its writer produces
+//! (no uppercase, no Bech32 checksum, no non-zero padding). An address
+//! therefore has exactly one string: the one [`ShekylAddress::encode`]
+//! returns.
 
-use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
+use shekyl_encoding::{decode_blob, encode_blob, EncodingError};
 
 use crate::network::{self, Network};
 
@@ -214,8 +222,9 @@ pub const SEGMENT_SEPARATOR: char = '/';
 /// Errors specific to address encoding/decoding.
 #[derive(Debug, thiserror::Error)]
 pub enum AddressError {
-    #[error("{0}")]
-    Encoding(String),
+    /// A segment is not the one Bech32m string its contents encode to.
+    #[error("address segment: {0}")]
+    Bech32m(#[from] EncodingError),
 
     #[error("wrong HRP: expected '{expected}', got '{got}'")]
     WrongHrp { expected: String, got: String },
@@ -269,23 +278,16 @@ pub struct ShekylAddress {
     pub ml_kem_encap_key: Vec<u8>,
 }
 
-fn bech32m_encode(hrp: &Hrp, data: &[u8]) -> String {
-    data.iter()
-        .copied()
-        .bytes_to_fes()
-        .with_checksum::<Bech32m>(hrp)
-        .chars()
-        .collect()
-}
-
-fn bech32m_decode(encoded: &str) -> Result<(Hrp, Vec<u8>), AddressError> {
-    let (hrp, data) = bech32::decode(encoded)
-        .map_err(|e| AddressError::Encoding(format!("bech32m decode: {e}")))?;
-    Ok((hrp, data))
-}
-
-fn parse_hrp(s: &str) -> Result<Hrp, AddressError> {
-    Hrp::parse(s).map_err(|e| AddressError::Encoding(format!("invalid HRP '{s}': {e}")))
+/// Decode one PQC segment, which must carry `expected_hrp`.
+fn decode_segment(encoded: &str, expected_hrp: &str) -> Result<Vec<u8>, AddressError> {
+    let (hrp, data) = decode_blob(encoded)?;
+    if hrp != expected_hrp {
+        return Err(AddressError::WrongHrp {
+            expected: expected_hrp.to_string(),
+            got: hrp,
+        });
+    }
+    Ok(data)
 }
 
 /// The ek-binding tag: `cSHAKE256("shekyl/ek-bind-v1", ml_kem_ek)` truncated to
@@ -429,11 +431,14 @@ impl ShekylAddress {
         // length was validated above, so the tag commits to a well-formed key.
         let classical = self.encode_classical_bound()?;
 
-        let hrp_a = parse_hrp(network::pqc_a_hrp(self.network))?;
-        let hrp_b = parse_hrp(network::pqc_b_hrp(self.network))?;
-
-        let pqc_a = bech32m_encode(&hrp_a, &self.ml_kem_encap_key[..PQC_SPLIT]);
-        let pqc_b = bech32m_encode(&hrp_b, &self.ml_kem_encap_key[PQC_SPLIT..]);
+        let pqc_a = encode_blob(
+            network::pqc_a_hrp(self.network),
+            &self.ml_kem_encap_key[..PQC_SPLIT],
+        )?;
+        let pqc_b = encode_blob(
+            network::pqc_b_hrp(self.network),
+            &self.ml_kem_encap_key[PQC_SPLIT..],
+        )?;
 
         Ok(format!(
             "{classical}{SEGMENT_SEPARATOR}{pqc_a}{SEGMENT_SEPARATOR}{pqc_b}"
@@ -448,14 +453,13 @@ impl ShekylAddress {
     }
 
     fn encode_classical(&self) -> Result<String, AddressError> {
-        let hrp = parse_hrp(network::classical_hrp(self.network))?;
         let payload = classical_segment_bytes(
             self.version,
             &self.spend_key,
             &self.view_key,
             &self.msg_sign_pk,
         );
-        Ok(bech32m_encode(&hrp, &payload))
+        Ok(encode_blob(network::classical_hrp(self.network), &payload)?)
     }
 
     /// Rebuild from the classical payload the wallet stores
@@ -496,11 +500,10 @@ impl ShekylAddress {
     }
 
     fn encode_classical_bound(&self) -> Result<String, AddressError> {
-        let hrp = parse_hrp(network::classical_hrp(self.network))?;
-        Ok(bech32m_encode(
-            &hrp,
+        Ok(encode_blob(
+            network::classical_hrp(self.network),
             self.bound_classical_segment().as_bytes(),
-        ))
+        )?)
     }
 
     /// Decode a Shekyl address from its encoded form.
@@ -530,28 +533,10 @@ impl ShekylAddress {
     }
 
     fn decode_full(classical: &str, pqc_a: &str, pqc_b: &str) -> Result<Self, AddressError> {
-        let (c_hrp, c_data) = bech32m_decode(classical)?;
-        let net = network::network_from_hrp(&c_hrp.to_string())
-            .ok_or_else(|| AddressError::UnknownHrp(c_hrp.to_string()))?;
-
-        let expected_a = parse_hrp(network::pqc_a_hrp(net))?;
-        let expected_b = parse_hrp(network::pqc_b_hrp(net))?;
-
-        let (a_hrp, a_data) = bech32m_decode(pqc_a)?;
-        if a_hrp != expected_a {
-            return Err(AddressError::WrongHrp {
-                expected: network::pqc_a_hrp(net).to_string(),
-                got: a_hrp.to_string(),
-            });
-        }
-
-        let (b_hrp, b_data) = bech32m_decode(pqc_b)?;
-        if b_hrp != expected_b {
-            return Err(AddressError::WrongHrp {
-                expected: network::pqc_b_hrp(net).to_string(),
-                got: b_hrp.to_string(),
-            });
-        }
+        let (c_hrp, c_data) = decode_blob(classical)?;
+        let net = network::network_from_hrp(&c_hrp).ok_or(AddressError::UnknownHrp(c_hrp))?;
+        let a_data = decode_segment(pqc_a, network::pqc_a_hrp(net))?;
+        let b_data = decode_segment(pqc_b, network::pqc_b_hrp(net))?;
 
         // Full-address classical segment is
         // `version || spend || view || msg_sign_pk || tag`.
@@ -597,9 +582,8 @@ impl ShekylAddress {
     }
 
     fn decode_classical_only(encoded: &str) -> Result<Self, AddressError> {
-        let (c_hrp, c_data) = bech32m_decode(encoded)?;
-        let net = network::network_from_hrp(&c_hrp.to_string())
-            .ok_or_else(|| AddressError::UnknownHrp(c_hrp.to_string()))?;
+        let (c_hrp, c_data) = decode_blob(encoded)?;
+        let net = network::network_from_hrp(&c_hrp).ok_or(AddressError::UnknownHrp(c_hrp))?;
 
         Self::from_classical_bytes(net, &c_data, Vec::new())
     }
@@ -654,6 +638,7 @@ impl PaymentAddress {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::respell::Spelling;
 
     fn make_test_address(net: Network) -> ShekylAddress {
         ShekylAddress {
@@ -706,6 +691,91 @@ mod tests {
         let decoded = ShekylAddress::decode(&encoded).unwrap();
         assert_eq!(addr, decoded);
         assert_eq!(decoded.network, Network::Stagenet);
+    }
+
+    /// Every network's address round-trips through its one string.
+    #[test]
+    fn every_network_round_trips_its_one_string() {
+        for net in Network::ALL {
+            let addr = make_test_address(net);
+            let full = addr.encode().unwrap();
+            assert_eq!(ShekylAddress::decode(&full).unwrap(), addr, "{net}");
+            assert_eq!(
+                ShekylAddress::decode(&full).unwrap().encode().unwrap(),
+                full
+            );
+            let display = addr.encode_classical_display().unwrap();
+            assert_eq!(
+                ShekylAddress::decode(&display)
+                    .unwrap()
+                    .encode_classical_display()
+                    .unwrap(),
+                display,
+                "{net}"
+            );
+        }
+    }
+
+    /// `encoded` with its segment `at` spelled `spelling`.
+    fn respell_segment(encoded: &str, at: usize, spelling: Spelling) -> String {
+        let mut segments: Vec<String> = encoded
+            .split(SEGMENT_SEPARATOR)
+            .map(str::to_owned)
+            .collect();
+        segments[at] = spelling.of(&segments[at]);
+        segments.join(&SEGMENT_SEPARATOR.to_string())
+    }
+
+    fn assert_refused(encoded: &str, spelling: Spelling, what: &str) {
+        match ShekylAddress::decode(encoded) {
+            Err(AddressError::Bech32m(e)) => {
+                assert!(
+                    spelling.refused_by(&e),
+                    "{what} {spelling:?}: refused as {e:?}"
+                );
+            }
+            other => panic!("{what} {spelling:?}: {other:?}"),
+        }
+    }
+
+    /// An address has one string. Each other spelling the `bech32` crate
+    /// reads as the same address, on any one of the three segments, is
+    /// refused by the refusal that names it.
+    #[test]
+    fn a_full_address_has_one_string() {
+        for net in Network::ALL {
+            let full = make_test_address(net).encode().unwrap();
+            for at in 0..3 {
+                for spelling in Spelling::ALL {
+                    let respelled = respell_segment(&full, at, spelling);
+                    assert_ne!(respelled, full);
+                    assert_refused(&respelled, spelling, &format!("{net} segment {at}"));
+                }
+            }
+        }
+    }
+
+    /// The display form has one string too.
+    #[test]
+    fn a_classical_only_address_has_one_string() {
+        for net in Network::ALL {
+            let display = make_test_address(net).encode_classical_display().unwrap();
+            for spelling in Spelling::ALL {
+                assert_refused(&spelling.of(&display), spelling, &format!("{net} display"));
+            }
+        }
+    }
+
+    /// Paying decodes through the same codec: an upper-cased address is
+    /// refused at the payer's door, not only at [`ShekylAddress::decode`].
+    #[test]
+    fn a_payment_address_has_one_string() {
+        let full = make_test_address(Network::Mainnet).encode().unwrap();
+        assert!(matches!(
+            PaymentAddress::decode(&full.to_uppercase(), Network::Mainnet),
+            Err(AddressError::Bech32m(EncodingError::NotLowercase))
+        ));
+        assert!(PaymentAddress::decode(&full, Network::Mainnet).is_ok());
     }
 
     #[test]
@@ -948,7 +1018,7 @@ mod tests {
         let addr = make_test_address(Network::Mainnet);
         let encoded = addr.encode().unwrap();
         let classical = encoded.split(SEGMENT_SEPARATOR).next().unwrap();
-        let (_hrp, from_encoder) = bech32m_decode(classical).unwrap();
+        let (_hrp, from_encoder) = decode_blob(classical).unwrap();
 
         let mut payload = Vec::with_capacity(CLASSICAL_SEGMENT_LEN);
         payload.push(addr.version);

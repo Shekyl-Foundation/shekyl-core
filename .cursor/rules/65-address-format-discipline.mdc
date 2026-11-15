@@ -36,6 +36,12 @@ must not replicate this.
    When in doubt, do not add an HRP. If a proposed change "could" use
    a new HRP or "could" use a version bump, use the version bump.
 
+6. **One canonical string per address; decoders refuse everything else.**
+   The canonical string is the lowercase one the encoder writes. Every
+   Bech32m string is read by `shekyl-encoding`'s one codec, which refuses
+   uppercase and mixed case by name, and anything else that decodes but
+   does not re-encode to itself (the Bech32 checksum, non-zero padding).
+
 ## Rationale
 
 Every new HRP is a permanent addition to the ecosystem: wallets must

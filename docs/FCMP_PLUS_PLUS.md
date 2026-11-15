@@ -852,6 +852,21 @@ Each segment is independently Bech32m-encoded with its own checksum,
 keeping every segment under Bech32m's 1023-character proven detection
 limit.
 
+### One string per address
+
+An address has exactly one string: the lowercase one its encoder writes.
+Bech32m as specified also admits the all-uppercase spelling, and a
+general Bech32 decoder also admits the older Bech32 checksum and
+non-zero padding bits; Shekyl accepts none of them. Every segment, and
+every other Shekyl Bech32m string (multisig fingerprints, wallet proofs,
+message signatures), is read by `shekyl-encoding::decode_blob`, which
+refuses an uppercase letter by name (`EncodingError::NotLowercase`) and
+then re-encodes what it decoded and refuses any string that differs
+(`EncodingError::NotCanonical`). One address therefore has one string to
+compare, store, hash or put in a payment URI, and a looser library
+fails closed at the re-encode rather than widening what an address is.
+HRP lookups are exact for the same reason.
+
 ### Display
 
 For human-readable display (QR codes, clipboard), only the classical

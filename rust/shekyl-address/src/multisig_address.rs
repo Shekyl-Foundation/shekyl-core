@@ -48,9 +48,12 @@
 //! for why cSHAKE256 and not the consensus `keccak256`.
 
 use crate::network::{multisig_hrp, network_and_kind_from_hrp, AddressKind, Network};
-use bech32::primitives::decode::CheckedHrpstring;
-use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
+use shekyl_encoding::{decode_blob, encode_blob, EncodingError};
 use shekyl_network::envelope::NameDomain;
+
+/// An address fingerprint: the 32-byte cSHAKE256 output of
+/// [`address_fingerprint`].
+pub const FINGERPRINT_LEN: usize = 32;
 
 /// X25519 (32) + ML-KEM-768 (1184).
 pub const HYBRID_KEM_PUBKEY_LEN: usize = 1216;
@@ -234,8 +237,13 @@ pub enum MultisigAddressError {
     #[error("unknown network byte 0x{byte:02x}")]
     UnknownNetwork { byte: u8 },
 
-    #[error("bech32m error: {0}")]
-    Encoding(String),
+    /// The fingerprint string is not the one Bech32m string its
+    /// contents encode to.
+    #[error("fingerprint: {0}")]
+    Bech32m(#[from] EncodingError),
+
+    #[error("a fingerprint is {FINGERPRINT_LEN} bytes, got {got}")]
+    FingerprintLength { got: usize },
 
     #[error("HRP '{hrp}' is not a multisig address HRP")]
     WrongHrp { hrp: String },
@@ -556,15 +564,10 @@ impl MultisigAddressPayload {
     /// the payload file and compare these short strings (string equality — both
     /// sides encode the same fingerprint bytes under the same HRP).
     pub fn fingerprint_bech32m(&self) -> Result<String, MultisigAddressError> {
-        let hrp = Hrp::parse(multisig_hrp(self.network))
-            .map_err(|e| MultisigAddressError::Encoding(e.to_string()))?;
-        Ok(address_fingerprint(self)
-            .iter()
-            .copied()
-            .bytes_to_fes()
-            .with_checksum::<Bech32m>(&hrp)
-            .chars()
-            .collect())
+        Ok(encode_blob(
+            multisig_hrp(self.network),
+            &address_fingerprint(self),
+        )?)
     }
 
     /// Decode a shareable fingerprint string back to `(network, fingerprint)`,
@@ -573,24 +576,19 @@ impl MultisigAddressPayload {
     /// only [`Self::fingerprint_bech32m`] string comparison.
     pub fn parse_fingerprint_bech32m(
         encoded: &str,
-    ) -> Result<(Network, [u8; 32]), MultisigAddressError> {
-        // Enforce the Bech32m variant specifically: `bech32::decode` accepts either
-        // Bech32 or Bech32m, but the fingerprint is *encoded* as Bech32m
-        // ([`Self::fingerprint_bech32m`]), so a plain-Bech32 string with the same
-        // HRP and data is not a fingerprint we produced and must not decode.
-        let checked = CheckedHrpstring::new::<Bech32m>(encoded)
-            .map_err(|e| MultisigAddressError::Encoding(e.to_string()))?;
-        let hrp_str = checked.hrp().to_string();
-        // Reverse-map the HRP → (network, kind) via the single ALL_HRPS registry
-        // (case-insensitive, and kept in sync with the single-sig HRPs), then
+    ) -> Result<(Network, [u8; FINGERPRINT_LEN]), MultisigAddressError> {
+        // The one codec: only the string `fingerprint_bech32m` writes decodes
+        // (no uppercase, no Bech32 checksum, no non-zero padding).
+        let (hrp, data) = decode_blob(encoded)?;
+        // Reverse-map the HRP → (network, kind) over the network table, then
         // require the multisig kind — a single-sig HRP is the wrong HRP here.
-        let Some((network, AddressKind::Multisig)) = network_and_kind_from_hrp(&hrp_str) else {
-            return Err(MultisigAddressError::WrongHrp { hrp: hrp_str });
+        let Some((network, AddressKind::Multisig)) = network_and_kind_from_hrp(&hrp) else {
+            return Err(MultisigAddressError::WrongHrp { hrp });
         };
-        let data: Vec<u8> = checked.byte_iter().collect();
-        let fingerprint: [u8; 32] = data.as_slice().try_into().map_err(|_| {
-            MultisigAddressError::Encoding(format!("expected 32 bytes, got {}", data.len()))
-        })?;
+        let fingerprint: [u8; FINGERPRINT_LEN] = data
+            .as_slice()
+            .try_into()
+            .map_err(|_| MultisigAddressError::FingerprintLength { got: data.len() })?;
         Ok((network, fingerprint))
     }
 }
@@ -636,14 +634,14 @@ pub const MULTISIG_ADDRESS_FINGERPRINT: NameDomain<1> =
 /// pattern for every new domain-separated artifact (`shekyl/archival-bundle-root-v1`,
 /// `shekyl/receive-label-hash-v1`); `shekyl_crypto_hash::keccak256` keeps exactly
 /// the consumers that require parity.
-pub fn address_fingerprint(payload: &MultisigAddressPayload) -> [u8; 32] {
+pub fn address_fingerprint(payload: &MultisigAddressPayload) -> [u8; FINGERPRINT_LEN] {
     MULTISIG_ADDRESS_FINGERPRINT
         .frame(&payload.network.name_id(), [&payload.to_canonical_bytes()])
         .into_bytes()
 }
 
 /// Format a fingerprint as grouped hex (4-char blocks separated by spaces).
-pub fn fingerprint_hex(fingerprint: &[u8; 32]) -> String {
+pub fn fingerprint_hex(fingerprint: &[u8; FINGERPRINT_LEN]) -> String {
     let hex: String = fingerprint.iter().map(|b| format!("{b:02x}")).collect();
     hex.as_bytes()
         .chunks(4)
@@ -664,12 +662,12 @@ pub fn fingerprint_badge(payload: &MultisigAddressPayload) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AddressProvenance {
-    pub address_fingerprint: [u8; 32],
+    pub address_fingerprint: [u8; FINGERPRINT_LEN],
     pub first_imported_at: u64,
     pub imported_from_source: String,
     pub user_assigned_label: String,
     pub last_used_at: u64,
-    pub prior_fingerprints: Vec<[u8; 32]>,
+    pub prior_fingerprints: Vec<[u8; FINGERPRINT_LEN]>,
 }
 
 impl AddressProvenance {
@@ -1213,30 +1211,35 @@ mod tests {
         assert!(MultisigAddressPayload::parse_fingerprint_bech32m(&mangled).is_err());
     }
 
+    /// A fingerprint has one string, so the ritual's string comparison and
+    /// a parse agree: the upper-cased spelling is refused by name.
     #[test]
-    fn fingerprint_bech32m_accepts_uppercase() {
-        // Bech32m is case-insensitive (an all-uppercase encoding is valid and
-        // carries the same HRP/data). The HRP reverse-map lowercases before
-        // matching, so a validly upper-cased fingerprint must still decode —
-        // regression guard for the previous case-sensitive open-coded lookup.
+    fn fingerprint_bech32m_refuses_uppercase() {
         let payload = make_test_payload(2, 2);
         let s = payload.fingerprint_bech32m().unwrap();
-        let upper = s.to_uppercase();
-        let (net, fp) = MultisigAddressPayload::parse_fingerprint_bech32m(&upper).unwrap();
+        assert!(matches!(
+            MultisigAddressPayload::parse_fingerprint_bech32m(&s.to_uppercase()),
+            Err(MultisigAddressError::Bech32m(EncodingError::NotLowercase))
+        ));
+        let (net, fp) = MultisigAddressPayload::parse_fingerprint_bech32m(&s).unwrap();
         assert_eq!(net, Network::Mainnet);
         assert_eq!(fp, address_fingerprint(&payload));
     }
 
     #[test]
-    fn fingerprint_bech32m_rejects_plain_bech32() {
-        // The fingerprint is encoded as Bech32m; a same-HRP, same-data string
-        // carrying a plain-Bech32 checksum is not a fingerprint we produced and
-        // must be rejected (bech32::decode would have accepted either variant).
-        use bech32::Bech32;
-        let fp = address_fingerprint(&make_test_payload(2, 2));
-        let hrp = Hrp::parse(multisig_hrp(Network::Mainnet)).unwrap();
-        let as_bech32 = bech32::encode::<Bech32>(hrp, &fp).unwrap();
-        assert!(MultisigAddressPayload::parse_fingerprint_bech32m(&as_bech32).is_err());
+    fn fingerprint_bech32m_refuses_every_other_spelling() {
+        // A fingerprint has one string: every other spelling the `bech32`
+        // crate would read as the same HRP and bytes is refused, by the
+        // refusal that names it.
+        let canonical = make_test_payload(2, 2).fingerprint_bech32m().unwrap();
+        for spelling in crate::respell::Spelling::ALL {
+            match MultisigAddressPayload::parse_fingerprint_bech32m(&spelling.of(&canonical)) {
+                Err(MultisigAddressError::Bech32m(e)) => {
+                    assert!(spelling.refused_by(&e), "{spelling:?}: refused as {e:?}");
+                }
+                other => panic!("{spelling:?}: {other:?}"),
+            }
+        }
     }
 
     #[test]
