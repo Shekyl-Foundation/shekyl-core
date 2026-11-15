@@ -148,33 +148,40 @@ fn whole_transaction_with_emission_input_parses() {
         .expect("the emission-shaped tx must pass context-free validation");
 }
 
-/// The mechanism the fix removed for `0x04` must still bite for a genuinely
-/// unknown tag: splice the emission arm's tag byte to `0x05` inside the
-/// serialized transaction and the *whole* parse must die on it.
+/// The mechanism the fix removed for `0x04` must still bite for every tag no
+/// arm reads: splice the emission arm's tag byte, inside the serialized
+/// transaction, to an unassigned input tag and the *whole* parse must die on
+/// it. `0x02` was the serve-credit input's until the switch (`SO-D12` 4b)
+/// deleted it, so a transaction carrying it is refused like any unknown tag
+/// (CEN-G2, the transaction does not parse); `0x05` is past the last arm.
 #[test]
 fn unknown_input_tag_still_kills_whole_tx_parse() {
-    let emission = emission_input(&[0xBB; 96]);
-    let tx = emission_tx(vec![ki(2), ki(1), emission.clone()], vec![out(), out()]);
-    let mut blob = tx.serialize();
+    for tag in [0x02, 0x05] {
+        let emission = emission_input(&[0xBB; 96]);
+        let tx = emission_tx(vec![ki(2), ki(1), emission.clone()], vec![out(), out()]);
+        let mut blob = tx.serialize();
 
-    // Locate the emission arm's serialization inside the tx blob and flip its
-    // leading tag byte. The arm bytes (tag + varint len + 0x04-leading payload)
-    // are long and distinctive enough to be unique in this fixture — nothing
-    // else in the tx emits a 96-byte 0xBB run.
-    let mut arm_bytes = Vec::new();
-    emission.write(&mut arm_bytes).expect("write emission arm");
-    let pos = blob
-        .windows(arm_bytes.len())
-        .position(|w| w == arm_bytes)
-        .expect("emission arm bytes must appear in the tx blob");
-    assert_eq!(blob[pos], TAG_INPUT_ARCHIVAL_REWARD_EMISSION);
-    blob[pos] = 0x05;
+        // Locate the emission arm's serialization inside the tx blob and flip
+        // its leading tag byte. The arm bytes (tag + varint len + 0x04-leading
+        // payload) are long and distinctive enough to be unique in this
+        // fixture: nothing else in the tx emits a 96-byte 0xBB run.
+        let mut arm_bytes = Vec::new();
+        emission.write(&mut arm_bytes).expect("write emission arm");
+        let pos = blob
+            .windows(arm_bytes.len())
+            .position(|w| w == arm_bytes)
+            .expect("emission arm bytes must appear in the tx blob");
+        assert_eq!(blob[pos], TAG_INPUT_ARCHIVAL_REWARD_EMISSION);
+        blob[pos] = tag;
 
-    let err = Transaction::from_bytes(&blob).expect_err("unknown tag must fail the whole parse");
-    assert!(
-        err.to_string().contains("unsupported input tag"),
-        "unexpected error: {err}"
-    );
+        let err = Transaction::from_bytes(&blob)
+            .expect_err("an unassigned input tag must fail the whole parse");
+        assert!(
+            err.to_string()
+                .contains(&format!("unsupported input tag {tag:#04x}")),
+            "tag {tag:#04x}: unexpected error: {err}"
+        );
+    }
 }
 
 #[test]

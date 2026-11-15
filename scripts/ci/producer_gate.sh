@@ -6,10 +6,10 @@
 #
 # The bundle producer's gate (`SO-D12` increment 4c,
 # `ARCHIVAL_SETTLEMENT_WRITER.md` §16.11), run by nightly.yml's
-# producer-gate job: a bundle the producer made is admitted by 4a's verifier
-# on a driven chain and connects through the staged door. 4b does not land
-# until it holds (round 0, F2), so it runs every night, not only when
-# someone remembers the live lane.
+# producer-gate job: a bundle the producer made is admitted by the bundle
+# verifier (CEN-J29 to J37) on a driven chain and connects. It is the
+# producer's path end to end, so it runs every night, not only when someone
+# remembers the live lane.
 #
 # Its support-stream twin runs beside it (`SO-D12` 4b §5.1 item 3,
 # `ARCHIVAL_SUPPORT_DRAW.md` §13): a complete tree seated by the connect
@@ -28,8 +28,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 subjects=(
-  'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects_through_the_staged_door'
-  'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door'
+  'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects'
+  'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects'
 )
 
 list=$(cargo test --locked --release -p shekyl-chain-ingest --lib -- --list --ignored)
