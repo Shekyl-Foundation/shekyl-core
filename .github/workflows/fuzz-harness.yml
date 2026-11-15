@@ -3,7 +3,7 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Compile every fuzz harness (the CI lane's fuzz brief, Part A, ruled
+# Compile every fuzz harness (scratch: this line edited so every crate runs) (the CI lane's fuzz brief, Part A, ruled
 # 2026-11-12, amended 2026-11-15).
 #
 # Each `rust/<crate>/fuzz/` is its own workspace, outside the main one, so

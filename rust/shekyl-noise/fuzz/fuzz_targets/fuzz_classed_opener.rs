@@ -20,6 +20,8 @@ use shekyl_noise::{
 };
 
 fn table() -> ClassTable {
+    // SCRATCH: a deliberate type error, to prove this crate's job alone turns red.
+    let _broken: u32 = "not a number";
     ClassTable::new(&[512, 16_384, 65_535]).expect("the channel's table")
 }
 
