@@ -311,6 +311,8 @@ module-level mutable state.
 
 ## 5. FFI Surface
 
+> **Superseded (2026-11-14).** The export this section specifies, and the process-global `CacheStore` behind it, are no longer in the tree: the workspace has no C ABI (rule 25), and `CacheStore` is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the contract as it stood while a C++ caller linked the export.
+
 The hashing export is one function. The daemon does not call it: since
 the DRS-X flip the Rust ingest owns the chain and hashes through the
 node's one hasher (§6). Callers are the C++ parity gates
@@ -973,6 +975,8 @@ The constants are emitted alongside the function prototype in
 that requires a doc update here.
 
 ## 18. Thread-Safety Contract
+
+> **Superseded (2026-11-14).** The export and the `CacheStore` in `shekyl-ffi` this section binds are no longer in the tree (§5's note). What a concurrent hash may rely on now is the hasher's contract: a job borrows its seed's cache, and one builder thread derives, so two jobs on one seed never derive twice ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) §5). The text below is the contract as it stood.
 
 `shekyl_pow_randomx_v2_hash` is callable concurrently from multiple
 threads. The contract is:

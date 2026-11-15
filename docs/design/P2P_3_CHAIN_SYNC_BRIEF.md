@@ -381,7 +381,10 @@ ingest deciding forks.**
        the same request every millisecond. **A proof whose seed the
        cache slots did not hold is not a spend (amended 2026-11-02,
        #1237's `a_main_seed_not_held_asks_again_when_the_window_changes`;
-       defect 8):** the gate as first written closed on it too, and a
+       defect 8; a dated record, superseded 2026-11-14: the slots, the
+       record and the event it names are deleted, and the note that
+       closes this item says what runs):** the gate as first written
+       closed on it too, and a
        joiner whose one source was idle then stood at height 1 for ever,
        because neither the source's claim nor `H*` would move while the
        ingest attendant was still deriving the genesis seed's cache (a
@@ -456,8 +459,12 @@ ingest deciding forks.**
      64; `shekyl-difficulty/src/seed_epoch.rs:37-40`). This is DRS-X's
      earned-seed rule, applied to headers (B2, DRS-X PR 2 review): a
      cache is derived only for a seed the chain has earned.
-     - **A seed one of the two cache slots holds** (the window the
-       ingest door uses) is used as is.
+     - **A seed on our own chain, at or below the fork,** is used as
+       is. For a fork inside the cap it is one of the one or two seeds
+       the ingest's window names, which head the node's ranked list
+       ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) §5.1), so its
+       cache is resident. A run past the cap is not hashed at all, apart
+       from the evidence check below.
      - **A seed on the run's own branch is earned once (Rick,
        2026-10-24).** It is earned when the seed header and the lag after
        it are PoW-verified on that branch: every header before the first
@@ -479,10 +486,17 @@ ingest deciding forks.**
          Hashing one header at a time would make a 50,000-header sync
          take hours on one slot (4.8 h measured on a 16-thread x86 host,
          far longer on the floor device).
-     - Such a cache is **transient**. It never takes the canonical slot
-       or the pinned pair, and it is never pinned. It is built under
-       `Class::HeaderPow` (`shekyl-hash-budget`, DRS-X PR 2), one build
-       at a time, and dropped when that seed epoch's headers are done.
+     - **Its cache is the node's one hasher's, and chain sync holds
+       none** ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) §5.3). A
+       header proof is a `lend` job on its seed: the hasher builds the
+       cache when it is not warm, inside its cap of three places, and
+       each header's hash takes one permit of `Class::HeaderPow`
+       (`shekyl-hash-budget`). What keeps the cache between one response's
+       headers and the next's is the ranked list, not the job: the owner
+       publishes the run's seed and proven work as the header frontier,
+       and the list takes it as its third place when the window does not
+       already name it (§5.1 there). When the run ends the frontier is
+       withdrawn, and the cache is freed once no job holds it.
      - **Any other seed is not derived.** That is an old main-chain seed
        below the window, named by the first headers of a branch that
        forks deeper than the window reaches. Those headers are not

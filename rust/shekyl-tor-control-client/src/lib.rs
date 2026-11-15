@@ -37,11 +37,9 @@ pub mod awake;
 pub mod binary;
 pub mod control;
 pub mod directory_cache;
-pub mod inherit;
 pub mod onion_identity;
 #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
 pub mod outside_kill;
-pub mod spawn_lock;
 pub mod supervisor;
 
 #[cfg(test)]

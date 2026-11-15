@@ -200,7 +200,7 @@ fn fill(command: &[String], fills: &[(&str, String)]) -> Vec<OsString> {
 /// launcher follows (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2).
 ///
 /// On Unix the child inherits standard input, output and error and no other
-/// descriptor ([`shekyl_tor_control_client::inherit`]): nothing this
+/// descriptor ([`shekyl_spawn::inherit`]): nothing this
 /// process holds is the operator's command's (§2.10).
 ///
 /// The spawn takes the spawn lock (`TOR_SUPERVISOR.md` §4.7): this runs in
@@ -210,21 +210,24 @@ fn fill(command: &[String], fills: &[(&str, String)]) -> Vec<OsString> {
 /// wait is outside it.
 async fn run(argv: &[OsString]) -> std::io::Result<std::process::ExitStatus> {
     let (program, args) = argv.split_first().expect("a command has its program first");
-    let mut cmd = tokio::process::Command::new(PathBuf::from(program));
-    cmd.args(args)
+    let mut std_cmd = std::process::Command::new(PathBuf::from(program));
+    std_cmd
+        .args(args)
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(false);
-    shekyl_tor_control_client::inherit::stdio_only(&mut cmd);
+        .stderr(Stdio::null());
+    shekyl_spawn::inherit::stdio_only(&mut std_cmd);
     #[cfg(windows)]
     {
         let root = shekyl_win_sec::system_dir::system_windows_directory()
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        cmd.env("SystemRoot", root);
+        std_cmd.env("SystemRoot", root);
     }
-    let mut child = shekyl_tor_control_client::spawn_lock::with(|| cmd.spawn())?;
+    // tokio's command keeps the std command's `pre_exec` hook.
+    let mut cmd = tokio::process::Command::from(std_cmd);
+    cmd.kill_on_drop(false);
+    let mut child = shekyl_spawn::spawn_lock::with(|| cmd.spawn())?;
     child.wait().await
 }
 
@@ -387,7 +390,7 @@ mod tests {
         // its status back, so nothing reaped it from under us.
         let status = rt
             .block_on(async {
-                let mut child = shekyl_tor_control_client::spawn_lock::with(|| {
+                let mut child = shekyl_spawn::spawn_lock::with(|| {
                     tokio::process::Command::new("true").spawn()
                 })?;
                 child.wait().await
@@ -435,7 +438,7 @@ mod tests {
     /// The operator's command inherits standard input, output and error and
     /// nothing else (§2.10): a planted descriptor without close-on-exec does
     /// not reach it. Fails when [`run`] stops calling
-    /// [`shekyl_tor_control_client::inherit::stdio_only`].
+    /// [`shekyl_spawn::inherit::stdio_only`].
     #[cfg(unix)]
     #[test]
     fn the_command_does_not_inherit_a_descriptor_left_open_without_cloexec() {

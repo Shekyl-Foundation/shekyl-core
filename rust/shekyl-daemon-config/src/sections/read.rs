@@ -208,9 +208,10 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// A development lever's integer. Absence is the lever left unset,
-    /// including a lever the network gate skipped. Another arm is a fault.
-    pub(super) fn dev_integer(&mut self, name: &str) -> Option<u64> {
+    /// An integer the table leaves unset by default. Absence is the row left
+    /// unset, including a development lever the network gate skipped.
+    /// Another arm is a fault.
+    pub(super) fn optional_integer(&mut self, name: &str) -> Option<u64> {
         match self.take(name).cloned() {
             None => None,
             Some(Value::Integer(n)) => Some(n),

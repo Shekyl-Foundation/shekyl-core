@@ -1,0 +1,30 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-os-account"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The operating-system account this process runs as: its effective user id, its session directory, its root for a rendezvous, and the account at the other end of a local socket. No network stack"
+publish = false
+
+# A leaf with no network stack (Rick, 2026-11-13): libc on Unix, shekyl-win-sec
+# on Windows. The process-hardening crate and the transport both read the
+# account here, so neither pulls the other's dependencies.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# The local application data folder, the account's root on Windows.
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
