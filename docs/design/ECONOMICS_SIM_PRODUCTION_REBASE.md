@@ -4001,7 +4001,7 @@ registered run; the narration of record is the sustained one.
 
 | Prediction | Outcome (registered run unless named) |
 | --- | --- |
-| **JG-1.** SMA: every share from 10 %; median: only 51 % and every miner; decoupled: none | **Held.** SMA: every share moves `M_r` wherever blocks have free room. Median: 10–33 % never move it; every miner holds it at its cap; 51 % moved it for 26 blocks in the registered run, and in the sustained run holds it at the cap from about half a window on, as every miner does. Decoupled: `M_r` is 1.0 in every cell |
+| **JG-1.** SMA: every share from 10 %; median: only 51 % and every miner; decoupled: none | **Held.** SMA: every share moves `M_r` wherever blocks have free room. Median: 10–33 % never move it from its unstuffed value (0.8–0.96 where the blocks are constrained, 1.0 elsewhere). 51 % moved it for 26 blocks in the registered run. In the sustained run 51 % and every miner move it as far as the free room lets them: nothing up to N = 35 at `w_ref` 3 000, 1.22 at N = 45, the cap from N = 60. Every miner gets there after half a window (361 blocks); 51 % after about 708, since the window must hold more than half its blocks from a 51 % share. Decoupled: `M_r` is 1.0 in every cell |
 | **JG-2.** Gain at 20 %: SMA 14 816 SKL re-derived and more as N grows; median about zero; median with the floor a small loss; decoupled a small loss | **Held but for the decoupled sign.** SMA: 14 815 re-derived, 29 866 at N = 90 (`w_ref` 3 000). Median: 0.00 everywhere. Median with the floor: −12.6 to −87 SKL. Decoupled: within ±0.3 SKL of zero, a small gain as often as a loss: the stuffed sum raises the burn and so `C`, which raises the fees the miner keeps |
 | **JG-3.** Year-1 Standard fee as `w_ref`·`M_r`/M², M the zone | **Held at `w_ref` 3 000, missed at `w_ref′` below N ≈ 45.** At 3 000: 0.448 SKL at N = 25 (0.90×), 0.337 at 30, 0.104 at 60, 0.0462 at 90, 0.0166 at 150; the ceiling is crossed between N = 20 (1.39×) and 25. N = 14 is the recorded 1.1888, not 1.50: the median sits at 315 KB, above that zone. At `w_ref′` the fee is flat at about 1.22 SKL (2.46×) up to N = 35: blocks grow to carry demand at once there (§5.29.1 R2), so the median is demand's weight, not the zone; it falls to 0.775 at N = 45, 0.394 at the re-derived zone and 0.194 at N = 90, crossing under the ceiling between N = 45 (1.56×) and 60 (0.88×) |
 | **JG-4.** A day's fill as `w_ref`·`M_r`/zone | **Held within 7 %** where the median is the zone: 2 462 SKL a day at N = 30, 1 032 at N = 90, 618 at N = 150 (`w_ref` 3 000); about 4.2 times that at `w_ref′` from N = 60 |
@@ -4015,10 +4015,14 @@ the sustained run, from year 5:
   over the span; 20 % holds 1.29 and gains 74 600; 33 % and more reach
   the cap.
 - **The median resists any minority and none of a majority.** 10 %, 20 %
-  and 33 % leave `M_r` at 1.0 at every zone; 51 % holds it at the cap from
-  about half a window on and gains about 160 000 SKL at N = 90, close to
-  every miner's 389 000. The median ignores an honest step until half
-  the window carries it (361 blocks), and does not see one shorter.
+  and 33 % leave `M_r` at its unstuffed value at every zone (0.8–0.96
+  where the blocks are constrained, 1.0 elsewhere). 51 % moves it as far
+  as the free room lets it (nothing up to N = 35 at `w_ref` 3 000, 1.22 at
+  N = 45, the cap from N = 60), reaching it after about 708 blocks, when
+  over half the window's blocks are the cartel's; at N = 90 it gains about
+  160 000 SKL, against every miner's 389 000. The median ignores an
+  honest step until half the window carries it (361 blocks), and does not
+  see one shorter.
 - **The floor on own bodies costs a minority its fees' burn** (−19 to
   −259 SKL) and a majority about 0.1 % of its gain.
 - **Decoupled, stuffing gains nothing and still costs the honest chain:**

@@ -447,15 +447,17 @@ signal arms with the zone, both `w_ref` levels, the stuffers and two start
 years, from one build (§5.33 there).
 
 **Where it stands.** The zone is 300,000 B, inherited (§3, item G). A
-2-in/2-out spend weighs 21,184 B, so a genesis block holds 14 such spends
-penalty-free and 28 at the hard limit, where the penalty takes the whole
-reward. `TX_WEIGHT_LIMIT` is derived from the zone
+2-in/2-out spend weighs 19,939 B at genesis depth and the genesis
+Standard fee (more on a deeper tree: 21,219 B at depth 2, 26,083 B at the
+consensus maximum), so beside the 1,386 B coinbase reserve a genesis
+block holds 14 such spends penalty-free and 30 at the hard limit, where
+the penalty takes the whole reward. `TX_WEIGHT_LIMIT` is derived from the zone
 (`MIN_BLOCK_WEIGHT / 2 − COINBASE_RESERVE`, `shekyl-wire`). The coinbase
 reserve is not: it is the coinbase grammar's maximum. ESR-10's re-derived
 arm (`esr10::rederived_pair`) declares `w_ref′` = 12,595 B, the ordinary
 1-in/2-out at genesis depth, and `zone′ = 100 · w_ref′` = 1,259,500 B,
-about 59 2-in/2-out spends; the factor 100 is the inherited ratio. Ninety
-spends are 1,906,560 B, plus `COINBASE_RESERVE`.
+63 2-in/2-out spends; the factor 100 is the inherited ratio. Ninety
+spends with the reserve are 1,795,896 B.
 
 Everything below that Rick has not ruled is **PROPOSED**, for the reason
 §4 gives.
@@ -475,8 +477,8 @@ Everything below that Rick has not ruled is **PROPOSED**, for the reason
    and 5.75, 5.10 and 3.67 on the conservative bracket; S = 3 is the
    integer below 3.67, an Assumption until BA-T10. The same composition
    gives the largest zone each S admits: at depth 24, about 1.18 MB at
-   S = 1 (1.10 MB conservative), about 56 2-in/2-out spends, and about
-   0.39 MB at S = 3. The composition uses the worst-verifying shape per
+   S = 1 (1.10 MB conservative), about 45 2-in/2-out spends at that depth
+   (59 at genesis depth), and about 0.39 MB at S = 3. The composition uses the worst-verifying shape per
    byte, not the 2-in/2-out spend. Verify cost is not in the fold, so the
    sweep reads it from the ledger and prints, per arm and depth tier, the
    largest S its zone admits.
