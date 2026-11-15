@@ -26,9 +26,10 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::mine_address_from_seed;
-use super::wallet_server::{
-    build, fund, open, refresh, send, tail, wallet_and_daemon, WalletServer,
-};
+// `build` (without its submit) serves only the unix stop-signal gate.
+#[cfg(unix)]
+use super::wallet_server::build;
+use super::wallet_server::{fund, open, refresh, send, tail, wallet_and_daemon, WalletServer};
 
 /// The wallet's name on the wire: the server opens `<wallet-dir>/<name>.wallet`.
 const NAME: &str = "a19";
