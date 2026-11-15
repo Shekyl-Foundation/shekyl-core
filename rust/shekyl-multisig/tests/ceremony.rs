@@ -18,8 +18,7 @@ mod common;
 use rand_core::OsRng;
 
 use common::wallet::{
-    assert_weight_predicted, context, import_into, intent, proposer_inputs, validate,
-    verify_from_the_wire, Wallet,
+    assert_weight_predicted, context, import_into, intent, validate, verify_from_the_wire, Wallet,
 };
 use common::{found_group, pay_group_twice};
 use shekyl_multisig::{Cosigner, Holder, MemberFile, Proposer, Responder, ResponderInput};
@@ -32,7 +31,7 @@ use shekyl_multisig::{Cosigner, Holder, MemberFile, Proposer, Responder, Respond
 #[test]
 fn two_of_three_spends_two_group_outputs() {
     let (address, files) = found_group(3, 2);
-    let mut paid = pay_group_twice(&address, &files);
+    let paid = pay_group_twice(&address, &files);
     let [a, _, b]: [MemberFile; 3] = files.try_into().ok().unwrap();
     let mut a = Wallet::new(a);
     let mut b = Wallet::new(b);
@@ -40,14 +39,8 @@ fn two_of_three_spends_two_group_outputs() {
 
     // 1: A proposes.
     let ctx_a = context(&a.file, validate(&a.file, intent.clone()), &paid);
-    let (proposer, proposal) = Proposer::propose(
-        ctx_a,
-        proposer_inputs(&mut paid),
-        &mut a.store,
-        &mut a.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (proposer, proposal) =
+        Proposer::propose(ctx_a, &mut a.store, &mut a.live, &mut OsRng).unwrap();
     assert_eq!(proposer.responder_file(&mut OsRng).unwrap(), proposal);
 
     // 4: B approves the intent it received, and responds in one call.
@@ -102,7 +95,7 @@ fn two_of_three_spends_two_group_outputs() {
 #[test]
 fn three_of_five_spends_two_group_outputs() {
     let (address, files) = found_group(5, 3);
-    let mut paid = pay_group_twice(&address, &files);
+    let paid = pay_group_twice(&address, &files);
     let mut files: Vec<Option<MemberFile>> = files.into_iter().map(Some).collect();
     let mut wallet = |i: usize| Wallet::new(files[i].take().unwrap());
     let (mut a, mut h, mut b) = (wallet(1), wallet(3), wallet(4));
@@ -110,14 +103,8 @@ fn three_of_five_spends_two_group_outputs() {
 
     // 1: A proposes; the holder receives it.
     let ctx_a = context(&a.file, validate(&a.file, intent.clone()), &paid);
-    let (proposer, proposal) = Proposer::propose(
-        ctx_a,
-        proposer_inputs(&mut paid),
-        &mut a.store,
-        &mut a.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (proposer, proposal) =
+        Proposer::propose(ctx_a, &mut a.store, &mut a.live, &mut OsRng).unwrap();
 
     // 2: the holder commits.
     let at_h = expect!(import_into(&h, &proposal), Proposal);

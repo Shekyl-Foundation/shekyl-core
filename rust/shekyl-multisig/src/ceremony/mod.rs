@@ -66,7 +66,7 @@ pub mod nonce;
 pub mod proofs;
 pub mod roles;
 
-pub use context::{ContextError, InputPath, ProposerInputs, SigningContext};
+pub use context::{ContextError, SigningContext};
 pub use derivation::{
     DeriveError, DerivedSpend, GroupOutput, GroupOutputs, InputContext, UnsignedSpend,
 };

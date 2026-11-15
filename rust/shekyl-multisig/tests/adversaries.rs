@@ -14,10 +14,8 @@ mod common;
 
 use rand_core::OsRng;
 
-use common::wallet::{
-    context, import_for, intent, ledger, try_context, validate, verify_from_the_wire, Live,
-};
-use common::{found_group, pay_group_twice, rebuild_paths, Paid, NET};
+use common::wallet::{context, import_for, intent, ledger, validate, verify_from_the_wire, Live};
+use common::{found_group, pay_group_twice, Paid, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
 use shekyl_fcmp::frost_sal::{participant, FrostError};
 use shekyl_multisig::ceremony::context::ContextError;
@@ -27,9 +25,9 @@ use shekyl_multisig::ceremony::roles::{Committed, SharesPending};
 use shekyl_multisig::intent::SpendIntent;
 use shekyl_multisig::{
     import, seal_envelope, CeremonyError, Cosigner, DeriveError, DerivedSpend, HeldNonceStore,
-    Holder, ImportError, MemberFile, Proposer, ProposerInputs, Responder, ResponderInput,
-    SigningContext,
+    Holder, ImportError, MemberFile, Proposer, Responder, ResponderInput, SigningContext,
 };
+use shekyl_types::{BlockHash, CurveTreeRoot};
 
 /// A 3-of-5 group that owns two outputs, and an intent to spend them.
 struct Spend {
@@ -85,12 +83,6 @@ impl Spend {
         context(file, validate(file, intent), &self.paid)
     }
 
-    fn proposer_inputs(&self) -> ProposerInputs {
-        ProposerInputs {
-            input_paths: rebuild_paths(&self.paid),
-        }
-    }
-
     /// `body` as a file for this intent, sealed by `from`.
     fn sealed<B: Body>(&self, from: &MemberFile, body: &B) -> Vec<u8> {
         seal_envelope(
@@ -121,14 +113,8 @@ fn through_step_5<'w>(
     ch: &mut Caps,
     cb: &mut Caps,
 ) -> ThroughStep5<'w> {
-    let (proposer, proposal) = Proposer::propose(
-        s.ctx(&m.a),
-        s.proposer_inputs(),
-        &mut ca.store,
-        &mut ca.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (proposer, proposal) =
+        Proposer::propose(s.ctx(&m.a), &mut ca.store, &mut ca.live, &mut OsRng).unwrap();
     let at_h = expect!(import_for(&m.h, &proposal), Proposal);
     let (holder, commitment) =
         Holder::commit(s.ctx(&m.h), &at_h, &mut ch.store, &mut ch.live, &mut OsRng).unwrap();
@@ -167,14 +153,8 @@ fn through_step_5<'w>(
 #[test]
 fn a_proposal_not_from_the_proposer_is_refused() {
     let (s, m, mut ca, _, _) = setup();
-    let (_, proposal) = Proposer::propose(
-        s.ctx(&m.a),
-        s.proposer_inputs(),
-        &mut ca.store,
-        &mut ca.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (_, proposal) =
+        Proposer::propose(s.ctx(&m.a), &mut ca.store, &mut ca.live, &mut OsRng).unwrap();
     let honest = expect!(import_for(&m.h, &proposal), Proposal);
     let forged = s.sealed(&m.h, honest.body());
     assert!(matches!(
@@ -189,14 +169,8 @@ fn a_proposal_not_from_the_proposer_is_refused() {
 #[test]
 fn a_forged_commitment_in_a_signing_set_is_refused() {
     let (s, m, mut ca, _, mut cb) = setup();
-    let (_, proposal) = Proposer::propose(
-        s.ctx(&m.a),
-        s.proposer_inputs(),
-        &mut ca.store,
-        &mut ca.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (_, proposal) =
+        Proposer::propose(s.ctx(&m.a), &mut ca.store, &mut ca.live, &mut OsRng).unwrap();
     let at_h = expect!(import_for(&m.h, &proposal), Proposal);
     let forged = s.sealed(
         &m.a,
@@ -227,14 +201,8 @@ fn a_forged_commitment_in_a_signing_set_is_refused() {
 #[test]
 fn a_signing_set_without_every_signer_is_refused() {
     let (s, m, mut ca, _, mut cb) = setup();
-    let (_, proposal) = Proposer::propose(
-        s.ctx(&m.a),
-        s.proposer_inputs(),
-        &mut ca.store,
-        &mut ca.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (_, proposal) =
+        Proposer::propose(s.ctx(&m.a), &mut ca.store, &mut ca.live, &mut OsRng).unwrap();
     let set = s.sealed(
         &m.a,
         &SigningSet {
@@ -260,17 +228,10 @@ fn a_signing_set_without_every_signer_is_refused() {
 #[test]
 fn different_preprocess_sets_give_no_sal_and_no_reused_nonce() {
     let (s, m, mut ca, mut ch, mut cb) = setup();
-    let (proposer, p1) = Proposer::propose(
-        s.ctx(&m.a),
-        s.proposer_inputs(),
-        &mut ca.store,
-        &mut ca.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (proposer, p1) =
+        Proposer::propose(s.ctx(&m.a), &mut ca.store, &mut ca.live, &mut OsRng).unwrap();
     let (_, p2) = Proposer::propose(
         s.ctx(&m.a),
-        s.proposer_inputs(),
         &mut HeldNonceStore::new(),
         &mut Live::default(),
         &mut OsRng,
@@ -419,14 +380,8 @@ fn a_bad_share_is_named_by_its_signer() {
 #[test]
 fn a_key_that_does_not_match_its_hash_is_refused_in_round_one() {
     let (s, m, mut ca, mut ch, _) = setup();
-    let (proposer, proposal) = Proposer::propose(
-        s.ctx(&m.a),
-        s.proposer_inputs(),
-        &mut ca.store,
-        &mut ca.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (proposer, proposal) =
+        Proposer::propose(s.ctx(&m.a), &mut ca.store, &mut ca.live, &mut OsRng).unwrap();
     let at_h = expect!(import_for(&m.h, &proposal), Proposal);
     let (_, commitment) =
         Holder::commit(s.ctx(&m.h), &at_h, &mut ch.store, &mut ch.live, &mut OsRng).unwrap();
@@ -471,7 +426,6 @@ fn a_replayed_file_is_refused() {
     let second = intent(&s.address, 1, &[1, 3, 4], 4);
     let (proposer2, _) = Proposer::propose(
         s.ctx_for(&m.a, second),
-        s.proposer_inputs(),
         &mut HeldNonceStore::new(),
         &mut Live::default(),
         &mut OsRng,
@@ -506,7 +460,6 @@ fn a_second_intent_on_a_live_input_is_refused() {
     let second = intent(&s.address, 1, &[1, 3, 4], 4);
     let (_, proposal) = Proposer::propose(
         s.ctx_for(&m.a, second.clone()),
-        s.proposer_inputs(),
         &mut HeldNonceStore::new(),
         &mut Live::default(),
         &mut OsRng,
@@ -660,14 +613,8 @@ fn a_proposer_restarting_after_finish_still_releases() {
 #[test]
 fn a_proposer_resumes_after_finish_only_from_its_own_final_tx() {
     let (s, m, mut ca, _, _) = setup();
-    let (_, proposal) = Proposer::propose(
-        s.ctx(&m.a),
-        s.proposer_inputs(),
-        &mut ca.store,
-        &mut ca.live,
-        &mut OsRng,
-    )
-    .unwrap();
+    let (_, proposal) =
+        Proposer::propose(s.ctx(&m.a), &mut ca.store, &mut ca.live, &mut OsRng).unwrap();
     assert!(matches!(
         Proposer::resume_after_finish(s.ctx(&m.a), &proposal).err(),
         Some(CeremonyError::FileType)
@@ -694,13 +641,25 @@ fn a_proposer_resumes_after_finish_only_from_its_own_final_tx() {
 // The context
 // ---------------------------------------------------------------------------
 
-/// A context under a layer count no spend proves under does not build.
+/// A reference tree with a layer count no spend proves under builds no
+/// context.
 #[test]
 fn a_context_needs_a_layer_count_a_spend_proves_under() {
     let (s, m, ..) = setup();
     for layers in [0, 1, shekyl_fcmp::MAX_TREE_DEPTH + 1] {
+        let mut held = ledger(&m.b, &s.paid);
+        for output in &mut held.0 {
+            output.path.tree.tree_depth = layers;
+        }
+        let derived = DerivedSpend::derive(
+            validate(&m.b, s.intent.clone()),
+            &held,
+            &m.b.group_key(),
+            NET,
+        )
+        .unwrap();
         assert!(matches!(
-            try_context(&m.b, validate(&m.b, s.intent.clone()), &s.paid, layers),
+            SigningContext::new(&m.b, derived),
             Err(ContextError::TreeLayers { layers: refused }) if refused == layers
         ));
     }
@@ -722,7 +681,7 @@ fn a_derivation_orders_its_inputs_by_key_image() {
         NET,
     )
     .unwrap();
-    let from_reversed = SigningContext::new(&m.b, derived, s.paid.root, s.paid.layers).unwrap();
+    let from_reversed = SigningContext::new(&m.b, derived).unwrap();
     assert_eq!(in_order.tx_signable(), from_reversed.tx_signable());
 }
 
@@ -771,6 +730,25 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
             l[0].source_ml_kem_ct = l[1].source_ml_kem_ct.clone();
         }),
         Some(DeriveError::KeyImage { .. })
+    ));
+    // A path to another block, to another tree than the other input's, or
+    // one whose leaf chunk does not hold the output.
+    assert!(matches!(
+        derive_from(&|l| l[0].path.tree.reference_block = BlockHash::from_bytes([0; 32])),
+        Some(DeriveError::Reference { .. })
+    ));
+    assert!(matches!(
+        derive_from(&|l| l[1].path.tree.tree_root = CurveTreeRoot::EMPTY),
+        Some(DeriveError::Tree { .. })
+    ));
+    assert!(matches!(
+        derive_from(&|l| {
+            let spent = l[0].output_key;
+            l[0].path
+                .leaf_chunk
+                .retain(|leaf| leaf.output_key.to_bytes() != spent);
+        }),
+        Some(DeriveError::Path { .. })
     ));
     // One output recorded at both of the intent's global indices (an
     // output key paid twice): both records derive, to one key image.

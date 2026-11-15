@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! What one member brings to a ceremony: [`SigningContext`], its derived
-//! spend (`super::derivation`) with its keys and its view of the tree,
-//! and, for the proposer alone, [`ProposerInputs`].
+//! spend (`super::derivation`), with the tree at the intent's reference
+//! block and each input's path to it, and its keys.
 //!
 //! The intent is the only input a signer trusts. Every value here is the
 //! member's own: the spent outputs as its ledger records them, and what
@@ -21,6 +21,23 @@
 //! descending (CEN-I5). Every member computes the same key images, so every
 //! member orders its inputs alike, and every per-input list in a ceremony
 //! file is in this order.
+//!
+//! A context is built only from a derived spend; it cannot be written
+//! down from parts:
+//!
+//! ```compile_fail,E0451
+//! use shekyl_multisig::ceremony::{InputContext, SigningContext, UnsignedSpend};
+//! use shekyl_multisig::{MemberFile, ValidatedIntent};
+//!
+//! fn forge<'a>(
+//!     member: &'a MemberFile,
+//!     intent: ValidatedIntent,
+//!     inputs: Vec<InputContext>,
+//!     unsigned: UnsignedSpend,
+//! ) -> SigningContext<'a> {
+//!     SigningContext { member, intent, inputs, unsigned }
+//! }
+//! ```
 
 use shekyl_crypto_pq::multisig_output::{MemberOwnCiphertext, MultisigMemberView};
 use shekyl_curve_primitives::Commitment;
@@ -28,13 +45,12 @@ use shekyl_fcmp::frost_sal::{
     check_keys_open, threshold_keys, Ed25519T, FrostKeyError, FrostSalError, SalSigningParams,
     ThresholdKeys,
 };
-use shekyl_fcmp::proof::ProveInputLeafChunk;
 use shekyl_network::NetworkId;
-use shekyl_types::{BlockHash, CurveTreeRoot, KeyImage, TxSignableHash};
+use shekyl_types::{BlockHash, CurveTreeRoot, TxSignableHash};
 use shekyl_wire::{Ct, Input, PqcAuth, Prunable, Transaction, TxPrefix};
 
 use super::derivation::{DerivedSpend, InputContext, UnsignedSpend};
-use super::{CeremonyError, Role};
+use super::Role;
 use crate::invariants::ValidatedIntent;
 use crate::member_file::MemberFile;
 
@@ -47,7 +63,7 @@ pub enum ContextError {
     /// An input's committed form is not for this group.
     #[error("input {input}'s committed form is not for this group")]
     CommittedForm { input: usize },
-    /// No spend proves under this many FCMP++ layers.
+    /// No spend proves under the reference tree's layer count.
     #[error("no spend proves under {layers} FCMP++ layers")]
     TreeLayers { layers: u8 },
     /// This member's key share does not load.
@@ -74,31 +90,28 @@ pub struct SigningContext<'a> {
 }
 
 impl<'a> SigningContext<'a> {
-    /// Build `member`'s context for its derived spend `derived`, under a
-    /// tree whose root is `tree_root` and whose layer count is
-    /// `fcmp_layers`.
+    /// Build `member`'s context for its derived spend `derived`, under the
+    /// curve tree at the intent's reference block that its inputs' paths
+    /// are to.
     ///
     /// Checks this member signs the intent; every committed form is for
-    /// this group's size; a spend proves under `fcmp_layers`; this
-    /// member's share loads; and every input's parameters build and are
-    /// opened by this member's keys.
+    /// this group's size; a spend proves under the tree's layer count;
+    /// this member's share loads; and every input's parameters build and
+    /// are opened by this member's keys.
     ///
     /// # Errors
     ///
     /// The first [`ContextError`] that holds.
-    pub fn new(
-        member: &'a MemberFile,
-        derived: DerivedSpend,
-        tree_root: CurveTreeRoot,
-        fcmp_layers: u8,
-    ) -> Result<Self, ContextError> {
+    pub fn new(member: &'a MemberFile, derived: DerivedSpend) -> Result<Self, ContextError> {
         let DerivedSpend {
             network_id,
             intent,
+            tree,
             inputs,
             unsigned,
             output_openings,
         } = derived;
+        let (tree_root, fcmp_layers) = (tree.tree_root, tree.tree_depth);
         if !intent.intent().signers.contains(&member.member_index()) {
             return Err(ContextError::NotASigner);
         }
@@ -268,44 +281,5 @@ fn spend(
             pqc_auths,
             prunable,
         },
-    }
-}
-
-/// One input's path to the reference root, named by the input it proves.
-pub struct InputPath {
-    /// The key image of the input the path proves.
-    pub key_image: KeyImage,
-    /// The leaf chunk holding the input's output, and the branch above it.
-    pub leaf_chunk: ProveInputLeafChunk,
-}
-
-/// What the proposer alone needs to finish the transaction, beyond what
-/// it derives: each input's path to the reference root (the membership
-/// proof).
-pub struct ProposerInputs {
-    /// One per input, in any order: each names its input.
-    pub input_paths: Vec<InputPath>,
-}
-
-impl ProposerInputs {
-    /// These inputs for `ctx`: a path per input, put in the context's
-    /// input order.
-    ///
-    /// # Errors
-    ///
-    /// [`CeremonyError::InputCount`] when an input has no path, or one has
-    /// two.
-    pub(crate) fn for_context(mut self, ctx: &SigningContext<'_>) -> Result<Self, CeremonyError> {
-        self.input_paths
-            .sort_unstable_by(|a, b| b.key_image.as_bytes().cmp(a.key_image.as_bytes()));
-        let paths_match = self
-            .input_paths
-            .iter()
-            .map(|path| path.key_image)
-            .eq(ctx.inputs.iter().map(InputContext::key_image));
-        if !paths_match {
-            return Err(CeremonyError::InputCount);
-        }
-        Ok(self)
     }
 }

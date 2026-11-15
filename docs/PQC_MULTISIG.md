@@ -1140,8 +1140,10 @@ construction: no copy of a wallet contains one.
   group holds, named by its global index. It holds public values and
   ciphertexts only, as the solo ledger does: `O`, `C`, the output's index
   in its transaction, its `0x06` ciphertext, its key image, its leaf
-  point, its committed form and the member's own `0x0D` ciphertexts. The
-  ledger is read through `GroupOutputs`, a lookup by global index.
+  point, its committed form, the member's own `0x0D` ciphertexts, and its
+  membership path (`AssembledPath`, public material) to the curve tree at
+  the intent's reference block. The ledger is read through
+  `GroupOutputs`, a lookup by global index.
 - **`DerivedSpend`**, made only by `DerivedSpend::derive` from the
   validated intent, the member's ledger and the group's key from the
   member file (`MultisigGroupKey`: the group KEM secret and `b`) (R-7,
@@ -1149,8 +1151,11 @@ construction: no copy of a wallet contains one.
   the input's secrets (`x = ho + b`, `y_kem`, `z`, the leaf blind) from
   the record's `0x06` ciphertext in `shekyl-crypto-pq`
   (`recover_group_spend`, the scanner's own steps), then checks the
-  record's key image and leaf point against what they derive. It consumes the
-  intent, so no spend can be paired with another intent. Recipient `i`
+  record's key image and leaf point against what they derive, and that
+  the path's leaf chunk holds the output. Every input's path names the
+  intent's reference block and one tree; that tree (root and layer
+  count) is the spend's. It consumes the intent, so no spend can be
+  paired with another intent. Recipient `i`
   is output `i`, built to its resolved payee by the builder every spend
   uses, under the transaction key the intent's seed derives; that gives
   the outputs, their `tx_extra` and the committed base, and each
@@ -1160,12 +1165,14 @@ construction: no copy of a wallet contains one.
   masks. The inputs are then put in the transaction's order. The
   derivation refuses, each by name, an input the ledger lacks, an input
   whose secrets do not derive, a record whose key image or leaf point is
-  not the one its secrets derive, and two inputs with one key image. `InputContext` and `UnsignedSpend` have private fields and no
+  not the one its secrets derive, a path to another block or another
+  tree, a path that does not hold its output, and two inputs with one
+  key image. `InputContext` and `UnsignedSpend` have private fields and no
   other constructor: a member cannot sign a blind, a seed or an output
   the intent does not determine.
-- **`SigningContext`**, built from the `DerivedSpend`, the reference
-  root and layer count, and the member file, from which the member's
-  threshold keys load. What the intent fixes is not carried twice: the
+- **`SigningContext`**, built from the `DerivedSpend` and the member
+  file alone (the member's threshold keys load from the file), and from
+  nothing written down by hand: its fields are private. What the intent fixes is not carried twice: the
   fee and the reference block are read from the intent, and the inputs
   are the member's own key images. So the transaction every member
   hashes and signs is built in one place, and an unsigned spend that
@@ -1173,8 +1180,9 @@ construction: no copy of a wallet contains one.
   checks that the member signs the intent, that each committed form is
   for this group, that a spend proves under the layer count, and that
   the member's keys open every input.
-- **`ProposerInputs`**, A only: each input's path to the reference root,
-  named by the input's key image (for the membership proof). The
+- **No proposer-only input.** The proposer proves from its own context:
+  each input's leaf chunk is the record's path joined to the leaf point
+  and blind its secrets derive, made at the proof and wiped after it. The
   ceremony combines no mask itself: the openings are the crypto crate's
   type (rule 36).
 - **`HeldNonceStore`**, the member's held nonces in memory (§11.4), and
@@ -1645,7 +1653,7 @@ rust/shekyl-multisig/src/
 ├── lib.rs                 — crate root + re-exports
 ├── ceremony/              — the signing ceremony (§11)
 │   ├── mod.rs             — Role, CeremonyError
-│   ├── context.rs         — SigningContext, ProposerInputs, InputPath (§11.5)
+│   ├── context.rs         — SigningContext (§11.5)
 │   ├── derivation.rs      — GroupOutput(s), DerivedSpend, InputContext,
 │   │                        UnsignedSpend (§9.5, §11.5)
 │   ├── files.rs           — the bodies, Authenticated<B>, import (§11.1,
@@ -1848,8 +1856,9 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
   `FinalTx`
 - A ledger that lacks an input, a record whose key image or leaf point is
   not the one its secrets derive, a record holding another output's
-  ciphertext, and one output recorded at two global indices (each
-  refused by the derivation, by name); a ledger holding more than the
+  ciphertext, a path to another block or another tree or one that does
+  not hold its output, and one output recorded at two global indices
+  (each refused by the derivation, by name); a ledger holding more than the
   intent spends, and records handed over in any order (the derivation
   looks up what it spends and puts it in the transaction's order)
 

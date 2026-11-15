@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 use rand_core::{OsRng, RngCore};
 
-use super::{paths, random_scalar, Paid, AMOUNTS, NET};
+use super::{random_scalar, Paid, AMOUNTS, NET};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use shekyl_address::multisig_address::{address_fingerprint, MultisigAddressPayload};
 use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
@@ -22,14 +22,13 @@ use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
-use shekyl_multisig::ceremony::context::ContextError;
 use shekyl_multisig::ceremony::nonce::InputInUse;
 use shekyl_multisig::intent::{
     ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
     import, DerivedSpend, GroupOutput, GroupOutputs, HeldNonceStore, Incoming, LedgerView,
-    LiveCeremonies, MemberFile, ProposerInputs, SigningContext, ValidatedIntent,
+    LiveCeremonies, MemberFile, SigningContext, ValidatedIntent,
 };
 use shekyl_tx_weight::{predict_group_weight, GroupSize, GroupSpendShape, InputCount, OutputCount};
 use shekyl_types::{BlockHash, KeyImage};
@@ -195,8 +194,9 @@ pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
         paid.outputs
             .iter()
             .zip(&paid.scans)
+            .zip(&paid.paths)
             .zip(GLOBAL_INDICES)
-            .map(|(((out, output_index, _), s), global_index)| {
+            .map(|((((out, output_index, _), s), path), global_index)| {
                 let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
                 GroupOutput {
                     global_index,
@@ -210,6 +210,7 @@ pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
                     committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
                     own_x25519_ct: x25519.try_into().unwrap(),
                     own_ml_kem_ct: ml_kem.to_vec(),
+                    path: path.clone(),
                 }
             })
             .collect(),
@@ -228,26 +229,7 @@ pub fn context<'a>(
     intent: ValidatedIntent,
     paid: &Paid,
 ) -> SigningContext<'a> {
-    try_context(file, intent, paid, paid.layers).expect("every member's context builds")
-}
-
-/// [`context`] under `layers` FCMP++ layers, refusals returned.
-pub fn try_context<'a>(
-    file: &'a MemberFile,
-    intent: ValidatedIntent,
-    paid: &Paid,
-    layers: u8,
-) -> Result<SigningContext<'a>, ContextError> {
-    SigningContext::new(file, derive(file, intent, paid), paid.root, layers)
-}
-
-/// The proposer's own inputs. The leaf chunks are taken: the prover is
-/// their only reader.
-pub fn proposer_inputs(paid: &mut Paid) -> ProposerInputs {
-    let chunks = std::mem::take(&mut paid.chunks);
-    ProposerInputs {
-        input_paths: paths(paid, chunks),
-    }
+    SigningContext::new(file, derive(file, intent, paid)).expect("every member's context builds")
 }
 
 pub fn import_into(wallet: &Wallet, file: &[u8]) -> Incoming {

@@ -64,9 +64,12 @@ use shekyl_crypto_pq::multisig_output::{
 };
 use shekyl_crypto_pq::CryptoError;
 use shekyl_curve_primitives::Commitment;
+use shekyl_curve_tree::{AssembledPath, TreeContext};
 use shekyl_fcmp::frost_sal::{
     FrostSalError, SalSigningParams, SpentOutput, RERANDOMIZATION_SEED_LEN,
 };
+use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
+use shekyl_fcmp::PqcLeafScalar;
 use shekyl_network::NetworkId;
 use shekyl_tx_builder::outputs::{build_output, BuiltOutput, Payee, RecipientKeys, SpendOutputs};
 use shekyl_tx_builder::TxBuilderError;
@@ -104,6 +107,9 @@ pub struct GroupOutput {
     pub own_x25519_ct: [u8; X25519_KEM_CT_LEN],
     /// This member's own `0x0D` ML-KEM-768 ciphertext for the output.
     pub own_ml_kem_ct: Vec<u8>,
+    /// The output's membership path to the curve tree at the intent's
+    /// reference block, public material only, with that tree's context.
+    pub path: AssembledPath,
 }
 
 impl GroupOutput {
@@ -119,7 +125,8 @@ impl GroupOutput {
 }
 
 /// A member's ledger of the group's spendable outputs, as [`DerivedSpend::derive`]
-/// reads it: one record per global index.
+/// reads it: one record per global index, its path assembled to the
+/// intent's reference block.
 pub trait GroupOutputs {
     /// The record of the output at `global_index`, if the group holds it
     /// spendable.
@@ -166,6 +173,38 @@ impl InputContext {
             &self.pseudo_out_blind,
             signable,
         )
+    }
+
+    /// The prover's leaf chunk for this input: the record's public path
+    /// joined to the leaf point and the blind its secrets derive.
+    pub(crate) fn leaf_chunk(&self) -> ProveInputLeafChunk {
+        let path = &self.output.path;
+        let branch = |layers: &[Vec<[u8; 32]>]| -> Vec<BranchLayer> {
+            layers
+                .iter()
+                .map(|siblings| BranchLayer {
+                    siblings: siblings.clone(),
+                })
+                .collect()
+        };
+        ProveInputLeafChunk {
+            pqc_leaf_commitment: self.output.leaf_point,
+            pqc_leaf_blind: *self.secrets.leaf_blind(),
+            leaf_outputs: path
+                .leaf_chunk
+                .iter()
+                .map(|leaf| {
+                    (
+                        leaf.output_key.to_bytes(),
+                        leaf.key_image_gen,
+                        leaf.commitment.to_bytes(),
+                    )
+                })
+                .collect(),
+            leaf_cm_x: path.leaf_chunk.iter().map(|leaf| leaf.cm_x).collect(),
+            c1_branch_layers: branch(&path.c1_layers),
+            c2_branch_layers: branch(&path.c2_layers),
+        }
     }
 
     /// This member's own `0x0D` ciphertext for the spent output, in a
@@ -227,6 +266,15 @@ pub enum DeriveError {
     /// An input's record names a leaf point its secrets do not derive.
     #[error("input {global_index}'s recorded leaf is not the one its secrets derive")]
     Leaf { global_index: u64 },
+    /// An input's path is not to the tree at the intent's reference block.
+    #[error("input {global_index}'s path is not to the intent's reference block")]
+    Reference { global_index: u64 },
+    /// Two inputs' paths name different trees at the reference block.
+    #[error("input {global_index}'s path names another tree than the other inputs'")]
+    Tree { global_index: u64 },
+    /// An input's path does not hold its output's leaf.
+    #[error("input {global_index}'s path does not hold its output")]
+    Path { global_index: u64 },
     /// Two inputs have one key image: one output spent twice.
     #[error("two inputs have one key image")]
     DuplicateKeyImage,
@@ -246,12 +294,14 @@ pub enum DeriveError {
 }
 
 /// A member's spend, derived from a validated intent and its own ledger:
-/// the intent, the network its outputs are built for, the inputs in the
-/// transaction's order (key images strictly descending, CEN-I5), the
-/// unsigned spend, and each output's opening.
+/// the intent, the network its outputs are built for, the curve tree at
+/// the intent's reference block, the inputs in the transaction's order
+/// (key images strictly descending, CEN-I5), the unsigned spend, and each
+/// output's opening.
 pub struct DerivedSpend {
     pub(super) network_id: NetworkId,
     pub(super) intent: ValidatedIntent,
+    pub(super) tree: TreeContext,
     pub(super) inputs: Vec<InputContext>,
     pub(super) unsigned: UnsignedSpend,
     pub(super) output_openings: Vec<Commitment>,
@@ -284,6 +334,7 @@ impl DerivedSpend {
             .iter()
             .map(|&global_index| spendable(ledger, key, global_index))
             .collect::<Result<Vec<_>, _>>()?;
+        let tree = one_tree(&intent, &records)?;
         let seed = IntentSeed::new(&intent.intent().kem_randomness_seed);
         let tx_key = seed.tx_key();
         let built = intent
@@ -338,6 +389,7 @@ impl DerivedSpend {
         Ok(Self {
             network_id,
             intent,
+            tree,
             inputs,
             unsigned,
             output_openings,
@@ -384,7 +436,38 @@ fn spendable(
     if secrets.leaf_point() != &output.leaf_point {
         return Err(DeriveError::Leaf { global_index });
     }
+    let cm_x = PqcLeafScalar::from_commitment_point(&output.leaf_point)
+        .ok_or(DeriveError::Leaf { global_index })?;
+    // Consensus does not forbid two leaves with one `(O, C)` in a chunk;
+    // `CM.x` names the spent one.
+    if !output.path.leaf_chunk.iter().any(|leaf| {
+        leaf.output_key.to_bytes() == output.output_key
+            && leaf.commitment.to_bytes() == output.commitment
+            && leaf.cm_x == cm_x.0
+    }) {
+        return Err(DeriveError::Path { global_index });
+    }
     Ok((output.clone(), secrets))
+}
+
+/// The one tree every input's path is to: the intent's reference block's.
+fn one_tree(
+    intent: &ValidatedIntent,
+    records: &[(GroupOutput, GroupSpendSecrets)],
+) -> Result<TreeContext, DeriveError> {
+    let reference = intent.intent().reference_block_hash;
+    let mut tree = None;
+    for (output, _) in records {
+        let global_index = output.global_index;
+        let this = output.path.tree;
+        if *this.reference_block.as_bytes() != reference {
+            return Err(DeriveError::Reference { global_index });
+        }
+        if *tree.get_or_insert(this) != this {
+            return Err(DeriveError::Tree { global_index });
+        }
+    }
+    Ok(tree.expect("a validated intent spends at least one input"))
 }
 
 /// The output paying `recipient` at `output_index`, under `tx_key_secret`.
@@ -436,6 +519,9 @@ mod tests {
         MultisigOutputData,
     };
     use shekyl_crypto_pq::output::recover_combined_ss;
+    use shekyl_curve_tree::ChunkLeaf;
+    use shekyl_fcmp::tree::key_image_generator;
+    use shekyl_types::{BlockHash, CommitmentBytes, CurveTreeRoot, OneTimePubkey};
     use shekyl_units::AtomicUnits;
 
     use super::*;
@@ -451,6 +537,12 @@ mod tests {
     const PAID_OUTPUT_INDEX: u64 = 1;
     /// The group's members.
     const MEMBERS: u8 = 2;
+    /// The intents' reference block, and the tree at it every path is to.
+    const REFERENCE_HASH: [u8; 32] = [0x77; 32];
+    const TREE_ROOT: [u8; 32] = [0x52; 32];
+    /// The reference tree's layer count. The derivation reads it and the
+    /// context checks it; these tests prove nothing under it.
+    const TREE_LAYERS: u8 = 2;
     const OUTPUTS: [u64; 2] = [900, 250];
     const FEE: u64 = 50;
     const SIGNERS: [u8; 2] = [0, 1];
@@ -524,7 +616,7 @@ mod tests {
             .map(|&(_, amount)| AtomicUnits::from_raw(amount))
             .collect();
         let indices: Vec<u64> = INPUTS.iter().map(|&(index, _)| index).collect();
-        let reference_block_hash = bytes32();
+        let reference_block_hash = REFERENCE_HASH;
         let fingerprint = ChainStateFingerprint {
             reference_block_hash,
             input_global_indices: indices.clone(),
@@ -635,9 +727,10 @@ mod tests {
                     committed_form,
                     key_image: KeyImage::from_bytes([0; 32]),
                 };
-                paid.key_image = recover_group_spend(&g.key(), &record(&paid, 0).source())
-                    .unwrap()
-                    .key_image();
+                paid.key_image =
+                    recover_group_spend(&g.key(), &record(&paid, 0, &path(&[])).source())
+                        .unwrap()
+                        .key_image();
                 paid
             })
             .collect()
@@ -649,8 +742,33 @@ mod tests {
         (x25519.try_into().unwrap(), ml_kem.to_vec())
     }
 
-    /// `member`'s ledger record of `paid`.
-    fn record(paid: &Paid, member: u8) -> GroupOutput {
+    /// The path every paid output's record holds: one leaf chunk holding
+    /// all of them, in the tree at [`REFERENCE_HASH`].
+    fn path(paid: &[Paid]) -> AssembledPath {
+        AssembledPath {
+            leaf_chunk: paid
+                .iter()
+                .map(|p| ChunkLeaf {
+                    output_key: OneTimePubkey::from_bytes(p.output.output_key),
+                    key_image_gen: key_image_generator(&p.output.output_key),
+                    commitment: CommitmentBytes::from_bytes(p.output.commitment),
+                    cm_x: PqcLeafScalar::from_commitment_point(&p.output.pqc_leaf.point)
+                        .unwrap()
+                        .0,
+                })
+                .collect(),
+            c1_layers: vec![],
+            c2_layers: vec![],
+            tree: TreeContext {
+                reference_block: BlockHash::from_bytes(REFERENCE_HASH),
+                tree_root: CurveTreeRoot::from_bytes(TREE_ROOT),
+                tree_depth: TREE_LAYERS,
+            },
+        }
+    }
+
+    /// `member`'s ledger record of `paid`, its path `path`.
+    fn record(paid: &Paid, member: u8, path: &AssembledPath) -> GroupOutput {
         let (own_x25519_ct, own_ml_kem_ct) = own_ciphertexts(&paid.output, member);
         GroupOutput {
             global_index: paid.global_index,
@@ -664,6 +782,7 @@ mod tests {
             committed_form: paid.committed_form.clone(),
             own_x25519_ct,
             own_ml_kem_ct,
+            path: path.clone(),
         }
     }
 
@@ -679,7 +798,8 @@ mod tests {
     /// `member`'s ledger of `paid`: its own ciphertexts differ from every
     /// other member's.
     fn ledger(paid: &[Paid], member: u8) -> Ledger {
-        Ledger(paid.iter().map(|p| record(p, member)).collect())
+        let path = path(paid);
+        Ledger(paid.iter().map(|p| record(p, member, &path)).collect())
     }
 
     /// Two members holding one intent derive one spend from their own

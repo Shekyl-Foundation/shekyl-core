@@ -31,14 +31,15 @@ use shekyl_crypto_pq::multisig_output::{
     MultisigOutputData,
 };
 use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss};
+use shekyl_curve_tree::{AssembledPath, ChunkLeaf, TreeContext};
 use shekyl_fcmp::frost_sal::{dealer_split, threshold_keys, Ed25519T, ThresholdKeys};
 use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::tree::{
     build_layers, construct_leaf, ed25519_point_to_selene_scalar, key_image_generator,
     selene_point_to_helios_scalar,
 };
-use shekyl_multisig::{InputPath, MemberFile, MemberSecrets};
-use shekyl_types::CurveTreeRoot;
+use shekyl_multisig::{MemberFile, MemberSecrets};
+use shekyl_types::{BlockHash, CommitmentBytes, CurveTreeRoot, OneTimePubkey};
 
 pub mod wallet;
 
@@ -202,8 +203,12 @@ pub struct Paid {
     pub root: CurveTreeRoot,
     /// The tree's layer count.
     pub layers: u8,
-    /// Each output's leaf chunk and branch, for the prover.
+    /// Each output's leaf chunk and branch with its blind, for a prover
+    /// outside the ceremony.
     pub chunks: Vec<ProveInputLeafChunk>,
+    /// Each output's public path to the tree at the intents' reference
+    /// block, as a ledger assembles it.
+    pub paths: Vec<AssembledPath>,
 }
 
 /// The amounts [`pay_group_twice`] pays, in output order.
@@ -241,39 +246,29 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
             first
         })
         .collect();
-    let (root, layers, chunks) = tree(&outputs, &scans);
+    let (root, layers, chunks, paths) = tree(&outputs, &scans);
     Paid {
         outputs,
         scans,
         root,
         layers,
         chunks,
+        paths,
     }
 }
 
-/// Each of `paid`'s outputs' path, named by its key image.
-pub fn paths(paid: &Paid, chunks: Vec<ProveInputLeafChunk>) -> Vec<InputPath> {
-    paid.scans
-        .iter()
-        .zip(chunks)
-        .map(|(scan, leaf_chunk)| InputPath {
-            key_image: scan.key_image,
-            leaf_chunk,
-        })
-        .collect()
-}
-
-/// `paid`'s paths again: the prover consumes them.
-pub fn rebuild_paths(paid: &Paid) -> Vec<InputPath> {
-    paths(paid, tree(&paid.outputs, &paid.scans).2)
-}
-
 /// The tree that holds `outputs`, as the daemon builds it: its root, its
-/// layer count, and each output's leaf chunk and branch.
+/// layer count, and each output's leaf chunk and branch, with its blind
+/// and as a ledger's public path to the tree at [`wallet::REFERENCE_HASH`].
 fn tree(
     outputs: &[(MultisigOutputData, u64, u64)],
     scans: &[Scanned],
-) -> (CurveTreeRoot, u8, Vec<ProveInputLeafChunk>) {
+) -> (
+    CurveTreeRoot,
+    u8,
+    Vec<ProveInputLeafChunk>,
+    Vec<AssembledPath>,
+) {
     let leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = outputs
         .iter()
         .map(|(out, _, _)| {
@@ -321,5 +316,27 @@ fn tree(
             }],
         })
         .collect();
-    (root, depth, chunks)
+    let path = AssembledPath {
+        leaf_chunk: leaf_outputs
+            .iter()
+            .zip(&leaf_cm_x)
+            .map(
+                |(&(output_key, key_image_gen, commitment), &cm_x)| ChunkLeaf {
+                    output_key: OneTimePubkey::from_bytes(output_key),
+                    key_image_gen,
+                    commitment: CommitmentBytes::from_bytes(commitment),
+                    cm_x,
+                },
+            )
+            .collect(),
+        c1_layers: vec![],
+        c2_layers: vec![helios_chunk],
+        tree: TreeContext {
+            reference_block: BlockHash::from_bytes(wallet::REFERENCE_HASH),
+            tree_root: root,
+            tree_depth: depth,
+        },
+    };
+    let paths = vec![path; outputs.len()];
+    (root, depth, chunks, paths)
 }
