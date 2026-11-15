@@ -1,4 +1,4 @@
-window_s	guard	shift	sends	plain_ratio_p5	plain_p50	plain_p95	wire_ratio_p5	wire_p50	wire_p95	share_wire_ratio_at_least_1
+window_s	guard	shift	sends	run_ratio_p5	run_p50	run_p95	run_wire_ratio_p5	run_wire_p50	run_wire_p95	share_run_wire_ratio_at_least_1
 0.1	g0	shifted	453	0.922796	1.2553	inf	0.958444	1.30942	inf	0.543046
 0.1	g1	shifted	453	0.963677	inf	inf	1.01309	inf	inf	0.95585
 0.1	g2	shifted	453	inf	inf	inf	inf	inf	inf	1

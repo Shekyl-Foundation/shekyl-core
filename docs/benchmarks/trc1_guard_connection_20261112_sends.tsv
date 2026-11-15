@@ -1,4 +1,4 @@
-seq	submit_utc	window_s	guard	shift	plaintext_bytes	min_wire_bytes	guard_out_bytes	plaintext_over_guard	min_wire_over_guard
+seq	submit_utc	window_s	guard	shift	run_bytes	run_min_wire_bytes	guard_out_bytes	run_over_guard	run_min_wire_over_guard
 10	2026-11-12T21:48:04.76Z	0.1	g0	shifted	13690	14392	1050	13.0381	13.7067
 11	2026-11-12T21:53:30.82Z	0.1	g0	shifted	13877	14392	14502	0.956902	0.992415
 12	2026-11-12T21:57:40.96Z	0.1	g0	shifted	13690	14392	14206	0.963677	1.01309

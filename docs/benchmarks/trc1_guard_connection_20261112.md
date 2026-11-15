@@ -414,12 +414,21 @@ groups:
   episode.
 
 Every accepted send was 13,619 bytes serialized: at least 28 relay cells,
-or 14,392 bytes on the wire. The table gives each matched send's plaintext
-bytes, and its minimum wire bytes, against the guard connection's outbound
-bytes in the window holding it. `inf` means that guard sent nothing in that
-window.
+or 14,392 bytes on the wire.
 
-| Window | Guard | Sends | Plaintext ÷ guard outbound, p5 / p50 / p95 | Minimum wire ÷ guard outbound, p5 / p50 / p95 |
+**What the ratios measure.** Each ratio is a matched send's run, the
+daemon's loopback bytes over the run Amendment 1 item 3 matched, set
+against the guard connection's outbound bytes in the window holding it.
+The run's minimum wire bytes are set against the same. `inf` means that
+guard sent nothing in that window.
+- **A run is not the transaction alone.** It is the transaction plus the
+  daemon's message framing, and sometimes other daemon traffic written in
+  the same slots.
+- **How much bigger.** The run totals have a median of 13,690 bytes
+  against the transaction's 13,619. 436 of the 453 are within 10 % of the
+  transaction's size, and 14 are more than twice it.
+
+| Window | Guard | Sends | Matched run ÷ guard outbound, p5 / p50 / p95 | Run's minimum wire ÷ guard outbound, p5 / p50 / p95 |
 | --- | --- | --- | --- | --- |
 | 0.1 s | `g0` | 453 | 0.92 / 1.26 / inf | 0.96 / 1.31 / inf |
 | 0.1 s | `g1` | 453 | 0.96 / inf / inf | 1.01 / inf / inf |
@@ -435,8 +444,9 @@ window.
 | 10 s | `sum` | 422 | 0.04 / 0.21 / 0.70 | 0.04 / 0.22 / 0.73 |
 
 In the 100 ms slot holding the send, the three guard connections together
-send about the send's own minimum wire bytes (median ratio 0.99). Over the
-whole second, the send is 88 % of their outbound bytes at the median.
+send about the matched run's minimum wire bytes (median ratio 0.99). Over
+the whole second, the matched run is 88 % of their outbound bytes at the
+median.
 
 ### 5. The observer's test
 
@@ -468,8 +478,9 @@ Per series, sum of the three, 100 ms, own transaction against other windows: ser
 
 - **The guard connections carry little.** Between them they carry about
   half a percent of the relay's bytes. The relay's relayed volume is
-  mostly on other connections, and the daemon's own sends make up most of
-  what crosses the guard connections.
+  mostly on other connections. In the slot holding one of the daemon's
+  sends, what crosses them is about the size of that send's matched run
+  (result 4).
 - **One send stands out at 100 ms.** Watching the two working guard
   connections together, an observer ranks the window holding the daemon's
   own transaction above a random other window 93 % of the time, and 79 %
@@ -500,5 +511,5 @@ Per series, sum of the three, 100 ms, own transaction against other windows: ser
   to the wallet lane. Sends were accepted again after each burst.
 - **Collection ran past the horizon,** to 2026-11-15 07:57:58Z. Rows after
   the horizon go into no figure above.
-- **The daily package upgrade** was turned back on at the stop, and
-  restarted the relay at about 08:08Z on 2026-11-15.
+- **Operational events after the horizon** are in the private run log
+  in `shekyl-dev`.
