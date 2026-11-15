@@ -30,12 +30,15 @@ PQC note:
 transaction input (`pqc_auth_weight()`; see `docs/V3_ROLLOUT.md`).
 Practical consequences for anonymity relay:
 
-- A typical 2-in/2-out FCMP++ transaction grows from ~2–3 KB to ~7–8 KB.
-- On Tor, a single cell is 512 bytes; a v3 transaction spans ~14–16 cells
-  vs ~4–6 cells pre-PQC. The burst pattern is more distinctive.
-- Fragmented Levin messages (white noise feature) help pad smaller payloads
-  but cannot conceal large-burst events unless dummy traffic volume is
-  proportionally increased.
+- The smallest transaction the wire admits is 13,042 bytes; a one-input,
+  two-output transaction at the deepest curve tree is 17,015 bytes
+  (`shekyl-relay-privacy` `params/carrier.rs`, derived from
+  `predict_size_and_weight`).
+- On Tor a relay cell carries 498 bytes, so one transaction is a burst of
+  about 27 to 35 cells. In TRC-1's guard-connection reading (#1388) every
+  send was 13,619 bytes, at least 28 cells.
+- Nothing pads or hides that burst on mainnet today. The cover carrier runs
+  only under a testnet development flag and is being redesigned.
 
 ### Known Leak Vectors vs Mitigations Matrix
 
@@ -45,7 +48,7 @@ Practical consequences for anonymity relay:
 | ISP link timing (intermittent sync) | Medium | Keep `shekyld` running continuously | Users who sync-send-quit are linkable |
 | Active bandwidth shaping | High | No second anonymity network is integrated | Tor circuits remain vulnerable |
 | Stream reuse (2+ tx same circuit) | Medium | Outgoing-only selection, 5-min rotation, 20-min change lock time | Small fixed outgoing pool → non-trivial reuse probability |
-| v3 tx size burst (new) | Medium | Fragmentation + dummy messages | Burst pattern still larger than pre-PQC; requires tuning dummy volume |
+| v3 tx size burst (new) | High | None on mainnet: the cover carrier is a testnet development flag, being redesigned | A guard-connection observer picks out the node's own sends (`TOR_COVER_POSTURE.md` banner) |
 | Levin 8-byte signature (DPI) | Low | SSL/BIP-151/Noise proposals | Not yet implemented; clearnet traffic is identifiable |
 
 ### Recommended Pre-Mainnet Testing

@@ -964,8 +964,8 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 > ([TOR_RELAY.md](TOR_RELAY.md)). Cover traffic is being redesigned
 > ([design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md)).
 
-Shekyl can broadcast transactions over Tor so that observers cannot
-link your IP address to your transactions. I2P is not a network this
+Shekyl can broadcast transactions over Tor so that peers do not learn
+your IP address from your transactions. I2P is not a network this
 daemon dials. Regular block sync and peer communication still uses IPv4
 to resist Sybil attacks.
 

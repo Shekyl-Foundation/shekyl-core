@@ -1,6 +1,7 @@
 # Tor cover posture — relay contribution, not a protocol carrier — REOPENED 2026-11-15
 
-**Status: REOPENED 2026-11-15 (Rick). Relay volume is not cover on Tor.**
+**Status: OPEN — reopened 2026-11-15 (Rick), Round 0 of the cover-traffic
+lane. Relay volume is not cover on Tor.**
 §8 step 3 is met. TRC-1's guard-connection reading (#1388, results at
 its head `9c82f7f81a`, not yet on `dev`) watched the relay's three
 entry-guard connections. Every circuit the node builds for itself goes
