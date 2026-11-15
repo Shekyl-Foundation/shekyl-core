@@ -249,6 +249,17 @@ pub trait MiningFacts: Send + Sync {
     /// [`FactsFault::NotReady`] when no mining control was supplied.
     fn stop(&self) -> Result<bool, FactsFault>;
 
+    /// Wait until every block the miner has delivered has its answer from
+    /// the door, connected or refused. After [`Self::stop`] the miner
+    /// delivers nothing more, so the chain read after this wait shows
+    /// everything that miner found. Blocks while a delivered block is at
+    /// the door: a caller on a runtime calls it from a blocking thread.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn found_answered(&self) -> Result<(), FactsFault>;
+
     /// The miner, the posted job, and why none is posted.
     ///
     /// # Errors
@@ -607,6 +618,10 @@ impl MiningFacts for MiningAbsent {
     }
 
     fn stop(&self) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn found_answered(&self) -> Result<(), FactsFault> {
         Err(FactsFault::NotReady)
     }
 
