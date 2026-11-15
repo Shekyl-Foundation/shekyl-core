@@ -1,3 +1,13 @@
+# `seeds/<target>/` is committed and read by every run of that target
+# (the nightly workflow's `fuzz` job; locally,
+#   cargo +nightly fuzz run <target> corpus/<target> seeds/<target>).
+# The KEM seeds are the eight vectors of `docs/test_vectors/
+# KEM_DERIVE_V1_KAT.json`, each `x25519_eph_pk || ml_kem_ct`, the layout
+# `fuzz_kem_decapsulate` reads. The multisig key and signature blob seeds
+# are the non-empty `adversarial_test_cases` inputs of
+# `docs/PQC_TEST_VECTOR_002_MULTISIG.json`, one file per case, named for
+# it. A crash's input joins its target's directory with the fix.
+
 [package]
 name = "shekyl-crypto-pq-fuzz"
 version = "0.0.0"
