@@ -7283,3 +7283,33 @@ names).
   comes back as a per-wallet rate.
 
 **Why.** A per-wallet rate is a fingerprint the wallet pays for.
+
+## 2026-11-15 — #1393's review: a change of at least one unit, reserve proofs show money held, the names
+
+**Decision** (Rick, the review of #1393 at `24f6cf5c4`).
+
+- **The fee is always a ladder value; the change is at least one unit.**
+  A leftover above the with-change fee becomes a change output however
+  small, never a fee of its own. A leftover exactly equal to the
+  with-change fee would leave a change of zero: the output would not be
+  built while the fee stayed sized for it, off the ladder for the
+  transaction's real shape. It is refused, and selection covers the
+  payments, the with-change fee and one unit.
+- **A reserve proof shows money held, not money spendable at the
+  reference.** Its candidates are every on-chain output in the balance:
+  spendable, parked and incoming. In-flight inputs and unspendable outputs
+  are out.
+- **`-29127 OUTPUTS_PARKED` carries no amount**: the parked amount's one
+  source is `get_balance.parked`, and error data is logged like the
+  message.
+- **The fee tier is not a preference.** The prefs file's
+  `default_priority` and the fee reply's `default_priority`, which nothing
+  read, are deleted.
+- **Names ratified**: `parked` (the user-freeze leg; `frozen` means frozen
+  shards), `held` as the definition's name with no field,
+  `incoming_wait`, the codes `-29123`…`-29127`, and the `-29119` fault
+  keywords. The sim names the top tier `high` too.
+
+**Why.** A fee sized for an output the transaction does not carry marks
+the wallet as surely as a fee of its own. A reserve proof answers "how much
+does this wallet hold", which incoming money is part of.
