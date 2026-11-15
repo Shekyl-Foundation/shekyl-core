@@ -11,11 +11,11 @@ use crate::chain_facts::decode_target_count;
 use crate::core::ArchivalGood;
 use crate::methods::tests::{facts, patterned_hash, tagged_bytes, tagged_hash, FakeFacts};
 use crate::read_facts::{
-    AdmittedPow, AltChainFacts, BlockRead, BlocksAt, ClaimSource, CurveTreeFacts, ListedTx,
-    ShardCoverage, TransactionsAt,
+    AltChainFacts, BlockRead, BlocksAt, ClaimSource, CurveTreeFacts, ListedTx, ShardCoverage,
+    TransactionsAt,
 };
 use serde_json::json;
-use shekyl_types::{CurveTreeRoot, PowHash, ShardId};
+use shekyl_types::{CurveTreeRoot, ShardId};
 use shekyl_wire::Transaction;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
@@ -75,10 +75,12 @@ impl ChainReadFacts for FakeRead {
     fn coinbase_sum(&self, _start: BlockHeight, _count: u64) -> Result<CoinbaseRange, FactsFault> {
         self.coinbase.ok_or(FactsFault::NotReady)
     }
-    fn admit_pow(&self, _seed: PowSeed) -> Result<PowAdmission, FactsFault> {
-        Err(FactsFault::NotReady)
-    }
-    fn hash_admitted(&self, _blob: &[u8], _admitted: &AdmittedPow) -> Result<PowHash, FactsFault> {
+    fn pow(
+        &self,
+        _seed: PowSeed,
+        _pow_blob: &[u8],
+        _pay: &mut dyn FnMut() -> bool,
+    ) -> Result<PowAnswer, FactsFault> {
         Err(FactsFault::NotReady)
     }
     fn emission_claim_source(&self, _persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {
@@ -845,6 +847,7 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
                 txs: Vec::new(),
                 bundle_references: vec![vec![0xaa, 0x01], vec![0xaa, 0x02]],
                 bundle_bodies: vec![vec![0xbb]],
+                draws: Some(2),
             },
             BlockRead {
                 block: vec![2],
@@ -854,6 +857,7 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
                 }],
                 bundle_references: Vec::new(),
                 bundle_bodies: Vec::new(),
+                draws: None,
             },
         ],
         output_indices: Some(vec![7]),
@@ -881,11 +885,15 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
         vec![Bytes(vec![0xaa, 0x01]), Bytes(vec![0xaa, 0x02])]
     );
     assert_eq!(first.section_body, vec![Bytes(vec![0xbb])]);
+    // The block's draw count rides with it; a block whose row this node
+    // does not hold says `null`, never zero.
+    assert_eq!(first.draws.0, Some(Count(2)));
     let shared::Slot::Item(second) = &out[1] else {
         panic!("height 2 is held")
     };
     assert_eq!(second.tx.len(), 1);
     assert!(second.section.is_empty() && second.section_body.is_empty());
+    assert_eq!(second.draws.0, None);
     assert_eq!(second.output_index, Integer(7));
     assert_eq!(
         out[2],

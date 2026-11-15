@@ -31,16 +31,15 @@ use crate::calibration::tree_depth_for_leaves;
 use crate::chain_cursor::{ChainCursor, ChainStep};
 use crate::engine::ScenarioConfig;
 use crate::engine::{emitted_at_start, SimParams};
-use crate::escalation::flat_25;
 use crate::fee_model::{FeeModel, OrdinaryTx, StandardMultiplier, MILLI};
 use crate::growth_gate::{cell_gate, m_star, year_label, CellGate};
 use crate::onset::{
-    age_quantile, at_horizon, binding_onsets, fmt_onset, BindingOnsets, Onset, BLOCK_SPACE_YEARS,
-    ONSET_HORIZON_YEARS,
+    age_quantile, at_horizon, binding_onsets, fmt_onset, legs_at_flat_onset, BindingOnsets, Onset,
+    BLOCK_SPACE_YEARS, ONSET_HORIZON_YEARS,
 };
 use crate::rung_mix::{Rung, RungMix};
 use crate::scenarios::{all_scenarios, BASELINE_STEADY_STATE};
-use crate::stage2::{a1_shipped_budget_atomic, a1_year_aggs, kilobytes, trunc, A1YearAgg};
+use crate::stage2::{a1_year_aggs, kilobytes, trunc, A1YearAgg};
 
 /// The inherited ratio of the zone to the reference weight, kept by the
 /// re-derived arm and declared as inherited (`ESR10_PREDICTIONS.md` §0.3).
@@ -92,7 +91,7 @@ pub(crate) fn year_one_fee_ceiling() -> u64 {
 }
 
 /// The scenario called `name` under `params`.
-fn scenario_named(params: &SimParams, name: &str) -> ScenarioConfig {
+pub(crate) fn scenario_named(params: &SimParams, name: &str) -> ScenarioConfig {
     all_scenarios(params)
         .into_iter()
         .find(|config| config.name == name)
@@ -435,7 +434,7 @@ fn year_one_standard_fee(aggs: &[A1YearAgg]) -> Option<u64> {
 }
 
 /// Economy carried over Economy demanded, over every year.
-fn economy_served(aggs: &[A1YearAgg]) -> Option<f64> {
+pub(crate) fn economy_served(aggs: &[A1YearAgg]) -> Option<f64> {
     let (carried, demand) = aggs.iter().fold((0u128, 0u128), |(c, d), a| {
         let economy = &a.rungs[Rung::Economy];
         (c + economy.carried_txs, d + economy.demand_txs)
@@ -746,31 +745,21 @@ fn write_scenario(
             multiplier * rho
         )),
     )?;
-    let (at, which) = match run
-        .onsets
-        .flat
-        .year
-        .and_then(|y| run.aggs.iter().find(|a| a.year == y))
-    {
-        Some(a) => (Some(a), "at the flat-25 onset"),
-        None => (run.aggs.last(), "no flat-25 onset; at the horizon"),
-    };
-    if let Some(a) = at {
-        let budget = a1_shipped_budget_atomic(a, &flat_25(params));
-        let fee_leg = budget - a.emission_leg_atomic;
+    if let Some(legs) = legs_at_flat_onset(&run.aggs, run.onsets.flat, params) {
         writeln!(
             out,
-            "    A1 @10%: onset flat-25 {}, best {}; legs {which} (y{}): emission {:.1}, fee {:.1} SKL/yr ({:.1}% fee)",
+            "    A1 @10%: onset flat-25 {}, best {}; legs {} (y{}): emission {:.1}, fee {:.1} SKL/yr ({:.1}% fee)",
             fmt_onset(run.onsets.flat),
             fmt_onset(run.onsets.best),
-            a.year,
-            skl(a.emission_leg_atomic),
-            skl(fee_leg),
-            if budget == 0 {
-                0.0
+            if legs.at_onset {
+                "at the flat-25 onset"
             } else {
-                100.0 * fee_leg as f64 / budget as f64
+                "no flat-25 onset; at the horizon"
             },
+            legs.year,
+            skl(legs.emission_atomic),
+            skl(legs.fee_atomic),
+            legs.fee_pct(),
         )?;
     }
     let shards = |year: u64| {

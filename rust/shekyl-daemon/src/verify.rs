@@ -474,12 +474,12 @@ mod tests {
 
     /// A start that gives `service` from an account that is not the
     /// service's is refused before it touches anything, with this machine's
-    /// own rendezvous directory (`/run/shekyl` on Linux). An ordinary account
-    /// is refused because the directory is not its own; a root runner, as CI
-    /// is, because a service never runs as root. Either way the refusal is
-    /// the rendezvous directory's (Rick, 2026-11-12). Red edit: drop the
-    /// walk's rendezvous check and the refusal is the data directory's, or
-    /// none.
+    /// own rendezvous directory (`/run/shekyl` on Linux, `/var/run/shekyl` on
+    /// FreeBSD). An ordinary account is refused because the directory is not
+    /// its own; a root runner, as CI is, because a service never runs as
+    /// root. Either way the refusal is the rendezvous directory's (Rick,
+    /// 2026-11-12). Red edit: drop the walk's rendezvous check and the
+    /// refusal is the data directory's, or none.
     #[cfg(unix)]
     #[test]
     fn a_non_service_account_giving_service_is_refused_on_this_machine() {

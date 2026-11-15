@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! 32-byte [`Seedhash`] newtype — the typed key used to derive a
-//! cache (via [`crate::PreparedCache::derive`]) and (in Phase 2F
-//! commit 2) to index `CacheStore` slots.
+//! cache (via [`crate::PreparedCache::derive`]), and the name the
+//! daemon's hasher knows a cache by.
 //!
 //! # Why a newtype, not a type alias
 //!
@@ -51,8 +51,8 @@
 use core::fmt;
 
 /// 32-byte seedhash — the typed key for cache derivation (via
-/// [`crate::PreparedCache::derive`]) and (in Phase 2F commit 2)
-/// `CacheStore` slot indexing.
+/// [`crate::PreparedCache::derive`]) and for naming a cache to the
+/// daemon's hasher.
 ///
 /// Distinct from generic `[u8; 32]` values (output hashes, content
 /// hashes, etc.) at the type level. See the module rustdoc for the
@@ -68,8 +68,7 @@ use core::fmt;
 ///
 /// `Copy + Clone + Debug + Eq + Hash + PartialEq` per Phase 2F
 /// §1.1 Round 2: `Hash + Eq` are required for
-/// `HashMap<Seedhash, _>` keying in the (Phase 2F commit 2)
-/// `CacheStore` in-flight derivation map; `Copy` is inherited
+/// `HashMap<Seedhash, _>` keying; `Copy` is inherited
 /// from `[u8; 32]` and is cheap (32 bytes); `Debug` aids test
 /// diagnostics. No `Default` (no canonical zero seedhash); no
 /// `Display` derive — the [`core::fmt::Display`] impl is hand-
@@ -145,8 +144,7 @@ mod tests {
     /// `Eq` + `PartialEq`: two `Seedhash` values constructed from
     /// the same bytes compare equal; two from different bytes
     /// compare not-equal. Catches a hypothetical breakage of the
-    /// `HashMap<Seedhash, _>` key contract used by the (Phase 2F
-    /// commit 2) `CacheStore` in-flight derivation map.
+    /// `HashMap<Seedhash, _>` key contract.
     #[test]
     fn eq_compares_bytes_not_identity() {
         let a = Seedhash::from_bytes([0x42; 32]);

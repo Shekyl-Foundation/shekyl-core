@@ -431,6 +431,49 @@ pub(crate) fn binding_onsets(aggs: &[A1YearAgg], params: &SimParams) -> BindingO
     }
 }
 
+/// A1's two legs in one year: the staker's emission leg and the fee leg
+/// the shipped flat-25 budget adds to it.
+pub(crate) struct Legs {
+    pub(crate) year: u64,
+    /// Whether `year` is the flat-25 onset, or the horizon for want of one.
+    pub(crate) at_onset: bool,
+    pub(crate) emission_atomic: u128,
+    pub(crate) fee_atomic: u128,
+}
+
+impl Legs {
+    /// The fee leg's share of the budget, in percent.
+    pub(crate) fn fee_pct(&self) -> f64 {
+        let budget = self.emission_atomic + self.fee_atomic;
+        if budget == 0 {
+            0.0
+        } else {
+            100.0 * self.fee_atomic as f64 / budget as f64
+        }
+    }
+}
+
+/// [`Legs`] at `flat`'s onset year in `aggs`, or at the horizon when it
+/// has none. `None` for an empty series.
+pub(crate) fn legs_at_flat_onset(
+    aggs: &[A1YearAgg],
+    flat: Onset,
+    params: &SimParams,
+) -> Option<Legs> {
+    let at_onset = flat.year.and_then(|y| aggs.iter().find(|a| a.year == y));
+    let (a, onset) = match at_onset {
+        Some(a) => (a, true),
+        None => (aggs.last()?, false),
+    };
+    let budget = a1_shipped_budget_atomic(a, &flat_25(params));
+    Some(Legs {
+        year: a.year,
+        at_onset: onset,
+        emission_atomic: a.emission_leg_atomic,
+        fee_atomic: budget - a.emission_leg_atomic,
+    })
+}
+
 /// A1-T row: one scenario at the 60-year horizon.
 #[derive(Debug, Clone, Serialize)]
 pub struct OnsetScenarioResult {

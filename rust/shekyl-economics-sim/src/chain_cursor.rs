@@ -22,7 +22,7 @@ use shekyl_economics::{
     EmissionInputs, PaidEmission, TxVolume,
 };
 
-use crate::block_space::{Arrival, BlockSpace, Filled};
+use crate::block_space::{Arrival, BlockSpace, Filled, OwnBodies};
 use crate::engine::{net_supply, SimParams};
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::rung_mix::{PerRung, Rung, RungSplit};
@@ -36,6 +36,10 @@ pub(crate) struct ChainCursor {
     window: VolumeWindow,
     space: BlockSpace,
     split: RungSplit,
+    /// Priority's fee at the fold's first block, which an elastic mix's
+    /// Priority demand is measured against
+    /// ([`crate::rung_mix::RungMix::priority_at`]).
+    priority_reference_fee: Option<u64>,
 }
 
 /// What one block offers the cursor. `chain_height` is the consensus height
@@ -57,6 +61,17 @@ pub(crate) struct ChainStep {
     /// burn's staker share escalates on. A fold with no corpus trajectory
     /// passes zero, where the share is its floor under any parameter set.
     pub(crate) closed_shards: ClosedShardCount,
+}
+
+/// What a producer's own bodies pay ([`ChainCursor::price_with_own`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnFee {
+    /// The relay floor, the Economy rung: the chain once the floor applies
+    /// to a block's own bodies (C2-R2 Q9's fix).
+    RelayFloor,
+    /// Nothing: the chain as it stands, where the floor is relay policy and
+    /// a producer's own bodies never pass a relay.
+    None,
 }
 
 /// The block [`ChainCursor::price`] built, and the operands it was built at.
@@ -116,6 +131,19 @@ impl ChainCursor {
         params: &'a SimParams,
         economic: &'a EconomicParams,
     ) -> PricedBlock<'a> {
+        self.price_with_own(step, None, params, economic)
+    }
+
+    /// [`Self::price`], with the producer listing bodies of its own after
+    /// the pool's when `own` names them: one `own` transaction, priced on
+    /// the Economy rung at this block, paying its fee or none.
+    pub(crate) fn price_with_own<'a>(
+        &mut self,
+        step: ChainStep,
+        own: Option<OwnFee>,
+        params: &'a SimParams,
+        economic: &'a EconomicParams,
+    ) -> PricedBlock<'a> {
         let volume = self.window.operand();
         let medians = self.space.medians(economic);
         let supply = net_supply(step.already_generated, step.total_burned);
@@ -135,7 +163,17 @@ impl ChainCursor {
         };
         let txs = params.fee.rung_txs(&fee_point);
         let tx = txs[Rung::Standard].expect("every arm prices the Standard rung");
-        let demand = self.split.split(params.fee.mix(), step.demand);
+        let mix = params.fee.mix();
+        let mix = match txs[Rung::Priority] {
+            Some(priority) if mix.is_priority_elastic() => {
+                let reference = *self
+                    .priority_reference_fee
+                    .get_or_insert(priority.fee_atomic);
+                mix.priority_at(reference, priority.fee_atomic)
+            }
+            _ => mix,
+        };
+        let demand = self.split.split(mix, step.demand);
         let arrivals: Vec<Arrival> = Rung::ADMISSION
             .into_iter()
             .filter(|&rung| demand[rung] > 0)
@@ -147,9 +185,21 @@ impl ChainCursor {
             .collect();
         // The pool's heights are the chain's: the reference window and the
         // received hour read them.
-        let filled = self
-            .space
-            .fill(step.chain_height, medians, &arrivals, &fee_point);
+        let own = own.map(|own| {
+            let economy = params
+                .fee
+                .rung_tx(Rung::Economy, &fee_point)
+                .expect("a producer's own body is priced on the Economy rung");
+            OwnBodies {
+                tx: match own {
+                    OwnFee::RelayFloor => economy,
+                    OwnFee::None => crate::fee_model::tx_paying(0, &fee_point),
+                },
+            }
+        });
+        let filled =
+            self.space
+                .fill_with_own(step.chain_height, medians, &arrivals, &fee_point, own);
         self.window.push(filled.carried_txs());
         let paid = price_emission(&EmissionInputs {
             height: step.chain_height,

@@ -396,7 +396,7 @@ pub const MIN_POW_BLOB_SIZE: usize =
 /// transaction-count varint. It does not carry the block body, so
 /// [`MAX_BLOCK_BLOB_SIZE`] is not this length. The versions are at the
 /// width of a `u8`, the timestamp at the width of a `u64`, and the count
-/// at the preimage parser's own cap ([`READ_LEN_CAP`] plus the miner).
+/// at the preimage parser's own cap (`READ_LEN_CAP` plus the miner).
 pub const MAX_POW_BLOB_SIZE: usize = max_pow_blob_size();
 
 /// The largest `tx_count` [`PowBlob::read`] accepts: one more than
@@ -436,7 +436,7 @@ impl PowBlob {
     /// Parse exactly the bytes [`Block::pow_blob`] writes.
     ///
     /// The transaction-hash count (`tx_count - 1`) is held to
-    /// [`READ_LEN_CAP`], the same cap [`Block::read`] puts on `n_tx`. A
+    /// `READ_LEN_CAP`, the same cap [`Block::read`] puts on `n_tx`. A
     /// trailing byte is refused: the preimage has no slack.
     ///
     /// # Errors

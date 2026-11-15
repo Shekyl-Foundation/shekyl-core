@@ -47,7 +47,7 @@ pipeline = [
     "dep:kameo",
     "dep:tokio",
     "dep:tracing",
-    "dep:shekyl-hash-budget",
+    "dep:shekyl-hasher",
     "dep:shekyl-miner",
     "dep:shekyl-mempool",
     "dep:shekyl-block-template",
@@ -70,6 +70,7 @@ replay-cli = [
     "pipeline",
     "fetch",
     "dep:clap",
+    "dep:shekyl-hash-budget",
     "dep:shekyl-rpc-transport",
 ]
 # harness: the driver's emission-claim assembly (`emission_assembly.rs`,
@@ -145,7 +146,8 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # in every build, and the pipeline builds and roots the template's
 # section. The validator already depends on it.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
-# The production PoW verifier: PreparedCache / compute_hash / CacheStore.
+# The production PoW verifier's `Seedhash`, the name the hasher knows a
+# cache by. The cache itself is the hasher's: nothing here derives one.
 # Verification is this crate everywhere, forever (§1.3); the JIT is never
 # consulted here.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
@@ -184,8 +186,12 @@ serde_json = { workspace = true }
 
 # pipeline: the one stateful stage is an actor (RD-Q11); form workers are
 # blocking tasks on the same runtime.
-# pipeline: the daemon's one hasher budget (PR2-Q3), which the ingest
-# service's form workers take permits from.
+# pipeline: the node's one hasher (RANDOMX_CACHE_ACTOR.md), which every
+# hash in the ingest borrows a cache from, inside a job. The ingest holds
+# no budget: a permit is taken through a job and nowhere else.
+shekyl-hasher = { path = "../shekyl-hasher", optional = true }
+# replay-cli: the budget the replay binary starts its own hasher over, one
+# permit per `--hashers`. The library names no budget.
 shekyl-hash-budget = { path = "../shekyl-hash-budget", optional = true }
 # pipeline: the miner's job board and found-block sink, which the ingest
 # service's tip follower feeds and receives from (DX-Q2 item 5, DX-Q4).
@@ -238,6 +244,9 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The budget a test starts its own hasher over, and the one the service
+# tests' gate takes its jobs' permits from. The library names no budget.
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 # The Tor status a store test hands `daemon_status`, as the daemon's
 # supervisor would answer it.
 shekyl-tor-status = { path = "../shekyl-tor-status" }

@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use shekyl_chain_rules::{
     effective_median_at, fee_ladder_at, mtp_median_at, target_claim, tx_volume_window, AtHeight,
-    Fault, RuleSet, ViewRead,
+    BlockDrawsFloor, Fault, RuleSet, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, KeyImage, TxHash};
@@ -158,24 +158,25 @@ pub struct StoreFacts {
     rules: Arc<dyn RulesAt>,
     node: Arc<dyn NodeFacts>,
     identity: NodeIdentity,
-    caches: Arc<shekyl_pow_randomx::CacheStore>,
-    /// The daemon's one hasher budget: `pow` hashes under a permit.
-    budget: shekyl_hash_budget::Budget,
+    /// The node's one hasher: `pow` hashes on a warm loan from it, and
+    /// `daemon_status` reads its live-cache count.
+    pub(crate) hasher: shekyl_hasher::Hasher,
+    /// `pow`'s loan has no stop of its own: the hasher's stop ends it.
+    pub(crate) never_stops: std::sync::atomic::AtomicBool,
 }
 
 impl StoreFacts {
     /// The facts over `store`, whose data file is `store_file`. `pow`
-    /// hashes under the caches `caches` already holds — the daemon's one
-    /// cache store, the validator's — and never derives one, each hash
-    /// under a permit from `budget` in `pow`'s class (PR2-Q3).
+    /// hashes on a warm loan from `hasher`, the node's one owner of
+    /// caches: it builds none, and each hash takes a permit in `pow`'s
+    /// class (PR2-Q3).
     pub fn new(
         store: Arc<ChainStore>,
         store_file: PathBuf,
         rules: Arc<dyn RulesAt>,
         node: Arc<dyn NodeFacts>,
         identity: NodeIdentity,
-        caches: Arc<shekyl_pow_randomx::CacheStore>,
-        budget: shekyl_hash_budget::Budget,
+        hasher: shekyl_hasher::Hasher,
     ) -> Self {
         Self {
             store,
@@ -183,8 +184,8 @@ impl StoreFacts {
             rules,
             node,
             identity,
-            caches,
-            budget,
+            hasher,
+            never_stops: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -237,6 +238,27 @@ fn claim_fault(fault: Fault<StoreError>) -> FactsFault {
             FactsFault::Internal
         }
     }
+}
+
+/// `count(h)` of the main-chain block at `height`, while this node holds
+/// its row: at or above the draw rows' floor in force for the next block
+/// (`BlockDrawsFloor::in_force`; a read below it is SI-34, and the row is
+/// gone), and written (a height the rule has not run for has none).
+fn held_draws(
+    snap: &ReadSnapshot<'_>,
+    tip: BlockHeight,
+    height: BlockHeight,
+    rules: &dyn RulesAt,
+) -> Result<Option<u32>, FactsFault> {
+    let next = connecting(tip);
+    let floor = BlockDrawsFloor::in_force(next, rules.in_force(next).settlement_schedule());
+    if floor.height().is_some_and(|first| height < first) {
+        return Ok(None);
+    }
+    Ok(snap
+        .block_draws(height, floor)
+        .map_err(store_fault)?
+        .map(|row| row.count))
 }
 
 /// The snapshot's tip: its height and identity. An empty store is a daemon
@@ -580,6 +602,13 @@ impl ChainFacts for StoreFacts {
             .iter()
             .map(|body| body.as_bytes().to_vec())
             .collect();
+        // An alternative block has no draws row: the count rule writes it
+        // when a block connects.
+        let draws = if header.orphan_status {
+            None
+        } else {
+            held_draws(&snap, tip, header.height, self.rules.as_ref())?
+        };
         let block = Some(BlockFacts {
             tx_hashes: block.transaction_hashes.clone(),
             blob: block.serialize(),
@@ -589,6 +618,7 @@ impl ChainFacts for StoreFacts {
                 .map(shekyl_types::archival::BundleReferences::into_inner)
                 .unwrap_or_default(),
             bundle_bodies,
+            draws,
         });
         Ok(BlockAt {
             block,
@@ -656,6 +686,8 @@ impl InfoFacts for StoreFacts {
             free_space: self.node.free_space()?,
             alt_blocks_count: snap.alt_block_count().map_err(store_fault)?,
             version: self.identity.version.clone(),
+            randomx_cache_places: u64::try_from(self.hasher.resident().borrow().caches.len())
+                .unwrap_or(u64::MAX),
         })
     }
 

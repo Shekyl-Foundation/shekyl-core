@@ -18,8 +18,8 @@ use shekyl_wire::{Block, BlockBody, PowBlob};
 use super::{retry_of, Judged, WallClock};
 use crate::branch::Pending;
 use crate::model::{
-    BoundArrival, CachePlan, CloseCause, Command, HashClass, Job, OfferedBody, Outcome, ProveItem,
-    Proved, Sync,
+    BoundArrival, CloseCause, Command, HashClass, Job, OfferedBody, Outcome, ProveItem, Proved,
+    Sync,
 };
 use crate::peer::Announced;
 
@@ -234,7 +234,7 @@ where
         out.push(Command::Prove {
             job: Job::from_raw(id),
             class: HashClass::Unsolicited,
-            cache: CachePlan::Main(seed),
+            seed,
             items: vec![item],
         });
         Ok(())
@@ -277,10 +277,6 @@ where
                 self.close(session, CloseCause::HeaderRefused(refused.rule), out);
                 Ok(())
             }
-            // The announce's seed is not in the window. It is dropped, not
-            // held for a retry: the next announce, or a header request,
-            // brings the block again.
-            Proved::NotHeld => Ok(()),
             Proved::Formed(formed) => {
                 let parent = formed.previous();
                 let hash = formed.hash();
@@ -335,7 +331,7 @@ where
                             out.push(Command::Prove {
                                 job: Job::from_raw(id),
                                 class: HashClass::Unsolicited,
-                                cache: CachePlan::Main(seed),
+                                seed,
                                 items: vec![item],
                             });
                         }

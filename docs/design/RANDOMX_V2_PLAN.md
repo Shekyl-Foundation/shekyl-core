@@ -51,6 +51,8 @@ isProject: false
 **Status:** LIVING CONTRACT (as of 2026-09-16). Phases 0–5 landed; the release-time algorithm-review gate remains. YAML `trackb-gate-check` deleted (moot: Phase 3 landed; no discharge recorded).
 ## Sequencing rationale
 
+> **Superseded for the daemon's caches (2026-11-14).** Wherever this plan names `CacheStore`, in the phase list above, the diagram below and the decisions after it, that type is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The plan stands as the record of what was ruled and built.
+
 Three independent gates govern when phases land.
 
 **Wallet-migration gate (Track B).** Historical: the wallet rewrite churned `shekyl-ffi` while Phase 3 was scoped. Phase 3 landed (PR #235). The YAML `trackb-gate-check` quiet-window row is deleted (moot: Phase 3 landed; no discharge recorded). Not gated on a V3.2 wallet cutover (that train does not exist).
@@ -153,6 +155,8 @@ pub fn compute_hash(cache: &Cache, seedhash: &Seedhash, data: &[u8]) -> Hash {
 ### 5. Memoization is transparent inside `shekyl-ffi`, not exposed to C++
 
 The daemon's hash-call shape is identical to today: `hash(seedhash, data) -> hash`. Caching of derived `Cache` values across calls is a function-level memo internal to `shekyl-ffi`. The load-bearing argument: `shekyl-ffi` *is* the C-ABI boundary, and module-level state at the C-ABI boundary is structurally unavoidable — C has no other way to hold cross-call state than process-globals, and FFI tracks C's reality. Other Rust crates (`shekyl-pow-randomx` included) are not at this boundary and do not get the same allowance.
+
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
 
 The verifier crate `shekyl-pow-randomx` exports `CacheStore` as a generic utility type (`LruCache<Seedhash, Arc<Cache>>` wrapper). It **instantiates no module-level instance** — `shekyl-ffi` constructs one as part of its FFI bridge's lifecycle, hidden from C++ callers.
 

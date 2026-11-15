@@ -13,7 +13,7 @@
 # (§1.3a.6 item 8), so a miss at a release cut names its cause.
 #
 # The share is read, not guessed: the replay tool connects the seed's chain
-# under the production substrate and writes its per-hash timings. The share
+# under the production proof-of-work boundary and writes its per-hash timings. The share
 # is the advanced blocks' hashes at that mean, over the subject's CPU
 # seconds. One hash per block: the validator hashes each block once
 # (CEN-D1/D2), so the count is the block count.

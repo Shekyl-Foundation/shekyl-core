@@ -58,7 +58,26 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// and `served_epoch` names the last pass only inside the release
 /// cooldown's window. A 4.2 reader refuses a 4.3 header and bond after the
 /// version read reports the daemon newer.
-pub const CORE_RPC_VERSION_MINOR: u32 = 3;
+///
+/// 4.4: `daemon_status` reports the hasher's RandomX cache places
+/// (`RANDOMX_CACHE_ACTOR.md` §5.6). `randomx_cache_places` joins the part
+/// shown to `status`, beside `data_size`: the places the node's one hasher
+/// has in use when the call is made, at most three. It is the quantity
+/// HA-R2 caps, an upper bound on the RandomX cache memory, never a reading
+/// of it: a place reserved for a build counts, and so does a derive still
+/// filling its pages, and a cache whose 256 MiB is still being returned. A
+/// caller without
+/// the grant finds the part absent (RK-D23). A 4.3 reader of a 4.4 Status
+/// part refuses the field it does not know after the version read reports
+/// the daemon newer.
+/// 4.5: a block carries `draws`, the draws the count rule issued at it,
+/// `count(h)` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3; Rick, 2026-11-14):
+/// public consensus state every node writes at connect, which a filed
+/// bundle's reference carries too (`SCS-P39`). Which pairs were drawn stays
+/// secret until the reveal. `null` where the node holds no row: an
+/// alternative block, or a height below the draw rows' floor. A 4.4 reader
+/// refuses a 4.5 block after the version read reports the daemon newer.
+pub const CORE_RPC_VERSION_MINOR: u32 = 5;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -72,15 +91,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 3)` is `(4 << 16) | 3` = 262147. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 5)` is `(4 << 16) | 5` = 262149. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_147);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 3);
+        assert_eq!(CORE_RPC_VERSION, 262_149);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 5);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 3);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.3");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 5);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.5");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

@@ -275,3 +275,50 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
     assert_eq!(*stopped.borrow_and_update(), SyncState::NoView);
     assert!(stopped.has_changed().is_err());
 }
+
+/// A prove job that could not judge an item ends the owner, and the end
+/// names the fault with its seeds: what `Node::ended()` carries as
+/// `NodeEnd::Sync` and the daemon's stop line prints. The owner's loop
+/// takes [`super::Owner::unjudged`]'s record before it waits again; the
+/// guard reports it as every other end.
+///
+/// The job's half is `executor_tests::an_item_under_another_seed_is_not_judged`.
+/// No test drives a whole owner into this end: the model names one seed
+/// per job by construction, and the executor's boundary is the production
+/// one, so neither fault can be caused from outside the task.
+///
+/// Red edit: have `EndCause`'s `Display` write `text()` for every cause:
+/// the line loses the two seeds.
+#[test]
+fn an_unjudged_proof_is_an_end_that_names_its_fault() {
+    use crate::executor::ProveFault;
+    use shekyl_types::BlockHash;
+
+    let asked = BlockHash::from_bytes([7; 32]);
+    let lent = BlockHash::from_bytes([6; 32]);
+    let cause = super::EndCause::ProofUnjudged(ProveFault::SeedNotLent { asked, lent });
+    assert_eq!(
+        cause.text(),
+        "a header proof was asked under a seed its job did not borrow"
+    );
+    let line = cause.to_string();
+    assert!(line.starts_with(cause.text()), "{line}");
+    assert!(
+        line.contains(&format!("{asked:?}")) && line.contains(&format!("{lent:?}")),
+        "the end names both seeds: {line}"
+    );
+    let clock = super::EndCause::ProofUnjudged(ProveFault::ClockBeforeEpoch);
+    assert_eq!(clock.to_string(), clock.text());
+    assert_ne!(clock, cause, "the two faults are two ends");
+
+    let (sender, _seen) = tokio::sync::watch::channel(SyncState::Synced);
+    let (ended_tx, ended) = tokio::sync::watch::channel(None);
+    let (_stop_tx, stop) = tokio::sync::watch::channel(false);
+    drop(super::EndGuard {
+        state: sender,
+        ended: ended_tx,
+        stop,
+        how: super::Ended::Failed(cause),
+    });
+    assert_eq!(*ended.borrow(), Some(super::Ended::Failed(cause)));
+}

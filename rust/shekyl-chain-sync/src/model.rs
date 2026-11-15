@@ -51,8 +51,8 @@ const _: () = assert!(HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR == 256);
 const _: () = assert!(BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR == 1024);
 
 pub use crate::protocol::{
-    BoundArrival, CachePlan, CloseCause, Command, Event, HashClass, HeadersFormFault, Job,
-    OfferedBody, Outcome, ProveItem, Proved, Spent,
+    BoundArrival, CloseCause, Command, Event, HashClass, HeadersFormFault, Job, OfferedBody,
+    Outcome, ProveItem, Proved, Spent,
 };
 
 /// How long a refused latch write waits before it is asked again.
@@ -496,6 +496,25 @@ where
             .count()
     }
 
+    /// What the node's ranked list needs of the header runs
+    /// (`RANDOMX_CACHE_ACTOR.md` §5.1): the seed and the proven cumulative
+    /// work of the run with the most of it, when that seed is earned.
+    /// Evidence runs are not counted. Between runs of equal work the first
+    /// in session order stands.
+    #[must_use]
+    pub fn frontier(&self) -> Option<(BlockHash, shekyl_difficulty::CumulativeDifficulty)> {
+        let mut most: Option<(BlockHash, shekyl_difficulty::CumulativeDifficulty)> = None;
+        for peer in self.peers.values() {
+            let Some(found) = peer.run.as_ref().and_then(crate::peer::frontier_of) else {
+                continue;
+            };
+            if most.is_none_or(|(_, work)| found.1 > work) {
+                most = Some(found);
+            }
+        }
+        most
+    }
+
     /// The transit the session opened with.
     #[must_use]
     pub fn transit(&self, session: K) -> Option<Duration> {
@@ -567,7 +586,6 @@ where
             Event::Proven { job, results } => self.on_proven(main, job, &results, now, out)?,
             Event::Entry { tag, outcome } => self.on_entry(main, tag, outcome, now, out)?,
             Event::Room { seats } => self.on_room(seats, out),
-            Event::Seeds => self.seeds_changed(),
             Event::Announce { session, body } => {
                 self.on_announce(main, session, &body, now, out)?
             }

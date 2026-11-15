@@ -55,10 +55,12 @@ use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{
     form, FormAttempt, FormClaims, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid,
-    Substrate, Verdict, Weights,
+    Verdict, Weights,
 };
 use shekyl_chain_store::archival_snapshot::SnapshotDiff;
 use shekyl_chain_store::store::{ChainStore, StoreError};
+use shekyl_hasher::{Class, Ranked};
+use shekyl_pow_randomx::Seedhash;
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight,
 };
@@ -71,6 +73,7 @@ use crate::connector::{
     Rewind, Rewound, RunFault,
 };
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
+use crate::pow::Pow;
 use crate::schedule::ChainRules;
 use crate::seed::{SeedClaim, SeedLedger};
 use crate::sequencer::{SequenceError, Sequencer};
@@ -572,6 +575,10 @@ pub enum PipelineFault<SrcF, SubF> {
     /// The verifier could not compute (§1.1: terminal for the run).
     #[error("substrate: {0:?}")]
     Substrate(SubF),
+    /// The hasher stopped under the run: a form's job was never granted.
+    /// The caller stopped it while the run still formed.
+    #[error("the hasher stopped before a form's job was granted")]
+    HasherStopped,
     /// A `form` worker was cancelled or panicked.
     #[error("form worker: {0}")]
     Worker(#[from] tokio::task::JoinError),
@@ -646,7 +653,27 @@ pub enum PipelineFault<SrcF, SubF> {
 
 /// What a `form` worker hands the sequencer: the formed height, or the
 /// substrate's inability to compute.
-type Formed<F> = Result<(BlockHeight, Verdict<StructurallyValid>), F>;
+type Formed<F> = Result<(BlockHeight, Verdict<StructurallyValid>), Unformed<F>>;
+
+/// Why a form produced no verdict.
+enum Unformed<F> {
+    /// The substrate faulted.
+    Substrate(F),
+    /// The job was never granted ([`PipelineFault::HasherStopped`]).
+    HasherStopped,
+}
+
+impl<F> Unformed<F> {
+    fn fault<SrcF>(self) -> PipelineFault<SrcF, F> {
+        match self {
+            Self::Substrate(fault) => PipelineFault::Substrate(fault),
+            Self::HasherStopped => PipelineFault::HasherStopped,
+        }
+    }
+}
+
+/// The replay run has no stop of its own: its jobs wait for the hasher.
+static NEVER_STOPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// A handler's own error is the connector's fault; every other way an
 /// `ask` can fail is the mailbox.
@@ -672,27 +699,31 @@ fn next_height(tip: Option<BlockHeight>) -> BlockHeight {
 
 /// Run a source to exhaustion against `store`.
 ///
-/// `metrics` must be the sink `substrate` records into (`substrate` module
-/// docs): the pipeline times each block's `form` into it and snapshots it
-/// for the report.
+/// `metrics` must be the sink `pow` records into (`pow` module docs): the
+/// pipeline times each block's `form` into it and snapshots it for the
+/// report, with `pow`'s derives.
+///
+/// Each block is formed as one job on its seed ([`Pow::run`]). The run
+/// ranks the seed it forms under first and the one before it second, so
+/// a seed epoch's cache stays warm between forms and the previous epoch's
+/// serves the forms still in flight under it.
 ///
 /// # Errors
 ///
 /// Any [`PipelineFault`]; the report up to the fault is not returned (the
 /// store carries what landed; `metrics` carries the measurement).
-pub async fn run<Src, S>(
+pub async fn run<Src, P>(
     source: &mut Src,
-    substrate: Arc<S>,
+    pow: Arc<P>,
     metrics: Arc<Metrics>,
     rules: ChainRules,
     store: ChainStore,
     trace: Arc<Trace>,
     cfg: PipelineConfig,
-) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>>
+) -> Result<RunReport, PipelineFault<Src::Fault, P::Fault>>
 where
     Src: Source,
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + 'static,
+    P: Pow,
 {
     // A per-height digest is the digest after that height's own commit.
     // Refusing a wider window here leaves the store untouched: the check
@@ -724,11 +755,12 @@ where
         store: Arc::new(store),
         rules,
         bundle_queued: None,
+        ranked: None,
     });
 
     let mut drive = Drive {
         source,
-        substrate,
+        pow,
         metrics: &metrics,
         rules,
         connector: &connector,
@@ -741,7 +773,7 @@ where
         checkpoint_at: trace.checkpoint().map(|(h, _)| h),
         report: RunReport::default(),
         sequencer: Sequencer::new(SequenceNo::FIRST),
-        pinned: None,
+        ranked: None,
         hashers: Arc::new(Semaphore::new(cfg.hashers.get())),
         in_flight: JoinSet::new(),
         pending_rewind: None,
@@ -762,14 +794,13 @@ where
 
 /// The loop's state, named. Fill, collect, apply, barrier are the four
 /// steps; a `Drive` is what holds them together.
-struct Drive<'a, Src, S>
+struct Drive<'a, Src, P>
 where
     Src: Source,
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + 'static,
+    P: Pow,
 {
     source: &'a mut Src,
-    substrate: Arc<S>,
+    pow: Arc<P>,
     metrics: &'a Arc<Metrics>,
     rules: ChainRules,
     connector: &'a kameo::actor::ActorRef<Connector>,
@@ -784,13 +815,14 @@ where
     next_seq: SequenceNo,
     checkpoint_at: Option<BlockHeight>,
     report: RunReport,
-    sequencer: Sequencer<Formed<S::Fault>>,
-    /// The seed last pinned on the substrate.
-    pinned: Option<BlockHash>,
+    sequencer: Sequencer<Formed<P::Fault>>,
+    /// The seed the forms hash under now, which the last list sent ranks
+    /// first.
+    ranked: Option<BlockHash>,
     /// One permit per hasher; a worker holds its permit for the life of
     /// its `form`.
     hashers: Arc<Semaphore>,
-    in_flight: JoinSet<Sequenced<Formed<S::Fault>>>,
+    in_flight: JoinSet<Sequenced<Formed<P::Fault>>>,
     /// The `Rewind` read but not yet committed, if any, as its target: a
     /// barrier, so `fill` reads nothing past it and it commits once nothing
     /// is in flight ahead of it.
@@ -805,13 +837,12 @@ where
     unclaimable: Option<(BlockHeight, shekyl_chain_rules::Corrupt)>,
 }
 
-impl<Src, S> Drive<'_, Src, S>
+impl<Src, P> Drive<'_, Src, P>
 where
     Src: Source,
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + 'static,
+    P: Pow,
 {
-    async fn run_loop(&mut self) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>> {
+    async fn run_loop(&mut self) -> Result<RunReport, PipelineFault<Src::Fault, P::Fault>> {
         loop {
             self.fill().await?;
             self.collect().await?;
@@ -842,13 +873,13 @@ where
             }
         }
         self.compare_checkpoint().await?;
-        self.report.metrics = self.metrics.snapshot();
+        self.report.metrics = self.metrics.snapshot(self.pow.derives());
         Ok(std::mem::take(&mut self.report))
     }
 
     /// Read events and start forming them, while the window has room and a
     /// hasher is free. Stops at a `Rewind` (a barrier) and at exhaustion.
-    async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         while !self.exhausted
             && self.pending_rewind.is_none()
             && self.in_flight.len() + self.sequencer.pending() < self.cfg.window.get()
@@ -892,7 +923,7 @@ where
         Ok(())
     }
 
-    /// Assign the next height, claim its seed, pin the epoch if it changed,
+    /// Assign the next height, claim its seed, rank the epoch if it changed,
     /// and start the worker. The permit rides with the worker and is
     /// released when `form` returns.
     async fn spawn_form(
@@ -900,7 +931,7 @@ where
         seq: SequenceNo,
         candidate: Box<shekyl_chain_rules::Candidate>,
         permit: OwnedSemaphorePermit,
-    ) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    ) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let height = self.form_at;
         self.form_at = next_height(Some(height));
         self.ledger.record(height, candidate.block.hash());
@@ -926,36 +957,46 @@ where
             return Ok(());
         }
         self.targets.forget_below_window_of(height);
-        // The null seed is genesis's cache, a real 256 MiB fill. Skipping
-        // it here would make the lookup-only longhash fault on block 0.
-        if self.pinned != Some(seed) {
-            let substrate = Arc::clone(&self.substrate);
-            tokio::task::spawn_blocking(move || substrate.pin_seed(&seed)).await?;
-            self.pinned = Some(seed);
+        // The seed this run forms under now is ranked first and the one
+        // before it second: a ranked seed stays warm between forms, where
+        // an unranked one is freed whenever no form holds it. The null
+        // seed is genesis's cache, a real 256 MiB fill, and is ranked like
+        // any other here: this run has no store-backed ranker.
+        if self.ranked != Some(seed) {
+            let as_seed = |seed: &BlockHash| Seedhash::from_bytes(*seed.as_bytes());
+            let list = Ranked::new(as_seed(&seed), self.ranked.as_ref().map(as_seed), None)
+                .expect("the seed changed, so the two differ");
+            self.pow.rank(list);
+            self.ranked = Some(seed);
         }
-        let substrate = Arc::clone(&self.substrate);
+        let pow = Arc::clone(&self.pow);
         let metrics = Arc::clone(self.metrics);
         let network = self.rules.trust().network_id();
         self.in_flight.spawn_blocking(move || {
-            let started = std::time::Instant::now();
-            let verdict = form(
-                *candidate,
-                &FormClaims {
-                    rule_set: &in_force,
-                    seed,
-                    target,
-                    references: &references,
-                    network,
-                },
-                &*substrate,
-                FormAttempt::FIRST,
-            );
-            metrics.block_formed(started.elapsed());
+            let formed = pow.run(Class::Chain, seed, &NEVER_STOPS, |job| {
+                let started = std::time::Instant::now();
+                let verdict = form(
+                    *candidate,
+                    &FormClaims {
+                        rule_set: &in_force,
+                        seed,
+                        target,
+                        references: &references,
+                        network,
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                );
+                metrics.block_formed(started.elapsed());
+                verdict
+            });
             drop(permit);
-            Sequenced {
-                seq,
-                event: verdict.map(|verdict| (height, verdict)),
-            }
+            let event = match formed {
+                Some(Ok(verdict)) => Ok((height, verdict)),
+                Some(Err(fault)) => Err(Unformed::Substrate(fault)),
+                None => Err(Unformed::HasherStopped),
+            };
+            Sequenced { seq, event }
         });
         Ok(())
     }
@@ -968,7 +1009,7 @@ where
     async fn claim_seed(
         &mut self,
         connecting: BlockHeight,
-    ) -> Result<BlockHash, PipelineFault<Src::Fault, S::Fault>> {
+    ) -> Result<BlockHash, PipelineFault<Src::Fault, P::Fault>> {
         let seed = match self.ledger.claim(connecting) {
             SeedClaim::Known(seed) => seed,
             SeedClaim::Unread { seed_height } => {
@@ -1005,7 +1046,7 @@ where
         rule_set: &shekyl_chain_rules::RuleSet,
     ) -> Result<
         Result<shekyl_chain_rules::Target, shekyl_chain_rules::Corrupt>,
-        PipelineFault<Src::Fault, S::Fault>,
+        PipelineFault<Src::Fault, P::Fault>,
     > {
         for height in self.targets.missing_for(connecting) {
             let recorded = self
@@ -1039,7 +1080,7 @@ where
         &mut self,
         height: BlockHeight,
         corrupt: shekyl_chain_rules::Corrupt,
-    ) -> PipelineFault<Src::Fault, S::Fault> {
+    ) -> PipelineFault<Src::Fault, P::Fault> {
         match self.connector.ask(ObserveTarget { height }).await {
             Err(fault) => collapse(fault),
             Ok(()) => PipelineFault::TargetLedger { height, corrupt },
@@ -1048,7 +1089,7 @@ where
 
     /// Wait for one worker, then take every other one already finished, so
     /// a run covers everything formed by the time the writer is asked.
-    async fn collect(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn collect(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let Some(done) = self.in_flight.join_next().await else {
             return Ok(());
         };
@@ -1061,10 +1102,10 @@ where
 
     /// Send the releasable run — at most a window, by the fill bound — to
     /// the writer, and record what it did.
-    async fn apply_ready(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn apply_ready(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let mut run: Vec<(BlockHeight, Verdict<StructurallyValid>)> = Vec::new();
         while let Some(item) = self.sequencer.pop_ready() {
-            run.push(item.event.map_err(PipelineFault::Substrate)?);
+            run.push(item.event.map_err(Unformed::fault)?);
         }
         if run.is_empty() {
             return Ok(());
@@ -1121,7 +1162,7 @@ where
     async fn record_commit_digest(
         &mut self,
         connected: &[(BlockHeight, BlockHash)],
-    ) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    ) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let height = match connected {
             [(height, _)] => *height,
             [] => return Ok(()),
@@ -1147,7 +1188,7 @@ where
     /// identical. A trace carries both encodings or neither
     /// (`TraceFault::MissingSnapshot`), so a checkpoint height without a
     /// snapshot is unreachable here.
-    async fn compare_checkpoint(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn compare_checkpoint(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let Some(at) = self.checkpoint_at else {
             return Ok(());
         };
@@ -1183,7 +1224,7 @@ where
     /// Commit the pending `Rewind` once nothing is in flight ahead of it:
     /// it records the digest after the pop and moves the ledger and the
     /// next height to the post-rewind chain.
-    async fn try_rewind(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn try_rewind(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let Some(rewind) = self.pending_rewind.take() else {
             return Ok(());
         };
@@ -1196,7 +1237,7 @@ where
     }
 
     /// Pop to `to`.
-    async fn rewind(&mut self, to: BlockHeight) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn rewind(&mut self, to: BlockHeight) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let rewound = self.connector.ask(Rewind { to }).await.map_err(collapse)?;
         if let Rewound::Refused { tip, floor } = rewound {
             return Err(PipelineFault::RewindBelowFloor { to, tip, floor });

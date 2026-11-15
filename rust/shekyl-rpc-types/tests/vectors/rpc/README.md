@@ -39,6 +39,13 @@ At 4.3 the files were edited by hand from the grammar as IG-Q102 amends it
 each block's `section` and `section_body` (empty here: no block in these
 files admits a bundle), and no `complete_tree` on an `archival_claim_show`
 bond.
+At 4.5 each block in `block_show` and `block_list` carries `draws`, its draw
+count (IG-Q107); every file shows a count, `1`.
+
+At 4.4 `daemon_status.reply.json` gained `randomx_cache_places` in its Status
+part, by hand from the grammar's field census: the places the node's
+hasher has in use for RandomX caches, an upper bound on that memory
+(`RANDOMX_CACHE_ACTOR.md` §5.6).
 
 ### Layout
 
