@@ -3975,6 +3975,80 @@ hours on an eight-core fleet host. The year-30 campaigns dominate. The
 full grid runs on demand; the nightly pins a slice (the shipped zone and
 N = 90, SMA and median, 20 % and 51 %, year 5).
 
+#### 5.33.1 What the grid read (2026-11-15)
+
+Run on a fleet host at `85135e868` (the registered design) and again at
+`81c5f0596` (the measure of record, below). The three narrations committed
+before this change (`--stage2`, its flat control, `--esr10`'s nightly
+scope) pass unregenerated: the median and the per-block counts change no
+production fold. The `--eup4` narrations move, as §5.33 said, in their
+campaign rows: 33 % is now 33 of every 100 blocks (8 295 bodies from year
+5 on the re-derived arm, not 8 400), 51 % joins the shares (93 792 SKL
+gained), and the 10 % and 20 % rows move in their last digit from the
+spread's phase.
+
+**The campaign's length, changed after the registered run.** §5.33 took
+EI-3's campaign: one window, read over three. Two windows after it ends,
+`M_r` is back at 1.0, so "`M_r` at rest" said nothing about where a
+stuffer holds it; and a 51 % campaign of one window holds over half the
+window only at its end, so the median moved for 26 blocks, which reads
+as a cartel that barely moves it when the campaign's length is the
+cause. Every share now holds for the measured span, as the every-miner
+row already did (`81c5f0596`). The predictions are graded on the
+registered run; the narration of record is the sustained one.
+
+**Outcomes, graded against §5.33:**
+
+| Prediction | Outcome (registered run unless named) |
+| --- | --- |
+| **JG-1.** SMA: every share from 10 %; median: only 51 % and every miner; decoupled: none | **Held.** SMA: every share moves `M_r` wherever blocks have free room. Median: 10–33 % never move it; every miner holds it at its cap; 51 % moved it for 26 blocks in the registered run, and in the sustained run holds it at the cap from about half a window on, as every miner does. Decoupled: `M_r` is 1.0 in every cell |
+| **JG-2.** Gain at 20 %: SMA 14 816 SKL re-derived and more as N grows; median about zero; median with the floor a small loss; decoupled a small loss | **Held but for the decoupled sign.** SMA: 14 815 re-derived, 29 866 at N = 90 (`w_ref` 3 000). Median: 0.00 everywhere. Median with the floor: −12.6 to −87 SKL. Decoupled: within ±0.3 SKL of zero, a small gain as often as a loss: the stuffed sum raises the burn and so `C`, which raises the fees the miner keeps |
+| **JG-3.** Year-1 Standard fee as `w_ref`·`M_r`/M², M the zone | **Held at `w_ref` 3 000, missed at `w_ref′` below N ≈ 45.** At 3 000: 0.448 SKL at N = 25 (0.90×), 0.337 at 30, 0.104 at 60, 0.0462 at 90, 0.0166 at 150; the ceiling is crossed between N = 20 (1.39×) and 25. N = 14 is the recorded 1.1888, not 1.50: the median sits at 315 KB, above that zone. At `w_ref′` the fee is flat at about 1.22 SKL (2.46×) up to N = 35: blocks grow to carry demand at once there (§5.29.1 R2), so the median is demand's weight, not the zone; it falls to 0.775 at N = 45, 0.394 at the re-derived zone and 0.194 at N = 90, crossing under the ceiling between N = 45 (1.56×) and 60 (0.88×) |
+| **JG-4.** A day's fill as `w_ref`·`M_r`/zone | **Held within 7 %** where the median is the zone: 2 462 SKL a day at N = 30, 1 032 at N = 90, 618 at N = 150 (`w_ref` 3 000); about 4.2 times that at `w_ref′` from N = 60 |
+| **JG-5.** Step: SMA as §5.32.1 where blocks have room, flat below N = 32; median about 360 blocks; decoupled none. Design load year 1 from N = 31, later below | **Held at `w_ref` 3 000, missed for the design load at `w_ref′`.** SMA: no move up to N = 35 (`M_r` 0.80–0.96, the constrained block), partial at N = 45 (1.0 → 1.24), the cap beyond, faster as the zone grows (141 blocks at N = 90). Median: 361 blocks at every zone with room. Decoupled: none. Design load at 3 000: y20 at N = 14, y17, y15, y13 at N = 30, y1 from N = 35. At `w_ref′`: y1 at every N, for R2's reason |
+
+**What the grid says (measures, not verdicts; J and G are Rick's).** In
+the sustained run, from year 5:
+
+- **The SMA gives way to any share with free room.** At N = 90 and
+  `w_ref` 3 000 a 10 % stuffer holds `M_r` at 1.14 and gains 18 600 SKL
+  over the span; 20 % holds 1.29 and gains 74 600; 33 % and more reach
+  the cap.
+- **The median resists any minority and none of a majority.** 10 %, 20 %
+  and 33 % leave `M_r` at 1.0 at every zone; 51 % holds it at the cap from
+  about half a window on and gains about 160 000 SKL at N = 90, close to
+  every miner's 389 000. The median ignores an honest step until half
+  the window carries it (361 blocks), and does not see one shorter.
+- **The floor on own bodies costs a minority its fees' burn** (−19 to
+  −259 SKL) and a majority about 0.1 % of its gain.
+- **Decoupled, stuffing gains nothing and still costs the honest chain:**
+  `M_r` stays at 1.0, but the stuffed sum raises the burn (11.1 % to
+  17.3 % with every miner at N = 90) and so `C` (to 1.09), and so every
+  user's fee.
+- **Below about N = 35 at `w_ref` 3 000 there is no free room,** and no
+  signal is stuffed: the inherited zone's blocks are full of demand.
+- **The zone trades the fee against the fill.** At `w_ref` 3 000 the
+  year-1 Standard fee falls under the ceiling between N = 20 and 25 and
+  a day's fill falls as 1/N; at `w_ref′` the fee stays at the ceiling's
+  2.46× until the zone is above demand's weight, then falls as 1/N².
+
+**Cost.** The full grid took 4 061 s and 4 046 s on the fleet host's
+eight threads (at `nice 10`, beside its testnet node): about 1 300
+campaign folds, 84 honest folds of 60 years and 84 step folds. It is
+pinned on demand (`jg_grid_narration_matches_the_committed_fixture`);
+its nightly slice (the inherited zone and N = 90, the SMA and the
+median, 20 % and 51 %, year 5) is pinned nightly. NIGHTLY_SLICE_COST
+
+**Regenerated** on the fleet host. The `--jg-grid` narrations, their first
+generation, under `SHEKYL_PINNED_REGEN_DECISION="2026-11-15 J x G: the
+--jg-grid narrations first fixtures, its stuffers holding their share for
+the measured span; predicted in ECONOMICS_SIM_PRODUCTION_REBASE.md §5.33
+and read in §5.33.1"` at `81c5f0596`. The `--eup4` narrations under
+`SHEKYL_PINNED_REGEN_DECISION="2026-11-15 J x G: a stuffers share is an
+even proportion of the blocks and 51 % joins the shares, which moves the
+--eup4 narrations campaign rows; recorded in
+ECONOMICS_SIM_PRODUCTION_REBASE.md §5.33.1"` at `85135e868`.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
