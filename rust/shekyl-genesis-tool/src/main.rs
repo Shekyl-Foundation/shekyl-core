@@ -199,10 +199,11 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
     }
 }
 
-/// One network's freshly written pins, to stdout.
+/// One network's freshly written pins, to stdout: the mint time those
+/// pins record, and the block hash.
 fn report_pinned(net: Network, rebuilt: &Rebuilt) {
     println!(
-        "{net}: minted at {ts}, block {hash}{provisional}",
+        "{net}: mint time {ts}, block {hash}{provisional}",
         ts = rebuilt.timestamp.get(),
         hash = hex::encode(rebuilt.block_hash),
         provisional = if net.genesis().provisional() {

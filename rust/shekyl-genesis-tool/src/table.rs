@@ -79,23 +79,28 @@ pub fn pin_paths(repo_root: &Path, net: Network) -> PinPaths {
 /// the deterministic genesis pipeline landed. A clock before it is a broken
 /// clock, and genesis is exempt from every timestamp rule a later block
 /// meets, so the tool refuses to stamp it rather than let the network
-/// carry it.
+/// carry it. Zero is not a mint time at all ([`GenesisTimestamp`]).
 pub const MINT_FLOOR: u64 = 1_785_801_600;
+
+const _: () = assert!(MINT_FLOOR > 0, "the mint floor is a non-zero second");
 
 /// The mint time for a genesis stamped at `now` (seconds after the Unix
 /// epoch).
 ///
 /// # Errors
 ///
-/// `now` is before [`MINT_FLOOR`].
+/// `now` is zero, or `now` is before [`MINT_FLOOR`].
 pub fn mint_time(now: u64) -> Result<GenesisTimestamp, GenesisToolError> {
-    if now < MINT_FLOOR {
+    let Some(stamp) = GenesisTimestamp::new(now) else {
+        return Err(invalid("a mint time is never zero"));
+    };
+    if stamp.get() < MINT_FLOOR {
         return Err(invalid(format!(
             "the clock reads {now}, before {MINT_FLOOR} (2026-08-04 UTC): \
              set the clock before minting a genesis"
         )));
     }
-    GenesisTimestamp::new(now).ok_or_else(|| invalid("a mint time is never zero"))
+    Ok(stamp)
 }
 
 /// The mint time recorded in `net`'s timestamp pin.
@@ -103,7 +108,7 @@ pub fn mint_time(now: u64) -> Result<GenesisTimestamp, GenesisToolError> {
 /// # Errors
 ///
 /// The file is missing (the network has not been minted), unreadable, or
-/// does not hold one non-zero decimal second.
+/// not a timestamp pin ([`GenesisTimestamp::from_pin`]).
 pub fn recorded_timestamp(
     repo_root: &Path,
     net: Network,
@@ -115,17 +120,12 @@ pub fn recorded_timestamp(
             path.display()
         ))
     })?;
-    let digits = text.strip_suffix('\n').unwrap_or(&text);
-    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(invalid(format!(
-            "{} holds {digits:?}, not a non-zero decimal second",
+    GenesisTimestamp::from_pin(&text).ok_or_else(|| {
+        invalid(format!(
+            "{} holds {text:?}, not one non-zero decimal second",
             path.display()
-        )));
-    }
-    let seconds: u64 = digits
-        .parse()
-        .map_err(|error| invalid(format!("{}: {error}", path.display())))?;
-    GenesisTimestamp::new(seconds).ok_or_else(|| invalid("a mint time is never zero"))
+        ))
+    })
 }
 
 /// A genesis rebuilt from its recipients file.
@@ -203,7 +203,7 @@ pub fn write_pins(
     let rebuilt = rebuild(net, &recipients_path(repo_root, net), timestamp)?;
     let paths = pin_paths(repo_root, net);
     std::fs::write(&paths.tx_hex, format!("{}\n", rebuilt.tx_hex))?;
-    std::fs::write(&paths.timestamp, format!("{}\n", timestamp.get()))?;
+    std::fs::write(&paths.timestamp, timestamp.to_pin())?;
     std::fs::write(
         &paths.hash,
         format!("{}\n", hex::encode(rebuilt.block_hash)),
@@ -273,8 +273,10 @@ mod tests {
 
     #[test]
     fn a_clock_before_the_floor_mints_nothing() {
-        assert!(mint_time(0).is_err());
-        assert!(mint_time(MINT_FLOOR - 1).is_err());
+        let zero = mint_time(0).expect_err("zero is not a mint time");
+        assert!(zero.to_string().contains("never zero"), "{zero}");
+        let early = mint_time(MINT_FLOOR - 1).expect_err("before the floor");
+        assert!(early.to_string().contains("2026-08-04"), "{early}");
         assert_eq!(
             mint_time(MINT_FLOOR).map(GenesisTimestamp::get).ok(),
             Some(MINT_FLOOR)

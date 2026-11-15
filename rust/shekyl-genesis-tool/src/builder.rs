@@ -194,8 +194,8 @@ pub const GENESIS_HEADER_NONCE: u32 = 0;
 /// [`GENESIS_BLOCK_MAJOR_VERSION`], minor [`HEADER_MINOR_VERSION`], the
 /// network's mint time (`NETWORK_IDENTITY.md` NI-R18), zero previous hash,
 /// the empty curve-tree root, the empty section root (genesis admits no
-/// bundle), and nonce [`GENESIS_HEADER_NONCE`]. Every field but the mint
-/// time is the same on every network.
+/// bundle), and nonce [`GENESIS_HEADER_NONCE`]. Every header field but the
+/// mint time is the same on every network; the coinbase is that network's.
 pub fn genesis_block(
     tx: Transaction,
     timestamp: GenesisTimestamp,

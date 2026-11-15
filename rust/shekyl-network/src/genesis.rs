@@ -13,6 +13,8 @@
 //! The block is the transaction under the genesis header (the mint time,
 //! nonce 0, NI-Q1), which the node assembles; the hash is pinned here
 //! because assembling a block needs the wire crate this table sits below.
+//! The mint time's pin text has one reading, [`GenesisTimestamp::from_pin`],
+//! and one writing, [`GenesisTimestamp::to_pin`].
 
 use core::num::NonZeroU64;
 
@@ -37,6 +39,47 @@ impl GenesisTimestamp {
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0.get()
+    }
+
+    /// The pin file's text for `self`: decimal seconds and one newline.
+    /// [`from_pin`](Self::from_pin) reads it back.
+    #[must_use]
+    pub fn to_pin(self) -> String {
+        format!("{}\n", self.get())
+    }
+
+    /// `text` as a mint time. One optional trailing newline, then decimal
+    /// digits with no sign and no leading zero. `None` when the text is
+    /// empty, zero, signed, padded, not decimal, or does not fit in a `u64`.
+    #[must_use]
+    pub const fn from_pin(text: &str) -> Option<Self> {
+        let bytes = text.as_bytes();
+        let len = if !bytes.is_empty() && bytes[bytes.len() - 1] == b'\n' {
+            bytes.len() - 1
+        } else {
+            bytes.len()
+        };
+        if len == 0 || bytes[0] == b'0' {
+            return None;
+        }
+        let mut seconds: u64 = 0;
+        let mut i = 0;
+        while i < len {
+            let c = bytes[i];
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            let Some(scaled) = seconds.checked_mul(10) else {
+                return None;
+            };
+            let Some(next) = scaled.checked_add((c - b'0') as u64) else {
+                return None;
+            };
+            seconds = next;
+            i += 1;
+        }
+        // The first digit is `1..=9`, so `seconds` is not zero.
+        Self::new(seconds)
     }
 }
 
@@ -102,39 +145,12 @@ const fn hash_file(text: &str) -> [u8; 32] {
     out
 }
 
-/// A timestamp file's decimal seconds, with an optional trailing newline.
-/// Zero, a sign, a leading zero or anything but digits fails the build.
-pub(crate) const fn timestamp_file(text: &str) -> GenesisTimestamp {
-    let b = text.as_bytes();
-    let len = if !b.is_empty() && b[b.len() - 1] == b'\n' {
-        b.len() - 1
-    } else {
-        b.len()
-    };
-    assert!(
-        len > 0 && len <= 20 && b[0] != b'0',
-        "a genesis timestamp file holds the mint second in decimal, not zero"
-    );
-    let mut seconds: u64 = 0;
-    let mut i = 0;
-    while i < len {
-        let c = b[i];
-        assert!(
-            c.is_ascii_digit(),
-            "a genesis timestamp file holds decimal digits"
-        );
-        seconds = match seconds.checked_mul(10) {
-            Some(v) => match v.checked_add((c - b'0') as u64) {
-                Some(v) => v,
-                None => panic!("a genesis timestamp overflows u64"),
-            },
-            None => panic!("a genesis timestamp overflows u64"),
-        };
-        i += 1;
-    }
-    match GenesisTimestamp::new(seconds) {
+/// A timestamp pin, read by [`GenesisTimestamp::from_pin`]. A pin that does
+/// not read fails the build.
+const fn timestamp_file(text: &str) -> GenesisTimestamp {
+    match GenesisTimestamp::from_pin(text) {
         Some(t) => t,
-        None => panic!("a genesis timestamp is never zero"),
+        None => panic!("a genesis timestamp pin holds one non-zero decimal second"),
     }
 }
 

@@ -231,26 +231,32 @@ fn the_name_id_is_the_tags_cshake() {
     }
 }
 
-/// A genesis timestamp is never zero (NI-R18): the type has no zero, and a
-/// pin file holding one does not build.
+/// A mint time's pin is decimal seconds and one newline, and every row's
+/// compiled time is that pin (`GenesisTimestamp::to_pin` / `from_pin`).
 #[test]
-fn a_genesis_timestamp_is_never_zero() {
+fn a_timestamp_pin_round_trips() {
+    let stamp = crate::GenesisTimestamp::new(1_794_760_828).expect("a mint time");
+    assert_eq!(stamp.to_pin(), "1794760828\n");
+    assert_eq!(
+        crate::GenesisTimestamp::from_pin("1794760828\n"),
+        Some(stamp)
+    );
+    assert_eq!(crate::GenesisTimestamp::from_pin("1794760828"), Some(stamp));
     assert_eq!(crate::GenesisTimestamp::new(0), None);
-    assert_eq!(
-        crate::GenesisTimestamp::new(1).map(crate::GenesisTimestamp::get),
-        Some(1)
-    );
-    assert_eq!(
-        crate::genesis::timestamp_file("1794760828\n").get(),
-        1_794_760_828
-    );
+    let max = crate::GenesisTimestamp::new(u64::MAX).expect("u64::MAX is not zero");
+    assert_eq!(crate::GenesisTimestamp::from_pin(&max.to_pin()), Some(max));
     for net in Network::ALL {
-        assert_ne!(net.genesis().timestamp().get(), 0, "{net}");
+        let row = net.genesis().timestamp();
+        assert_eq!(
+            crate::GenesisTimestamp::from_pin(&row.to_pin()),
+            Some(row),
+            "{net}"
+        );
     }
 }
 
-/// Every malformed timestamp pin is refused where the table is built: zero,
-/// a leading zero, an empty file, a sign, and a non-digit.
+/// One reading refuses a pin that is zero, padded, empty, signed, not
+/// decimal, or too wide for a `u64`.
 #[test]
 fn a_malformed_timestamp_pin_is_refused() {
     for text in [
@@ -260,10 +266,15 @@ fn a_malformed_timestamp_pin_is_refused() {
         "",
         "\n",
         "-1\n",
+        "+1\n",
         "17947608a8\n",
+        "1794760828\n\n",
+        "1794760828\r\n",
         "99999999999999999999\n",
     ] {
-        let refused = std::panic::catch_unwind(|| crate::genesis::timestamp_file(text));
-        assert!(refused.is_err(), "{text:?} was accepted");
+        assert!(
+            crate::GenesisTimestamp::from_pin(text).is_none(),
+            "{text:?} was accepted"
+        );
     }
 }
