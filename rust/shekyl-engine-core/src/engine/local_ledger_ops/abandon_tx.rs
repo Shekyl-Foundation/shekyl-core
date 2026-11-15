@@ -438,8 +438,12 @@ mod tests {
             shekyl_types::BlockHeight::from_raw(25)
         );
         assert!(
-            !wallet.ledger.transfers[0]
-                .is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &locks),
+            !wallet.ledger.transfers[0].is_spendable(
+                shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                    u64::MAX
+                )),
+                &locks
+            ),
             "the replayed funding row is excluded from selection"
         );
         assert_eq!(

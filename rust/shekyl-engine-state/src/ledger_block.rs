@@ -388,16 +388,13 @@ impl LedgerBlock {
             .collect()
     }
 
-    /// Get spendable outputs with an optional minimum-amount filter.
-    ///
-    /// Only returns outputs where `current_height >= eligible_height`
-    /// — the daemon has no curve-tree path for immature outputs, so
-    /// attempting to spend them would fail at FCMP++ proof generation.
-    /// `spend_locks` is the journal-derived lock map (see
-    /// [`Self::unspent_transfers`]).
+    /// The outputs a send could use at `horizon`, with an optional
+    /// minimum-amount filter: the classifier's `Spendable`
+    /// ([`TransferDetails::is_spendable`]). `spend_locks` is the
+    /// journal-derived lock map (see [`Self::unspent_transfers`]).
     pub fn spendable_outputs(
         &self,
-        current_height: BlockHeight,
+        horizon: crate::output_state::SpendHorizon,
         min_amount: Option<AtomicUnits>,
         spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> Vec<(usize, &TransferDetails)> {
@@ -405,7 +402,7 @@ impl LedgerBlock {
             .iter()
             .enumerate()
             .filter(|(_, td)| {
-                if !td.is_spendable(current_height, spend_locks) {
+                if !td.is_spendable(horizon, spend_locks) {
                     return false;
                 }
                 if let Some(min) = min_amount {

@@ -30,9 +30,24 @@ pub enum SendError {
     InsufficientFunds {
         /// Total amount-plus-fee the build attempted to cover.
         needed: u64,
-        /// Spendable balance currently visible to the wallet (matured,
-        /// non-reserved).
+        /// What the wallet's own outputs could cover without the user
+        /// acting: its spendable money (including any still waiting on the
+        /// tree rebuild) plus its incoming outputs, less outputs other
+        /// built sends reserve. It leaves out parked money (refused as
+        /// [`Self::OutputsParked`] when that would cover the send) and the
+        /// change of in-flight sends, which is not an output yet.
         available: u64,
+    },
+
+    /// The wallet holds enough only with the outputs the user parked: the
+    /// balance counts them, but coin selection does not use them until the
+    /// user releases them.
+    #[error("the send needs {needed} and is covered only with {parked} the user parked")]
+    OutputsParked {
+        /// Total amount-plus-fee the build attempted to cover.
+        needed: u64,
+        /// The parked amount.
+        parked: u64,
     },
 
     /// The `TxRequest` named a destination this wallet will not pay:

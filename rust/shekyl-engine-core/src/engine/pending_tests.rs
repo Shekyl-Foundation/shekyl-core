@@ -320,9 +320,9 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     let mut reservations = std::collections::BTreeMap::new();
     let mut next_id = 0u64;
 
-    // Drive the build at height 5 (well past the spendable_age
-    // cutoff so the output qualifies).
-    for h in 6..=15 {
+    // Drive the build at height 20: the output (eligible at 11) is in the
+    // tree of the reference block a wallet at 20 anchors to.
+    for h in 6..=20 {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             &mut ledger,
@@ -340,14 +340,14 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     .expect("build");
     assert_eq!(
         pending.built_at_height,
-        shekyl_types::BlockHeight::from_raw(15)
+        shekyl_types::BlockHeight::from_raw(20)
     );
 
-    // Reorg: rewind to fork height 15, replay 15..=20 with new
-    // hashes. After rewind, `block_hash_at(15)` differs from
+    // Reorg: rewind to fork height 20, replay 20..=25 with new
+    // hashes. After rewind, `block_hash_at(20)` differs from
     // `pending.built_at_tip_hash`.
-    indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(15));
-    for h in 15..=20 {
+    indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(20));
+    for h in 20..=25 {
         let hash = [u8::try_from(0xA0 ^ (h & 0xFF)).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             &mut ledger,
@@ -360,7 +360,7 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     let err = submit_pending_tx_in_state(&mut ledger, &mut reservations, pending.id).unwrap_err();
     match err {
         PendingTxError::ChainStateChanged { height } => {
-            assert_eq!(height, shekyl_types::BlockHeight::from_raw(15));
+            assert_eq!(height, shekyl_types::BlockHeight::from_raw(20));
         }
         other => panic!("unexpected error: {other:?}"),
     }

@@ -2339,8 +2339,10 @@ async fn e2e_refresh_scans_coinbase_balance() {
             let ledger = g.ledger();
             total_height = ledger.ledger.height().to_raw();
             unlocked = ledger
-                .balance_at(shekyl_types::BlockHeight::from_raw(total_height))
-                .unlocked;
+                .balance_at(shekyl_engine_state::SpendHorizon::at_tip(
+                    shekyl_types::BlockHeight::from_raw(total_height),
+                ))
+                .spendable;
         }
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -2428,7 +2430,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         unlocked = {
             let g = arc.read().await;
             let ledger = g.ledger();
-            ledger.balance().unlocked
+            ledger.balance().spendable
         };
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -2591,7 +2593,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
         unlocked = {
             let g = arc.read().await;
             let ledger = g.ledger();
-            ledger.balance().unlocked
+            ledger.balance().spendable
         };
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -2872,7 +2874,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let unlocked = {
         let g = arc.read().await;
         let ledger = g.ledger();
-        ledger.balance().unlocked
+        ledger.balance().spendable
     };
     assert!(
         unlocked > AtomicUnits::ZERO,
@@ -3735,7 +3737,7 @@ async fn mine_until_unlocked_at_least(
     for _ in 0..max_batches {
         daemon.generate_blocks(batch).await;
         refresh(arc).await;
-        if unlocked_balance(arc).await >= target {
+        if spendable_balance(arc).await >= target {
             return;
         }
     }
@@ -3764,7 +3766,7 @@ async fn submit_tier_b_spend(
     max_batches: usize,
 ) {
     use shekyl_units::AtomicUnits;
-    let amount = AtomicUnits::from_raw(unlocked_balance(arc).await.to_raw() / 4);
+    let amount = AtomicUnits::from_raw(spendable_balance(arc).await.to_raw() / 4);
     transfer_to(
         daemon,
         arc,
@@ -3896,13 +3898,13 @@ async fn refresh(arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>) {
         .expect("refresh joins");
 }
 
-async fn unlocked_balance(
+async fn spendable_balance(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
 ) -> shekyl_units::AtomicUnits {
     use shekyl_scanner::WalletLedgerExt;
     let g = arc.read().await;
     let ledger = g.ledger();
-    ledger.balance().unlocked
+    ledger.balance().spendable
 }
 
 // ---------------------------------------------------------------------------

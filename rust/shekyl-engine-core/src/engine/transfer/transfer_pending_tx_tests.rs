@@ -1386,7 +1386,12 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+            !td.is_spendable(
+                shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                    u64::MAX
+                )),
+                &spend_locks
+            ),
             "journal-locked output must be excluded from selection"
         );
     }
@@ -1738,7 +1743,12 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+                !td.is_spendable(
+                    shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                        u64::MAX
+                    )),
+                    &spend_locks
+                ),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -1915,7 +1925,12 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+                !td.is_spendable(
+                    shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                        u64::MAX
+                    )),
+                    &spend_locks
+                ),
                 "journal-locked output must be excluded from selection"
             );
         }

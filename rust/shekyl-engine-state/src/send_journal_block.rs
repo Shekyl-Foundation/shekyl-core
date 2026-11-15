@@ -364,6 +364,24 @@ impl SendRecord {
     pub fn sent_amount(&self) -> Option<u64> {
         sum_recipient_amounts(&self.recipients)
     }
+
+    /// The money leaving the wallet: Σ recipients plus the fee. `None` on
+    /// overflow, as [`Self::sent_amount`].
+    #[must_use]
+    pub fn outgoing_amount(&self) -> Option<u64> {
+        self.sent_amount()?.checked_add(self.fee)
+    }
+
+    /// Whether this send is in flight: its state still carries its inputs
+    /// ([`SendState::locks_carried_inputs`]) and an accepting verdict
+    /// stamped the lock baseline. The one predicate behind both the F14
+    /// lock set ([`SendJournalBlock::spend_locks`]) and the balance's
+    /// outgoing and incoming change, so an input is locked exactly while
+    /// its send's outgoing and change are counted.
+    #[must_use]
+    pub fn is_in_flight(&self) -> bool {
+        self.state.locks_carried_inputs() && self.lock_baseline.is_some()
+    }
 }
 
 /// The one implementation of "Σ recipient amounts", shared by
@@ -601,6 +619,11 @@ impl SendJournalBlock {
         }
     }
 
+    /// The in-flight sends ([`SendRecord::is_in_flight`]), in txid order.
+    pub fn in_flight(&self) -> impl Iterator<Item = (&[u8; 32], &SendRecord)> {
+        self.rows.iter().filter(|(_, row)| row.is_in_flight())
+    }
+
     /// Derive the F14 awaiting-confirmation lock set from journal facts
     /// — the **single owner** of the lock-derivation rule (PR-SJ-1b,
     /// `WALLET_SEND_RECORD.md` C2/P3-1a): a carried input of any row in
@@ -630,10 +653,7 @@ impl SendJournalBlock {
             shekyl_types::GlobalOutputIndex,
             crate::transfer::AwaitingConfirmation,
         > = BTreeMap::new();
-        for (txid, row) in &self.rows {
-            if !row.state.locks_carried_inputs() {
-                continue;
-            }
+        for (txid, row) in self.in_flight() {
             let Some(accepted_at_height) = row.lock_baseline else {
                 continue;
             };

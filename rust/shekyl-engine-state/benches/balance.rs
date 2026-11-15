@@ -82,16 +82,18 @@ fn hot_path_bench_balance_compute(c: &mut Criterion) {
             BenchmarkId::from_parameter(n),
             &transfers,
             |b, transfers| {
-                // PR-SJ-1b: locks are journal-derived and caller-supplied.
-                // Empty map = the baseline-comparable workload (the retired
-                // field was `None` on every fixture row); derivation cost is
-                // O(live sends), measured at its consumer, not per-row here.
-                let spend_locks = shekyl_engine_state::SendJournalBlock::empty().spend_locks();
+                // An empty journal: nothing in flight, the
+                // baseline-comparable workload; the per-row cost is the
+                // classifier (A17) at one horizon.
+                let journal = shekyl_engine_state::SendJournalBlock::empty();
+                let horizon = shekyl_engine_state::SpendHorizon::at_tip(
+                    shekyl_types::BlockHeight::from_raw(current_height),
+                );
                 b.iter(|| {
                     black_box(BalanceSummary::compute(
                         black_box(transfers),
-                        shekyl_types::BlockHeight::from_raw(current_height),
-                        black_box(&spend_locks),
+                        horizon,
+                        black_box(&journal),
                     ))
                 });
             },

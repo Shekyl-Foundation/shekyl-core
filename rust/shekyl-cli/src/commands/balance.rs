@@ -51,10 +51,24 @@ pub(crate) fn show_balance(val: &Value) {
             .map(|v| format!("{} SKL", format_amount_str(v)))
             .unwrap_or_else(|| "unavailable (staking state could not be read)".to_owned())
     };
-    println!("Balance:");
-    println!("  Unlocked:           {} SKL", field("unlocked"));
-    println!("  Liquid:             {} SKL", field("liquid"));
-    println!("  Pending:            {} SKL", field("pending"));
+    // The balance and each leg once (A17): balance = spendable + incoming
+    // + parked. Outgoing and unspendable are beside it, never in it.
+    let wait = val
+        .get("incoming_wait")
+        .and_then(Value::as_u64)
+        .map(|blocks| match blocks {
+            1 => "  (the first spendable in 1 block)".to_owned(),
+            n => format!("  (the first spendable in {n} blocks)"),
+        })
+        .unwrap_or_default();
+    println!("Balance:              {} SKL", field("balance"));
+    println!("  Spendable:          {} SKL", field("spendable"));
+    println!("  Incoming:           {} SKL{wait}", field("incoming"));
+    println!("  Parked:             {} SKL", field("parked"));
+    println!(
+        "Outgoing:             {} SKL  (sends in flight, not in the balance)",
+        field("outgoing")
+    );
     // Received-but-unspendable money (PL-D3 §6.2): shown only when
     // non-zero, with the pointer to the rows that name the sender's
     // transaction (rule 82: the failure is first-class, not hidden).
@@ -201,8 +215,8 @@ pub(crate) fn show_wallet(val: &Value) {
                 .map(format_amount_str)
                 .unwrap_or_else(|| "?".to_owned())
         };
-        println!("  Balance unlocked: {} SKL", field("unlocked"));
-        println!("  Balance liquid:   {} SKL", field("liquid"));
+        println!("  Balance:          {} SKL", field("balance"));
+        println!("  Spendable:        {} SKL", field("spendable"));
     }
     match val.get("staking") {
         Some(staking) => {

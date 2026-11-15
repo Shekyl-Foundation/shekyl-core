@@ -236,7 +236,12 @@ fn release_confirmed_absent_clears_only_the_named_tx() {
     for td in ledger.transfers() {
         let locked = locks.contains(td.global_output_index);
         assert_eq!(
-            td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &locks),
+            td.is_spendable(
+                shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                    u64::MAX
+                )),
+                &locks
+            ),
             !locked,
             "gindex {} spendability must mirror the derived lock",
             td.global_output_index

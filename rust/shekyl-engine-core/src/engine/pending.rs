@@ -828,7 +828,11 @@ pub(crate) fn build_pending_tx_in_state(
         .collect();
 
     let mut candidates: Vec<(usize, AtomicUnits)> = ledger
-        .spendable_outputs(synced, None, &SendJournalBlock::empty().spend_locks())
+        .spendable_outputs(
+            shekyl_engine_state::SpendHorizon::at_tip(synced),
+            None,
+            &SendJournalBlock::empty().spend_locks(),
+        )
         .into_iter()
         .filter(|(idx, _)| !reserved.contains(idx))
         .map(|(idx, td)| (idx, td.amount()))

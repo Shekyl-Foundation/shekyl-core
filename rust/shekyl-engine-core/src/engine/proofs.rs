@@ -575,10 +575,13 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
     // Project candidates under a short read guard.
     let candidates: Vec<ReserveCandidate> = {
         let state = ctx.ledger.read();
-        let height = state.ledger.ledger.tip.synced_height;
+        // The one definition of spendable (A17): the outputs a send could
+        // use at the synced tip.
+        let horizon =
+            shekyl_engine_state::SpendHorizon::at_tip(state.ledger.ledger.tip.synced_height);
         state
             .ledger
-            .spendable_outputs(height, None)
+            .spendable_outputs(horizon, None)
             .into_iter()
             .filter_map(|(_, td)| {
                 // key_image and source_ciphertext are populated on every

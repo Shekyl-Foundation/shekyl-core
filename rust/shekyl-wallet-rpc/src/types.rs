@@ -255,37 +255,45 @@ pub use shekyl_units::AtomicUnitsString;
 /// a placeholder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetBalanceResult {
-    /// Spendable liquid balance (maps from unlocked until staking splits
-    /// liquid from locked principal).
-    pub liquid: AtomicUnitsString,
+    /// The balance: `spendable + incoming + parked`. The only field that is
+    /// a sum of others (A17).
+    pub balance: AtomicUnitsString,
+    /// What a send could use now.
+    pub spendable: AtomicUnitsString,
+    /// Received and not yet spendable, plus in-flight sends' change.
+    pub incoming: AtomicUnitsString,
+    /// Blocks until the soonest on-chain incoming output is spendable.
+    /// **Absent (not `0`)** when no incoming output is on chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incoming_wait: Option<u64>,
+    /// Parked by the user: in the balance, out of coin selection.
+    pub parked: AtomicUnitsString,
+    /// Σ (recipients + fee) of the in-flight sends. Beside the balance.
+    pub outgoing: AtomicUnitsString,
+    /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;
+    /// `PL-D3` §6.2): on chain, retained, never spendable by this wallet.
+    /// Beside the balance. Always present; `"0"` is a true zero.
+    pub unspendable: AtomicUnitsString,
     /// Bond principal under confirmed live bonds PLUS principal committed
     /// by in-flight sealed posts — the sum of `get_staked_balance`'s two
     /// bonded legs (the legs stay separate on that method).
     ///
     /// **Absent (not `"0"`) when the wallet's sealed staking state cannot
-    /// be read**: the liquid fields stay authoritative while the staking
+    /// be read**: the ledger's legs stay authoritative while the staking
     /// projection degrades, and absence is structurally distinct from a
     /// zero — the engine pin "never render nothing-staked over a bad seal"
     /// holds on the wire. A non-staker's `"0"` is a true zero and is
     /// always present.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staked: Option<AtomicUnitsString>,
-    /// Unlocked / spendable now.
-    pub unlocked: AtomicUnitsString,
-    /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;
-    /// `PL-D3` §6.2): on chain, retained, never spendable by this wallet.
-    /// Always present; `"0"` is a true zero.
-    pub unspendable: AtomicUnitsString,
     /// Emission-reward money received and still unspent in staking-side
     /// outputs — the same quantity as
     /// `get_staked_balance.rewards_received_unspent`; NOT a claim-era
     /// "accrued but unclaimed" entitlement (no such user-visible quantity
     /// exists in the archival design). Absent exactly when `staked` is
     /// (unreadable staking seal — degrade, never a fabricated zero).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimable_rewards: Option<AtomicUnitsString>,
-    /// Awaiting-confirmation / in-flight spend lock.
-    pub pending: AtomicUnitsString,
 }
 
 /// `get_primary_address` result.

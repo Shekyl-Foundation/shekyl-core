@@ -323,16 +323,16 @@ impl WalletLedger {
         self.ledger.unspent_transfers(&self.spend_locks())
     }
 
-    /// Spendable outputs at `current_height`, with journal-derived F14
-    /// locks applied. Prefer this over threading `spend_locks` by hand.
+    /// The outputs a send could use at `horizon`, with journal-derived
+    /// F14 locks applied. Prefer this over threading `spend_locks` by hand.
     #[must_use]
     pub fn spendable_outputs(
         &self,
-        current_height: shekyl_types::BlockHeight,
+        horizon: crate::output_state::SpendHorizon,
         min_amount: Option<shekyl_units::AtomicUnits>,
     ) -> Vec<(usize, &TransferDetails)> {
         self.ledger
-            .spendable_outputs(current_height, min_amount, &self.spend_locks())
+            .spendable_outputs(horizon, min_amount, &self.spend_locks())
     }
 
     /// Serialize the full bundle to postcard bytes.
@@ -1534,7 +1534,10 @@ mod tests {
         );
         assert_eq!(w.send_journal.rows[&txid].lock_baseline, Some(25));
         assert!(
-            !w.ledger.transfers[0].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            !w.ledger.transfers[0].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "the armed lock excludes the carried input from selection"
         );
         w.check_invariants().expect("invariants hold after stamp");
@@ -1600,11 +1603,17 @@ mod tests {
             );
         }
         assert!(
-            !w.ledger.transfers[0].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            !w.ledger.transfers[0].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "unspent carried input is excluded from selection"
         );
         assert!(
-            !w.ledger.transfers[1].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            !w.ledger.transfers[1].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "spent input stays unspendable via `spent`, not the lock"
         );
         assert_eq!(locks, w.spend_locks(), "derivation is pure");
@@ -1804,11 +1813,17 @@ mod tests {
             "a released abandoned row (baseline None) derives no lock"
         );
         assert!(
-            !w.ledger.transfers[0].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            !w.ledger.transfers[0].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "the armed abandoned row's input stays excluded from selection"
         );
         assert!(
-            w.ledger.transfers[1].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            w.ledger.transfers[1].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "the released row's input is selectable again"
         );
         w.check_invariants().expect("invariants hold");

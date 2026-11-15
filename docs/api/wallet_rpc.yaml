@@ -811,6 +811,7 @@ components:
         - -29124   # TOO_MANY_OUTPUTS
         - -29125   # INPUT_NOT_IN_TREE
         - -29126   # INPUT_UNSPENDABLE
+        - -29127   # OUTPUTS_PARKED
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -1109,6 +1110,15 @@ components:
                                           (data: {"input"}). The scan
                                           should have counted it as
                                           unspendable already — report it
+          -29127 OUTPUTS_PARKED           build: the balance covers the send
+                                          only with outputs the user parked,
+                                          which coin selection does not use
+                                          (data: {"needed", "parked"},
+                                          amounts) — release the parked
+                                          outputs, or send less. Checked
+                                          after the rebuild (-29111) and the
+                                          incoming wait (-29112), which heal
+                                          on their own (A17)
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: the
                                           daemon did not answer — check it
@@ -1956,22 +1966,67 @@ components:
 
     GetBalanceResult:
       type: object
-      required: [liquid, unlocked, pending, unspendable]
+      required: [balance, spendable, incoming, parked, outgoing, unspendable]
       description: >
-        Staking is first-class (locked JSON shape). As of WI-RPC-5 the
-        staking fields carry live values projected from the same
-        authoritative staking view `get_staked_balance` reads — never the
-        StakingBlock hint. For a non-staker wallet all staking fields are
-        genuinely "0" (there is nothing staked), which is a true zero, not
-        a placeholder. `staked` and `claimable_rewards` are ABSENT
-        (never "0") when the wallet's sealed staking state cannot be
-        read: the liquid fields stay authoritative while the staking
-        projection degrades, and absence is structurally distinct from a
-        zero — a client must render "staking unavailable", not
-        "nothing staked".
+        The balance and each of its legs once (A17; Rick, 2026-11-15).
+        balance = spendable + incoming + parked; no other field is a sum
+        of others. outgoing and unspendable are beside the balance, never
+        in it, and so are the staking fields. An in-flight send's inputs
+        are in no leg: their value is that send's outgoing plus its
+        change. The tree rebuild is the wallet's state, not the money's:
+        money spendable by the rule stays in spendable while the wallet's
+        membership data catches up, and a send in that window is refused
+        -29111. Staking is first-class: `staked` and `claimable_rewards`
+        carry live values projected from the same staking view
+        `get_staked_balance` reads, genuinely "0" for a non-staker, and
+        ABSENT (never "0") when the wallet's sealed staking state cannot
+        be read — the ledger's legs stay authoritative while the staking
+        projection degrades, and a client must render "staking
+        unavailable", not "nothing staked".
       properties:
-        liquid:
+        balance:
           $ref: "#/components/schemas/AtomicUnits"
+          description: spendable + incoming + parked.
+        spendable:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            What a send could use at the wallet's synced tip: outputs not
+            spent, not parked, not unspendable, not under an in-flight
+            send, and in the tree of the reference block the wallet
+            anchors to. The balance says spendable exactly when a build
+            can select the money.
+        incoming:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Received outputs not yet spendable by that rule, plus the
+            change of each in-flight send of this wallet, from dispatch
+            until the change output is scanned (from then it is a received
+            output, counted by the rule).
+        incoming_wait:
+          type: integer
+          minimum: 0
+          description: >
+            Blocks until the soonest on-chain incoming output becomes
+            spendable. ABSENT, not 0, when no incoming output is on chain
+            (only change in flight, or nothing incoming).
+        parked:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Outputs the user parked: in the balance, out of coin selection
+            until released. No method of this contract parks or releases
+            an output yet.
+        outgoing:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Σ (recipients + fee) of this wallet's in-flight sends. Beside
+            the balance.
+        unspendable:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Money in received-but-unspendable outputs (`get_transfers`
+            state UNSPENDABLE; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`):
+            on chain and retained, never spendable by this wallet. Beside
+            the balance. Always present; `"0"` is a true zero.
         staked:
           $ref: "#/components/schemas/AtomicUnits"
           description: >
@@ -1980,9 +2035,8 @@ components:
             `get_staked_balance`'s two bonded legs. The legs stay separate
             on that method; this scalar exists for the one-glance balance
             surface. Absent when the staking seal is unreadable (see the
-            schema description).
-        unlocked:
-          $ref: "#/components/schemas/AtomicUnits"
+            schema description). Beside the balance: staked money is spent
+            from this wallet.
         claimable_rewards:
           $ref: "#/components/schemas/AtomicUnits"
           description: >
@@ -1993,15 +2047,6 @@ components:
             quantity exists in the archival design (claims are engine-side
             automation). Absent exactly when `staked` is (unreadable
             staking seal — degrade, never a fabricated zero).
-        pending:
-          $ref: "#/components/schemas/AtomicUnits"
-        unspendable:
-          $ref: "#/components/schemas/AtomicUnits"
-          description: >
-            Money in received-but-unspendable outputs (`get_transfers`
-            state UNSPENDABLE; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`):
-            on chain and retained, never spendable by this wallet. Counted
-            in no other field. Always present; `"0"` is a true zero.
 
     GetPrimaryAddressParams:
       type: object

@@ -37,6 +37,7 @@ pub mod invariants;
 pub mod ledger_block;
 pub mod ledger_indexes;
 pub mod local_label;
+pub mod output_state;
 pub mod payment_id;
 pub mod payment_request;
 pub mod pending_post_block;
@@ -63,6 +64,7 @@ pub use error::WalletLedgerError;
 pub use ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks, LEDGER_BLOCK_VERSION};
 pub use ledger_indexes::LedgerIndexes;
 pub use local_label::{LocalLabel, SecretStr};
+pub use output_state::{OutputState, SpendHorizon};
 pub use payment_id::PaymentId;
 pub use payment_request::{
     DisputeReason, ParsePaymentRequestIdError, PaymentRequest, PaymentRequestId,

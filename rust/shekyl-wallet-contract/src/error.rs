@@ -243,6 +243,8 @@ wallet_rpc_error_codes! {
     InputNotInTree = -29125 => "INPUT_NOT_IN_TREE",
     /// Build: an input was received but can never be spent.
     InputUnspendable = -29126 => "INPUT_UNSPENDABLE",
+    /// Build: the wallet covers the send only with outputs the user parked.
+    OutputsParked = -29127 => "OUTPUTS_PARKED",
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200 => "REFRESH_IN_PROGRESS",
     /// Refresh / rescan / proofs / build: the daemon did not answer.
@@ -785,6 +787,18 @@ pub enum WalletRpcError {
         /// The input's position in the transaction.
         input: usize,
     },
+    /// `-29127`: the balance covers the send only with the outputs the user
+    /// parked, which coin selection does not use (A17).
+    #[error(
+        "this send is covered only with money you parked — release the parked outputs to \
+         spend them, or send less"
+    )]
+    OutputsParked {
+        /// The amount plus fee the send needs, atomic units.
+        needed: u64,
+        /// The parked amount, atomic units.
+        parked: u64,
+    },
     /// `-29120`: the send's record (with its signed bytes and tx secret)
     /// could not be saved, so the wallet sent nothing (A19). The
     /// reservation is kept: fix the cause and submit it again, or discard
@@ -1288,6 +1302,7 @@ impl WalletRpcError {
             Self::TooManyOutputs { .. } => WalletRpcErrorCode::TooManyOutputs,
             Self::InputNotInTree { .. } => WalletRpcErrorCode::InputNotInTree,
             Self::InputUnspendable { .. } => WalletRpcErrorCode::InputUnspendable,
+            Self::OutputsParked { .. } => WalletRpcErrorCode::OutputsParked,
             Self::SendNotSaved => WalletRpcErrorCode::SendNotSaved,
             Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
             Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
@@ -1444,6 +1459,11 @@ impl WalletRpcError {
             Self::InputNotInTree { input } | Self::InputUnspendable { input } => {
                 Some(json!({ "input": input }))
             }
+            // Amounts as decimal strings, the contract's one encoding.
+            Self::OutputsParked { needed, parked } => Some(json!({
+                "needed": needed.to_string(),
+                "parked": parked.to_string(),
+            })),
             Self::ChainTooShortToSpend {
                 synced_height,
                 ref_anchor_age,
@@ -1720,6 +1740,7 @@ impl From<SendError> for WalletRpcError {
             SendError::InvalidRecipient { .. } => Self::InvalidRecipient,
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
+            SendError::OutputsParked { needed, parked } => Self::OutputsParked { needed, parked },
             SendError::Io(io) => from_io_error(io),
             SendError::Sign(fault) => from_sign_fault(fault),
             SendError::NotSynced => Self::WalletNotSynced,
@@ -3526,6 +3547,13 @@ mod tests {
                     fault: "handle-mismatch",
                 },
                 WalletRpcErrorCode::SignerFailed,
+            ),
+            (
+                SendError::OutputsParked {
+                    needed: 10,
+                    parked: 4,
+                },
+                WalletRpcErrorCode::OutputsParked,
             ),
             (
                 SendError::Sign(SignFault::TooManyInputs { count: 9 }),
