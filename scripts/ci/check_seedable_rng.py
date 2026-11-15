@@ -46,6 +46,12 @@ checked from the commit it enters: there is no list of crates to update.
 `shekyl-harness-wallet` and `shekyl-randomx-differential` are outside by
 construction (the gate asserts both).
 
+Crates headed for production are read now (`CF-R26`): the members
+`shipped_graph.HEADED_FOR_PRODUCTION` lists (they will ship; no shipped
+build links them yet), so a seeded site in one is reviewed before a release
+links it. A headed crate already in the set is refused: it leaves the list
+in the change that links it.
+
 Within a crate in the set, its whole `src/` tree is read, less the items
 under a cfg that holds only in a test build: `test`, or a feature
 `check_test_only_features.py` registers as TEST_ONLY for that crate (its
@@ -55,6 +61,16 @@ is read: it is production code a wallet turns on. The reading of cfgs, and
 of files declared as modules under one, is `check_network_uniformity.py`'s,
 imported. Test, bench and example targets live outside `src/` and are not
 read.
+
+# Provisional listings
+
+A listing whose seed source is promised by a named, not-yet-landed
+increment carries a marker in `PROVISIONAL`: the increment, and the domain
+label that increment registers in `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv`
+with the code that derives under it. Once that label is registered, the
+increment has landed, and a marker still present is red: the listing must
+be restated for the code as landed and the marker removed. A marker has an
+expiry; it cannot sit forever.
 
 # Test-only sites
 
@@ -69,8 +85,12 @@ The gate asserts its subject: it reads members' sources and finds at least
 one listed site live. `--selftest` plants an unlisted `seed_from_u64` in
 production code (red), one under a test-only cfg (green), a listed site at a
 moved path (red), a row for code that is gone (red), and a test-only site
-that has moved into production (red). `--list` prints every production site
-it finds, the census the list is reviewed against.
+that has moved into production (red), and a provisional marker whose
+increment has landed (red). Through the path `main()` runs (manifests, the
+set, the scan), it plants a seeded site in a crate outside the graph
+(green), then adds that crate as a shipped binary's or the GUI wallet's
+dependency (red), or lists it headed for production (red). `--list` prints
+every production site it finds, the census the list is reviewed against.
 """
 
 from __future__ import annotations
@@ -88,6 +108,7 @@ from check_network_uniformity import (  # noqa: E402
     test_only_features,
 )
 from shipped_graph import (  # noqa: E402
+    HEADED_FOR_PRODUCTION,
     GraphError,
     graphs,
     live_graphs,
@@ -153,6 +174,13 @@ SITES: dict[tuple[str, str], tuple[str, int, str]] = {
     ("shekyl-crypto-pq/src/output.rs", "sign_derived_output_auth"): (
         "G1", 1, "the spend key's ML-DSA seed, derived from the combined shared secret; the "
         "signature itself is hedged (OS randomness)"),
+    ("shekyl-fcmp/src/frost_sal.rs", "new"): (
+        "G1", 1, "PROVISIONAL until multisig slice 4a-1 (PROVISIONAL). The input's "
+        "rerandomization seed: the blinds r_o, r_i, r_r_i, never a signing nonce. "
+        "PQC_MULTISIG.md §9.5 derives it per input from the intent's group-secret "
+        "kem_randomness_seed by HKDF under shekyl/multisig-intent-rerandomize-v1. Today "
+        "InputContext's caller passes it in; 4a-1 replaces that with the per-input derivation "
+        "from a shekyl-crypto-pq kem_randomness_seed type (4a brief §2.2, §2.3, amendment B)"),
     # G2: verifier batch weights from a domain-separated transcript.
     ("shekyl-bulletproofs/src/derived.rs", "verify_batch"): (
         "G2", 1, "batch_weights_seed over the batch's own proofs; weights only"),
@@ -172,6 +200,18 @@ SITES: dict[tuple[str, str], tuple[str, int, str]] = {
         "repeats across signing sessions"),
 }
 
+REGISTRY = REPO / "docs" / "design" / "CRYPTO_DOMAIN_REGISTRY.tsv"
+
+# (path under rust/, function) -> (the increment that replaces the listing's
+# seed source, the domain label that increment registers in REGISTRY). The
+# label registered means the increment has landed, and the marker is red.
+PROVISIONAL: dict[tuple[str, str], tuple[str, str]] = {
+    ("shekyl-fcmp/src/frost_sal.rs", "new"): (
+        "multisig slice 4a-1",
+        "shekyl/multisig-intent-rerandomize-v1",
+    ),
+}
+
 # (path under rust/, function) -> why it must stay test-only
 TEST_ONLY_SITES: dict[tuple[str, str], str] = {
     ("shekyl-chain-rules/src/harness/bundle.rs", "signed_record"): (
@@ -189,13 +229,65 @@ OUTSIDE = ("shekyl-harness-wallet", "shekyl-randomx-differential")
 INSIDE = "shekyl-crypto-pq"
 
 
-def production_crates(dirs: dict[str, Path], shipped: set[str]) -> list[tuple[str, Path]]:
-    """(crate name, its `src/`) for every member in the shipped set."""
+def production_crates(
+    dirs: dict[str, Path], shipped: set[str], headed: dict[str, str]
+) -> list[tuple[str, Path]]:
+    """(crate name, its `src/`) for every member in the shipped set or
+    headed for production."""
     return [
         (name, path / "src")
         for name, path in sorted(dirs.items())
-        if name in shipped and (path / "src").is_dir()
+        if (name in shipped or name in headed) and (path / "src").is_dir()
     ]
+
+
+def headed_errors(shipped: set[str], headed: dict[str, str], members: set[str]) -> list[str]:
+    errors = []
+    for name in sorted(headed):
+        if name in shipped:
+            errors.append(
+                f"{name} is listed headed for production and a shipped build now links it: "
+                "it leaves HEADED_FOR_PRODUCTION (shipped_graph.py) in the change that links it"
+            )
+        if name not in members:
+            errors.append(f"{name} is listed headed for production and is not a member")
+    return errors
+
+
+def registered_labels(text: str) -> set[str]:
+    """The domain labels REGISTRY registers (its second column)."""
+    labels = set()
+    for line in text.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.split("\t")
+        if len(cols) > 1:
+            labels.add(cols[1])
+    return labels
+
+
+def provisional_errors(
+    listed: dict[tuple[str, str], tuple[str, int, str]],
+    provisional: dict[tuple[str, str], tuple[str, str]],
+    labels: set[str],
+) -> list[str]:
+    errors = []
+    for key, (increment, label) in sorted(provisional.items()):
+        path, function = key
+        if key not in listed:
+            errors.append(f"{path} `{function}`: a provisional marker for a site that is not listed")
+        elif "PROVISIONAL" not in listed[key][2]:
+            errors.append(f"{path} `{function}`: provisional, and its listing does not say so")
+        if label in labels:
+            errors.append(
+                f"{path} `{function}`: provisional until {increment}, which has landed ({label} "
+                "is registered in CRYPTO_DOMAIN_REGISTRY.tsv). Restate the listing for the code "
+                "as landed and remove its PROVISIONAL marker"
+            )
+    for key, (_, _, note) in sorted(listed.items()):
+        if "PROVISIONAL" in note and key not in provisional:
+            errors.append(f"{key[0]} `{key[1]}`: says PROVISIONAL with no marker naming its expiry")
+    return errors
 
 
 def enclosing(code: str, at: int) -> str:
@@ -375,7 +467,7 @@ def selftest() -> int:
     def manifest(name: str, deps: dict) -> dict:
         return {"package": {"name": name}, "dependencies": deps, "features": {}}
 
-    def through_the_graph(members: dict[str, dict], pin: dict) -> list[str]:
+    def through_the_graph(members: dict[str, dict], pin: dict, headed: dict) -> list[str]:
         sources = {"lib": prod, "outside": unlisted}
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -386,9 +478,12 @@ def selftest() -> int:
                 (src / "lib.rs").write_text(text, encoding="utf-8")
                 dirs[crate] = root / crate
             shipped = shipped_crates(graphs(members, {}, ["shekyld"], [], pin))
-            crates = production_crates(dirs, shipped)
+            errors = headed_errors(shipped, headed, set(members))
+            crates = production_crates(dirs, shipped, headed)
             sites, tested, _ = scan(root, crates, {}, set())
-        return check(sites, tested, {("lib/src/lib.rs", "keys"): ("G1", 1, "a KDF's output")}, {})
+        return errors + check(
+            sites, tested, {("lib/src/lib.rs", "keys"): ("G1", 1, "a KDF's output")}, {}
+        )
 
     gui = {"package": {"name": "shekyl-gui-wallet"}, "dependencies": {}}
     shipped_only = {
@@ -399,16 +494,40 @@ def selftest() -> int:
     entered = {**shipped_only, "shekyld": manifest(
         "shekyld", {"lib": {"path": "../lib"}, "outside": {"path": "../outside"}})}
     graph_cases = [
-        ("a seeded site in a crate outside the graph: green", shipped_only, gui, False),
-        ("that crate added as a shipped binary's dependency: red", entered, gui, True),
+        ("a seeded site in a crate outside the graph: green", shipped_only, gui, {}, False),
+        ("that crate added as a shipped binary's dependency: red", entered, gui, {}, True),
         ("that crate added as the GUI wallet's dependency: red", shipped_only,
-         {**gui, "dependencies": {"outside": {}}}, True),
+         {**gui, "dependencies": {"outside": {}}}, {}, True),
+        ("that crate listed headed for production: red", shipped_only, gui,
+         {"outside": "ships later"}, True),
+        ("a headed crate already in the graph: red", shipped_only, gui,
+         {"lib": "ships later"}, True),
     ]
-    for name, members, pin, want in graph_cases:
+    for name, members, pin, headed, want in graph_cases:
         try:
-            errors = through_the_graph(members, pin)
+            errors = through_the_graph(members, pin, headed)
         except GraphError as e:
             errors = [f"graph: {e}"]
+        if bool(errors) != want:
+            print(f"selftest FAIL: {name}: {errors}")
+            failed = 1
+        else:
+            print(f"selftest ok: {name}")
+
+    # A provisional marker expires when its increment lands.
+    note = "PROVISIONAL until x-1: a KDF's output"
+    p_row = {key: ("G1", 1, note)}
+    marker = {key: ("x-1", "shekyl/x-label-v1")}
+    provisional_cases = [
+        ("a provisional marker before its increment lands: green", p_row, marker, set(), False),
+        ("a provisional marker after its increment lands: red", p_row, marker,
+         {"shekyl/x-label-v1"}, True),
+        ("a marker for a site not listed: red", {}, marker, set(), True),
+        ("a listing saying PROVISIONAL with no marker: red", p_row, {}, set(), True),
+        ("a marker on a listing that does not say so: red", row, marker, set(), True),
+    ]
+    for name, listed, prov, labels, want in provisional_cases:
+        errors = provisional_errors(listed, prov, labels)
         if bool(errors) != want:
             print(f"selftest FAIL: {name}: {errors}")
             failed = 1
@@ -438,11 +557,16 @@ def main() -> int:
     ]
     if INSIDE not in shipped:
         errors.append(f"{INSIDE} is not in the shipped set: the set has no subject (rule 47)")
+    errors += headed_errors(shipped, HEADED_FOR_PRODUCTION, set(dirs))
+    labels = registered_labels(REGISTRY.read_text(encoding="utf-8"))
+    if not labels:
+        errors.append("no label read from CRYPTO_DOMAIN_REGISTRY.tsv: the provisional "
+                      "markers' expiry has no subject (rule 47)")
     if errors:
         for e in errors:
             print(f"FAIL: {e}")
         return 1
-    crates = production_crates(dirs, shipped)
+    crates = production_crates(dirs, shipped, HEADED_FOR_PRODUCTION)
     features = test_only_features()
     sites, tested, files = scan(RUST, crates, features, {p for p, _ in TEST_ONLY_SITES})
     if "--list" in sys.argv[1:]:
@@ -455,14 +579,16 @@ def main() -> int:
         print("FAIL: no Rust source read: the gate has no subject", file=sys.stderr)
         return 1
     errors = check(sites, tested, SITES, TEST_ONLY_SITES)
+    errors += provisional_errors(SITES, PROVISIONAL, labels)
     if errors:
         for e in errors:
             print(f"FAIL: {e}")
         return 1
     print(f"PASS: {len(sites)} production site(s) building a seedable generator, each listed "
           f"with its group; {len(TEST_ONLY_SITES)} test-only site(s) held in test-only code; "
-          f"{files} file(s) read in the {len(crates)} shipped crate(s) "
-          f"({len(dirs) - len(crates)} member(s) outside the set or without src/)")
+          f"{len(PROVISIONAL)} provisional listing(s) before their increment; "
+          f"{files} file(s) read in {len(crates)} crate(s), shipped or headed for production "
+          f"({len(dirs) - len(crates)} member(s) not shipped or without src/)")
     return 0
 
 

@@ -31,6 +31,13 @@ edges by edge kind. This check proves the consequence on the graphs that
 ship: the seeded signers and provers, the harness id and the driver are
 compiled into none of them, whatever forwards a future manifest adds.
 
+# Every member outside the set is classified
+
+`shipped_graph.classify()`: each member outside both graphs is headed for
+production or not shipped, with a reason, and neither table names a crate
+a shipped graph links (`CF-R26`). A headed crate is not held here (no
+shipped graph has it); the seedable-RNG gate reads it as production code.
+
 # The GUI pin's currency
 
 `--gui-wallet DIR` compares `gui_wallet_core_deps.toml` with the GUI
@@ -66,9 +73,11 @@ from shipped_graph import (  # noqa: E402
     GUI_RELEASE,
     GUI_ROOT,
     GraphError,
+    classify,
     graphs,
     live_graphs,
     load_gui_pin,
+    member_dirs,
     pin_drift,
     release_features,
     shipped_crates,
@@ -274,6 +283,29 @@ def selftest() -> int:
     except GraphError:
         print("selftest ok: a release feature naming an unreached package is refused")
 
+    # Every member outside the set is classified (CF-R26).
+    in_graph = {"shekyld", "lib"}
+    classify_cases = [
+        ("every outsider classified: green", {"shekyld", "lib", "soon", "tool"},
+         {"soon": "ships later"}, {"tool": "a harness"}, False),
+        ("a headed crate already in the graph: red", {"shekyld", "lib", "tool"},
+         {"lib": "ships later"}, {"tool": "a harness"}, True),
+        ("a not-shipped crate now in the graph: red", {"shekyld", "lib"},
+         {}, {"lib": "a harness"}, True),
+        ("an unclassified outsider: red", {"shekyld", "lib", "new"}, {}, {}, True),
+        ("a row for a crate that is not a member: red", {"shekyld", "lib"},
+         {"gone": "ships later"}, {}, True),
+        ("a crate in both tables: red", {"shekyld", "lib", "x"},
+         {"x": "ships later"}, {"x": "a harness"}, True),
+    ]
+    for name, all_members, headed, not_shipped, want in classify_cases:
+        errors = classify(all_members, in_graph, headed, not_shipped)
+        if bool(errors) != want:
+            print(f"selftest FAIL: {name}: {errors}")
+            failed = 1
+        else:
+            print(f"selftest ok: {name}")
+
     # The pin's currency.
     gui = {
         "package": {"name": "shekyl-wallet"},
@@ -346,6 +378,7 @@ def main() -> int:
         print(f"FAIL: {e}")
         return 1
     errors = check(by_build, load_gui_pin(), rows)
+    errors += classify(set(member_dirs()), shipped_crates(by_build))
     if errors:
         for e in errors:
             print(f"FAIL: {e}")
@@ -354,7 +387,8 @@ def main() -> int:
     print(
         f"PASS: the shipped graphs ({sizes} members; {len(shipped_crates(by_build))} in all) "
         f"reach none of {', '.join(HARNESS)} and resolve none of {len(rows)} TEST_ONLY "
-        "feature(s) on"
+        "feature(s) on; every member outside them is classified headed for production or "
+        "not shipped"
     )
     return 0
 

@@ -44,6 +44,10 @@ on:
       - 'scripts/ci/shipped_graph.py'
       - 'scripts/ci/check_production_graph.py'
       - 'scripts/ci/check_p_fetch_dep_cut.py'
+  # The GUI pin's nightly (gui-pin-nightly below). A schedule runs main's
+  # copy of this file, so it starts once this reaches main.
+  schedule:
+    - cron: "15 4 * * *"
 
 concurrency:
   group: gui-drift-${{ github.ref }}
@@ -55,6 +59,7 @@ permissions:
 jobs:
   wallet-ref:
     name: wallet ref
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 24 runs; the floor
     outputs:
@@ -157,6 +162,7 @@ jobs:
   gui-pin:
     name: the GUI wallet's pinned shekyl-core edges are current
     needs: wallet-ref
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10  # a checkout and one Python read; no build
     steps:
@@ -169,3 +175,46 @@ jobs:
           path: gui-wallet
       - name: The pin matches the GUI wallet's manifest and release
         run: python3 scripts/ci/check_production_graph.py --gui-wallet gui-wallet
+
+  # A GUI wallet change to its shekyl-core edges reaches gui-pin only on the
+  # next shekyl-core change under its paths. The nightly closes most of that
+  # gap: each branch's pin against the same branch of the GUI wallet, main
+  # (both repositories' default branch) and dev (where both integrate). A
+  # step in the GUI wallet's own CI would close the rest, failing the GUI
+  # change itself.
+  gui-pin-nightly:
+    name: the GUI wallet's pin is current (nightly)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # two checkouts and one Python read; no build
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.branch }}
+      - name: Check out shekyl-gui-wallet
+        uses: actions/checkout@v5
+        with:
+          repository: Shekyl-Foundation/shekyl-gui-wallet
+          ref: ${{ matrix.branch }}
+          path: gui-wallet
+      - name: The pin matches the GUI wallet's manifest and release
+        run: python3 scripts/ci/check_production_graph.py --gui-wallet gui-wallet
+
+  # A red nightly opens or threads a tracking issue (report-dev-red.yml).
+  # `needs` lists every other job in this file; only a scheduled run
+  # reports, and scripts/ci/check_dev_red_reporter.py holds the list and
+  # this condition to the file. A job past its timeout is cancelled, not
+  # failed, so the condition reads each needed job's result.
+  report-dev-red:
+    needs: [wallet-ref, gui-builds-against-core, gui-pin, gui-pin-nightly]
+    if: ${{ !cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

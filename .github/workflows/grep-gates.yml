@@ -267,7 +267,8 @@ jobs:
           # built in production code, the crates the shipped binaries build
           # (shipped_graph.py: this repository's release and the GUI
           # wallet's pinned edges), is red unless its site is listed with its
-          # group (G0..G3).
+          # group (G0..G3). Crates headed for production are read too, and a
+          # provisional listing is red once its increment has landed.
           # CHAIN_FORGE.md §11.1 item 2: no shipped build's resolved graph
           # activates a harness or forge crate or turns a TEST_ONLY feature
           # on. Both read the same set; the selftests hold the set itself.
@@ -277,6 +278,8 @@ jobs:
             python3 scripts/ci/check_production_graph.py
           run_one "No unlisted seedable generator in production code (selftest)" \
             python3 scripts/ci/check_seedable_rng.py --selftest
+          run_one "No unlisted seedable generator in production code" \
+            python3 scripts/ci/check_seedable_rng.py
           run_one "The shard-fill chain is frozen, with no new consumer (selftest)" \
             python3 scripts/ci/check_shard_fill_frozen.py --selftest
           run_one "The shard-fill chain is frozen, with no new consumer" \

@@ -34,6 +34,24 @@ not a shipped graph.
 A crate is in the set when either build activates it. Its feature set is
 reported per build; the gates that read the set decide what to do with it.
 
+Builds that are not released are not in the set. The mobile wallet
+(`shekyl-mobile-wallet`) links shekyl-core crates but has no release; it
+joins through its own pin when it ships, as the GUI wallet's does.
+
+# Every member outside the set is classified
+
+A member outside the set is either **headed for production**
+(`HEADED_FOR_PRODUCTION`: it will ship, and no shipped build links it yet)
+or **not shipped** (`NOT_SHIPPED`: test support, a harness, a simulation,
+an instrument or a spike), each with a one-line reason. The seedable-RNG
+gate reads a headed crate as production code now, so its seeded sites are
+reviewed before a release links it; the graph check does not hold it,
+since no shipped graph contains it. `classify()` refuses a member in
+neither table, a row in both, a row for a crate that is not a member, and
+a row for a crate already in the set: a headed crate leaves its list in
+the change that links it, and a crate that starts to ship leaves
+`NOT_SHIPPED` the same way.
+
 # Failing closed
 
 A `set(_shekyl_rust_bin_features ...)` this reading cannot place (inside
@@ -77,6 +95,76 @@ FEATURES_VAR = "_shekyl_rust_bin_features"
 
 class GraphError(ValueError):
     """The set cannot be computed without guessing."""
+
+
+# Crates that will ship and no shipped build links yet (CF-R26). Each leaves
+# this table in the change that adds it to a shipped graph.
+HEADED_FOR_PRODUCTION: dict[str, str] = {
+    "shekyl-multisig": "the multisig wallet's signing ceremony; the wallet engine links it in "
+    "multisig slice 4a-2 (MULTISIG_SLICE4A_BRIEF)",
+    "shekyl-rpc-channel": "the RPC channel's hybridXK handshake; the daemon's listener and the "
+    "wallets' dial take it in RT-W10 step 4",
+    "shekyl-rpc-stream": "the RPC channel's stream adapter the daemon's router serves over "
+    "(RT-W10 step 4; RPC_CHANNEL_RT_W10_PREFLIGHT.md F-11)",
+}
+
+# Members no release builds, and why (CF-R26).
+NOT_SHIPPED: dict[str, str] = {
+    "randomx-v2-sys": "bindings to the C RandomX reference for the differential and parity "
+    "harnesses; never linked into shekyld (RANDOMX_V2_RUST.md §2)",
+    "shekyl-economics-sim": "the economics simulation: design and verification runs over the "
+    "production economics crates",
+    "shekyl-harness-spender": "test support: the wallet-side spender (CHAIN_FORGE.md §11.1)",
+    "shekyl-harness-wallet": "test support: the fixture miner wallet (CHAIN_FORGE.md §11.1)",
+    "shekyl-p-loopback": "dev-only loopback between the P serve endpoint and fetch client; "
+    "SF-D4 keeps it out of both shipped graphs",
+    "shekyl-p2p-harness": "the P2P conformance harness: scripted peer, seam host, comparator",
+    "shekyl-randomx-differential": "the Rust/C RandomX differential test harness",
+    "shekyl-rpc-channel-xcheck": "a test-only cross-check of the RPC channel's handshake "
+    "against clatter",
+    "shekyl-shard-source": "the GUI's fixture-only shard preview source; live shards come "
+    "through the wallet contract's get_shard_view, and nothing shipped links it",
+    "shekyl-sp-t3-spike": "a disposable measurement spike (SP-T3)",
+    "shekyl-staking-sim": "the staker-archival coverage simulation",
+    "shekyl-stats": "goodness-of-fit instruments for tests and the conformance features; "
+    "only a dev or optional conformance dependency",
+    "shekyl-tor-transit-spike": "a disposable measurement spike (§94 Tor transit)",
+    "shekyl-verify-cost": "verification-cost instruments, measured at the bodies the rules run",
+    "shekyl-wss-q1b-bench": "the WSS-Q1(b) grading harness",
+}
+
+
+def classify(
+    members: set[str],
+    shipped: set[str],
+    headed: dict[str, str] | None = None,
+    not_shipped: dict[str, str] | None = None,
+) -> list[str]:
+    """Every member outside the set is in exactly one table, and no row
+    names a crate in the set or outside the workspace."""
+    headed = HEADED_FOR_PRODUCTION if headed is None else headed
+    not_shipped = NOT_SHIPPED if not_shipped is None else not_shipped
+    errors: list[str] = []
+    for table, rows in (("HEADED_FOR_PRODUCTION", headed), ("NOT_SHIPPED", not_shipped)):
+        for crate, why in sorted(rows.items()):
+            if crate not in members:
+                errors.append(f"{table} names {crate}, which is not a workspace member")
+            elif crate in shipped:
+                errors.append(
+                    f"{table} names {crate}, which a shipped build now links: it leaves "
+                    "the table in the change that links it (CF-R26)"
+                )
+            if not why.strip():
+                errors.append(f"{table} names {crate} with no reason")
+    for crate in sorted(set(headed) & set(not_shipped)):
+        errors.append(f"{crate} is both headed for production and not shipped")
+    for crate in sorted(members - shipped - set(headed) - set(not_shipped)):
+        errors.append(
+            f"{crate} is outside the shipped set and unclassified: add it to "
+            "HEADED_FOR_PRODUCTION (it will ship; its seeded sites are checked now) or "
+            "NOT_SHIPPED (shipped_graph.py), with one line saying why"
+        )
+    return errors
 
 
 def member_dirs() -> dict[str, Path]:
