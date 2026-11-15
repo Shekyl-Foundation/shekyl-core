@@ -95,6 +95,31 @@ impl StagedWrite {
         sync_dir(parent(&self.live))
     }
 
+    /// Adopt the journal a previous process left beside `live`.
+    ///
+    /// The bytes are not rewritten. [`Self::commit`] renames the journal
+    /// over `live` and syncs the directory; [`Self::discard`] removes it.
+    /// A path that is missing, or that is not a file, is an error: a
+    /// symbolic link is not renamed over the key.
+    ///
+    /// # Errors
+    ///
+    /// The journal is not there, or it is not a file.
+    pub(crate) fn resume(live: &Path) -> std::io::Result<Self> {
+        let staged = staged_path(live);
+        let meta = std::fs::symlink_metadata(&staged)?;
+        if !meta.file_type().is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the journal is not a file",
+            ));
+        }
+        Ok(Self {
+            staged,
+            live: live.to_path_buf(),
+        })
+    }
+
     /// Remove the journal. The destination is left as it is.
     ///
     /// # Errors
@@ -219,5 +244,48 @@ mod tests {
         assert_eq!(mode("record"), WORLD_READABLE_MODE);
         assert_eq!(mode("key"), OWNER_ONLY_MODE);
         assert!(!staged_path(&dir.path().join("record")).exists());
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+
+    /// A journal a previous process left is the same writer: commit renames
+    /// it over the live file, discard removes it, and a path that is not a
+    /// file is not adopted. Red edit: rename in `console::reconcile` with
+    /// `std::fs::rename` and skip `resume`, and a symlink journal replaces
+    /// the key.
+    #[test]
+    fn a_resumed_journal_commits_and_discards_and_a_link_is_refused() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let live = dir.path().join("key");
+        std::fs::write(&live, b"old").unwrap();
+        let journal = staged_path(&live);
+        std::fs::write(&journal, b"new").unwrap();
+        StagedWrite::resume(&live)
+            .expect("the journal")
+            .commit()
+            .expect("the rename");
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
+        assert!(!journal.exists());
+
+        std::fs::write(&journal, b"stray").unwrap();
+        StagedWrite::resume(&live)
+            .expect("the stray journal")
+            .discard()
+            .expect("the removal");
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
+        assert!(!journal.exists());
+        assert!(StagedWrite::resume(&live).is_err(), "nothing to adopt");
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&live, &journal).unwrap();
+            assert!(
+                StagedWrite::resume(&live).is_err(),
+                "a link is not a journal"
+            );
+        }
     }
 }

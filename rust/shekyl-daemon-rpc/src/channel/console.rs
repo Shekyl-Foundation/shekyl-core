@@ -125,11 +125,20 @@ pub(crate) fn reconcile(dir: &Path, store: &Store) -> Result<Reconcile, ConsoleF
     match next_step(cell, live_key.material, journal_key.material) {
         Step::Consistent => Ok(Reconcile::Consistent),
         Step::PlaceStaged => {
-            std::fs::rename(&journal, &live).map_err(|error| FileRefused::Io(live, error))?;
+            // The same rename the install commits, directory sync included.
+            // A crash after the rename and before the directory is durable
+            // leaves the journal, and the next start places it again.
+            StagedWrite::resume(&live)
+                .map_err(|error| FileRefused::Io(journal.clone(), error))?
+                .commit()
+                .map_err(|error| FileRefused::Io(live, error))?;
             Ok(Reconcile::Placed)
         }
         Step::DiscardStaged => {
-            std::fs::remove_file(&journal).map_err(|error| FileRefused::Io(journal, error))?;
+            StagedWrite::resume(&live)
+                .map_err(|error| FileRefused::Io(journal.clone(), error))?
+                .discard()
+                .map_err(|error| FileRefused::Io(journal, error))?;
             Ok(Reconcile::Consistent)
         }
         Step::Generate => Ok(Reconcile::Absent),
