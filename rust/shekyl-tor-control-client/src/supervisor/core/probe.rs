@@ -38,7 +38,7 @@
 use super::super::posture::{Cause, Inbound, InboundCause};
 use super::announce::Cadence;
 use super::directories::{
-    DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryVerdict,
+    DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryVerdict, OpenUploads,
 };
 use super::{duration_ns, Action, Core, Duty, Phase, RoundTally};
 use crate::control::{RelayFingerprint, ServiceDescriptor};
@@ -380,6 +380,13 @@ impl Core {
     /// Installed only while the draw is still outstanding, including once
     /// the probe is already [`Probe::Judging`]. A draw that arrives after
     /// the check was dropped is ignored.
+    ///
+    /// An upload still open belongs to the open round, and is asked only
+    /// once that round is older than `Policy::round_wait`: the age at which
+    /// the round's own probe goes ahead without it (§4.5). A second probe
+    /// drawn seconds after a new round began leaves that round's uploads in
+    /// flight alone. Tor starts a round's uploads in one pass
+    /// (`UploadRounds`), so the round's start is each upload's.
     pub(super) fn directories_drawn(
         &mut self,
         now: u64,
@@ -389,14 +396,21 @@ impl Core {
         if !matches!(self.directories, Some(DirectoryHalf::AwaitingDraw)) {
             return Vec::new();
         }
+        let round_wait = duration_ns(self.policy.round_wait);
+        let open = match self.round {
+            Some(track) if now >= track.started_at.saturating_add(round_wait) => OpenUploads::Hung,
+            _ => OpenUploads::InFlight,
+        };
         let fetches = fetches
             .into_iter()
             .map(|fetch| {
                 let due = now.saturating_add(self.probe_delay(fetch.draw));
-                (fetch.hsdir, fetch.descriptor_id, due)
+                (fetch.upload, due)
             })
             .collect();
-        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(fetches, ours)));
+        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(
+            fetches, ours, open,
+        )));
         self.judge(now)
     }
 
@@ -484,7 +498,8 @@ impl Core {
     /// half of the counted directories. Any other counted outcome is a miss,
     /// into the two-miss rule. An empty list is [`DirectoryVerdict::Unmatched`]:
     /// the probe alone decides. No list at all, because the check was
-    /// dropped, decides nothing.
+    /// dropped, decides nothing. A judged check's directories are said at
+    /// debug, one line each ([`Action::DirectoriesSettled`]).
     ///
     /// Outbound must still be usable. A link that dropped while the
     /// directories were out discards the check, the same way a probe in
@@ -493,10 +508,10 @@ impl Core {
         let Probe::Judging { arrived, attempt } = self.probe else {
             return Vec::new();
         };
-        let verdict = match &self.directories {
+        let (verdict, report) = match &self.directories {
             Some(DirectoryHalf::AwaitingDraw) => return Vec::new(),
             Some(DirectoryHalf::Open(check)) if !check.is_complete() => return Vec::new(),
-            Some(DirectoryHalf::Open(check)) => check.verdict(),
+            Some(DirectoryHalf::Open(check)) => (check.verdict(), check.report()),
             None => {
                 self.probe = Probe::Idle;
                 self.probe_confirms = false;
@@ -513,7 +528,7 @@ impl Core {
         // Idle for the moment. A first miss becomes `Refetching` and keeps
         // `probe_confirms`, so the second probe is still this republish's.
         self.probe = Probe::Idle;
-        let mut actions = Vec::new();
+        let mut actions = vec![Action::DirectoriesSettled(report)];
         if verdict == DirectoryVerdict::Unmatched {
             actions.push(Action::DirectoriesUnmatched);
         }

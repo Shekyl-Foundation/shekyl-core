@@ -482,10 +482,11 @@ impl Drive {
         None
     }
 
-    /// A probe's check: the directories the latest round reached, each with
-    /// its own CSPRNG draw, read now; this service's current descriptor,
-    /// asked off the loop (§4.5). No control, or no service yet, is no
-    /// descriptor; an ask that fails is a process fault.
+    /// A probe's check: every upload of the latest round that reached a
+    /// directory, confirmed or not, each with its own CSPRNG draw, read now;
+    /// this service's current descriptor, asked off the loop (§4.5). No
+    /// control, or no service yet, is no descriptor; an ask that fails is a
+    /// process fault.
     fn send_check(&self, number: u64) -> Option<Vec<Input>> {
         let fetches: Vec<DirectoryFetch> = self
             .rounds
@@ -494,9 +495,8 @@ impl Drive {
                 rounds
                     .directories()
                     .iter()
-                    .map(|to| DirectoryFetch {
-                        hsdir: to.hsdir,
-                        descriptor_id: to.descriptor_id.clone(),
+                    .map(|upload| DirectoryFetch {
+                        upload: upload.clone(),
                         draw: self.network.probe_delay_draw(),
                     })
                     .collect()
