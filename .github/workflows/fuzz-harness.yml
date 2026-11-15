@@ -119,7 +119,16 @@ jobs:
           key: fuzz-${{ matrix.crate }}
           save-if: ${{ github.event_name == 'push' }}
       - name: cargo check --locked
-        run: cargo check --locked --manifest-path rust/${{ matrix.crate }}/fuzz/Cargo.toml
+        env:
+          CRATE: ${{ matrix.crate }}
+        run: |
+          # A lockfile cargo refuses to update is a crate this harness
+          # depends on that changed its dependencies: the fuzz lockfiles
+          # are regenerated from the workspace's, and committed.
+          if ! cargo check --locked --manifest-path "rust/$CRATE/fuzz/Cargo.toml"; then
+            echo "::error::rust/$CRATE/fuzz did not type-check. If cargo refused to update its Cargo.lock, run python3 scripts/ci/check_fuzz_inventory.py --regenerate and commit the fuzz lockfiles."
+            exit 1
+          fi
 
   fuzz-harness-pass:
     name: "Fuzz harnesses: pass"
