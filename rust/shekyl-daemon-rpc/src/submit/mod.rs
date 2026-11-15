@@ -76,7 +76,9 @@ pub type DaemonSubmitEngine = SubmitEngine<RustPoolShim<StoreChain>, DaemonTxVer
 /// F39's verification cap is the one Phase-C semaphore, taken before the
 /// blocking pool, so a queued submission parks as a cheap task and does not
 /// pin a blocking worker; one semaphore for every listener makes the cap
-/// the daemon's.
+/// the daemon's. The permit is held by the blocking work itself
+/// ([`gate::verify_under`]), so a cancelled call cannot free the cap while
+/// its verification runs.
 ///
 /// # Errors
 ///
@@ -105,8 +107,7 @@ pub async fn tx_submit(
         return Err(fault("the submission gate is closed"));
     };
     let engine = std::sync::Arc::clone(&state.submit_engine);
-    let joined = tokio::task::spawn_blocking(move || engine.submit(&tx, caller)).await;
-    drop(permit);
+    let joined = gate::verify_under(permit, move || engine.submit(&tx, caller)).await;
     match joined {
         Ok(Ok(verdict)) => Ok(verdict),
         Ok(Err(engine_fault)) => {

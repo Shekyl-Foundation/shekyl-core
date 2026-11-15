@@ -28,7 +28,7 @@
 //! client sends that way.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_noise::ClassId;
 
@@ -40,15 +40,43 @@ pub(crate) const CLOSE_CLASS: ClassId = ClassId(0);
 
 /// The verdict [`crate::RecordStream`] publishes for the request handler.
 ///
-/// The handler reads it after the body, while hyper owns the stream. It is
-/// the reader's decision at the last data record. The close record does not
-/// change it.
+/// [`Self::ends_in_submission`] is the reader's decision at the last data
+/// record. The close record does not change it. That decision is the whole
+/// connection's, so the channel binds it to one HTTP message
+/// ([`Self::note_message`]) before a handler reads
+/// [`Self::message_is_submission`]: two requests in one frame are not each
+/// a submission.
 #[derive(Clone, Debug)]
-pub struct InboundShape(Arc<AtomicBool>);
+pub struct InboundShape {
+    inner: Arc<Shape>,
+}
+
+/// Payload bytes `[from, to)` of one finished submission, in the order the
+/// reader copies them. Padding records add none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PayloadSpan {
+    from: u64,
+    to: u64,
+}
+
+#[derive(Debug)]
+struct Shape {
+    /// The last data record finished a submission.
+    record: AtomicBool,
+    /// The HTTP message last noted is exactly the stored span.
+    message: AtomicBool,
+    span: Mutex<Option<PayloadSpan>>,
+}
 
 impl Default for InboundShape {
     fn default() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self {
+            inner: Arc::new(Shape {
+                record: AtomicBool::new(false),
+                message: AtomicBool::new(false),
+                span: Mutex::new(None),
+            }),
+        }
     }
 }
 
@@ -56,11 +84,46 @@ impl InboundShape {
     /// Whether the records ending at the last data record are one submission.
     #[must_use]
     pub fn ends_in_submission(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.inner.record.load(Ordering::Acquire)
     }
 
-    pub(crate) fn set(&self, submission: bool) {
-        self.0.store(submission, Ordering::Release);
+    /// Whether the HTTP message last passed to [`Self::note_message`] is
+    /// exactly the submission the last data record finished.
+    #[must_use]
+    pub fn message_is_submission(&self) -> bool {
+        self.inner.message.load(Ordering::Acquire)
+    }
+
+    /// The message now being read is not yet a submission.
+    pub fn clear_message(&self) {
+        self.inner.message.store(false, Ordering::Release);
+    }
+
+    /// The bytes `[from, to)` are one HTTP message, in the same index as
+    /// the submission's payload. The message is a submission when those
+    /// bytes are exactly the frame the last data record finished, and the
+    /// verdict is consumed by this note: a later message in the same frame
+    /// does not match it again.
+    pub fn note_message(&self, from: u64, to: u64) {
+        let mut span = self
+            .inner
+            .span
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // One claim. A prefix of the frame, and the bytes left after it,
+        // are not the frame.
+        let matches = span.take() == Some(PayloadSpan { from, to });
+        self.inner.message.store(matches, Ordering::Release);
+    }
+
+    pub(crate) fn publish(&self, submission: bool, from: u64, to: u64) {
+        self.inner.record.store(submission, Ordering::Release);
+        *self
+            .inner
+            .span
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            submission.then_some(PayloadSpan { from, to });
     }
 }
 
@@ -221,6 +284,15 @@ impl Frame {
         self.submission = false;
         self.place = Place::Run { count: 0 };
         Ok(())
+    }
+
+    /// Whether the next payload record is the first byte of a message.
+    ///
+    /// Called before [`Self::admit`]. A run at a boundary, and the payload
+    /// that follows padding, both open one. A record inside a run or a
+    /// frame does not.
+    pub(crate) fn opening_payload(&self) -> bool {
+        matches!(self.place, Place::Run { count: 0 } | Place::Pad { .. })
     }
 
     /// This side sealed a record: on the daemon, its response.

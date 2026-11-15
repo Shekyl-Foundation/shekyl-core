@@ -140,6 +140,22 @@ pub async fn bind_listener(addr: SocketAddr) -> std::io::Result<BoundListener> {
     Ok(BoundListener { addr, listener })
 }
 
+/// Bind the channel listener (`rpc-listen`). Any address, a wildcard
+/// included (`RPC_CHANNEL.md` RT-14): the channel's security does not depend
+/// on which interface it is reached through, so [`refuse_non_loopback`] is
+/// replaced at this seam, and [`BoundListener`] stays the only thing served.
+/// The same canonical form as [`bind_listener`].
+///
+/// # Errors
+///
+/// The bind's own error.
+pub async fn bind_channel_listener(addr: SocketAddr) -> std::io::Result<BoundListener> {
+    let addr = SocketAddr::new(addr.ip().to_canonical(), addr.port());
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let addr = listener.local_addr()?;
+    Ok(BoundListener { addr, listener })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{bind_listener, listen_addrs, parse_bind, refuse_non_loopback};
