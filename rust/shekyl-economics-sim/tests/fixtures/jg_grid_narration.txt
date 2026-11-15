@@ -1,0 +1,1280 @@
+J x G — THE VOLUME SIGNAL CROSSED WITH THE ZONE (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.33).
+Measures only. Signals: SMA (production's window sum), median (the window's lower-middle
+per-block count), median+floor (the median, the stuffer paying the relay floor on its own
+bodies), decoupled (release rails at 1.0; the burn and C still read the sum). Zone: N
+2-in/2-out spends of 19939 B (genesis depth and Standard fee) plus the coinbase reserve
+(1386 B), beside the inherited and re-derived zones; w_ref at 3000 and 12595 B, each fixed across
+N. Not re-derived: TX_WEIGHT_LIMIT (the sim does not read it; it caps one transaction, not a
+count) and COINBASE_RESERVE (it does not depend on the zone).
+
+THE HONEST CHAIN. Per signal, zone and w_ref: the year-1 Standard fee (SKL, and over the
+ceiling), a day's blocks filled to the zone at the year-1 relay floor (SKL), the first year
+blocks carry the design load (30 spends, 48 ordinary transactions a block), and the
+declared step's up-edge: M_r before and after, and the blocks to 95 % of the move.
+  SMA          N = 14          280532 B w_ref  3000: fee 1.1888 (2.40x) ; fill a day     4181.3 ; design load y20 ; step M_r 0.800->0.800 in no move
+  SMA          N = 14          280532 B w_ref 12595: fee 1.2238 (2.47x) ; fill a day     4056.4 ; design load y1 ; step M_r 1.000->1.300 in 654 blocks
+  SMA          inherited       300000 B w_ref  3000: fee 1.1888 (2.40x) ; fill a day     4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
+  SMA          inherited       300000 B w_ref 12595: fee 1.2233 (2.46x) ; fill a day     4337.9 ; design load y1 ; step M_r 1.000->1.300 in 654 blocks
+  SMA          N = 20          400166 B w_ref  3000: fee 0.6874 (1.39x) ; fill a day     3448.2 ; design load y17 ; step M_r 0.800->0.800 in no move
+  SMA          N = 20          400166 B w_ref 12595: fee 1.2221 (2.46x) ; fill a day     5786.3 ; design load y1 ; step M_r 1.000->1.300 in 654 blocks
+  SMA          N = 25          499861 B w_ref  3000: fee 0.4481 (0.90x) ; fill a day     2804.0 ; design load y15 ; step M_r 0.800->0.800 in no move
+  SMA          N = 25          499861 B w_ref 12595: fee 1.2219 (2.46x) ; fill a day     7227.9 ; design load y1 ; step M_r 1.000->1.300 in 654 blocks
+  SMA          N = 30          599556 B w_ref  3000: fee 0.3374 (0.68x) ; fill a day     2462.3 ; design load y13 ; step M_r 0.840->0.840 in no move
+  SMA          N = 30          599556 B w_ref 12595: fee 1.2220 (2.46x) ; fill a day     8669.4 ; design load y1 ; step M_r 1.000->1.300 in 654 blocks
+  SMA          N = 35          699251 B w_ref  3000: fee 0.2957 (0.60x) ; fill a day     2508.7 ; design load y1 ; step M_r 0.960->0.960 in no move
+  SMA          N = 35          699251 B w_ref 12595: fee 1.2196 (2.46x) ; fill a day    10111.0 ; design load y1 ; step M_r 1.000->1.300 in 654 blocks
+  SMA          N = 45          898641 B w_ref  3000: fee 0.1845 (0.37x) ; fill a day     2062.1 ; design load y1 ; step M_r 1.000->1.240 in 684 blocks
+  SMA          N = 45          898641 B w_ref 12595: fee 0.7748 (1.56x) ; fill a day     8657.8 ; design load y1 ; step M_r 1.000->1.300 in 478 blocks
+  SMA          N = 60         1197726 B w_ref  3000: fee 0.1039 (0.21x) ; fill a day     1547.1 ; design load y1 ; step M_r 1.000->1.300 in 321 blocks
+  SMA          N = 60         1197726 B w_ref 12595: fee 0.4362 (0.88x) ; fill a day     6496.2 ; design load y1 ; step M_r 1.000->1.300 in 275 blocks
+  SMA          re-derived     1259500 B w_ref  3000: fee 0.0939 (0.19x) ; fill a day     1470.9 ; design load y1 ; step M_r 1.000->1.300 in 285 blocks
+  SMA          re-derived     1259500 B w_ref 12595: fee 0.3944 (0.79x) ; fill a day     6177.4 ; design load y1 ; step M_r 1.000->1.300 in 251 blocks
+  SMA          N = 75         1496811 B w_ref  3000: fee 0.0665 (0.13x) ; fill a day     1237.2 ; design load y1 ; step M_r 1.000->1.300 in 198 blocks
+  SMA          N = 75         1496811 B w_ref 12595: fee 0.2793 (0.56x) ; fill a day     5197.8 ; design load y1 ; step M_r 1.000->1.300 in 182 blocks
+  SMA          N = 90         1795896 B w_ref  3000: fee 0.0462 (0.09x) ; fill a day     1031.9 ; design load y1 ; step M_r 1.000->1.300 in 141 blocks
+  SMA          N = 90         1795896 B w_ref 12595: fee 0.1940 (0.39x) ; fill a day     4331.7 ; design load y1 ; step M_r 1.000->1.300 in 136 blocks
+  SMA          N = 105        2094981 B w_ref  3000: fee 0.0339 (0.07x) ; fill a day      883.9 ; design load y1 ; step M_r 1.000->1.300 in 111 blocks
+  SMA          N = 105        2094981 B w_ref 12595: fee 0.1425 (0.29x) ; fill a day     3713.6 ; design load y1 ; step M_r 1.000->1.300 in 107 blocks
+  SMA          N = 120        2394066 B w_ref  3000: fee 0.0260 (0.05x) ; fill a day      774.0 ; design load y1 ; step M_r 1.000->1.300 in 90 blocks
+  SMA          N = 120        2394066 B w_ref 12595: fee 0.1091 (0.22x) ; fill a day     3249.2 ; design load y1 ; step M_r 1.000->1.300 in 89 blocks
+  SMA          N = 150        2992236 B w_ref  3000: fee 0.0166 (0.03x) ; fill a day      618.3 ; design load y1 ; step M_r 1.000->1.300 in 69 blocks
+  SMA          N = 150        2992236 B w_ref 12595: fee 0.0699 (0.14x) ; fill a day     2598.2 ; design load y1 ; step M_r 1.000->1.300 in 69 blocks
+  median       N = 14          280532 B w_ref  3000: fee 1.1888 (2.40x) ; fill a day     4181.3 ; design load y20 ; step M_r 0.800->0.800 in no move
+  median       N = 14          280532 B w_ref 12595: fee 1.2236 (2.47x) ; fill a day     4056.4 ; design load y1 ; step M_r 1.000->1.300 in 714 blocks
+  median       inherited       300000 B w_ref  3000: fee 1.1888 (2.40x) ; fill a day     4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
+  median       inherited       300000 B w_ref 12595: fee 1.2231 (2.46x) ; fill a day     4337.9 ; design load y1 ; step M_r 1.000->1.300 in 714 blocks
+  median       N = 20          400166 B w_ref  3000: fee 0.6874 (1.39x) ; fill a day     3448.2 ; design load y17 ; step M_r 0.800->0.800 in no move
+  median       N = 20          400166 B w_ref 12595: fee 1.2221 (2.46x) ; fill a day     5786.3 ; design load y1 ; step M_r 1.000->1.300 in 714 blocks
+  median       N = 25          499861 B w_ref  3000: fee 0.4481 (0.90x) ; fill a day     2804.0 ; design load y15 ; step M_r 0.800->0.800 in no move
+  median       N = 25          499861 B w_ref 12595: fee 1.2219 (2.46x) ; fill a day     7227.9 ; design load y1 ; step M_r 1.000->1.300 in 714 blocks
+  median       N = 30          599556 B w_ref  3000: fee 0.3374 (0.68x) ; fill a day     2462.3 ; design load y13 ; step M_r 0.840->0.840 in no move
+  median       N = 30          599556 B w_ref 12595: fee 1.2220 (2.46x) ; fill a day     8669.4 ; design load y1 ; step M_r 1.000->1.300 in 714 blocks
+  median       N = 35          699251 B w_ref  3000: fee 0.2957 (0.60x) ; fill a day     2508.7 ; design load y1 ; step M_r 0.960->0.960 in no move
+  median       N = 35          699251 B w_ref 12595: fee 1.2196 (2.46x) ; fill a day    10111.0 ; design load y1 ; step M_r 1.000->1.300 in 714 blocks
+  median       N = 45          898641 B w_ref  3000: fee 0.1845 (0.37x) ; fill a day     2062.1 ; design load y1 ; step M_r 1.000->1.240 in 361 blocks
+  median       N = 45          898641 B w_ref 12595: fee 0.7748 (1.56x) ; fill a day     8657.8 ; design load y1 ; step M_r 1.000->1.300 in 412 blocks
+  median       N = 60         1197726 B w_ref  3000: fee 0.1039 (0.21x) ; fill a day     1547.1 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 60         1197726 B w_ref 12595: fee 0.4362 (0.88x) ; fill a day     6496.2 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       re-derived     1259500 B w_ref  3000: fee 0.0939 (0.19x) ; fill a day     1470.9 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       re-derived     1259500 B w_ref 12595: fee 0.3944 (0.79x) ; fill a day     6177.4 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 75         1496811 B w_ref  3000: fee 0.0665 (0.13x) ; fill a day     1237.2 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 75         1496811 B w_ref 12595: fee 0.2793 (0.56x) ; fill a day     5197.8 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 90         1795896 B w_ref  3000: fee 0.0462 (0.09x) ; fill a day     1031.9 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 90         1795896 B w_ref 12595: fee 0.1940 (0.39x) ; fill a day     4331.7 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 105        2094981 B w_ref  3000: fee 0.0339 (0.07x) ; fill a day      883.9 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 105        2094981 B w_ref 12595: fee 0.1425 (0.29x) ; fill a day     3713.6 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 120        2394066 B w_ref  3000: fee 0.0260 (0.05x) ; fill a day      774.0 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 120        2394066 B w_ref 12595: fee 0.1091 (0.22x) ; fill a day     3249.2 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 150        2992236 B w_ref  3000: fee 0.0166 (0.03x) ; fill a day      618.3 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 150        2992236 B w_ref 12595: fee 0.0699 (0.14x) ; fill a day     2598.2 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  decoupled    N = 14          280532 B w_ref  3000: fee 1.4798 (2.98x) ; fill a day     5182.3 ; design load y17 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 14          280532 B w_ref 12595: fee 1.2248 (2.47x) ; fill a day     4056.4 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    inherited       300000 B w_ref  3000: fee 1.4798 (2.98x) ; fill a day     5541.9 ; design load y17 ; step M_r 1.000->1.000 in no move
+  decoupled    inherited       300000 B w_ref 12595: fee 1.2241 (2.47x) ; fill a day     4337.9 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 20          400166 B w_ref  3000: fee 0.8559 (1.72x) ; fill a day     4276.3 ; design load y14 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 20          400166 B w_ref 12595: fee 1.2224 (2.46x) ; fill a day     5786.3 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 25          499861 B w_ref  3000: fee 0.5581 (1.12x) ; fill a day     3478.8 ; design load y13 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 25          499861 B w_ref 12595: fee 1.2220 (2.46x) ; fill a day     7227.9 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 30          599556 B w_ref  3000: fee 0.3929 (0.79x) ; fill a day     2916.9 ; design load y12 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 30          599556 B w_ref 12595: fee 1.2220 (2.46x) ; fill a day     8669.4 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 35          699251 B w_ref  3000: fee 0.3035 (0.61x) ; fill a day     2610.9 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 35          699251 B w_ref 12595: fee 1.2196 (2.46x) ; fill a day    10111.0 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 45          898641 B w_ref  3000: fee 0.1845 (0.37x) ; fill a day     2062.1 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 45          898641 B w_ref 12595: fee 0.7748 (1.56x) ; fill a day     8657.8 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 60         1197726 B w_ref  3000: fee 0.1039 (0.21x) ; fill a day     1547.1 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 60         1197726 B w_ref 12595: fee 0.4362 (0.88x) ; fill a day     6496.2 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    re-derived     1259500 B w_ref  3000: fee 0.0939 (0.19x) ; fill a day     1470.9 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    re-derived     1259500 B w_ref 12595: fee 0.3944 (0.79x) ; fill a day     6177.4 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 75         1496811 B w_ref  3000: fee 0.0665 (0.13x) ; fill a day     1237.2 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 75         1496811 B w_ref 12595: fee 0.2793 (0.56x) ; fill a day     5197.8 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 90         1795896 B w_ref  3000: fee 0.0462 (0.09x) ; fill a day     1031.9 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 90         1795896 B w_ref 12595: fee 0.1940 (0.39x) ; fill a day     4331.7 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 105        2094981 B w_ref  3000: fee 0.0339 (0.07x) ; fill a day      883.9 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 105        2094981 B w_ref 12595: fee 0.1425 (0.29x) ; fill a day     3713.6 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 120        2394066 B w_ref  3000: fee 0.0260 (0.05x) ; fill a day      774.0 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 120        2394066 B w_ref 12595: fee 0.1091 (0.22x) ; fill a day     3249.2 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 150        2992236 B w_ref  3000: fee 0.0166 (0.03x) ; fill a day      618.3 ; design load y1 ; step M_r 1.000->1.000 in no move
+  decoupled    N = 150        2992236 B w_ref 12595: fee 0.0699 (0.14x) ; fill a day     2598.2 ; design load y1 ; step M_r 1.000->1.000 in no move
+
+THE STUFFER. Per signal, zone, w_ref and start: a stuffer holding its share (100 = every miner)
+for the whole measured span (2160 blocks from the start of the year); the bodies listed, M_r
+at the span's end and its mean over it, the longest run of M_r > 1.0, the stuffer's payout
+less its fees against no stuffing (SKL), and the burn and C at rest. A share is an even
+proportion of the blocks; the bodies are the ordinary 1-in/2-out, the lightest valid shape
+(CEN-I1).
+== N = 14 (280532 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5   20%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5   33%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5   51%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5  100%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median         5   10%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5   20%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5   33%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5   51%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5  100%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median        30   10%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median        30   20%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median        30   33%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median        30   51%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median        30  100%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor   5   10%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor   5   20%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor   5   33%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor   5   51%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor   5  100%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+== N = 14 (280532 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5   20%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5   33%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5   51%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5  100%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median         5   10%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5   20%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5   33%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5   51%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5  100%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median        30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor   5   10%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor   5   20%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor   5   33%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor   5   51%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor   5  100%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+== inherited (300000 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5   20%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5   33%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5   51%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5  100%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median         5   10%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5   20%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5   33%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5   51%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5  100%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median        30   10%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median        30   20%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median        30   33%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median        30   51%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median        30  100%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor   5   10%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor   5   20%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor   5   33%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor   5   51%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor   5  100%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  39.629  1.6447
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00   7.359  0.9733
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.703  1.7033
+== inherited (300000 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5   20%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5   33%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5   51%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5  100%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median         5   10%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5   20%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5   33%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5   51%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5  100%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median        30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor   5   10%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor   5   20%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor   5   33%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor   5   51%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor   5  100%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+== N = 20 (400166 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  SMA            5   20%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  SMA            5   33%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  SMA            5   51%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  SMA            5  100%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median         5   10%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median         5   20%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median         5   33%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median         5   51%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median         5  100%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median        30   10%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median        30   20%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median        30   33%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median        30   51%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median        30  100%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median+floor   5   10%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median+floor   5   20%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median+floor   5   33%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median+floor   5   51%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median+floor   5  100%       0   0.8000  0.8000      0           0.00   6.926  0.7750
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  40.001  1.6549
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00   8.450  0.9849
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00   8.450  0.9849
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00   8.450  0.9849
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00   8.450  0.9849
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00   8.450  0.9849
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.721  1.7038
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.721  1.7038
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.721  1.7038
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.721  1.7038
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.721  1.7038
+== N = 20 (400166 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median         5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median        30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor   5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+== N = 25 (499861 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  SMA            5   20%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  SMA            5   33%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  SMA            5   51%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  SMA            5  100%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median         5   10%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median         5   20%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median         5   33%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median         5   51%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median         5  100%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median        30   10%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median        30   20%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median        30   33%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median        30   51%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median        30  100%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median+floor   5   10%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median+floor   5   20%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median+floor   5   33%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median+floor   5   51%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median+floor   5  100%       0   0.8000  0.8000      0           0.00   7.609  0.7807
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  40.200  1.6604
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00   9.283  0.9939
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00   9.283  0.9939
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00   9.283  0.9939
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00   9.283  0.9939
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00   9.283  0.9939
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.728  1.7040
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.728  1.7040
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.728  1.7040
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.728  1.7040
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.728  1.7040
+== N = 25 (499861 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median         5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median        30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor   5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+== N = 30 (599556 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  SMA            5   20%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  SMA            5   33%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  SMA            5   51%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  SMA            5  100%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  40.708  1.6747
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  40.708  1.6747
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  40.708  1.6747
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  40.708  1.6747
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  40.708  1.6747
+  median         5   10%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median         5   20%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median         5   33%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median         5   51%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median         5  100%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median        30   10%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median        30   20%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median        30   33%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median        30   51%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median        30  100%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median+floor   5   10%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median+floor   5   20%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median+floor   5   33%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median+floor   5   51%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median+floor   5  100%       0   0.8400  0.8400      0           0.00   8.749  0.8300
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  40.709  1.6747
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00  10.170  1.0037
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00  10.170  1.0037
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00  10.170  1.0037
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00  10.170  1.0037
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00  10.170  1.0037
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.734  1.7041
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.734  1.7041
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.734  1.7041
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.734  1.7041
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.734  1.7041
+== N = 30 (599556 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median         5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median        30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor   5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+== N = 35 (699251 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  SMA            5   20%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  SMA            5   33%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  SMA            5   51%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  SMA            5  100%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median         5   10%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median         5   20%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median         5   33%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median         5   51%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median         5  100%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median        30   10%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median        30   20%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median        30   33%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median        30   51%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median        30  100%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median+floor   5   10%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median+floor   5   20%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median+floor   5   33%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median+floor   5   51%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median+floor   5  100%       0   0.9600  0.9600      0           0.00  10.523  0.9674
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  41.537  1.6984
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00  10.873  1.0117
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00  10.873  1.0117
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00  10.873  1.0117
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00  10.873  1.0117
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00  10.873  1.0117
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.737  1.7042
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.737  1.7042
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.737  1.7042
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.737  1.7042
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.737  1.7042
+== N = 35 (699251 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA            5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  SMA           30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  SMA           30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median         5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median         5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median        30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median        30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor   5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor   5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  median+floor  30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  median+floor  30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled      5   10%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   20%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   33%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5   51%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled      5  100%       0   1.0000  1.0000      0           0.00  11.074  1.0139
+  decoupled     30   10%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   20%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   33%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30   51%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+  decoupled     30  100%       0   1.0000  1.0000      0           0.00  41.291  1.6913
+== N = 45 (898641 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%    2376   1.0220  1.0183   2150        2867.08  11.221  1.0380
+  SMA            5   20%    4752   1.0440  1.0366   2155       11484.64  11.342  1.0618
+  SMA            5   33%    7832   1.0727  1.0604   2156       31178.11  11.497  1.0929
+  SMA            5   51%   12111   1.1124  1.0934   2158       74657.56  11.709  1.1361
+  SMA            5  100%   23760   1.2200  1.1833   2159      287418.83  12.264  1.2538
+  SMA           30   10%    1728   1.0160  1.0133   2150         479.65  42.112  1.7427
+  SMA           30   20%    3456   1.0320  1.0266   2155        1921.59  42.442  1.7803
+  SMA           30   33%    5696   1.0529  1.0440   2156        5216.24  42.870  1.8300
+  SMA           30   51%    8808   1.0818  1.0679   2158       12490.76  43.454  1.8996
+  SMA           30  100%   17280   1.1600  1.1333   2159       48087.64  44.998  2.0941
+  median         5   10%    2376   1.0000  1.0000      0           0.00  11.099  1.0142
+  median         5   20%    4752   1.0000  1.0000      0           0.00  11.099  1.0142
+  median         5   33%    7832   1.0000  1.0000      0           0.00  11.099  1.0142
+  median         5   51%   12111   1.2200  1.1479   1452      118195.83  12.263  1.2538
+  median         5  100%   23760   1.2200  1.1832   1799      287338.91  12.264  1.2538
+  median        30   10%    1728   1.0000  1.0000      0           0.00  41.779  1.7055
+  median        30   20%    3456   1.0000  1.0000      0           0.00  41.779  1.7055
+  median        30   33%    5696   1.0000  1.0000      0           0.00  41.779  1.7055
+  median        30   51%    8808   1.1600  1.1076   1452       19775.28  44.998  2.0941
+  median        30  100%   17280   1.1600  1.1333   1799       48074.66  44.998  2.0941
+  median+floor   5   10%    2376   1.0000  1.0000      0         -11.58  11.099  1.0142
+  median+floor   5   20%    4752   1.0000  1.0000      0         -23.16  11.099  1.0142
+  median+floor   5   33%    7832   1.0000  1.0000      0         -38.16  11.099  1.0142
+  median+floor   5   51%   12111   1.2200  1.1479   1452      118122.31  12.263  1.2538
+  median+floor   5  100%   23760   1.2200  1.1832   1799      287187.87  12.264  1.2538
+  median+floor  30   10%    1728   1.0000  1.0000      0         -11.62  41.779  1.7055
+  median+floor  30   20%    3456   1.0000  1.0000      0         -23.24  41.779  1.7055
+  median+floor  30   33%    5696   1.0000  1.0000      0         -38.31  41.779  1.7055
+  median+floor  30   51%    8808   1.1600  1.1076   1452       19703.19  44.998  2.0941
+  median+floor  30  100%   17280   1.1600  1.1333   1799       47927.20  44.998  2.0941
+  decoupled      5   10%    2376   1.0000  1.0000      0           0.03  11.221  1.0156
+  decoupled      5   20%    4752   1.0000  1.0000      0           0.02  11.341  1.0170
+  decoupled      5   33%    7832   1.0000  1.0000      0           0.26  11.496  1.0188
+  decoupled      5   51%   12111   1.0000  1.0000      0           1.03  11.707  1.0212
+  decoupled      5  100%   23760   1.0000  1.0000      0           2.01  12.260  1.0277
+  decoupled     30   10%    1728   1.0000  1.0000      0          -0.01  42.112  1.7153
+  decoupled     30   20%    3456   1.0000  1.0000      0           0.08  42.442  1.7251
+  decoupled     30   33%    5696   1.0000  1.0000      0          -0.07  42.870  1.7380
+  decoupled     30   51%    8808   1.0000  1.0000      0           0.16  43.454  1.7560
+  decoupled     30  100%   17280   1.0000  1.0000      0          -0.05  44.997  1.8053
+== N = 45 (898641 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%    2376   1.0220  1.0183   2150        2965.77  11.206  1.0378
+  SMA            5   20%    4752   1.0440  1.0366   2155       11879.65  11.326  1.0616
+  SMA            5   33%    7832   1.0727  1.0604   2156       32250.76  11.481  1.0927
+  SMA            5   51%   12111   1.1124  1.0934   2158       77227.00  11.693  1.1359
+  SMA            5  100%   23760   1.2200  1.1833   2159      297310.85  12.247  1.2536
+  SMA           30   10%    1728   1.0160  1.0133   2150         496.92  41.793  1.7332
+  SMA           30   20%    3456   1.0320  1.0266   2155        1990.38  42.121  1.7705
+  SMA           30   33%    5696   1.0529  1.0440   2156        5403.52  42.546  1.8196
+  SMA           30   51%    8808   1.0818  1.0679   2158       12939.23  43.125  1.8886
+  SMA           30  100%   17280   1.1600  1.1333   2159       49814.33  44.658  2.0813
+  median         5   10%    2376   1.0000  1.0000      0           0.00  11.084  1.0141
+  median         5   20%    4752   1.0000  1.0000      0           0.00  11.084  1.0141
+  median         5   33%    7832   1.0000  1.0000      0           0.00  11.084  1.0141
+  median         5   51%   12111   1.2200  1.1479   1452      122263.84  12.246  1.2535
+  median         5  100%   23760   1.2200  1.1832   1799      297228.68  12.247  1.2536
+  median        30   10%    1728   1.0000  1.0000      0           0.00  41.463  1.6963
+  median        30   20%    3456   1.0000  1.0000      0           0.00  41.463  1.6963
+  median        30   33%    5696   1.0000  1.0000      0           0.00  41.463  1.6963
+  median        30   51%    8808   1.1600  1.1076   1452       20485.01  44.657  2.0812
+  median        30  100%   17280   1.1600  1.1333   1799       49800.48  44.658  2.0813
+  median+floor   5   10%    2376   1.0000  1.0000      0         -48.54  11.084  1.0141
+  median+floor   5   20%    4752   1.0000  1.0000      0         -97.08  11.084  1.0141
+  median+floor   5   33%    7832   1.0000  1.0000      0        -160.00  11.084  1.0141
+  median+floor   5   51%   12111   1.2200  1.1479   1452      121955.62  12.246  1.2535
+  median+floor   5  100%   23760   1.2200  1.1832   1799      296595.48  12.247  1.2536
+  median+floor  30   10%    1728   1.0000  1.0000      0         -48.18  41.463  1.6963
+  median+floor  30   20%    3456   1.0000  1.0000      0         -96.36  41.463  1.6963
+  median+floor  30   33%    5696   1.0000  1.0000      0        -158.82  41.463  1.6963
+  median+floor  30   51%    8808   1.1600  1.1076   1452       20186.36  44.657  2.0812
+  median+floor  30  100%   17280   1.1600  1.1333   1799       49189.67  44.658  2.0813
+  decoupled      5   10%    2376   1.0000  1.0000      0           0.02  11.205  1.0154
+  decoupled      5   20%    4752   1.0000  1.0000      0           0.05  11.325  1.0168
+  decoupled      5   33%    7832   1.0000  1.0000      0           0.05  11.480  1.0186
+  decoupled      5   51%   12111   1.0000  1.0000      0           0.17  11.691  1.0210
+  decoupled      5  100%   23760   1.0000  1.0000      0           0.39  12.243  1.0275
+  decoupled     30   10%    1728   1.0000  1.0000      0           0.02  41.793  1.7059
+  decoupled     30   20%    3456   1.0000  1.0000      0           0.04  42.121  1.7156
+  decoupled     30   33%    5696   1.0000  1.0000      0          -0.04  42.545  1.7282
+  decoupled     30   51%    8808   1.0000  1.0000      0           0.03  43.125  1.7458
+  decoupled     30  100%   17280   1.0000  1.0000      0           0.30  44.657  1.7942
+== N = 60 (1197726 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%    6696   1.0620  1.0515   2150        8042.14  11.442  1.0813
+  SMA            5   20%   13392   1.1240  1.1032   2155       32212.39  11.772  1.1487
+  SMA            5   33%   22072   1.2049  1.1703   2156       87449.25  12.190  1.2373
+  SMA            5   51%   34131   1.3000  1.2524   2158      200798.21  12.746  1.3434
+  SMA            5  100%   66960   1.3000  1.2757   2159      430357.47  14.137  1.3652
+  SMA           30   10%    6048   1.0560  1.0465   2150        1670.71  42.978  1.8388
+  SMA           30   20%   12096   1.1120  1.0932   2155        6692.21  44.103  1.9753
+  SMA           30   33%   19936   1.1851  1.1538   2156       18166.97  45.530  2.1604
+  SMA           30   51%   30828   1.2862  1.2378   2158       43502.09  47.433  2.4295
+  SMA           30  100%   60480   1.3000  1.2731   2159       98053.16  52.238  2.7026
+  median         5   10%    6696   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   20%   13392   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   33%   22072   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   51%   34131   1.3000  1.2017   1452      160415.66  14.135  1.3651
+  median         5  100%   66960   1.3000  1.2499   1799      389976.05  14.136  1.3651
+  median        30   10%    6048   1.0000  1.0000      0           0.00  41.823  1.7068
+  median        30   20%   12096   1.0000  1.0000      0           0.00  41.823  1.7068
+  median        30   33%   19936   1.0000  1.0000      0           0.00  41.823  1.7068
+  median        30   51%   30828   1.3000  1.2017   1452       36895.75  52.237  2.7026
+  median        30  100%   60480   1.3000  1.2499   1799       89695.44  52.238  2.7026
+  median+floor   5   10%    6696   1.0000  1.0000      0         -18.37  11.102  1.0143
+  median+floor   5   20%   13392   1.0000  1.0000      0         -36.74  11.102  1.0143
+  median+floor   5   33%   22072   1.0000  1.0000      0         -60.54  11.102  1.0143
+  median+floor   5   51%   34131   1.3000  1.2017   1452      160277.12  14.135  1.3651
+  median+floor   5  100%   66960   1.3000  1.2499   1799      389683.18  14.136  1.3651
+  median+floor  30   10%    6048   1.0000  1.0000      0         -22.92  41.823  1.7068
+  median+floor  30   20%   12096   1.0000  1.0000      0         -45.85  41.823  1.7068
+  median+floor  30   33%   19936   1.0000  1.0000      0         -75.56  41.823  1.7068
+  median+floor  30   51%   30828   1.3000  1.2017   1452       36702.00  52.237  2.7026
+  median+floor  30  100%   60480   1.3000  1.2499   1799       89279.25  52.238  2.7026
+  decoupled      5   10%    6696   1.0000  1.0000      0           0.28  11.441  1.0181
+  decoupled      5   20%   13392   1.0000  1.0000      0           0.31  11.770  1.0219
+  decoupled      5   33%   22072   1.0000  1.0000      0           0.54  12.186  1.0268
+  decoupled      5   51%   34131   1.0000  1.0000      0           1.12  12.740  1.0333
+  decoupled      5  100%   66960   1.0000  1.0000      0           2.48  14.130  1.0500
+  decoupled     30   10%    6048   1.0000  1.0000      0           0.05  42.978  1.7413
+  decoupled     30   20%   12096   1.0000  1.0000      0           0.10  44.102  1.7764
+  decoupled     30   33%   19936   1.0000  1.0000      0           0.23  45.529  1.8229
+  decoupled     30   51%   30828   1.0000  1.0000      0           0.15  47.432  1.8889
+  decoupled     30  100%   60480   1.0000  1.0000      0           2.05  52.236  2.0789
+== N = 60 (1197726 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%    6696   1.0620  1.0515   2150        8198.49  11.433  1.0812
+  SMA            5   20%   13392   1.1240  1.1032   2155       32839.24  11.763  1.1486
+  SMA            5   33%   22072   1.2049  1.1703   2156       89151.33  12.180  1.2371
+  SMA            5   51%   34131   1.3000  1.2524   2158      204706.90  12.736  1.3432
+  SMA            5  100%   66960   1.3000  1.2757   2159      438734.70  14.126  1.3650
+  SMA           30   10%    6048   1.0560  1.0465   2150        1704.58  42.794  1.8329
+  SMA           30   20%   12096   1.1120  1.0932   2155        6827.77  43.914  1.9687
+  SMA           30   33%   19936   1.1851  1.1538   2156       18535.89  45.335  2.1527
+  SMA           30   51%   30828   1.2862  1.2378   2158       44384.95  47.230  2.4202
+  SMA           30  100%   60480   1.3000  1.2731   2159      100043.44  52.014  2.6900
+  median         5   10%    6696   1.0000  1.0000      0           0.00  11.093  1.0142
+  median         5   20%   13392   1.0000  1.0000      0           0.00  11.093  1.0142
+  median         5   33%   22072   1.0000  1.0000      0           0.00  11.093  1.0142
+  median         5   51%   34131   1.3000  1.2017   1452      163538.30  14.124  1.3650
+  median         5  100%   66960   1.3000  1.2499   1799      397567.29  14.125  1.3650
+  median        30   10%    6048   1.0000  1.0000      0           0.00  41.644  1.7015
+  median        30   20%   12096   1.0000  1.0000      0           0.00  41.644  1.7015
+  median        30   33%   19936   1.0000  1.0000      0           0.00  41.644  1.7015
+  median        30   51%   30828   1.3000  1.2017   1452       37644.64  52.014  2.6900
+  median        30  100%   60480   1.3000  1.2499   1799       91516.10  52.014  2.6900
+  median+floor   5   10%    6696   1.0000  1.0000      0         -77.07  11.093  1.0142
+  median+floor   5   20%   13392   1.0000  1.0000      0        -154.15  11.093  1.0142
+  median+floor   5   33%   22072   1.0000  1.0000      0        -254.06  11.093  1.0142
+  median+floor   5   51%   34131   1.3000  1.2017   1452      162957.06  14.124  1.3650
+  median+floor   5  100%   66960   1.3000  1.2499   1799      396338.63  14.125  1.3650
+  median+floor  30   10%    6048   1.0000  1.0000      0         -95.63  41.644  1.7015
+  median+floor  30   20%   12096   1.0000  1.0000      0        -191.26  41.644  1.7015
+  median+floor  30   33%   19936   1.0000  1.0000      0        -315.23  41.644  1.7015
+  median+floor  30   51%   30828   1.3000  1.2017   1452       36837.90  52.014  2.6900
+  median+floor  30  100%   60480   1.3000  1.2499   1799       89783.58  52.014  2.6900
+  decoupled      5   10%    6696   1.0000  1.0000      0          -0.01  11.432  1.0180
+  decoupled      5   20%   13392   1.0000  1.0000      0          -0.04  11.761  1.0218
+  decoupled      5   33%   22072   1.0000  1.0000      0          -0.06  12.177  1.0267
+  decoupled      5   51%   34131   1.0000  1.0000      0          -0.13  12.730  1.0332
+  decoupled      5  100%   66960   1.0000  1.0000      0           0.12  14.119  1.0499
+  decoupled     30   10%    6048   1.0000  1.0000      0           0.00  42.794  1.7357
+  decoupled     30   20%   12096   1.0000  1.0000      0          -0.04  43.914  1.7704
+  decoupled     30   33%   19936   1.0000  1.0000      0           0.07  45.335  1.8164
+  decoupled     30   51%   30828   1.0000  1.0000      0           0.20  47.229  1.8816
+  decoupled     30  100%   60480   1.0000  1.0000      0           0.31  52.013  2.0692
+== re-derived (1259500 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%    7560   1.0700  1.0582   2150        9074.22  11.485  1.0900
+  SMA            5   20%   15120   1.1400  1.1165   2155       36346.78  11.856  1.1662
+  SMA            5   33%   24920   1.2314  1.1923   2156       98674.10  12.324  1.2664
+  SMA            5   51%   38535   1.3000  1.2578   2158      204993.06  12.942  1.3464
+  SMA            5  100%   75600   1.3000  1.2785   2159      434415.98  14.482  1.3707
+  SMA           30   10%    6912   1.0640  1.0532   2150        1908.12  43.146  1.8583
+  SMA           30   20%   13824   1.1280  1.1065   2155        7643.08  44.425  2.0154
+  SMA           30   33%   22784   1.2116  1.1758   2156       20749.27  46.041  2.2295
+  SMA           30   51%   35232   1.3000  1.2538   2158       46426.72  48.187  2.4913
+  SMA           30  100%   69120   1.3000  1.2765   2159       99193.46  53.567  2.7800
+  median         5   10%    7560   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   20%   15120   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   33%   24920   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   51%   38535   1.3000  1.2017   1452      160320.95  14.480  1.3706
+  median         5  100%   75600   1.3000  1.2499   1799      389745.49  14.482  1.3707
+  median        30   10%    6912   1.0000  1.0000      0           0.00  41.828  1.7069
+  median        30   20%   13824   1.0000  1.0000      0           0.00  41.828  1.7069
+  median        30   33%   22784   1.0000  1.0000      0           0.00  41.828  1.7069
+  median        30   51%   35232   1.3000  1.2017   1452       36873.12  53.567  2.7800
+  median        30  100%   69120   1.3000  1.2499   1799       89639.97  53.567  2.7800
+  median+floor   5   10%    7560   1.0000  1.0000      0         -18.76  11.102  1.0143
+  median+floor   5   20%   15120   1.0000  1.0000      0         -37.52  11.102  1.0143
+  median+floor   5   33%   24920   1.0000  1.0000      0         -61.84  11.102  1.0143
+  median+floor   5   51%   38535   1.3000  1.2017   1452      160176.36  14.480  1.3706
+  median+floor   5  100%   75600   1.3000  1.2499   1799      389438.86  14.482  1.3707
+  median+floor  30   10%    6912   1.0000  1.0000      0         -23.71  41.828  1.7069
+  median+floor  30   20%   13824   1.0000  1.0000      0         -47.41  41.828  1.7069
+  median+floor  30   33%   22784   1.0000  1.0000      0         -78.14  41.828  1.7069
+  median+floor  30   51%   35232   1.3000  1.2017   1452       36664.04  53.567  2.7800
+  median+floor  30  100%   69120   1.3000  1.2499   1799       89188.44  53.567  2.7800
+  decoupled      5   10%    7560   1.0000  1.0000      0          -0.17  11.484  1.0186
+  decoupled      5   20%   15120   1.0000  1.0000      0          -0.03  11.854  1.0229
+  decoupled      5   33%   24920   1.0000  1.0000      0          -0.01  12.319  1.0284
+  decoupled      5   51%   38535   1.0000  1.0000      0           0.07  12.936  1.0356
+  decoupled      5  100%   75600   1.0000  1.0000      0          -0.37  14.475  1.0543
+  decoupled     30   10%    6912   1.0000  1.0000      0           0.02  43.146  1.7465
+  decoupled     30   20%   13824   1.0000  1.0000      0           0.13  44.424  1.7867
+  decoupled     30   33%   22784   1.0000  1.0000      0          -0.14  46.040  1.8402
+  decoupled     30   51%   35232   1.0000  1.0000      0          -0.12  48.186  1.9164
+  decoupled     30  100%   69120   1.0000  1.0000      0          -0.11  53.566  2.1384
+== re-derived (1259500 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%    7560   1.0700  1.0582   2150        9234.14  11.477  1.0899
+  SMA            5   20%   15120   1.1400  1.1165   2155       36987.54  11.848  1.1660
+  SMA            5   33%   24920   1.2314  1.1923   2156      100412.60  12.315  1.2662
+  SMA            5   51%   38535   1.3000  1.2578   2158      208604.63  12.933  1.3463
+  SMA            5  100%   75600   1.3000  1.2785   2159      442070.63  14.472  1.3705
+  SMA           30   10%    6912   1.0640  1.0532   2150        1943.22  42.979  1.8528
+  SMA           30   20%   13824   1.1280  1.1065   2155        7783.65  44.253  2.0091
+  SMA           30   33%   22784   1.2116  1.1758   2156       21130.74  45.863  2.2222
+  SMA           30   51%   35232   1.3000  1.2538   2158       47279.95  48.001  2.4824
+  SMA           30  100%   69120   1.3000  1.2765   2159      101016.66  53.360  2.7676
+  median         5   10%    7560   1.0000  1.0000      0           0.00  11.094  1.0142
+  median         5   20%   15120   1.0000  1.0000      0           0.00  11.094  1.0142
+  median         5   33%   24920   1.0000  1.0000      0           0.00  11.094  1.0142
+  median         5   51%   38535   1.3000  1.2017   1452      163146.07  14.470  1.3705
+  median         5  100%   75600   1.3000  1.2499   1799      396613.11  14.471  1.3705
+  median        30   10%    6912   1.0000  1.0000      0           0.00  41.666  1.7022
+  median        30   20%   13824   1.0000  1.0000      0           0.00  41.666  1.7022
+  median        30   33%   22784   1.0000  1.0000      0           0.00  41.666  1.7022
+  median        30   51%   35232   1.3000  1.2017   1452       37550.51  53.360  2.7676
+  median        30  100%   69120   1.3000  1.2499   1799       91287.15  53.360  2.7676
+  median+floor   5   10%    7560   1.0000  1.0000      0         -78.70  11.094  1.0142
+  median+floor   5   20%   15120   1.0000  1.0000      0        -157.40  11.094  1.0142
+  median+floor   5   33%   24920   1.0000  1.0000      0        -259.42  11.094  1.0142
+  median+floor   5   51%   38535   1.3000  1.2017   1452      162539.39  14.470  1.3705
+  median+floor   5  100%   75600   1.3000  1.2499   1799      395326.50  14.471  1.3705
+  median+floor  30   10%    6912   1.0000  1.0000      0         -98.92  41.666  1.7022
+  median+floor  30   20%   13824   1.0000  1.0000      0        -197.85  41.666  1.7022
+  median+floor  30   33%   22784   1.0000  1.0000      0        -326.08  41.666  1.7022
+  median+floor  30   51%   35232   1.3000  1.2017   1452       36679.52  53.360  2.7676
+  median+floor  30  100%   69120   1.3000  1.2499   1799       89406.31  53.360  2.7676
+  decoupled      5   10%    7560   1.0000  1.0000      0           0.01  11.476  1.0186
+  decoupled      5   20%   15120   1.0000  1.0000      0           0.05  11.845  1.0228
+  decoupled      5   33%   24920   1.0000  1.0000      0           0.09  12.311  1.0283
+  decoupled      5   51%   38535   1.0000  1.0000      0           0.23  12.927  1.0355
+  decoupled      5  100%   75600   1.0000  1.0000      0           0.64  14.465  1.0541
+  decoupled     30   10%    6912   1.0000  1.0000      0          -0.02  42.979  1.7414
+  decoupled     30   20%   13824   1.0000  1.0000      0           0.07  44.252  1.7811
+  decoupled     30   33%   22784   1.0000  1.0000      0          -0.04  45.862  1.8341
+  decoupled     30   51%   35232   1.0000  1.0000      0           0.14  47.999  1.9095
+  decoupled     30  100%   69120   1.0000  1.0000      0           0.05  53.359  2.1289
+== N = 75 (1496811 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   11232   1.1040  1.0864   2150       13460.17  11.667  1.1269
+  SMA            5   20%   22464   1.2080  1.1731   2155       53914.26  12.207  1.2407
+  SMA            5   33%   37024   1.3000  1.2560   2156      131433.69  12.876  1.3454
+  SMA            5   51%   57252   1.3000  1.2715   2158      215573.05  13.747  1.3590
+  SMA            5  100%  112320   1.3000  1.2855   2159      444627.03  15.866  1.3932
+  SMA           30   10%   10152   1.0940  1.0781   2150        2797.87  43.766  1.9317
+  SMA           30   20%   20304   1.1880  1.1564   2155       11206.81  45.607  2.1687
+  SMA           30   33%   33464   1.3000  1.2514   2156       29677.15  47.906  2.4779
+  SMA           30   51%   51747   1.3000  1.2685   2158       49027.37  50.913  2.6297
+  SMA           30  100%  101520   1.3000  1.2840   2159      101705.92  58.282  3.0942
+  median         5   10%   11232   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   20%   22464   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   33%   37024   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   51%   57252   1.3000  1.2017   1452      160063.82  15.863  1.3932
+  median         5  100%  112320   1.3000  1.2499   1799      389120.18  15.865  1.3932
+  median        30   10%   10152   1.0000  1.0000      0           0.00  41.843  1.7073
+  median        30   20%   20304   1.0000  1.0000      0           0.00  41.843  1.7073
+  median        30   33%   33464   1.0000  1.0000      0           0.00  41.843  1.7073
+  median        30   51%   51747   1.3000  1.2017   1452       36811.13  58.281  3.0941
+  median        30  100%  101520   1.3000  1.2499   1799       89489.71  58.282  3.0942
+  median+floor   5   10%   11232   1.0000  1.0000      0         -19.73  11.103  1.0143
+  median+floor   5   20%   22464   1.0000  1.0000      0         -39.46  11.103  1.0143
+  median+floor   5   33%   37024   1.0000  1.0000      0         -65.03  11.103  1.0143
+  median+floor   5   51%   57252   1.3000  1.2017   1452      159898.23  15.863  1.3932
+  median+floor   5  100%  112320   1.3000  1.2499   1799      388764.80  15.865  1.3932
+  median+floor  30   10%   10152   1.0000  1.0000      0         -24.67  41.843  1.7073
+  median+floor  30   20%   20304   1.0000  1.0000      0         -49.34  41.843  1.7073
+  median+floor  30   33%   33464   1.0000  1.0000      0         -81.32  41.843  1.7073
+  median+floor  30   51%   51747   1.3000  1.2017   1452       36556.46  58.281  3.0941
+  median+floor  30  100%  101520   1.3000  1.2499   1799       88929.61  58.282  3.0942
+  decoupled      5   10%   11232   1.0000  1.0000      0          -0.08  11.666  1.0207
+  decoupled      5   20%   22464   1.0000  1.0000      0           0.11  12.203  1.0270
+  decoupled      5   33%   37024   1.0000  1.0000      0          -0.18  12.870  1.0349
+  decoupled      5   51%   57252   1.0000  1.0000      0          -0.50  13.740  1.0453
+  decoupled      5  100%  112320   1.0000  1.0000      0           2.24  15.858  1.0716
+  decoupled     30   10%   10152   1.0000  1.0000      0          -0.01  43.765  1.7657
+  decoupled     30   20%   20304   1.0000  1.0000      0          -0.17  45.607  1.8255
+  decoupled     30   33%   33464   1.0000  1.0000      0          -0.05  47.904  1.9060
+  decoupled     30   51%   51747   1.0000  1.0000      0          -0.04  50.912  2.0228
+  decoupled     30  100%  101520   1.0000  1.0000      0           0.47  58.280  2.3800
+== N = 75 (1496811 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   11232   1.1040  1.0864   2150       13628.45  11.662  1.1268
+  SMA            5   20%   22464   1.2080  1.1731   2155       54588.00  12.200  1.2406
+  SMA            5   33%   37024   1.3000  1.2560   2156      133076.57  12.870  1.3453
+  SMA            5   51%   57252   1.3000  1.2715   2158      218266.68  13.740  1.3589
+  SMA            5  100%  112320   1.3000  1.2855   2159      450183.85  15.858  1.3931
+  SMA           30   10%   10152   1.0940  1.0781   2150        2834.37  43.645  1.9276
+  SMA           30   20%   20304   1.1880  1.1564   2155       11353.08  45.482  2.1637
+  SMA           30   33%   33464   1.3000  1.2514   2156       30064.44  47.774  2.4716
+  SMA           30   51%   51747   1.3000  1.2685   2158       49666.86  50.773  2.6222
+  SMA           30  100%  101520   1.3000  1.2840   2159      103032.07  58.122  3.0824
+  median         5   10%   11232   1.0000  1.0000      0           0.00  11.097  1.0142
+  median         5   20%   22464   1.0000  1.0000      0           0.00  11.097  1.0142
+  median         5   33%   37024   1.0000  1.0000      0           0.00  11.097  1.0142
+  median         5   51%   57252   1.3000  1.2017   1452      162063.96  15.855  1.3930
+  median         5  100%  112320   1.3000  1.2499   1799      393983.26  15.857  1.3931
+  median        30   10%   10152   1.0000  1.0000      0           0.00  41.728  1.7040
+  median        30   20%   20304   1.0000  1.0000      0           0.00  41.728  1.7040
+  median        30   33%   33464   1.0000  1.0000      0           0.00  41.728  1.7040
+  median        30   51%   51747   1.3000  1.2017   1452       37290.87  58.122  3.0823
+  median        30  100%  101520   1.3000  1.2499   1799       90656.06  58.122  3.0823
+  median+floor   5   10%   11232   1.0000  1.0000      0         -82.81  11.097  1.0142
+  median+floor   5   20%   22464   1.0000  1.0000      0        -165.62  11.097  1.0142
+  median+floor   5   33%   37024   1.0000  1.0000      0        -272.97  11.097  1.0142
+  median+floor   5   51%   57252   1.3000  1.2017   1452      161368.88  15.855  1.3930
+  median+floor   5  100%  112320   1.3000  1.2499   1799      392491.56  15.857  1.3931
+  median+floor  30   10%   10152   1.0000  1.0000      0        -103.13  41.728  1.7040
+  median+floor  30   20%   20304   1.0000  1.0000      0        -206.25  41.728  1.7040
+  median+floor  30   33%   33464   1.0000  1.0000      0        -339.93  41.728  1.7040
+  median+floor  30   51%   51747   1.3000  1.2017   1452       36228.35  58.122  3.0823
+  median+floor  30  100%  101520   1.3000  1.2499   1799       88319.64  58.122  3.0823
+  decoupled      5   10%   11232   1.0000  1.0000      0          -0.02  11.660  1.0207
+  decoupled      5   20%   22464   1.0000  1.0000      0           0.19  12.197  1.0269
+  decoupled      5   33%   37024   1.0000  1.0000      0           0.19  12.864  1.0348
+  decoupled      5   51%   57252   1.0000  1.0000      0           0.92  13.733  1.0452
+  decoupled      5  100%  112320   1.0000  1.0000      0           2.01  15.850  1.0715
+  decoupled     30   10%   10152   1.0000  1.0000      0           0.00  43.645  1.7620
+  decoupled     30   20%   20304   1.0000  1.0000      0           0.16  45.482  1.8213
+  decoupled     30   33%   33464   1.0000  1.0000      0           0.21  47.773  1.9012
+  decoupled     30   51%   51747   1.0000  1.0000      0           0.49  50.772  2.0170
+  decoupled     30  100%  101520   1.0000  1.0000      0           0.91  58.120  2.3709
+== N = 90 (1795896 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   15552   1.1440  1.1197   2150       18614.74  11.878  1.1705
+  SMA            5   20%   31104   1.2880  1.2397   2155       74560.01  12.606  1.3289
+  SMA            5   33%   51264   1.3000  1.2682   2156      137508.45  13.496  1.3550
+  SMA            5   51%   79272   1.3000  1.2794   2158      221547.53  14.636  1.3731
+  SMA            5  100%  155520   1.3000  1.2895   2159      450328.82  17.353  1.4183
+  SMA           30   10%   14472   1.1340  1.1114   2150        3983.41  44.570  2.0314
+  SMA           30   20%   28944   1.2680  1.2230   2155       15955.44  47.131  2.3814
+  SMA           30   33%   47704   1.3000  1.2658   2156       31344.11  50.277  2.5960
+  SMA           30   51%   73767   1.3000  1.2778   2158       50669.81  54.329  2.8264
+  SMA           30  100%  144720   1.3000  1.2887   2159      103282.94  64.026  3.5882
+  median         5   10%   15552   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   20%   31104   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   33%   51264   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   51%   79272   1.3000  1.2017   1452      159872.76  17.350  1.4182
+  median         5  100%  155520   1.3000  1.2499   1799      388656.14  17.351  1.4182
+  median        30   10%   14472   1.0000  1.0000      0           0.00  41.854  1.7077
+  median        30   20%   28944   1.0000  1.0000      0           0.00  41.854  1.7077
+  median        30   33%   47704   1.0000  1.0000      0           0.00  41.854  1.7077
+  median        30   51%   73767   1.3000  1.2017   1452       36765.24  64.025  3.5881
+  median        30  100%  144720   1.3000  1.2499   1799       89378.16  64.026  3.5882
+  median+floor   5   10%   15552   1.0000  1.0000      0         -18.97  11.103  1.0143
+  median+floor   5   20%   31104   1.0000  1.0000      0         -37.94  11.103  1.0143
+  median+floor   5   33%   51264   1.0000  1.0000      0         -62.54  11.103  1.0143
+  median+floor   5   51%   79272   1.3000  1.2017   1452      159699.06  17.350  1.4182
+  median+floor   5  100%  155520   1.3000  1.2499   1799      388279.24  17.351  1.4182
+  median+floor  30   10%   14472   1.0000  1.0000      0         -24.44  41.854  1.7077
+  median+floor  30   20%   28944   1.0000  1.0000      0         -48.88  41.854  1.7077
+  median+floor  30   33%   47704   1.0000  1.0000      0         -80.56  41.854  1.7077
+  median+floor  30   51%   73767   1.3000  1.2017   1452       36455.16  64.025  3.5881
+  median+floor  30  100%  144720   1.3000  1.2499   1799       88682.78  64.026  3.5882
+  decoupled      5   10%   15552   1.0000  1.0000      0           0.18  11.876  1.0232
+  decoupled      5   20%   31104   1.0000  1.0000      0           0.16  12.601  1.0317
+  decoupled      5   33%   51264   1.0000  1.0000      0           0.56  13.489  1.0423
+  decoupled      5   51%   79272   1.0000  1.0000      0           0.32  14.629  1.0562
+  decoupled      5  100%  155520   1.0000  1.0000      0           1.49  17.343  1.0909
+  decoupled     30   10%   14472   1.0000  1.0000      0          -0.01  44.570  1.7913
+  decoupled     30   20%   28944   1.0000  1.0000      0          -0.20  47.130  1.8781
+  decoupled     30   33%   47704   1.0000  1.0000      0          -0.44  50.276  1.9969
+  decoupled     30   51%   73767   1.0000  1.0000      0           0.04  54.328  2.1741
+  decoupled     30  100%  144720   1.0000  1.0000      0           0.20  64.024  2.7600
+== N = 90 (1795896 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   15552   1.1440  1.1197   2150       18776.32  11.874  1.1705
+  SMA            5   20%   31104   1.2880  1.2397   2155       75207.66  12.602  1.3288
+  SMA            5   33%   51264   1.3000  1.2682   2156      138703.31  13.491  1.3550
+  SMA            5   51%   79272   1.3000  1.2794   2158      223471.23  14.631  1.3731
+  SMA            5  100%  155520   1.3000  1.2895   2159      454241.39  17.347  1.4182
+  SMA           30   10%   14472   1.1340  1.1114   2150        4019.62  44.485  2.0283
+  SMA           30   20%   28944   1.2680  1.2230   2155       16100.47  47.041  2.3774
+  SMA           30   33%   47704   1.3000  1.2658   2156       31628.66  50.181  2.5910
+  SMA           30   51%   73767   1.3000  1.2778   2158       51130.21  54.225  2.8200
+  SMA           30  100%  144720   1.3000  1.2887   2159      104220.03  63.904  3.5761
+  median         5   10%   15552   1.0000  1.0000      0           0.00  11.099  1.0142
+  median         5   20%   31104   1.0000  1.0000      0           0.00  11.099  1.0142
+  median         5   33%   51264   1.0000  1.0000      0           0.00  11.099  1.0142
+  median         5   51%   79272   1.3000  1.2017   1452      161262.16  17.344  1.4181
+  median         5  100%  155520   1.3000  1.2499   1799      392033.66  17.345  1.4181
+  median        30   10%   14472   1.0000  1.0000      0           0.00  41.774  1.7053
+  median        30   20%   28944   1.0000  1.0000      0           0.00  41.774  1.7053
+  median        30   33%   47704   1.0000  1.0000      0           0.00  41.774  1.7053
+  median        30   51%   73767   1.3000  1.2017   1452       37098.92  63.903  3.5760
+  median        30  100%  144720   1.3000  1.2499   1799       90189.42  63.903  3.5760
+  median+floor   5   10%   15552   1.0000  1.0000      0         -79.67  11.099  1.0142
+  median+floor   5   20%   31104   1.0000  1.0000      0        -159.34  11.099  1.0142
+  median+floor   5   33%   51264   1.0000  1.0000      0        -262.61  11.099  1.0142
+  median+floor   5   51%   79272   1.3000  1.2017   1452      160532.75  17.344  1.4181
+  median+floor   5  100%  155520   1.3000  1.2499   1799      390451.00  17.345  1.4181
+  median+floor  30   10%   14472   1.0000  1.0000      0        -102.29  41.774  1.7053
+  median+floor  30   20%   28944   1.0000  1.0000      0        -204.59  41.774  1.7053
+  median+floor  30   33%   47704   1.0000  1.0000      0        -337.19  41.774  1.7053
+  median+floor  30   51%   73767   1.3000  1.2017   1452       35803.61  63.903  3.5760
+  median+floor  30  100%  144720   1.3000  1.2499   1799       87284.98  63.903  3.5760
+  decoupled      5   10%   15552   1.0000  1.0000      0          -0.14  11.871  1.0231
+  decoupled      5   20%   31104   1.0000  1.0000      0           0.02  12.596  1.0316
+  decoupled      5   33%   51264   1.0000  1.0000      0          -0.64  13.484  1.0422
+  decoupled      5   51%   79272   1.0000  1.0000      0           0.22  14.624  1.0561
+  decoupled      5  100%  155520   1.0000  1.0000      0           0.41  17.337  1.0908
+  decoupled     30   10%   14472   1.0000  1.0000      0           0.00  44.485  1.7886
+  decoupled     30   20%   28944   1.0000  1.0000      0           0.06  47.040  1.8749
+  decoupled     30   33%   47704   1.0000  1.0000      0           0.05  50.180  1.9931
+  decoupled     30   51%   73767   1.0000  1.0000      0           0.69  54.224  2.1691
+  decoupled     30  100%  144720   1.0000  1.0000      0           0.74  63.902  2.7507
+== N = 105 (2094981 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   20088   1.1860  1.1546   2150       24026.28  12.095  1.2165
+  SMA            5   20%   40176   1.3000  1.2593   2155       80618.18  13.012  1.3475
+  SMA            5   33%   66216   1.3000  1.2753   2156      141064.73  14.117  1.3648
+  SMA            5   51%  102393   1.3000  1.2840   2158      225042.61  15.516  1.3874
+  SMA            5  100%  200880   1.3000  1.2919   2159      453658.29  18.787  1.4433
+  SMA           30   10%   18792   1.1740  1.1446   2150        5168.50  45.357  2.1333
+  SMA           30   20%   37584   1.3000  1.2565   2155       18339.94  48.603  2.5115
+  SMA           30   33%   61944   1.3000  1.2736   2156       32239.87  52.539  2.7197
+  SMA           30   51%   95787   1.3000  1.2829   2158       51551.73  57.540  3.0401
+  SMA           30  100%  187920   1.3000  1.2913   2159      104123.87  69.293  4.2037
+  median         5   10%   20088   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   20%   40176   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   33%   66216   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   51%  102393   1.3000  1.2017   1452      159757.05  18.784  1.4433
+  median         5  100%  200880   1.3000  1.2499   1799      388374.83  18.786  1.4433
+  median        30   10%   18792   1.0000  1.0000      0           0.00  41.860  1.7079
+  median        30   20%   37584   1.0000  1.0000      0           0.00  41.860  1.7079
+  median        30   33%   61944   1.0000  1.0000      0           0.00  41.860  1.7079
+  median        30   51%   95787   1.3000  1.2017   1452       36737.04  69.293  4.2036
+  median        30  100%  187920   1.3000  1.2499   1799       89309.59  69.293  4.2037
+  median+floor   5   10%   19872   1.0000  1.0000      0         -17.82  11.103  1.0143
+  median+floor   5   20%   39744   1.0000  1.0000      0         -35.64  11.103  1.0143
+  median+floor   5   33%   65504   1.0000  1.0000      0         -58.74  11.103  1.0143
+  median+floor   5   51%  101292   1.3000  1.2017   1452      159582.04  18.718  1.4421
+  median+floor   5  100%  198720   1.3000  1.2499   1799      387992.01  18.720  1.4421
+  median+floor  30   10%   18576   1.0000  1.0000      0         -23.05  41.860  1.7079
+  median+floor  30   20%   37152   1.0000  1.0000      0         -46.11  41.860  1.7079
+  median+floor  30   33%   61232   1.0000  1.0000      0         -76.00  41.860  1.7079
+  median+floor  30   51%   94686   1.3000  1.2017   1452       36380.85  69.039  4.1693
+  median+floor  30  100%  185760   1.3000  1.2499   1799       88498.81  69.040  4.1693
+  decoupled      5   10%   20088   1.0000  1.0000      0          -0.10  12.092  1.0257
+  decoupled      5   20%   40176   1.0000  1.0000      0          -0.09  13.006  1.0365
+  decoupled      5   33%   66216   1.0000  1.0000      0          -0.35  14.110  1.0498
+  decoupled      5   51%  102393   1.0000  1.0000      0          -0.12  15.508  1.0672
+  decoupled      5  100%  200880   1.0000  1.0000      0          -0.58  18.778  1.1101
+  decoupled     30   10%   18792   1.0000  1.0000      0          -0.13  45.356  1.8171
+  decoupled     30   20%   37584   1.0000  1.0000      0          -0.25  48.601  1.9319
+  decoupled     30   33%   61944   1.0000  1.0000      0          -0.38  52.537  2.0920
+  decoupled     30   51%   95787   1.0000  1.0000      0          -0.50  57.538  2.3385
+  decoupled     30  100%  187920   1.0000  1.0000      0          -0.55  69.291  3.2334
+== N = 105 (2094981 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   20088   1.1860  1.1546   2150       24179.89  12.092  1.2165
+  SMA            5   20%   40176   1.3000  1.2593   2155       81133.90  13.008  1.3474
+  SMA            5   33%   66216   1.3000  1.2753   2156      141967.28  14.113  1.3648
+  SMA            5   51%  102393   1.3000  1.2840   2158      226480.79  15.512  1.3874
+  SMA            5  100%  200880   1.3000  1.2919   2159      456559.40  18.783  1.4432
+  SMA           30   10%   18792   1.1740  1.1446   2150        5203.15  45.293  2.1308
+  SMA           30   20%   37584   1.3000  1.2565   2155       18462.59  48.534  2.5081
+  SMA           30   33%   61944   1.3000  1.2736   2156       32455.57  52.465  2.7155
+  SMA           30   51%   95787   1.3000  1.2829   2158       51895.94  57.459  3.0343
+  SMA           30  100%  187920   1.3000  1.2913   2159      104819.86  69.196  4.1905
+  median         5   10%   20088   1.0000  1.0000      0           0.00  11.101  1.0143
+  median         5   20%   40176   1.0000  1.0000      0           0.00  11.101  1.0143
+  median         5   33%   66216   1.0000  1.0000      0           0.00  11.101  1.0143
+  median         5   51%  102393   1.3000  1.2017   1452      160778.56  18.779  1.4432
+  median         5  100%  200880   1.3000  1.2499   1799      390858.30  18.781  1.4432
+  median        30   10%   18792   1.0000  1.0000      0           0.00  41.802  1.7061
+  median        30   20%   37584   1.0000  1.0000      0           0.00  41.802  1.7061
+  median        30   33%   61944   1.0000  1.0000      0           0.00  41.802  1.7061
+  median        30   51%   95787   1.3000  1.2017   1452       36982.66  69.195  4.1904
+  median        30  100%  187920   1.3000  1.2499   1799       89906.77  69.196  4.1904
+  median+floor   5   10%   19872   1.0000  1.0000      0         -74.80  11.101  1.0143
+  median+floor   5   20%   39744   1.0000  1.0000      0        -149.61  11.101  1.0143
+  median+floor   5   33%   65504   1.0000  1.0000      0        -246.58  11.101  1.0143
+  median+floor   5   51%  101292   1.3000  1.2017   1452      160040.41  18.714  1.4420
+  median+floor   5  100%  198720   1.3000  1.2499   1799      389242.79  18.715  1.4420
+  median+floor  30   10%   18576   1.0000  1.0000      0         -96.59  41.802  1.7061
+  median+floor  30   20%   37152   1.0000  1.0000      0        -193.19  41.802  1.7061
+  median+floor  30   33%   61232   1.0000  1.0000      0        -318.40  41.802  1.7061
+  median+floor  30   51%   94686   1.3000  1.2017   1452       35491.39  68.942  4.1562
+  median+floor  30  100%  185760   1.3000  1.2499   1799       86512.39  68.943  4.1563
+  decoupled      5   10%   20088   1.0000  1.0000      0           0.06  12.089  1.0257
+  decoupled      5   20%   40176   1.0000  1.0000      0           0.42  13.002  1.0364
+  decoupled      5   33%   66216   1.0000  1.0000      0           0.56  14.106  1.0497
+  decoupled      5   51%  102393   1.0000  1.0000      0           1.46  15.504  1.0671
+  decoupled      5  100%  200880   1.0000  1.0000      0           1.54  18.773  1.1101
+  decoupled     30   10%   18792   1.0000  1.0000      0           0.03  45.293  1.8150
+  decoupled     30   20%   37584   1.0000  1.0000      0          -0.01  48.533  1.9293
+  decoupled     30   33%   61944   1.0000  1.0000      0           0.27  52.463  2.0888
+  decoupled     30   51%   95787   1.0000  1.0000      0           0.53  57.458  2.3340
+  decoupled     30  100%  187920   1.0000  1.0000      0           0.66  69.194  3.2232
+== N = 120 (2394066 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   24408   1.2260  1.1878   2150       29179.61  12.299  1.2605
+  SMA            5   20%   48816   1.3000  1.2665   2155       82798.65  13.386  1.3533
+  SMA            5   33%   80456   1.3000  1.2796   2156      143216.90  14.684  1.3739
+  SMA            5   51%  124413   1.3000  1.2868   2158      227155.27  16.309  1.4006
+  SMA            5  100%  244080   1.3000  1.2933   2159      455668.42  20.059  1.4663
+  SMA           30   10%   22896   1.2120  1.1762   2150        6294.40  46.090  2.2323
+  SMA           30   20%   45792   1.3000  1.2643   2155       18883.38  49.959  2.5795
+  SMA           30   33%   75472   1.3000  1.2783   2156       32777.28  54.599  2.8432
+  SMA           30   51%  116706   1.3000  1.2859   2158       52079.29  60.431  3.2623
+  SMA           30  100%  228960   1.3000  1.2929   2159      104627.86  73.950  4.9552
+  median         5   10%   24408   1.0000  1.0000      0           0.00  11.104  1.0143
+  median         5   20%   48816   1.0000  1.0000      0           0.00  11.104  1.0143
+  median         5   33%   80456   1.0000  1.0000      0           0.00  11.104  1.0143
+  median         5   51%  124413   1.3000  1.2017   1452      159684.43  20.055  1.4662
+  median         5  100%  244080   1.3000  1.2499   1799      388198.28  20.057  1.4663
+  median        30   10%   22896   1.0000  1.0000      0           0.00  41.865  1.7080
+  median        30   20%   45792   1.0000  1.0000      0           0.00  41.865  1.7080
+  median        30   33%   75472   1.0000  1.0000      0           0.00  41.865  1.7080
+  median        30   51%  116706   1.3000  1.2017   1452       36720.20  73.949  4.9551
+  median        30  100%  228960   1.3000  1.2499   1799       89268.65  73.950  4.9551
+  median+floor   5   10%   24408   1.0000  1.0000      0         -16.73  11.104  1.0143
+  median+floor   5   20%   48816   1.0000  1.0000      0         -33.46  11.104  1.0143
+  median+floor   5   33%   80456   1.0000  1.0000      0         -55.15  11.104  1.0143
+  median+floor   5   51%  124413   1.3000  1.2017   1452      159506.56  20.055  1.4662
+  median+floor   5  100%  244080   1.3000  1.2499   1799      387805.89  20.057  1.4663
+  median+floor  30   10%   22896   1.0000  1.0000      0         -21.68  41.865  1.7080
+  median+floor  30   20%   45792   1.0000  1.0000      0         -43.36  41.865  1.7080
+  median+floor  30   33%   75472   1.0000  1.0000      0         -71.47  41.865  1.7080
+  median+floor  30   51%  116706   1.3000  1.2017   1452       36301.89  73.949  4.9551
+  median+floor  30  100%  228960   1.3000  1.2499   1799       88303.58  73.950  4.9551
+  decoupled      5   10%   24408   1.0000  1.0000      0           0.20  12.294  1.0281
+  decoupled      5   20%   48816   1.0000  1.0000      0           0.85  13.380  1.0409
+  decoupled      5   33%   80456   1.0000  1.0000      0           0.79  14.676  1.0568
+  decoupled      5   51%  124413   1.0000  1.0000      0           2.08  16.300  1.0773
+  decoupled      5  100%  244080   1.0000  1.0000      0           3.72  20.048  1.1278
+  decoupled     30   10%   22896   1.0000  1.0000      0           0.13  46.089  1.8418
+  decoupled     30   20%   45792   1.0000  1.0000      0           0.11  49.958  1.9842
+  decoupled     30   33%   75472   1.0000  1.0000      0           0.60  54.597  2.1870
+  decoupled     30   51%  116706   1.0000  1.0000      0           0.94  60.430  2.5093
+  decoupled     30  100%  228960   1.0000  1.0000      0           1.39  73.948  3.8114
+== N = 120 (2394066 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   24408   1.2260  1.1878   2150       29322.34  12.296  1.2604
+  SMA            5   20%   48816   1.3000  1.2665   2155       83203.20  13.384  1.3533
+  SMA            5   33%   80456   1.3000  1.2796   2156      143917.79  14.681  1.3739
+  SMA            5   51%  124413   1.3000  1.2868   2158      228266.74  16.306  1.4005
+  SMA            5  100%  244080   1.3000  1.2933   2159      457897.30  20.055  1.4662
+  SMA           30   10%   22896   1.2120  1.1762   2150        6326.61  46.041  2.2303
+  SMA           30   20%   45792   1.3000  1.2643   2155       18979.77  49.905  2.5768
+  SMA           30   33%   75472   1.3000  1.2783   2156       32944.42  54.540  2.8395
+  SMA           30   51%  116706   1.3000  1.2859   2158       52345.69  60.367  3.2569
+  SMA           30  100%  228960   1.3000  1.2929   2159      105162.32  73.870  4.9401
+  median         5   10%   24408   1.0000  1.0000      0           0.00  11.101  1.0143
+  median         5   20%   48816   1.0000  1.0000      0           0.00  11.101  1.0143
+  median         5   33%   80456   1.0000  1.0000      0           0.00  11.101  1.0143
+  median         5   51%  124413   1.3000  1.2017   1452      160465.45  20.051  1.4661
+  median         5  100%  244080   1.3000  1.2499   1799      390097.11  20.053  1.4662
+  median        30   10%   22896   1.0000  1.0000      0           0.00  41.820  1.7067
+  median        30   20%   45792   1.0000  1.0000      0           0.00  41.820  1.7067
+  median        30   33%   75472   1.0000  1.0000      0           0.00  41.820  1.7067
+  median        30   51%  116706   1.3000  1.2017   1452       36907.88  73.870  4.9400
+  median        30  100%  228960   1.3000  1.2499   1799       89724.96  73.870  4.9401
+  median+floor   5   10%   24408   1.0000  1.0000      0         -70.36  11.101  1.0143
+  median+floor   5   20%   48816   1.0000  1.0000      0        -140.72  11.101  1.0143
+  median+floor   5   33%   80456   1.0000  1.0000      0        -231.93  11.101  1.0143
+  median+floor   5   51%  124413   1.3000  1.2017   1452      159718.46  20.051  1.4661
+  median+floor   5  100%  244080   1.3000  1.2499   1799      388449.46  20.053  1.4662
+  median+floor  30   10%   22896   1.0000  1.0000      0         -91.18  41.820  1.7067
+  median+floor  30   20%   45792   1.0000  1.0000      0        -182.36  41.820  1.7067
+  median+floor  30   33%   75472   1.0000  1.0000      0        -300.56  41.820  1.7067
+  median+floor  30   51%  116706   1.3000  1.2017   1452       35157.13  73.870  4.9400
+  median+floor  30  100%  228960   1.3000  1.2499   1799       85686.82  73.870  4.9400
+  decoupled      5   10%   24408   1.0000  1.0000      0          -0.00  12.292  1.0280
+  decoupled      5   20%   48816   1.0000  1.0000      0           0.37  13.377  1.0409
+  decoupled      5   33%   80456   1.0000  1.0000      0           0.19  14.673  1.0567
+  decoupled      5   51%  124413   1.0000  1.0000      0           0.52  16.297  1.0772
+  decoupled      5  100%  244080   1.0000  1.0000      0           1.32  20.044  1.1277
+  decoupled     30   10%   22896   1.0000  1.0000      0           0.08  46.040  1.8401
+  decoupled     30   20%   45792   1.0000  1.0000      0           0.23  49.904  1.9821
+  decoupled     30   33%   75472   1.0000  1.0000      0           0.41  54.539  2.1842
+  decoupled     30   51%  116706   1.0000  1.0000      0           0.54  60.365  2.5052
+  decoupled     30  100%  228960   1.0000  1.0000      0           1.44  73.868  3.7998
+== N = 150 (2992236 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   33264   1.3000  1.2506   2150       38913.39  12.705  1.3428
+  SMA            5   20%   66528   1.3000  1.2753   2155       85496.40  14.122  1.3649
+  SMA            5   33%  109648   1.3000  1.2850   2156      145881.66  15.782  1.3918
+  SMA            5   51%  169554   1.3000  1.2902   2158      229773.57  17.825  1.4264
+  SMA            5  100%  332640   1.3000  1.2951   2159      458159.77  22.441  1.5113
+  SMA           30   10%   31320   1.2900  1.2410   2150        8604.98  47.556  2.4424
+  SMA           30   20%   62640   1.3000  1.2738   2155       19551.42  52.631  2.7250
+  SMA           30   33%  103240   1.3000  1.2840   2156       33437.05  58.599  3.1178
+  SMA           30   51%  159645   1.3000  1.2897   2158       52728.32  65.968  3.7930
+  SMA           30  100%  313200   1.3000  1.2948   2159      105245.20  82.689  7.4565
+  median         5   10%   33264   1.0000  1.0000      0           0.00  11.104  1.0143
+  median         5   20%   66528   1.0000  1.0000      0           0.00  11.104  1.0143
+  median         5   33%  109648   1.0000  1.0000      0           0.00  11.104  1.0143
+  median         5   51%  169554   1.3000  1.2017   1452      159596.03  22.437  1.5112
+  median         5  100%  332640   1.3000  1.2499   1799      387983.38  22.439  1.5113
+  median        30   10%   31320   1.0000  1.0000      0           0.00  41.870  1.7081
+  median        30   20%   62640   1.0000  1.0000      0           0.00  41.870  1.7081
+  median        30   33%  103240   1.0000  1.0000      0           0.00  41.870  1.7081
+  median        30   51%  159645   1.3000  1.2017   1452       36698.43  82.688  7.4562
+  median        30  100%  313200   1.3000  1.2499   1799       89215.74  82.688  7.4563
+  median+floor   5   10%   33264   1.0000  1.0000      0         -14.59  11.104  1.0143
+  median+floor   5   20%   66528   1.0000  1.0000      0         -29.18  11.104  1.0143
+  median+floor   5   33%  109648   1.0000  1.0000      0         -48.10  11.104  1.0143
+  median+floor   5   51%  169554   1.3000  1.2017   1452      159420.90  22.437  1.5112
+  median+floor   5  100%  332640   1.3000  1.2499   1799      387592.53  22.439  1.5113
+  median+floor  30   10%   31320   1.0000  1.0000      0         -19.04  41.870  1.7081
+  median+floor  30   20%   62640   1.0000  1.0000      0         -38.08  41.870  1.7081
+  median+floor  30   33%  103240   1.0000  1.0000      0         -62.76  41.870  1.7081
+  median+floor  30   51%  159645   1.3000  1.2017   1452       36103.86  82.688  7.4562
+  median+floor  30  100%  313200   1.3000  1.2499   1799       87815.83  82.688  7.4563
+  decoupled      5   10%   33264   1.0000  1.0000      0           0.08  12.699  1.0328
+  decoupled      5   20%   66528   1.0000  1.0000      0           0.49  14.115  1.0499
+  decoupled      5   33%  109648   1.0000  1.0000      0           0.27  15.774  1.0705
+  decoupled      5   51%  169554   1.0000  1.0000      0           0.29  17.816  1.0971
+  decoupled      5  100%  332640   1.0000  1.0000      0           2.57  22.429  1.1624
+  decoupled     30   10%   31320   1.0000  1.0000      0          -0.10  47.555  1.8933
+  decoupled     30   20%   62640   1.0000  1.0000      0          -0.30  52.629  2.0961
+  decoupled     30   33%  103240   1.0000  1.0000      0          -0.19  58.597  2.3982
+  decoupled     30   51%  159645   1.0000  1.0000      0          -0.12  65.966  2.9175
+  decoupled     30  100%  313200   1.0000  1.0000      0          -0.07  82.686  5.7350
+== N = 150 (2992236 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   10%   33264   1.3000  1.2506   2150       39035.28  12.703  1.3427
+  SMA            5   20%   66528   1.3000  1.2753   2155       85764.33  14.121  1.3649
+  SMA            5   33%  109648   1.3000  1.2850   2156      146339.17  15.780  1.3918
+  SMA            5   51%  169554   1.3000  1.2902   2158      230493.29  17.822  1.4264
+  SMA            5  100%  332640   1.3000  1.2951   2159      459596.27  22.438  1.5113
+  SMA           30   10%   31320   1.2900  1.2410   2150        8633.27  47.523  2.4409
+  SMA           30   20%   62640   1.3000  1.2738   2155       19615.95  52.595  2.7230
+  SMA           30   33%  103240   1.3000  1.2840   2156       33546.76  58.558  3.1148
+  SMA           30   51%  159645   1.3000  1.2897   2158       52900.88  65.923  3.7879
+  SMA           30  100%  313200   1.3000  1.2948   2159      105590.71  82.632  7.4320
+  median         5   10%   33264   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   20%   66528   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   33%  109648   1.0000  1.0000      0           0.00  11.102  1.0143
+  median         5   51%  169554   1.3000  1.2017   1452      160096.46  22.434  1.5112
+  median         5  100%  332640   1.3000  1.2499   1799      389200.03  22.436  1.5112
+  median        30   10%   31320   1.0000  1.0000      0           0.00  41.841  1.7073
+  median        30   20%   62640   1.0000  1.0000      0           0.00  41.841  1.7073
+  median        30   33%  103240   1.0000  1.0000      0           0.00  41.841  1.7073
+  median        30   51%  159645   1.3000  1.2017   1452       36818.85  82.631  7.4317
+  median        30  100%  313200   1.3000  1.2499   1799       89508.51  82.631  7.4319
+  median+floor   5   10%   33264   1.0000  1.0000      0         -61.38  11.102  1.0143
+  median+floor   5   20%   66528   1.0000  1.0000      0        -122.75  11.102  1.0143
+  median+floor   5   33%  109648   1.0000  1.0000      0        -202.31  11.102  1.0143
+  median+floor   5   51%  169554   1.3000  1.2017   1452      159360.69  22.434  1.5112
+  median+floor   5  100%  332640   1.3000  1.2499   1799      387558.20  22.436  1.5112
+  median+floor  30   10%   31320   1.0000  1.0000      0         -79.91  41.841  1.7073
+  median+floor  30   20%   62640   1.0000  1.0000      0        -159.82  41.841  1.7073
+  median+floor  30   33%  103240   1.0000  1.0000      0        -263.40  41.841  1.7073
+  median+floor  30   51%  159645   1.3000  1.2017   1452       34330.43  82.631  7.4317
+  median+floor  30  100%  313200   1.3000  1.2499   1799       83650.12  82.631  7.4318
+  decoupled      5   10%   33264   1.0000  1.0000      0           0.14  12.698  1.0328
+  decoupled      5   20%   66528   1.0000  1.0000      0           0.23  14.114  1.0498
+  decoupled      5   33%  109648   1.0000  1.0000      0           0.52  15.772  1.0705
+  decoupled      5   51%  169554   1.0000  1.0000      0           1.20  17.813  1.0971
+  decoupled      5  100%  332640   1.0000  1.0000      0           1.52  22.426  1.1623
+  decoupled     30   10%   31320   1.0000  1.0000      0          -0.03  47.522  1.8921
+  decoupled     30   20%   62640   1.0000  1.0000      0           0.24  52.593  2.0945
+  decoupled     30   33%  103240   1.0000  1.0000      0          -0.00  58.556  2.3959
+  decoupled     30   51%  159645   1.0000  1.0000      0           0.25  65.921  2.9136
+  decoupled     30  100%  313200   1.0000  1.0000      0           1.31  82.629  5.7162

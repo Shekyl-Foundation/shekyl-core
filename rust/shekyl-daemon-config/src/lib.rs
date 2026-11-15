@@ -19,6 +19,8 @@ pub mod account;
 #[cfg(unix)]
 mod acl;
 pub mod announce;
+#[cfg(unix)]
+mod directory;
 pub mod docs;
 pub mod exit;
 pub mod file;

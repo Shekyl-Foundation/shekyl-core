@@ -16,6 +16,9 @@ publish = false
 [dependencies]
 # `platform::current` yields the configuration's `Platform` value.
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+# The rendezvous directory's name inside a Windows data home, as the
+# account's rendezvous names it (RPC_CHANNEL.md §7.1).
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 # The account's session directory and effective user id, from the leaf with
 # no network stack that the client resolving "this computer" reads too
 # (RPC_CHANNEL.md RT-15).
