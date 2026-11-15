@@ -19,6 +19,14 @@ from pathlib import Path
 
 import check_measurement_ledger as gate
 
+# Git exports GIT_DIR and its kin into hooks. A throwaway repository built
+# here must not inherit them, or `git init --bare` and `git config` act on the
+# caller's real repository (a pre-push hook's run once made it bare and gave
+# it a test author, 2026-11-15). Git finds a repository from the working
+# directory without them.
+for _name in [_k for _k in os.environ if _k.startswith("GIT_")]:
+    del os.environ[_name]
+
 LEDGER = gate.LEDGER
 HEADER = gate.REV_SOURCE_HEADER
 TRACKED = "| Id | Benchmark |\n| --- | --- |\n| **BA-T1** | a |\n| **BA-T2** | b |\n"
