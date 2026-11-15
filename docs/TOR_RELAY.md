@@ -84,7 +84,7 @@ horizon, while the cap was killing circuits. The cap bounds Tor's
 queues. Across that capped run the process held 0.7 to 1.6 GiB, and the
 daemon held up to 1.4 GiB:
 [`benchmarks/trc1_carried_traffic_20261012.md`](benchmarks/trc1_carried_traffic_20261012.md),
-final result 6. That is one host's record, not a sizing rule. Set the cap
+final result 6. During a later reading on the same host it was killed about 170 times in 14 hours: [`benchmarks/trc1_guard_connection_20261112.md`](benchmarks/trc1_guard_connection_20261112.md), result 1. That is one host's record, not a sizing rule. Set the cap
 by hand anyway, so Tor gives up circuits before the kernel takes the
 process. Do not copy a torrc from this page into an exit
 configuration. Wallet Tor stays a separate instance (PWD-E9); this page is
