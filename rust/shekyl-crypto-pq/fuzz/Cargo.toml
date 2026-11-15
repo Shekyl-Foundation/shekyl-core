@@ -6,7 +6,10 @@
 # `fuzz_kem_decapsulate` reads. The multisig key and signature blob seeds
 # are the non-empty `adversarial_test_cases` inputs of
 # `docs/PQC_TEST_VECTOR_002_MULTISIG.json`, one file per case, named for
-# it. A crash's input joins its target's directory with the fix.
+# it. A crash's input joins its target's directory with the fix:
+# `fuzz_bech32m_address_decode/crash_third_inside_a_character` is the
+# first nightly dispatch's, valid UTF-8 whose byte-length third fell
+# inside a two-byte character, which the harness sliced at.
 
 [package]
 name = "shekyl-crypto-pq-fuzz"

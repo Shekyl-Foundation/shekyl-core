@@ -45,7 +45,7 @@ fuzz_target!(|data: &[u8]| {
     let compressed: Vec<CompressedPoint> = commitments
         .iter()
         .map(|c| {
-            let pt = c.calculate().mul_by_cofactor();
+            let pt = c.calculate();
             CompressedPoint(pt.compress().to_bytes())
         })
         .collect();
