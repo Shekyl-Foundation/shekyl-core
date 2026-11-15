@@ -1057,6 +1057,7 @@ stale_through = [
   { through = "4a22840849", note = "The switch's C1: scan.rs renames the header field attestation_root to bundle_root in two test-block fixtures and fills it with the empty bundle root. Decapsulation and the output scan are unchanged. Not re-measured." },
   { through = "1e6f95a13e", note = "IG-Q102 (the switch): scan.rs's two test-block fixtures rename the header field bundle_root to section_root and its type to SectionRoot. A rename only; decapsulation and the output scan are unchanged. Not re-measured." },
   { through = "80e26ff5d5", note = "PR #1380 named-constants sweep (80e26ff5d5): shekyl-scanner's scan.rs and bench_fixtures.rs write a test transaction's unlock_time as TxPrefix::NO_UNLOCK_TIME instead of 0. Same value, no change to the scan path or its cost." },
+  { through = "d485e8d2d0", note = "PR #1380 review (d485e8d2d0): the multisig member scan holds its KEM secret as crypto-pq's HybridKemSecretKey instead of two split halves, and crypto-pq gains the secret's canonical-bytes parse. The receive check hands recover_combined_ss the same X25519 and ML-KEM bytes as before; the solo scan path is untouched. No change to the measured cost." },
 ]
 
 [[constant]]
