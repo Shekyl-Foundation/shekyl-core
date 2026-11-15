@@ -67,7 +67,9 @@ pub mod proofs;
 pub mod roles;
 
 pub use context::{ContextError, InputPath, ProposerInputs, SigningContext};
-pub use derivation::{DeriveError, DerivedSpend, GroupOutput, InputContext, UnsignedSpend};
+pub use derivation::{
+    DeriveError, DerivedSpend, GroupOutput, GroupOutputs, InputContext, UnsignedSpend,
+};
 pub use files::{import, Authenticated, BodyError, ImportError, Incoming};
 pub use nonce::{
     AlreadyHeld, ConsumedNonce, HeldNonce, HeldNonceStore, InputInUse, LiveCeremonies, NotHeld,

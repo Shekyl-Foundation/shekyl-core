@@ -1137,11 +1137,19 @@ construction: no copy of a wallet contains one.
 ### 11.5 What a member brings
 
 - **`GroupOutput`**: the member's ledger record of each output the
-  intent spends, named by its global index: the spent output (`O`, `C`,
-  `x`, `y_kem`, `z`), its key image, its committed form and the member's
-  own `0x0D` ciphertexts.
+  group holds, named by its global index. It holds public values and
+  ciphertexts only, as the solo ledger does: `O`, `C`, the output's index
+  in its transaction, its `0x06` ciphertext, its key image, its leaf
+  point, its committed form and the member's own `0x0D` ciphertexts. The
+  ledger is read through `GroupOutputs`, a lookup by global index.
 - **`DerivedSpend`**, made only by `DerivedSpend::derive` from the
-  validated intent and those records (R-7, §9.5). It consumes the
+  validated intent, the member's ledger and the group's key from the
+  member file (`MultisigGroupKey`: the group KEM secret and `b`) (R-7,
+  §9.5). It looks each of the intent's inputs up itself, and re-derives
+  the input's secrets (`x = ho + b`, `y_kem`, `z`, the leaf blind) from
+  the record's `0x06` ciphertext in `shekyl-crypto-pq`
+  (`recover_group_spend`, the scanner's own steps), then checks the
+  record's key image and leaf point against what they derive. It consumes the
   intent, so no spend can be paired with another intent. Recipient `i`
   is output `i`, built to its resolved payee by the builder every spend
   uses, under the transaction key the intent's seed derives; that gives
@@ -1150,9 +1158,9 @@ construction: no copy of a wallet contains one.
   proof). Input `j` of the intent takes the `j`-th derived pseudo-out
   blind and rerandomization seed; the last blind balances the outputs'
   masks. The inputs are then put in the transaction's order. The
-  derivation refuses a ledger that lacks an input, records one twice or
-  hands an output the intent does not spend, and two inputs with one key
-  image. `InputContext` and `UnsignedSpend` have private fields and no
+  derivation refuses, each by name, an input the ledger lacks, an input
+  whose secrets do not derive, a record whose key image or leaf point is
+  not the one its secrets derive, and two inputs with one key image. `InputContext` and `UnsignedSpend` have private fields and no
   other constructor: a member cannot sign a blind, a seed or an output
   the intent does not determine.
 - **`SigningContext`**, built from the `DerivedSpend`, the reference
@@ -1638,7 +1646,7 @@ rust/shekyl-multisig/src/
 ├── ceremony/              — the signing ceremony (§11)
 │   ├── mod.rs             — Role, CeremonyError
 │   ├── context.rs         — SigningContext, ProposerInputs, InputPath (§11.5)
-│   ├── derivation.rs      — GroupOutput, DerivedSpend, InputContext,
+│   ├── derivation.rs      — GroupOutput(s), DerivedSpend, InputContext,
 │   │                        UnsignedSpend (§9.5, §11.5)
 │   ├── files.rs           — the bodies, Authenticated<B>, import (§11.1,
 │   │                        wire format §3.1)
@@ -1838,11 +1846,12 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
 - The proposer restarting after step 7, straight after it and after one
   hybrid signature (the spend completes); it resumes only from its own
   `FinalTx`
-- A ledger that lacks an input, records one twice or hands an output the
-  intent does not spend (refused by the derivation), and records handed
-  over in any order (the derivation puts them in the transaction's order)
-- A member whose ledger records an input under another key image (its
-  transaction is not the one the proofs are over)
+- A ledger that lacks an input, a record whose key image or leaf point is
+  not the one its secrets derive, a record holding another output's
+  ciphertext, and one output recorded at two global indices (each
+  refused by the derivation, by name); a ledger holding more than the
+  intent spends, and records handed over in any order (the derivation
+  looks up what it spends and puts it in the transaction's order)
 
 Every ceremony test checks the released transaction from the wire:
 the wire's structural rules, the intent's fee and reference block, every

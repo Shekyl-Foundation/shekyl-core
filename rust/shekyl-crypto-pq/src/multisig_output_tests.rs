@@ -22,6 +22,7 @@ const NET: NetworkId = [0x4E; 16];
 
 struct Group {
     address: MultisigAddressPayload,
+    b: [u8; 32],
     group_sk: HybridKemSecretKey,
     member_sks: Vec<HybridKemSecretKey>,
 }
@@ -55,6 +56,7 @@ fn group(n: u8, m: u8) -> Group {
     .unwrap();
     Group {
         address,
+        b: b.to_bytes(),
         group_sk,
         member_sks,
     }
@@ -222,6 +224,113 @@ fn every_member_opens_the_output_and_any_m_can_spend() {
             );
         }
     }
+}
+
+/// `out`'s source, as a member's ledger records it.
+fn source<'a>(
+    out: &'a MultisigOutputData,
+    index: u64,
+    committed_form: &'a MultisigCommittedForm,
+) -> GroupOutputSource<'a> {
+    GroupOutputSource {
+        output_index: index,
+        output_key: &out.output_key,
+        x25519_ct: &out.kem_ciphertext_x25519,
+        ml_kem_ct: &out.kem_ciphertext_ml_kem,
+        committed_form,
+    }
+}
+
+fn point(bytes: &[u8; 32]) -> curve25519_dalek::edwards::EdwardsPoint {
+    curve25519_dalek::edwards::CompressedEdwardsY(*bytes)
+        .decompress()
+        .unwrap()
+}
+
+fn scalar(bytes: &[u8; 32]) -> Scalar {
+    Option::from(Scalar::from_canonical_bytes(*bytes)).unwrap()
+}
+
+/// A member re-derives an output's spend secrets from its source
+/// ciphertext under the group's key, and they are the output the sender
+/// built: `O = x·G + Y_group + y_kem·T`, `C = z·G + amount·H`, the key
+/// image `x·H_p(O)`, and the published leaf point.
+#[test]
+fn the_group_key_recovers_the_output_the_sender_built() {
+    let g = group(3, 2);
+    let index = 1u64;
+    let amount = 7_000;
+    let out = construct_multisig_output(&tx_key(), &g.address, amount, index, &NET).unwrap();
+    let committed = open_as(
+        &g,
+        &out,
+        index,
+        0,
+        3,
+        &out.enc_key_hashes,
+        &out.pqc_leaf.entry_bytes(),
+    )
+    .unwrap();
+    let secrets = recover_group_spend(
+        &MultisigGroupKey::new(&g.group_sk, &g.b),
+        &source(&out, index, &committed),
+    )
+    .unwrap();
+
+    let x = scalar(secrets.spend_scalar());
+    assert!(*secrets.y_kem() == out.y, "the sender's y_kem");
+    assert_eq!(
+        curve25519_dalek::constants::ED25519_BASEPOINT_POINT * x
+            + point(g.address.y_group())
+            + *T * scalar(secrets.y_kem()),
+        point(&out.output_key)
+    );
+    assert_eq!(
+        shekyl_curve_primitives::Commitment::new(scalar(secrets.commitment_mask()), amount)
+            .calculate(),
+        point(&out.commitment)
+    );
+    assert_eq!(
+        secrets.key_image().as_bytes(),
+        &(biased_hash_to_point(out.output_key) * x)
+            .compress()
+            .to_bytes()
+    );
+    assert_eq!(secrets.leaf_point(), &out.pqc_leaf.point);
+}
+
+/// Neither KEM refuses a wrong key (X25519 has no failure, ML-KEM rejects
+/// implicitly), so another group's key derives values, but not this
+/// output's: its key image and leaf point differ, which is what a ledger
+/// record is checked against.
+#[test]
+fn another_groups_key_does_not_recover_the_output() {
+    let g = group(2, 2);
+    let other = group(2, 2);
+    let index = 0u64;
+    let out = construct_multisig_output(&tx_key(), &g.address, 1, index, &NET).unwrap();
+    let committed = open_as(
+        &g,
+        &out,
+        index,
+        0,
+        2,
+        &out.enc_key_hashes,
+        &out.pqc_leaf.entry_bytes(),
+    )
+    .unwrap();
+    let ours = recover_group_spend(
+        &MultisigGroupKey::new(&g.group_sk, &g.b),
+        &source(&out, index, &committed),
+    )
+    .unwrap();
+    let theirs = recover_group_spend(
+        &MultisigGroupKey::new(&other.group_sk, &other.b),
+        &source(&out, index, &committed),
+    )
+    .unwrap();
+    assert_ne!(theirs.key_image(), ours.key_image());
+    assert_ne!(theirs.leaf_point(), ours.leaf_point());
 }
 
 /// The per-member ciphertexts use distinct randomness: no two share an

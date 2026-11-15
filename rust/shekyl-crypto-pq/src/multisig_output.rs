@@ -39,17 +39,24 @@ use shekyl_network::NetworkId;
 use subtle::ConstantTimeEq;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
-use crate::derivation::derive_multisig_key_hashes_key;
+use crate::derivation::{derive_multisig_key_hashes_key, derive_output_secrets};
 use crate::encrypted_output_field::EncryptedOutputField;
 use crate::error::CryptoError;
 use crate::kem::{HybridKemSecretKey, X25519_KEM_CT_LEN};
-use crate::leaf_commitment::{pqc_leaf_commitment, PqcLeafCommitment, PQC_LEAF_ENTRY_LEN};
+use crate::key_image::KeyImage;
+use crate::leaf_commitment::{
+    pqc_leaf_commitment, PqcLeafCommitment, PqcLeafCommitmentError, PQC_LEAF_ENTRY_LEN,
+    PQC_LEAF_POINT_LEN,
+};
 use crate::multisig::{multisig_key_hash, MultisigCommittedForm, MULTISIG_KEY_HASH_LEN};
-use crate::output::{construct_output_core, encapsulate_deterministic, recover_combined_ss};
+use crate::output::{
+    compute_output_key_image, construct_output_core, encapsulate_deterministic, recover_combined_ss,
+};
 use crate::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
 };
+use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_types::SigningPayloadHash;
 
 /// The HKDF info label a member's per-output hybrid signing seed expands
@@ -545,6 +552,149 @@ pub fn verify_multisig_member_auth(
         message.as_bytes(),
         signature,
     )
+}
+
+/// The group's spend key as one member's file holds it: the group KEM
+/// secret that opens every group output's `0x06` ciphertext, and `b`.
+/// [`recover_group_spend`] is the one reader, so `x = ho + b` is combined
+/// here and nowhere a caller can see (rule 36).
+pub struct MultisigGroupKey<'a> {
+    group_kem_secret: &'a HybridKemSecretKey,
+    b: &'a [u8; 32],
+}
+
+impl<'a> MultisigGroupKey<'a> {
+    /// The group's key from a member file's group KEM secret and `b`.
+    #[must_use]
+    pub const fn new(group_kem_secret: &'a HybridKemSecretKey, b: &'a [u8; 32]) -> Self {
+        Self {
+            group_kem_secret,
+            b,
+        }
+    }
+}
+
+/// One group output as a member's ledger records it: its public values and
+/// its `0x06` source ciphertext, nothing secret.
+pub struct GroupOutputSource<'a> {
+    /// The output's index in its transaction (the derivations bind it).
+    pub output_index: u64,
+    /// The output's key `O`.
+    pub output_key: &'a [u8; 32],
+    /// The `0x06` X25519 ciphertext.
+    pub x25519_ct: &'a [u8; X25519_KEM_CT_LEN],
+    /// The `0x06` ML-KEM-768 ciphertext.
+    pub ml_kem_ct: &'a [u8],
+    /// The committed form the output's leaf binds.
+    pub committed_form: &'a MultisigCommittedForm,
+}
+
+/// What a member re-derives to spend one group output, from its source
+/// ciphertext and the group's key, as the solo scanner derives a solo
+/// output's: the spend scalar `x = ho + b`, `y_kem`, the commitment mask
+/// `z`, the leaf blind, and the public key image and leaf point a ledger
+/// record is checked against. The secrets wipe on drop, and the type has
+/// no `Debug`.
+pub struct GroupSpendSecrets {
+    spend_scalar: Zeroizing<[u8; 32]>,
+    y_kem: Zeroizing<[u8; 32]>,
+    commitment_mask: Zeroizing<[u8; 32]>,
+    leaf_blind: Zeroizing<[u8; 32]>,
+    key_image: KeyImage,
+    leaf_point: [u8; PQC_LEAF_POINT_LEN],
+}
+
+impl GroupSpendSecrets {
+    /// `x = ho + b`.
+    #[must_use]
+    pub fn spend_scalar(&self) -> &[u8; 32] {
+        &self.spend_scalar
+    }
+
+    /// The output's `y_kem`.
+    #[must_use]
+    pub fn y_kem(&self) -> &[u8; 32] {
+        &self.y_kem
+    }
+
+    /// The output's commitment mask `z`.
+    #[must_use]
+    pub fn commitment_mask(&self) -> &[u8; 32] {
+        &self.commitment_mask
+    }
+
+    /// The leaf commitment's blind `r`, the prover's witness.
+    #[must_use]
+    pub fn leaf_blind(&self) -> &[u8; 32] {
+        &self.leaf_blind
+    }
+
+    /// The output's key image `x · H_p(O)`.
+    #[must_use]
+    pub const fn key_image(&self) -> KeyImage {
+        self.key_image
+    }
+
+    /// The leaf commitment point `CM` the derivation reaches.
+    #[must_use]
+    pub const fn leaf_point(&self) -> &[u8; PQC_LEAF_POINT_LEN] {
+        &self.leaf_point
+    }
+}
+
+/// Why a group output's spend secrets do not derive.
+#[derive(Debug, thiserror::Error)]
+pub enum GroupSpendError {
+    /// The `0x06` ciphertext does not open under the group's KEM key.
+    #[error("the output's source ciphertext does not open under the group's key: {0}")]
+    Decap(CryptoError),
+    /// `b` or the output key is not a valid key, so no key image.
+    #[error("the output's key image does not derive: {0}")]
+    KeyImage(CryptoError),
+    /// The leaf commitment does not derive.
+    #[error("the output's leaf commitment does not derive: {0:?}")]
+    Leaf(PqcLeafCommitmentError),
+}
+
+/// Re-derive one group output's spend secrets from its `0x06` ciphertext,
+/// under the group's key: the scanner's own steps (`recover_combined_ss`,
+/// the output secrets, `compute_output_key_image`, the leaf commitment).
+/// The shared secret exists only inside this call.
+///
+/// # Errors
+///
+/// The [`GroupSpendError`] naming the step that failed.
+pub fn recover_group_spend(
+    key: &MultisigGroupKey<'_>,
+    source: &GroupOutputSource<'_>,
+) -> Result<GroupSpendSecrets, GroupSpendError> {
+    let ss = recover_combined_ss(
+        &key.group_kem_secret.x25519,
+        &key.group_kem_secret.ml_kem,
+        source.x25519_ct,
+        source.ml_kem_ct,
+    )
+    .map_err(GroupSpendError::Decap)?;
+    let secrets = derive_output_secrets(&ss.0, source.output_index);
+    let hp_of_output = biased_hash_to_point(*source.output_key)
+        .compress()
+        .to_bytes();
+    let spend = compute_output_key_image(&ss.0, source.output_index, key.b, &hp_of_output)
+        .map_err(GroupSpendError::KeyImage)?;
+    let leaf = pqc_leaf_commitment(
+        &ss.0,
+        source.output_index,
+        &source.committed_form.to_bytes(),
+    )
+    .map_err(GroupSpendError::Leaf)?;
+    Ok(GroupSpendSecrets {
+        spend_scalar: spend.spend_secret_x.clone(),
+        y_kem: Zeroizing::new(secrets.y),
+        commitment_mask: Zeroizing::new(secrets.z),
+        leaf_blind: Zeroizing::new(leaf.blind),
+        key_image: spend.key_image,
+        leaf_point: leaf.point,
+    })
 }
 
 #[cfg(test)]

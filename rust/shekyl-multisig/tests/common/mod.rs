@@ -193,7 +193,7 @@ pub fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned 
 
 /// Two outputs paid to a group, as every member scans them, and the tree
 /// that holds them.
-pub struct GroupOutputs {
+pub struct Paid {
     /// Each output, its index in its transaction, and its amount.
     pub outputs: Vec<(MultisigOutputData, u64, u64)>,
     /// What every member's scan recovers, per output.
@@ -215,7 +215,7 @@ const OUTPUT_INDICES: [u64; 2] = [0, 3];
 /// The sender pays the group twice ([`AMOUNTS`]), in two transactions;
 /// every member scans both alone and recovers the same values; the tree
 /// holds both outputs in one leaf chunk, as the daemon builds it.
-pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -> GroupOutputs {
+pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -> Paid {
     let outputs: Vec<(MultisigOutputData, u64, u64)> = AMOUNTS
         .into_iter()
         .zip(OUTPUT_INDICES)
@@ -242,7 +242,7 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
         })
         .collect();
     let (root, layers, chunks) = tree(&outputs, &scans);
-    GroupOutputs {
+    Paid {
         outputs,
         scans,
         root,
@@ -252,7 +252,7 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
 }
 
 /// Each of `paid`'s outputs' path, named by its key image.
-pub fn paths(paid: &GroupOutputs, chunks: Vec<ProveInputLeafChunk>) -> Vec<InputPath> {
+pub fn paths(paid: &Paid, chunks: Vec<ProveInputLeafChunk>) -> Vec<InputPath> {
     paid.scans
         .iter()
         .zip(chunks)
@@ -264,7 +264,7 @@ pub fn paths(paid: &GroupOutputs, chunks: Vec<ProveInputLeafChunk>) -> Vec<Input
 }
 
 /// `paid`'s paths again: the prover consumes them.
-pub fn rebuild_paths(paid: &GroupOutputs) -> Vec<InputPath> {
+pub fn rebuild_paths(paid: &Paid) -> Vec<InputPath> {
     paths(paid, tree(&paid.outputs, &paid.scans).2)
 }
 

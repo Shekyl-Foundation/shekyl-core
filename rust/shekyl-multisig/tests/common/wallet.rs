@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 use rand_core::{OsRng, RngCore};
 
-use super::{paths, random_scalar, GroupOutputs, AMOUNTS, NET};
+use super::{paths, random_scalar, Paid, AMOUNTS, NET};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use shekyl_address::multisig_address::{address_fingerprint, MultisigAddressPayload};
 use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
@@ -28,8 +28,8 @@ use shekyl_multisig::intent::{
     ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
-    import, DerivedSpend, GroupOutput, HeldNonceStore, Incoming, LedgerView, LiveCeremonies,
-    MemberFile, ProposerInputs, SigningContext, ValidatedIntent,
+    import, DerivedSpend, GroupOutput, GroupOutputs, HeldNonceStore, Incoming, LedgerView,
+    LiveCeremonies, MemberFile, ProposerInputs, SigningContext, ValidatedIntent,
 };
 use shekyl_tx_weight::{predict_group_weight, GroupSize, GroupSpendShape, InputCount, OutputCount};
 use shekyl_types::{BlockHash, KeyImage};
@@ -177,36 +177,48 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
     .expect("the intent is valid for every member")
 }
 
-/// `file`'s ledger records of `paid`'s outputs, in payment order: the
-/// scan every member shares, its own ciphertexts, and each output's global
-/// index ([`GLOBAL_INDICES`]).
-pub fn group_outputs(file: &MemberFile, paid: &GroupOutputs) -> Vec<GroupOutput> {
+/// A member's ledger of the group's outputs, as a test hands it to the
+/// derivation: the records in any order, looked up by global index.
+pub struct Ledger(pub Vec<GroupOutput>);
+
+impl GroupOutputs for Ledger {
+    fn output(&self, global_index: u64) -> Option<&GroupOutput> {
+        self.0.iter().find(|out| out.global_index == global_index)
+    }
+}
+
+/// `file`'s ledger of `paid`'s outputs: public values, the `0x06`
+/// ciphertext, and its own `0x0D` ciphertexts. No secret.
+pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
     let me = usize::from(file.member_index());
-    paid.outputs
-        .iter()
-        .zip(&paid.scans)
-        .zip(GLOBAL_INDICES)
-        .map(|(((out, _, _), s), global_index)| {
-            let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
-            GroupOutput {
-                global_index,
-                output_key: out.output_key,
-                commitment: out.commitment,
-                spend_scalar: s.x.clone(),
-                y_kem: s.y_kem.clone(),
-                commitment_mask: s.z.clone(),
-                key_image: s.key_image,
-                committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
-                own_x25519_ct: x25519.try_into().unwrap(),
-                own_ml_kem_ct: ml_kem.to_vec(),
-            }
-        })
-        .collect()
+    Ledger(
+        paid.outputs
+            .iter()
+            .zip(&paid.scans)
+            .zip(GLOBAL_INDICES)
+            .map(|(((out, output_index, _), s), global_index)| {
+                let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
+                GroupOutput {
+                    global_index,
+                    output_index: *output_index,
+                    output_key: out.output_key,
+                    commitment: out.commitment,
+                    source_x25519_ct: out.kem_ciphertext_x25519,
+                    source_ml_kem_ct: out.kem_ciphertext_ml_kem.clone(),
+                    key_image: s.key_image,
+                    leaf_point: out.pqc_leaf.point,
+                    committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
+                    own_x25519_ct: x25519.try_into().unwrap(),
+                    own_ml_kem_ct: ml_kem.to_vec(),
+                }
+            })
+            .collect(),
+    )
 }
 
 /// `file`'s spend of `intent`, derived from its own ledger.
-pub fn derive(file: &MemberFile, intent: ValidatedIntent, paid: &GroupOutputs) -> DerivedSpend {
-    DerivedSpend::derive(intent, group_outputs(file, paid), NET)
+pub fn derive(file: &MemberFile, intent: ValidatedIntent, paid: &Paid) -> DerivedSpend {
+    DerivedSpend::derive(intent, &ledger(file, paid), &file.group_key(), NET)
         .expect("every member derives the spend")
 }
 
@@ -214,7 +226,7 @@ pub fn derive(file: &MemberFile, intent: ValidatedIntent, paid: &GroupOutputs) -
 pub fn context<'a>(
     file: &'a MemberFile,
     intent: ValidatedIntent,
-    paid: &GroupOutputs,
+    paid: &Paid,
 ) -> SigningContext<'a> {
     try_context(file, intent, paid, paid.layers).expect("every member's context builds")
 }
@@ -223,7 +235,7 @@ pub fn context<'a>(
 pub fn try_context<'a>(
     file: &'a MemberFile,
     intent: ValidatedIntent,
-    paid: &GroupOutputs,
+    paid: &Paid,
     layers: u8,
 ) -> Result<SigningContext<'a>, ContextError> {
     SigningContext::new(file, derive(file, intent, paid), paid.root, layers)
@@ -231,7 +243,7 @@ pub fn try_context<'a>(
 
 /// The proposer's own inputs. The leaf chunks are taken: the prover is
 /// their only reader.
-pub fn proposer_inputs(paid: &mut GroupOutputs) -> ProposerInputs {
+pub fn proposer_inputs(paid: &mut Paid) -> ProposerInputs {
     let chunks = std::mem::take(&mut paid.chunks);
     ProposerInputs {
         input_paths: paths(paid, chunks),
@@ -267,11 +279,7 @@ macro_rules! expect {
 /// the intent's recipients (a single-signer address and the group's
 /// change) equals the signed spend's own `weight()`: the scheme-2 auths and
 /// the change's `0x0D` entry are priced exactly (slice 4a §2.4).
-pub fn assert_weight_predicted(
-    tx: &Transaction,
-    group: &MultisigAddressPayload,
-    paid: &GroupOutputs,
-) {
+pub fn assert_weight_predicted(tx: &Transaction, group: &MultisigAddressPayload, paid: &Paid) {
     let Ct::Fcmp { fee, .. } = &tx.ct else {
         panic!("an FCMP++ spend");
     };
@@ -292,7 +300,7 @@ pub fn assert_weight_predicted(
 /// Serialize, parse back, and check from the parsed bytes alone: the
 /// structural rules the pool applies first, the intent's fee and reference
 /// block, every input's authorization, and the FCMP++ proof.
-pub fn verify_from_the_wire(tx: &Transaction, paid: &GroupOutputs) {
+pub fn verify_from_the_wire(tx: &Transaction, paid: &Paid) {
     let parsed = Transaction::from_bytes(&tx.serialize()).expect("the transaction parses");
     assert_eq!(parsed, *tx);
     parsed.validate().expect("the transaction is well formed");
