@@ -78,7 +78,7 @@ pub mod output;
 pub mod output_claim;
 pub mod rng;
 pub mod schnorr;
-mod seeded_rng;
+pub mod seeded_rng;
 pub mod signature;
 pub mod wallet_envelope;
 

@@ -80,11 +80,7 @@ fn spend_body() -> Transaction {
 }
 
 fn spend_input(k: usize) -> Input {
-    Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image: point(k),
-    }
+    Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(point(k)))
 }
 
 fn bond_post_input() -> Input {

@@ -11,6 +11,7 @@ use crate::harness::fixture::{
     bp_plus_layout_for, coinbase, coinbase_extra, listed, persona, point, pqc_auth_filler,
     pqc_extra, G, TWO_G,
 };
+use shekyl_types::KeyImage;
 use shekyl_wire::transaction::{
     MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
     UNLOCK_TIME_BLOCK_SENTINEL,
@@ -106,11 +107,7 @@ pub(super) fn emission_input() -> Input {
 }
 
 pub(super) fn spend_input(k: usize) -> Input {
-    Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image: point(k),
-    }
+    Input::fcmp_spend(KeyImage::from_bytes(point(k)))
 }
 
 /// `spend2()` with `input` appended and an auth for it.
@@ -316,11 +313,7 @@ pub(super) fn i5_ascending_key_images() -> Transaction {
     }
     tx.prefix.inputs = [a, b]
         .into_iter()
-        .map(|key_image| Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image,
-        })
+        .map(|key_image| Input::fcmp_spend(KeyImage::from_bytes(key_image)))
         .collect();
     tx
 }

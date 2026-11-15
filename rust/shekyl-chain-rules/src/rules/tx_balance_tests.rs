@@ -104,11 +104,9 @@ fn h7_a_non_point_output_key_is_refused_everywhere() {
 #[test]
 fn h11_a_non_point_identity_or_torsion_key_image_is_refused() {
     let with_image = |image: [u8; 32]| {
-        with_inputs(vec![Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: image,
-        }])
+        with_inputs(vec![Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+            image,
+        ))])
     };
     refused_lone(&with_image([0xC1; 32]), CenRow::H11);
     refused_listed(&with_image([0xC1; 32]), CenRow::H11);

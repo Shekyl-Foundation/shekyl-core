@@ -421,11 +421,7 @@ fn bond_post() -> Input {
 
 /// A spend input whose key image is the `k`-th table point.
 pub(crate) fn spend(k: usize) -> Input {
-    Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image: point(k),
-    }
+    Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(point(k)))
 }
 
 /// `listed(KI)` with its inputs replaced.

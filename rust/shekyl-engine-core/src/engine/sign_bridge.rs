@@ -197,7 +197,7 @@ pub(super) fn assemble_transfer_wire(
         pqc_auths: pqc_pubkeys
             .iter()
             .map(|pk| PqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
                 signature: Vec::new(),
                 public_key: pk.clone(),
             })

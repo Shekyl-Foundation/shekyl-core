@@ -1006,11 +1006,9 @@ fn arm_c_matches_watched_key_images_only() {
     block.transactions[0].modify(|tx| {
         tx.prefix
             .inputs
-            .push(shekyl_wire::transaction::Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image: ki,
-            })
+            .push(shekyl_wire::transaction::Input::fcmp_spend(
+                shekyl_types::KeyImage::from_bytes(ki),
+            ))
     });
     let gindex = shekyl_types::GlobalOutputIndex::from_raw(42);
     let mut watch = KeyImageWatchSet::new();
@@ -1065,21 +1063,17 @@ fn trailing_key_images_collect_after_an_in_step_discovery() {
     discovery.transactions[0].modify(|tx| {
         tx.prefix
             .inputs
-            .push(shekyl_wire::transaction::Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image: ki_at_discovery,
-            })
+            .push(shekyl_wire::transaction::Input::fcmp_spend(
+                shekyl_types::KeyImage::from_bytes(ki_at_discovery),
+            ))
     });
     let mut later = funding_block(&persona(9)); // not ours — filler carrier
     later.transactions[0].modify(|tx| {
         tx.prefix
             .inputs
-            .push(shekyl_wire::transaction::Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image: ki,
-            })
+            .push(shekyl_wire::transaction::Input::fcmp_spend(
+                shekyl_types::KeyImage::from_bytes(ki),
+            ))
     });
     let out = run_dual_extractor(
         vec![(0, scanner)],

@@ -481,7 +481,7 @@ mod tests {
         use shekyl_wire::{Ct, CtBase, Holdings};
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![shekyl_wire::Input::BondPost(Box::new(BondPost {
                     hybrid_public_key: Vec::new(),
                     p_canonical_id: id,
