@@ -1,14 +1,13 @@
 # Anonymity Networks with Shekyl
 
-> **UPDATE 2026-09-12.** Tor-zone wire-observer cover is operator non-exit
-> relay posture, not a protocol carrier. Mixing requires the daemon's Tor
-> client (SOCKS and overlay inbound) to be **that same relay process** —
-> a sidecar client Tor is uncovered. See [`TOR_RELAY.md`](TOR_RELAY.md)
-> and [`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md). This
+> **No wire-observer cover on Tor today, with a relay or without one
+> (2026-11-15).** An observer of a node's entry-guard connections can tell
+> when the node sends its own transaction, including when the node uses its
+> own relay's Tor. A relay is Tor payback, not cover
+> ([`TOR_RELAY.md`](TOR_RELAY.md)). Cover traffic is being redesigned
+> ([`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md)). This
 > file's remaining body is the Tor P2P usage matrix. I2P is not a network
-> this daemon dials. This file is not the cover-posture source of truth: for
-> cover, point `tor-socks` at the relay process as `TOR_RELAY.md` shows. A
-> second client Tor is uncovered.
+> this daemon dials.
 
 Tor is the anonymity network this daemon dials. I2P is not. The usage of
 Tor is still considered experimental - there are a few pessimistic

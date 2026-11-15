@@ -1327,6 +1327,10 @@ Exceptional deferral with a named blocker. This list stays tiny.
   - Target: post-genesis
   - Owner: the multisig protocol — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§5.1, R-11)
 
+- **Cover traffic on Tor rests on Tor's classical encryption.** An adversary who records a node's guard connections now and holds a quantum computer later can peel Tor's layers and tell the carrier's real windows from its dummies, which names past senders. Clearnet's Noise layer is hybrid with ML-KEM and is not exposed. Wrapping the carrier's Tor sessions in Noise would close this, at a latency cost nobody has measured; Tor adopting a post-quantum handshake would close it without us. Traffic sent before a fix stays exposed. Named blocker: Tor's encryption holds for now, and the Noise-over-Tor latency has to be measured against the carrier on Tor, which the cover-traffic lane has not built (Rick, 2026-11-15).
+  - Target: post-genesis
+  - Owner: the Tor cover posture — [`TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md) (TRC)
+
 ## V4
 
 Lattice-only transition, 2–5 years, gated on NIST (or successor) actually
