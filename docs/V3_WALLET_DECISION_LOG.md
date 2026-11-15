@@ -7295,6 +7295,11 @@ names).
   built while the fee stayed sized for it, off the ladder for the
   transaction's real shape. It is refused, and selection covers the
   payments, the with-change fee and one unit.
+- **No sentinel fee.** The signer's with-change fee is absent, not
+  `u64::MAX`, when the payments fill the output limit (second pass, at
+  `3ad490c8b`). The send path never builds that case: a request with more
+  payments than leave room for a change output is refused before
+  selection.
 - **A reserve proof shows money held, not money spendable at the
   reference.** Its candidates are every on-chain output in the balance:
   spendable, parked and incoming. In-flight inputs and unspendable outputs

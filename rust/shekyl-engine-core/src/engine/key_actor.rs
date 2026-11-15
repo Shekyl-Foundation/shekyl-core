@@ -818,7 +818,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
+                fee_with_change: Some(0),
             },
         }
     }

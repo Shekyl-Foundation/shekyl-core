@@ -550,9 +550,9 @@ pub(crate) struct OutputDestination {
 pub(crate) struct FeeDirective {
     /// The fee for the payments alone.
     pub fee_no_change: u64,
-    /// The fee with a change output added; `u64::MAX` when the payments
+    /// The fee with a change output added; `None` when the payments
     /// already fill the output limit and no change output fits.
-    pub fee_with_change: u64,
+    pub fee_with_change: Option<u64>,
 }
 
 /// Per-output signing context (§3.9). Deliberately **not** `Clone`.
@@ -1011,7 +1011,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
+                fee_with_change: Some(0),
             },
         };
         let rendered = format!("{tx:?}");

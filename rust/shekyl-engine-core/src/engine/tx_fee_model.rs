@@ -78,16 +78,23 @@ pub(crate) fn build_fee_directive(
 
     // With-change adds one output. At the output limit a change output would exceed
     // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
-    // `TooManyOutputs`). Mark it impossible with an infinite fee so the signer's
-    // choice (`sign_bridge::fee_and_change`) can never pick it. `clamped` returning a
-    // value below the requested `+1` is exactly the "at the limit" signal.
-    // That sentinel is not an overflow: overflow is `None` from this function.
+    // `TooManyOutputs`): it has no fee, and the signer's choice
+    // (`sign_bridge::fee_and_change`) has only the no-change fee to match. `clamped`
+    // returning a value below the requested `+1` is exactly the "at the limit"
+    // signal. The send path never reaches it: `TxRequest::check_recipients` refuses
+    // more payments than leave room for a change output.
     let with_change_request = payment_output_count.get() + 1; // <= MAX_OUTPUTS + 1, no overflow
     let n_with_change = OutputCount::clamped(with_change_request);
     let fee_with_change = if n_with_change.get() < with_change_request {
-        u64::MAX
+        None
     } else {
-        converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change)?
+        Some(converge_fee(
+            rate,
+            n_in,
+            n_with_change,
+            tree_depth,
+            fee_no_change,
+        )?)
     };
 
     Some(FeeDirective {
@@ -276,16 +283,15 @@ mod tests {
         let below = build_fee_directive(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1)
             .expect("the fee fits");
         assert!(below.fee_no_change > 0);
-        assert!(below.fee_with_change > 0 && below.fee_with_change < u64::MAX);
+        let with_change = below.fee_with_change.expect("a change output fits");
         assert!(
-            below.fee_with_change > below.fee_no_change,
+            with_change > below.fee_no_change,
             "the change output costs more"
         );
 
         // At MAX_OUTPUTS payments, a change output would exceed the limit, so the
-        // with-change variant is marked impossible (`u64::MAX`) — the signer's
-        // `leftover >= fee_with_change + dust` check can never select it, so a
-        // max-recipient spend falls through to the buildable no-change variant.
+        // with-change variant has no fee and the signer can take only the
+        // no-change variant.
         let at_limit = build_fee_directive(
             &rate,
             InputCount::clamped(1),
@@ -295,13 +301,8 @@ mod tests {
         .expect("the no-change fee fits");
         assert!(at_limit.fee_no_change > 0 && at_limit.fee_no_change < u64::MAX);
         assert_eq!(
-            at_limit.fee_with_change,
-            u64::MAX,
-            "with-change unselectable at the limit"
-        );
-        assert!(
-            at_limit.fee_no_change != u64::MAX,
-            "overflow is not the unbuildable sentinel"
+            at_limit.fee_with_change, None,
+            "no with-change fee at the limit"
         );
     }
 

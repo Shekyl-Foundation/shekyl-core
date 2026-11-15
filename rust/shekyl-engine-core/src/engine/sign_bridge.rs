@@ -22,8 +22,8 @@ use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
-    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput,
-    WireEncodeInput,
+    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SignFault, SignedProofs, SpendInput,
+    WireEncodeInput, MAX_OUTPUTS,
 };
 use shekyl_units::AtomicUnits;
 
@@ -339,20 +339,25 @@ fn fee_and_change(
     if leftover == directive.fee_no_change {
         return Ok((directive.fee_no_change, None));
     }
-    // `u64::MAX` is the "no change output fits" sentinel; no leftover reaches it.
-    if directive.fee_with_change != u64::MAX {
-        if let Some(change) = NonZeroU64::new(leftover.saturating_sub(directive.fee_with_change)) {
-            return Ok((directive.fee_with_change, Some(change)));
-        }
-    }
-    let short_of = if leftover < directive.fee_no_change {
-        directive.fee_no_change
-    } else {
-        directive.fee_with_change.saturating_add(MIN_CHANGE.get())
+    let short_of = |fee: u64| KeyEngineError::InsufficientFunds {
+        shortfall: fee.saturating_sub(leftover),
     };
-    Err(KeyEngineError::InsufficientFunds {
-        shortfall: short_of.saturating_sub(leftover),
-    })
+    if leftover < directive.fee_no_change {
+        return Err(short_of(directive.fee_no_change));
+    }
+    match directive.fee_with_change {
+        Some(fee_with_change) => match NonZeroU64::new(leftover.saturating_sub(fee_with_change)) {
+            Some(change) => Ok((fee_with_change, Some(change))),
+            None => Err(short_of(fee_with_change.saturating_add(MIN_CHANGE.get()))),
+        },
+        // The payments fill the output limit, so the leftover above the fee
+        // would need a change output the transaction cannot carry. The send
+        // path refuses such a request before selection
+        // (`TxRequest::check_recipients`); this names the same fault.
+        None => Err(KeyEngineError::Sign(SignFault::TooManyOutputs {
+            count: MAX_OUTPUTS + 1,
+        })),
+    }
 }
 
 pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, KeyEngineError> {
@@ -1004,7 +1009,7 @@ mod tests {
         );
     }
 
-    fn directive(fee_no_change: u64, fee_with_change: u64) -> FeeDirective {
+    fn directive(fee_no_change: u64, fee_with_change: Option<u64>) -> FeeDirective {
         FeeDirective {
             fee_no_change,
             fee_with_change,
@@ -1020,7 +1025,7 @@ mod tests {
     /// for a leftover it does not equal.
     #[test]
     fn every_accepted_leftover_balances_at_a_ladder_fee() {
-        let d = directive(700, 900);
+        let d = directive(700, Some(900));
         for leftover in [901, 950, 1_000, 5_000, u64::MAX / 2] {
             let (fee, change) = fee_and_change(leftover, &d).expect("covered");
             assert_eq!(fee, 900, "leftover {leftover}");
@@ -1036,7 +1041,7 @@ mod tests {
     /// equal to the with-change fee, one unit short of a change output.
     #[test]
     fn a_leftover_no_ladder_fee_balances_is_refused() {
-        let d = directive(700, 900);
+        let d = directive(700, Some(900));
         // 900: the with-change fee with a change of zero, which would pay a
         // fee sized for an output the transaction does not carry.
         for leftover in [0, 699, 701, 899, 900] {
@@ -1051,11 +1056,27 @@ mod tests {
     }
 
     /// At the output limit no change output fits: only the exact no-change
-    /// leftover signs.
+    /// leftover signs. A leftover above it would need a change output the
+    /// transaction cannot carry, refused as the signer's output-limit fault;
+    /// one below it is short of the fee. The send path never builds this
+    /// directive: `too_many_recipients_are_refused_at_the_request` holds it.
     #[test]
     fn at_the_output_limit_only_the_exact_leftover_signs() {
-        let d = directive(700, u64::MAX);
+        let d = directive(700, None);
         assert_eq!(fee_and_change(700, &d).expect("exact"), (700, None));
-        assert!(fee_and_change(5_000, &d).is_err());
+        for leftover in [701, 900, 5_000, u64::MAX] {
+            assert!(
+                matches!(
+                    fee_and_change(leftover, &d),
+                    Err(KeyEngineError::Sign(SignFault::TooManyOutputs { count }))
+                        if count == MAX_OUTPUTS + 1
+                ),
+                "leftover {leftover}"
+            );
+        }
+        assert!(matches!(
+            fee_and_change(699, &d),
+            Err(KeyEngineError::InsufficientFunds { shortfall: 1 })
+        ));
     }
 }
