@@ -2,19 +2,28 @@
 
 **Status: OPEN — reopened 2026-11-15 (Rick), Round 0 of the cover-traffic
 lane. Relay volume is not cover on Tor.**
-§8 step 3 is met. TRC-1's guard-connection reading (#1388, results at
-its head `9c82f7f81a`, not yet on `dev`) watched the relay's three
-entry-guard connections. Every circuit the node builds for itself goes
-through them, and they carried 0.47 % of the relay's bytes. Summed over
-the three, in 100 ms windows, the window holding one of the node's own
-transactions ranks above a random other window 93 % of the time (AUC
-0.928), and 82.6 % of those windows are above the other windows' 99th
-percentile.
-- **No longer holds:** §1's ruling, §3, §5's requirement that the node's
-  client be the relay's Tor, §6 and §7 (they describe a cover the
-  measurement did not find), and §9's rejection of the carrier on the Tor
-  zone. **A node on Tor has no wire-observer cover today, relay or not.**
-- **Stands:** §4. The relay is Tor payback and nothing more. §5's non-exit
+§8 step 3 is met. TRC-1's guard-connection reading
+([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md),
+#1388) watched the relay's three
+entry-guard connections. Every SOCKS and onion-service circuit the node
+builds for itself goes through them, and they carried 0.47 % of the
+relay's bytes. Summed over the three, in 100 ms windows, the window
+holding one of the node's own transactions ranks above a random other
+window 93 % of the time (AUC 0.928), and 82.6 % of those windows are
+above the other windows' 99th percentile. At 1 s and 10 s the AUC is
+0.93 and 0.82, with 3.2 % and 6.2 % above the 99th percentile. Limits:
+one relay and one daemon on a quiet testnet, kernel counters read every
+100 ms, six guard epochs over 38.7 h.
+- **No longer holds:** §1's ruling, §2's restriction of the carrier to
+  layers other than Tor, §2.1's withdrawal of the carrier as Tor's cover,
+  §3, §5's requirement that the node's client be the relay's Tor, §6 and
+  §7 (they describe a cover the measurement did not find), and §9's
+  rejection of the carrier on the Tor zone. **A node on Tor has no
+  wire-observer cover today, relay or not.** The reading measured a node
+  with a relay. Without one, a client's guard connections carry only its
+  own traffic, so the same follows by reasoning, not by measurement.
+- **Stands:** §4. The relay is Tor payback and nothing more. §2's
+  retention of the carrier machinery stands. §5's non-exit
   rule, its separate process from `shekyld`, and path selection staying
   Tor's also stand.
 - **Not Tor only** (Rick, 2026-11-15): encryption hides content, not when
@@ -98,12 +107,14 @@ Three consequences follow immediately:
 - **The anon embargo loses its largest inherited term.** The ~50-minute figure
   was an artifact of a cadence constant, not a derived requirement.
 
-## 2. What is preserved
+## 2. What is preserved — the machinery stands; its "other than Tor" scope is REOPENED 2026-11-15 (banner)
 
 **The carrier mechanism is retained.** `shekyl-relay-privacy`, `params::carrier`,
 the noise-slot machinery and its tests stay in the tree and stay maintained.
 
-This ruling **narrows the carrier's scope**; it does not abandon it. The carrier
+This ruling **narrows the carrier's scope**; it does not abandon it.
+**REOPENED 2026-11-15:** the narrowing to layers other than Tor no longer
+holds (banner). The carrier
 remains the cover mechanism for encrypted network layers other than Tor, where
 no relay-volume equivalent exists and where substitution cover is the only
 available construction. A future encrypted zone that ships without a
@@ -116,7 +127,7 @@ do-not-delete argument stands, with its scope restated. What must change in that
 document and its neighbours is the claim that the carrier is the Tor zone's
 cover mechanism — see §10.
 
-### 2.1 What this reopens — COVER_TRAFFIC §1.7 Axis 3
+### 2.1 What this reopens — COVER_TRAFFIC §1.7 Axis 3 — REOPENED 2026-11-15: the Tor-zone withdrawal no longer holds (banner)
 
 [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md) §1.7 Axis 3
 (**Ruled 2026-08-23**) said relay cover cannot substitute for the carrier at
@@ -286,7 +297,19 @@ must exist before the measurement can:
 2. Carried traffic is measured across hours and weights.
 3. If measured cover at ordinary operator scale is insufficient to make
    originated cells indistinguishable, **this ruling reopens** and the carrier's
-   scope re-expands to the Tor zone.
+   scope re-expands to the Tor zone. **MET 2026-11-15** (banner).
+
+**What the TRC-1 measurement leaves, with its disposition (2026-11-15):**
+- **Which step 2 series is an ordinary operator** (that record's ruling 3):
+  moot. No relay scale is cover, so the question gates nothing.
+- **The `PM-3` watermark test** (`DAEMON_RELAY_PRIVACY.md` §96 item 4) stays
+  open under its own row (`PM-1…PM-3`). It tests an active watermark, which
+  the guard reading did not. Whether it becomes the cover redesign's
+  acceptance test is a question for that lane's Round 0.
+- **A sidecar client Tor:** covered by §9's second-Tor rejection, and moot
+  with the reopening.
+- **Reciprocity:** the falsifier below is open and is not met by any of
+  this.
 
 **Reciprocity falsifier.** Consumption is re-derived against the post-carrier
 profile (§4) and Foundation relay capacity is sized above it. If measured

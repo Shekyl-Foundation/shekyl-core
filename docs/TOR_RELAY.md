@@ -6,13 +6,16 @@ does not add requirements the contract does not already carry.
 
 **A relay gives Tor capacity back. It does not hide your node's sends.**
 A measurement of a node using its own relay's Tor found no cover:
-- the node's own circuits go through its entry-guard connections, which
+- the node's own SOCKS and onion-service circuits go through its
+  entry-guard connections, which
   carry about half a percent of the relay's traffic;
 - an observer of those connections picks out the node's own transaction
   sends.
 
-No Tor configuration hides when a node sends today, with a relay or
-without one. The protocol's cover traffic is being redesigned. Run a relay
+No Tor configuration hides when a node sends today. That was measured
+with a relay; without one, a client's guard connections carry only its own
+traffic, so the same holds. The protocol's cover traffic is being
+redesigned. Run a relay
 to contribute to the Tor network (see Reciprocity), not to protect the
 node.
 

@@ -2,8 +2,9 @@
 
 > **No wire-observer cover on Tor today, with a relay or without one
 > (2026-11-15).** An observer of a node's entry-guard connections can tell
-> when the node sends its own transaction, including when the node uses its
-> own relay's Tor. A relay is Tor payback, not cover
+> when the node sends its own transaction. That was measured on a node
+> using its own relay's Tor; without a relay, a client's guard connections
+> carry only its own traffic, so the same holds. A relay is Tor payback, not cover
 > ([`TOR_RELAY.md`](TOR_RELAY.md)). Cover traffic is being redesigned
 > ([`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md)). This
 > file's remaining body is the Tor P2P usage matrix. I2P is not a network
