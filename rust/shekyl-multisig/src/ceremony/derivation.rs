@@ -16,7 +16,7 @@
 //! come from the builder every spend uses (`shekyl_tx_builder::outputs`),
 //! under the transaction key the intent's seed derives; each input's
 //! pseudo-out blind and rerandomization seed come from the same seed
-//! ([`IntentSeed`]). Every member holding the intent derives the same
+//! ([`IntentSeed`](shekyl_crypto_pq::multisig_intent::IntentSeed)). Every member holding the intent derives the same
 //! transaction, so no member sends another anything it must trust.
 //!
 //! [`DerivedSpend::derive`] is the only constructor of [`InputContext`],
@@ -126,6 +126,14 @@ impl GroupOutput {
 /// A member's ledger of the group's spendable outputs, as [`DerivedSpend::derive`]
 /// reads it: one record per global index, its path assembled to the
 /// intent's reference block.
+///
+/// `derive` checks that every path names the intent's reference block hash
+/// and one tree. That the tree's root is the one the block's header
+/// commits to is the implementor's to hold, as the solo wallet's curve
+/// tree client holds it (`shekyl_curve_tree::ReferenceBlock`): a ledger
+/// assembles its paths against the header root of the block it has synced
+/// under that hash. A path to another root makes a context the proposer's
+/// honest proof does not verify under.
 pub trait GroupOutputs {
     /// The record of the output at `global_index`, if the group holds it
     /// spendable.

@@ -174,7 +174,7 @@ impl HeldNonceStore {
 }
 
 /// A held nonce taken out of the store: the only thing that signs. Made
-/// only by [`consume`], so a nonce signs once.
+/// only by `consume`, so a nonce signs once.
 ///
 /// A holder signs only through its store, which is how it gets its
 /// `ConsumedNonce`:

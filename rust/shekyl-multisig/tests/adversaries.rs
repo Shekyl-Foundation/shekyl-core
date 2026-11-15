@@ -316,6 +316,24 @@ fn a_final_tx_that_is_not_the_intents_is_refused_before_signing() {
         expect!(import_for(&m.b, &s.sealed(&m.a, &body)), FinalTx)
     };
 
+    // A member whose ledger's paths are to another tree derives a context
+    // under that root: the proposer's honest proof is not over it.
+    let mut elsewhere = ledger(&m.b, &s.paid);
+    for output in &mut elsewhere.0 {
+        output.path.tree.tree_root = CurveTreeRoot::EMPTY;
+    }
+    let other = DerivedSpend::derive(
+        validate(&m.b, s.intent.clone()),
+        &elsewhere,
+        &m.b.group_key(),
+        NET,
+    )
+    .unwrap();
+    let ctx_other = SigningContext::new(&m.b, other).unwrap();
+    assert!(matches!(
+        Cosigner::sign_final_tx(&ctx_other, &honest, &mut OsRng),
+        Err(CeremonyError::MembershipProof)
+    ));
     assert!(matches!(
         Cosigner::sign_final_tx(&ctx_b, &edited(&|f| f.range_proof[40] ^= 1), &mut OsRng),
         Err(CeremonyError::RangeProof)

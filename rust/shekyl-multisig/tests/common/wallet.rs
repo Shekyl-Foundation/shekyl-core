@@ -20,7 +20,7 @@ use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation, X25519_KEM_CT_L
 use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::multisig_intent::IntentSeed;
-use shekyl_crypto_pq::signature::verify_pqc_auth;
+use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_multisig::ceremony::nonce::InputInUse;
@@ -36,7 +36,8 @@ use shekyl_tx_weight::{
 };
 use shekyl_types::{BlockHash, KeyImage};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Ct, Input, Transaction};
+use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
+use shekyl_wire::{Ct, Input, PqcAuth, Transaction};
 
 // ---------------------------------------------------------------------------
 // The capabilities a wallet injects, in memory
@@ -260,26 +261,51 @@ macro_rules! expect {
 // The checks a node runs, from the wire
 // ---------------------------------------------------------------------------
 
-/// The weight the wallet predicts for `group`'s spend of `paid` paying
+/// The predicted weight of `tx`'s shape, signed by `group` and paying
 /// the intent's recipients (a single-signer address and the group's
-/// change) equals the signed spend's own `weight()`: the scheme-2 auths and
-/// the change's `0x0D` entry are priced exactly (slice 4a §2.4).
+/// change), equals the signed spend's own `weight()`: the scheme-2 auths
+/// and the change's `0x0D` entry are priced exactly (slice 4a §2.4).
+///
+/// So does a solo spend paying the same group (§2.5): the same
+/// transaction, its outputs, `0x0D` entry and proofs unchanged, with each
+/// input authorized by one wallet's hybrid key and signature at their
+/// canonical lengths. The bytes are not a signature; weight is the
+/// serialized size, and the signed solo spend with a group output is the
+/// engine's send (4a-2).
 pub fn assert_weight_predicted(tx: &Transaction, group: &MultisigAddressPayload, paid: &Paid) {
     let Ct::Fcmp { fee, .. } = &tx.ct else {
         panic!("an FCMP++ spend");
     };
     let size = GroupSize::new(group.n_total(), group.m_required()).unwrap();
-    let predicted = predict_spend_weight(
-        &SpendShape {
-            n_in: InputCount::clamped(tx.prefix.inputs.len()),
-            n_out: OutputCount::clamped(tx.prefix.outputs.len()),
-            tree_depth: paid.layers,
-            signer: Signer::Group(size),
-            group_payees: &[size],
-        },
-        *fee,
-    );
-    assert_eq!(predicted, Some(tx.weight()));
+    let weigh = |signer: Signer| {
+        predict_spend_weight(
+            &SpendShape {
+                n_in: InputCount::clamped(tx.prefix.inputs.len()),
+                n_out: OutputCount::clamped(tx.prefix.outputs.len()),
+                tree_depth: paid.layers,
+                signer,
+                group_payees: &[size],
+            },
+            *fee,
+        )
+    };
+    assert_eq!(weigh(Signer::Group(size)), Some(tx.weight()));
+
+    let mut solo = tx.clone();
+    let Ct::Fcmp { pqc_auths, .. } = &mut solo.ct else {
+        unreachable!("matched above");
+    };
+    for auth in pqc_auths.iter_mut() {
+        *auth = PqcAuth {
+            hybrid_signature: vec![0; PQC_HYBRID_SINGLE_SIG_LEN],
+            ..PqcAuth::unsigned(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                vec![0; PQC_HYBRID_SINGLE_KEY_LEN],
+            )
+        };
+    }
+    assert_ne!(solo.weight(), tx.weight());
+    assert_eq!(weigh(Signer::Solo), Some(solo.weight()));
 }
 
 /// Serialize, parse back, and check from the parsed bytes alone: the

@@ -9,10 +9,10 @@
 //!
 //! - [`CommittedMemberKey`]: a per-output key that hashes to `h_i` at its
 //!   member's index of the input's committed form.
-//! - [`VerifiedMembershipProof`]: the FCMP++ proof, SALs included, verified
+//! - `VerifiedMembershipProof`: the FCMP++ proof, SALs included, verified
 //!   against this member's own key images, pseudo-outs, committed forms,
 //!   tree root, depth and `tx_signable`.
-//! - [`VerifiedRangeProof`]: the range proof, verified against the
+//! - `VerifiedRangeProof`: the range proof, verified against the
 //!   outputs' commitments in this member's own base.
 //! - [`SignableTransaction`]: assembled by this member from its own
 //!   context, the two verified proofs and the checked keys, and well formed

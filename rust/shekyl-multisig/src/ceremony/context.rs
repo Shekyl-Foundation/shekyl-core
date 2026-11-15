@@ -22,20 +22,15 @@
 //! member orders its inputs alike, and every per-input list in a ceremony
 //! file is in this order.
 //!
-//! A context is built only from a derived spend; it cannot be written
-//! down from parts:
+//! A context is built only from a derived spend, and nothing outside the
+//! crate can change what it holds afterwards, such as pairing it with
+//! another intent:
 //!
-//! ```compile_fail,E0451
-//! use shekyl_multisig::ceremony::{InputContext, SigningContext, UnsignedSpend};
-//! use shekyl_multisig::{MemberFile, ValidatedIntent};
+//! ```compile_fail,E0616
+//! use shekyl_multisig::{SigningContext, ValidatedIntent};
 //!
-//! fn forge<'a>(
-//!     member: &'a MemberFile,
-//!     intent: ValidatedIntent,
-//!     inputs: Vec<InputContext>,
-//!     unsigned: UnsignedSpend,
-//! ) -> SigningContext<'a> {
-//!     SigningContext { member, intent, inputs, unsigned }
+//! fn swap(ctx: &mut SigningContext<'_>, other: ValidatedIntent) {
+//!     ctx.intent = other;
 //! }
 //! ```
 
