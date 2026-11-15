@@ -1919,7 +1919,9 @@ a demonstrated operator recovery need returns it as a ruled capability.
   one the exclusive lock covers. The key is made on the first start. Each
   file is created readable by the daemon's account alone, in the creating
   call (`0600` with `O_EXCL`; on Windows an owner-only descriptor with the
-  no-read-up label at `CreateFileW`), and a key file anyone else can read
+  no-read-up label at `CreateFileW`), the mode set exactly so no umask
+  narrows or widens it, and the file and its directory entry synced before
+  the start goes on. A key file or an enrolled set anyone else can read
   refuses the start; it is never repaired.
 - **A service's data home (Rick, 2026-11-14, amending IG-Q36 and §7.1).**
   A fixed root per platform: `/var/lib/shekyl` on Linux (the unit's
