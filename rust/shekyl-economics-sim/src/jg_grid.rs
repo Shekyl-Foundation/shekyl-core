@@ -38,8 +38,8 @@ use crate::scenarios::BASELINE_STEADY_STATE;
 use crate::stage2::{a1_year_aggs_probed, NoProbe};
 use crate::volume_window::VolumeSignal;
 use crate::window_stuffer::{
-    fold_campaign, honest_step, scaled, Campaign, Folded, CAMPAIGN_BLOCKS, CAMPAIGN_START_YEARS,
-    MEASURED_BLOCKS, STUFFER_SHARES_PCT,
+    fold_campaign, honest_step, scaled, Campaign, Folded, CAMPAIGN_START_YEARS, MEASURED_BLOCKS,
+    STUFFER_SHARES_PCT,
 };
 
 /// The zone points the brief names, in 2-in/2-out spends beside the
@@ -411,27 +411,30 @@ pub fn run(
         fold_campaign(
             &params,
             year,
-            Campaign::uniform(EVERY_MINER, span, None, CAMPAIGN_BLOCKS),
+            Campaign::uniform(EVERY_MINER, span, None, MEASURED_BLOCKS),
         )
     });
     let campaign_runs = crate::parallel::map(&cells, |&(signal, z, w, year, share)| {
         let params = cell(base, signal, zone_axis[z].bytes, w);
-        let blocks = if share == EVERY_MINER {
-            MEASURED_BLOCKS
-        } else {
-            CAMPAIGN_BLOCKS
-        };
-        let campaign =
-            Campaign::uniform(share, start(&params, year), Some(signal.own_fee()), blocks);
+        // Every share holds for the whole measured span: M_r at rest is then
+        // where a stuffer holding that share keeps it, and a majority holds
+        // over half the window throughout (§5.33.1).
+        let campaign = Campaign::uniform(
+            share,
+            start(&params, year),
+            Some(signal.own_fee()),
+            MEASURED_BLOCKS,
+        );
         (campaign, fold_campaign(&params, year, campaign))
     });
     writeln!(
         out,
-        "\nTHE STUFFER. Per signal, zone, w_ref and start: at each share (100 = every miner), the bodies\n\
-         listed, M_r at the measured span's end ({MEASURED_BLOCKS} blocks) and its mean over it, the longest run of\n\
-         M_r > 1.0, the stuffer's payout less its fees against no stuffing (SKL), and the burn and C at\n\
-         rest. A share is an even proportion of the blocks; the bodies are the ordinary 1-in/2-out, the\n\
-         lightest valid shape (CEN-I1)."
+        "\nTHE STUFFER. Per signal, zone, w_ref and start: a stuffer holding its share (100 = every miner)\n\
+         for the whole measured span ({MEASURED_BLOCKS} blocks from the start of the year); the bodies listed, M_r\n\
+         at the span's end and its mean over it, the longest run of M_r > 1.0, the stuffer's payout\n\
+         less its fees against no stuffing (SKL), and the burn and C at rest. A share is an even\n\
+         proportion of the blocks; the bodies are the ordinary 1-in/2-out, the lightest valid shape\n\
+         (CEN-I1)."
     )?;
     let mut campaigns = Vec::new();
     let mut heading = None;
