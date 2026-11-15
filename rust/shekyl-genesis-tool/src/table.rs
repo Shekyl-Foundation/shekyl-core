@@ -292,9 +292,8 @@ mod tests {
             Some(1_794_760_828)
         );
         let missing = root_with(net, None);
-        let refused = recorded_timestamp(missing.path(), net)
-            .err()
-            .expect("an unminted network is refused");
+        let refused =
+            recorded_timestamp(missing.path(), net).expect_err("an unminted network is refused");
         assert!(refused.to_string().contains("geblock mint"), "{refused}");
         for text in ["0\n", "", "007\n", "12x\n", "-5\n"] {
             let bad = root_with(net, Some(text));
