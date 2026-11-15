@@ -37,9 +37,17 @@ pub enum VolumeSignal {
     /// The lower middle of the window's per-block counts, as the sum of
     /// that many blocks at it (J's arm 1). A declared arm.
     Median,
+    /// The median read against the baseline restated in median terms
+    /// ([`crate::rng::geometric_median`] of the baseline: 35 at the shipped
+    /// 50), so honest geometric traffic reads 1.0 where blocks have room
+    /// (§5.34). Passed as the median scaled by the shipped baseline over
+    /// the restated one, which release, the burn and `C` read exactly as
+    /// the median against the restated baseline: each reads the operand
+    /// only through its ratio to the baseline. A declared arm.
+    MedianRestated,
     /// The baseline, whatever the window holds: release, the burn and `C`
     /// cut off from volume together (J's arm 5, §5.34). A declared arm.
-    Baseline,
+    Fixed,
 }
 
 /// The prefix sums of a fold's transaction counts, as far back as CEN-F20's
@@ -77,13 +85,18 @@ impl<const W: u64> VolumeFold<W> {
     }
 
     /// The operand `signal` prices the next block at: [`Self::operand`] for
-    /// the production sum, [`Self::median_operand`] for the median arm, and
+    /// the production sum, [`Self::median_operand`] for the median arms, and
     /// `baseline` a block for the arm that reads no volume.
     pub(crate) fn signal_operand(&self, signal: VolumeSignal, baseline: u64) -> TxVolume {
         match signal {
             VolumeSignal::Sum => self.operand(),
             VolumeSignal::Median => self.median_operand(),
-            VolumeSignal::Baseline => TxVolume::per_block(baseline),
+            VolumeSignal::MedianRestated => {
+                let median = self.median_operand();
+                let restated = crate::rng::geometric_median(baseline);
+                TxVolume::window(median.tx_count_sum() * baseline, median.blocks() * restated)
+            }
+            VolumeSignal::Fixed => TxVolume::per_block(baseline),
         }
     }
 
@@ -197,7 +210,7 @@ mod tests {
                 window.median_operand()
             );
             assert_eq!(
-                window.signal_operand(VolumeSignal::Baseline, 50),
+                window.signal_operand(VolumeSignal::Fixed, 50),
                 TxVolume::per_block(50),
                 "arm 5 reads the baseline whatever the window holds"
             );

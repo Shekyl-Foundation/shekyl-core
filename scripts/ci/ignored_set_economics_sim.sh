@@ -29,7 +29,7 @@
 # its own fixture (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.29). EUP-4 prep
 # 2's instruments (`--eup4`, §5.32) are pinned the same way: the full
 # narration on demand, its nightly scope here. So is the J x G grid
-# (`--jg-grid`, §5.33 and §5.34): the full grid, about 70 000 fold-years,
+# (`--jg-grid`, §5.33 and §5.34): the full grid, about 160 000 fold-years,
 # on demand on a fleet host; its nightly slice here.
 #
 # Rule 47: the lane asserts its subject before running it. The crate's

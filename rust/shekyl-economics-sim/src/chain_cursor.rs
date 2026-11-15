@@ -69,11 +69,11 @@ pub enum Traffic {
     /// The scenario's demand, every block.
     #[default]
     Steady,
-    /// A count drawn at the block's height, geometric around the
-    /// scenario's demand ([`crate::rng::honest_count`]): Poisson arrivals
-    /// over production's exponential block intervals. What a block does not
-    /// list waits in the pool, as on the chain. A declared arm.
-    Varied,
+    /// A count drawn at the block's height under the seed, geometric around
+    /// the scenario's demand ([`crate::rng::honest_count`]): Poisson
+    /// arrivals over production's exponential block intervals. What a block
+    /// does not list waits in the pool, as on the chain. A declared arm.
+    Variable(u64),
 }
 
 impl Traffic {
@@ -82,7 +82,7 @@ impl Traffic {
     pub(crate) fn offered(self, demand: u64, height: u64) -> u64 {
         match self {
             Self::Steady => demand,
-            Self::Varied => crate::rng::honest_count(height, demand),
+            Self::Variable(seed) => crate::rng::honest_count(seed, height, demand),
         }
     }
 }
@@ -299,8 +299,8 @@ mod tests {
     /// they differ, so the comparison has something to find.
     #[test]
     fn the_baseline_arm_reads_no_volume() {
-        let quiet = priced_after(VolumeSignal::Baseline, 0, 60);
-        let busy = priced_after(VolumeSignal::Baseline, 20, 60);
+        let quiet = priced_after(VolumeSignal::Fixed, 0, 60);
+        let busy = priced_after(VolumeSignal::Fixed, 20, 60);
         assert_eq!(quiet, busy);
         assert_eq!(
             quiet.0,
@@ -312,18 +312,65 @@ mod tests {
         );
     }
 
-    /// Steady traffic offers the scenario's demand; varied traffic offers
-    /// the count drawn at the block's height.
+    /// The restated median (§5.34) prices exactly as the median against the
+    /// baseline restated to 35: release, the burn and `C` each read the
+    /// operand only through its ratio to the baseline.
     #[test]
-    fn varied_traffic_offers_the_count_drawn_at_the_height() {
+    fn the_restated_median_is_the_median_against_the_restated_baseline() {
+        use crate::baseline::Override;
+        use shekyl_economics::{calc_release_multiplier, fee_correction};
+        let shipped = SimParams::default();
+        let restated =
+            SimParams::with_overrides(vec![
+                Override::parse("economic.tx_volume_baseline=35").expect("well-formed")
+            ])
+            .expect("a restated baseline passes the validators");
+        let (a, b) = (shipped.economic(), restated.economic());
+        assert_eq!(
+            crate::rng::geometric_median(a.tx_volume_baseline),
+            b.tx_volume_baseline
+        );
+        let supply = net_supply(u128::from(a.emission_curve_asymptote) / 3, 0);
+        let mut window = VolumeWindow::default();
+        let mut read = 0;
+        for h in 0..3_000u64 {
+            window.push((h * 37 + 11) % 97);
+            if h % 61 != 0 {
+                continue;
+            }
+            read += 1;
+            let scaled = window.signal_operand(VolumeSignal::MedianRestated, a.tx_volume_baseline);
+            let median = window.median_operand();
+            assert_eq!(
+                calc_release_multiplier(scaled, a.tx_volume_baseline, a.release_min, a.release_max),
+                calc_release_multiplier(median, b.tx_volume_baseline, b.release_min, b.release_max),
+                "height {h}"
+            );
+            let burn = calc_burn_pct_at(scaled, supply, a);
+            assert_eq!(burn, calc_burn_pct_at(median, supply, b), "height {h}");
+            for share in [0, 400_000, 1_000_000] {
+                assert_eq!(
+                    fee_correction(scaled, share, burn, a).as_scaled(),
+                    fee_correction(median, share, burn, b).as_scaled(),
+                    "height {h}"
+                );
+            }
+        }
+        assert!(read > 40);
+    }
+
+    /// Steady traffic offers the scenario's demand; variable traffic offers
+    /// the count drawn at the block's height under its seed.
+    #[test]
+    fn variable_traffic_offers_the_count_drawn_at_the_height() {
         assert_eq!(Traffic::Steady.offered(50, 9), 50);
         for h in 0..100 {
             assert_eq!(
-                Traffic::Varied.offered(50, h),
-                crate::rng::honest_count(h, 50)
+                Traffic::Variable(2).offered(50, h),
+                crate::rng::honest_count(2, h, 50)
             );
         }
-        assert!((0..100).any(|h| Traffic::Varied.offered(50, h) != 50));
+        assert!((0..100).any(|h| Traffic::Variable(2).offered(50, h) != 50));
     }
 
     /// E15-1. One baseline year, every block's ordinary fee on the lattice.

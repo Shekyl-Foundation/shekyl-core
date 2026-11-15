@@ -30,6 +30,7 @@ use crate::engine::{ScenarioConfig, SimParams, VolumeSchedule};
 use crate::esr10::{scenario_named, Arm};
 use crate::eup4::{release_multiplier_at, SharedRuns};
 use crate::miner_stuffer::{envelope_at, ROWS};
+use crate::rung_mix::Rung;
 use crate::scenarios::{
     BASELINE_STEADY_STATE, BOOM_BUST_CYCLE, STUFFING_ATTACK, STUFFING_ATTACK_BLOCKS,
 };
@@ -115,6 +116,9 @@ pub(crate) struct TraceProbe<'p> {
     samples: BTreeMap<u64, (u64, u64)>,
     /// The operand over the baseline at the same blocks, unclamped.
     ratios: BTreeMap<u64, u64>,
+    /// Blocks `[from, to)` whose unclamped ratio is counted, value by value.
+    counted: (u64, u64),
+    ratio_counts: BTreeMap<u64, u64>,
 }
 
 impl FoldProbe for TraceProbe<'_> {
@@ -132,6 +136,12 @@ impl FoldProbe for TraceProbe<'_> {
                 ),
             );
             self.ratios.insert(seen.block, ratio_at(seen, self.params));
+        }
+        if seen.block >= self.counted.0 && seen.block < self.counted.1 {
+            *self
+                .ratio_counts
+                .entry(ratio_at(seen, self.params))
+                .or_insert(0) += 1;
         }
     }
 }
@@ -210,6 +220,9 @@ pub(crate) struct StepRead {
     /// The operand over the baseline, unclamped, over the window before the
     /// edge: where the honest chain rests.
     pub(crate) resting_ratio: f64,
+    /// The unclamped ratio's values over the first edge's year, after the
+    /// window's first fill, and how many blocks read each.
+    pub(crate) ratio_counts: BTreeMap<u64, u64>,
 }
 
 /// The declared step's reading at one parameter set (§5.33's honest step):
@@ -232,6 +245,8 @@ pub(crate) fn honest_step(params: &SimParams) -> Vec<StepRead> {
             .collect(),
         samples: BTreeMap::new(),
         ratios: BTreeMap::new(),
+        counted: (TX_VOLUME_WINDOW, edges[0]),
+        ratio_counts: BTreeMap::new(),
     };
     a1_year_aggs_probed(params, &config, &mut probe);
     let window = |from: u64| from..from + TX_VOLUME_WINDOW;
@@ -247,6 +262,7 @@ pub(crate) fn honest_step(params: &SimParams) -> Vec<StepRead> {
                 after: scaled(after),
                 settles: settles_between(&probe.samples, edge, (before, after), |s| s.0),
                 resting_ratio: scaled(mean_of(before_blocks.map(|b| probe.ratios[&b]))),
+                ratio_counts: probe.ratio_counts.clone(),
             }
         })
         .collect()
@@ -293,6 +309,8 @@ pub(crate) fn write_step_response(
                 .collect(),
             samples: BTreeMap::new(),
             ratios: BTreeMap::new(),
+            counted: (0, 0),
+            ratio_counts: BTreeMap::new(),
         };
         a1_year_aggs_probed(&arm.params, &schedule.config, &mut probe);
         (schedule.config.name, schedule.edges, probe.samples)
@@ -448,6 +466,8 @@ struct StufferProbe<'p> {
     ratio: Vec<u64>,
     owed: Vec<u64>,
     own_fees: u128,
+    floor_fees: u128,
+    own_burned: u128,
     listed: u64,
     floor_rate: Option<u64>,
     burn_and_c: (u64, u64),
@@ -487,8 +507,19 @@ impl FoldProbe for StufferProbe<'_> {
         self.m_r.push(release_multiplier_at(seen, self.params));
         self.ratio.push(ratio_at(seen, self.params));
         self.owed.push(seen.priced.paid.owed.to_raw());
-        self.own_fees += u128::from(seen.priced.filled.own.fees_atomic);
-        self.listed += seen.priced.filled.own.txs;
+        let own = &seen.priced.filled.own;
+        self.own_fees += u128::from(own.fees_atomic);
+        self.own_burned +=
+            u128::from(own.fees_atomic) * u128::from(seen.priced.burn_pct) / u128::from(SCALE);
+        if own.txs > 0 {
+            let floor = self
+                .params
+                .fee
+                .rung_tx(Rung::Economy, &seen.priced.fee_point)
+                .expect("a producer's own body is priced on the Economy rung");
+            self.floor_fees += u128::from(own.txs) * u128::from(floor.fee_atomic);
+        }
+        self.listed += own.txs;
         let burn = seen.priced.burn_pct;
         let c = fee_correction(
             seen.priced.volume,
@@ -508,6 +539,11 @@ pub(crate) struct Folded {
     /// Every measured block's `PaidEmission::owed`, in order.
     owed: Vec<u64>,
     pub(crate) own_fees: u128,
+    /// What the bodies listed would have paid at the relay floor, the
+    /// Economy rung, whether or not they paid it.
+    pub(crate) floor_fees: u128,
+    /// The burned share of the fees the bodies paid.
+    pub(crate) own_burned: u128,
     pub(crate) listed: u64,
     pub(crate) floor_rate: u64,
     archival_bytes: u64,
@@ -530,6 +566,20 @@ impl Folded {
             .sum();
         change - i128::try_from(self.own_fees).expect("a span's fees fit")
     }
+
+    /// The burn rate at which the campaign's net gain is zero had its
+    /// bodies paid the relay floor (§5.34), scaled: its gain before the
+    /// burn of its own fees, over the floor fees on its bodies. `None` with
+    /// no bodies listed. It is a rate on the stuffer's own fees alone, and
+    /// may exceed 1.0: no burn of floor fees then deters it.
+    pub(crate) fn break_even_burn(&self, base: &Self, campaign: Campaign) -> Option<i128> {
+        if self.floor_fees == 0 {
+            return None;
+        }
+        let burned = i128::try_from(self.own_burned).expect("a span's fees fit");
+        let floor = i128::try_from(self.floor_fees).expect("a span's fees fit");
+        Some((self.net_gain(base, campaign) + burned) * i128::from(SCALE) / floor)
+    }
 }
 
 /// Fold `campaign` on the baseline from `start_year`, through its measured
@@ -547,6 +597,8 @@ pub(crate) fn fold_campaign(params: &SimParams, start_year: u64, campaign: Campa
         ratio: Vec::new(),
         owed: Vec::new(),
         own_fees: 0,
+        floor_fees: 0,
+        own_burned: 0,
         listed: 0,
         floor_rate: None,
         burn_and_c: (0, 0),
@@ -557,6 +609,8 @@ pub(crate) fn fold_campaign(params: &SimParams, start_year: u64, campaign: Campa
         ratio: probe.ratio,
         owed: probe.owed,
         own_fees: probe.own_fees,
+        floor_fees: probe.floor_fees,
+        own_burned: probe.own_burned,
         listed: probe.listed,
         floor_rate: probe
             .floor_rate
