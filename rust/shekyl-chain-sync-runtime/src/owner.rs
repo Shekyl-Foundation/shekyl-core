@@ -35,7 +35,9 @@
 //!   A deadline does not pass peer messages already queued, because one
 //!   of them may be the response it would abandon (`on_headers` closes a
 //!   session whose request the deadline already cleared). When the clock
-//!   fires, those messages are taken and then the deadline runs.
+//!   fires, those messages are taken and then the deadline runs. An input
+//!   that ends the owner stops that take: what is queued behind it stays
+//!   unread, and the deadline does not run.
 //! - **Claims** arrive decoded: the session layer reads the handshake and
 //!   the timed sync in both directions and hands the peer's sync payload
 //!   here ([`Inbound::Claim`]). There is no claim tap.
@@ -676,28 +678,13 @@ async fn run<C, R>(
                 match clock_ready(&wakes) {
                     Some(false) => {}
                     Some(true) => {
-                        let pending = inbound.len();
-                        // Why the burst ended the owner, when it did: the
-                        // port closing, or an input that ends it. Nothing
-                        // queued behind either is read.
-                        let mut ended = None;
-                        for _ in 0..pending {
-                            match inbound.try_recv() {
-                                Ok(inbound_one) => owner.inbound(inbound_one),
-                                Err(mpsc::error::TryRecvError::Empty) => break,
-                                Err(mpsc::error::TryRecvError::Disconnected) => {
-                                    ended = Some(EndCause::PortClosed);
-                                    break;
-                                }
-                            }
-                            if let ControlFlow::Break(cause) =
-                                pump_local(&mut owner, &mut input_rx, &mut tips, &mut latch)
-                            {
-                                ended = Some(cause);
-                                break;
-                            }
-                        }
-                        if let Some(cause) = ended {
+                        if let ControlFlow::Break(cause) = take_queued(
+                            &mut owner,
+                            &mut inbound,
+                            &mut input_rx,
+                            &mut tips,
+                            &mut latch,
+                        ) {
                             end.how = Ended::Failed(cause);
                             break;
                         }
@@ -754,14 +741,71 @@ fn clock_ready<C: Clock>(timer: &OwnerHandle<C>) -> Option<bool> {
     }
 }
 
-/// Proofs, entry replies, the tip and the latch, when any are already
-/// waiting. A deadline is not one of these: it runs after the peer
-/// messages that were queued when the clock fired.
+/// A tip or a latch that changed while queued inputs were applied.
+/// `None` means that watch had not changed. Present only on
+/// [`ControlFlow::Continue`] from [`pump_local`].
+struct LocalReady {
+    tip: Option<TipChanged>,
+    /// Whether the latch is set, when the latch watch changed.
+    latch_set: Option<bool>,
+}
+
+/// `Break` when `input` ends the owner, before any of it is applied.
+/// The input otherwise.
+fn end_of(input: Input) -> ControlFlow<EndCause, Input> {
+    match input {
+        Input::Unjudged(fault) => ControlFlow::Break(unjudged(fault)),
+        other => ControlFlow::Continue(other),
+    }
+}
+
+/// A prove job could not judge an item. Logs the fault and returns the
+/// owner's end.
+fn unjudged(fault: ProveFault) -> EndCause {
+    tracing::error!(%fault, "a proof could not be judged: chain sync stops");
+    EndCause::ProofUnjudged(fault)
+}
+
+/// Inputs already queued, applied until one ends the owner, then the tip
+/// and the latch when they have changed.
 ///
-/// `Break` when an input ends the owner ([`Owner::input`]): the inputs
-/// queued behind it, the tip and the latch are left unread.
-fn pump_local<C, R>(
+/// `Break` is an input that ends the owner ([`end_of`]). The inputs
+/// behind it stay queued, and neither watch is marked seen. `Continue`
+/// is what changed, for the caller to apply. A deadline is not one of
+/// these: it runs after the peer messages that were queued when the
+/// clock fired.
+fn pump_local<F>(
+    input_rx: &mut mpsc::UnboundedReceiver<Input>,
+    tips: &mut watch::Receiver<TipChanged>,
+    latch: &mut watch::Receiver<Option<FollowingDegraded>>,
+    mut apply: F,
+) -> ControlFlow<EndCause, LocalReady>
+where
+    F: FnMut(Input) -> ControlFlow<EndCause>,
+{
+    while let Ok(input) = input_rx.try_recv() {
+        apply(input)?;
+    }
+    let tip = tips
+        .has_changed()
+        .unwrap_or(false)
+        .then(|| *tips.borrow_and_update());
+    let latch_set = latch
+        .has_changed()
+        .unwrap_or(false)
+        .then(|| latch.borrow_and_update().is_some());
+    ControlFlow::Continue(LocalReady { tip, latch_set })
+}
+
+/// Peer messages already queued when the clock fired. Each is applied,
+/// then the local work waiting behind it ([`pump_local`]).
+///
+/// `Break` is the port closing, or an input that ends the owner. What is
+/// queued behind either stays unread. The deadline runs only when this
+/// returns `Continue`.
+fn take_queued<C, R>(
     owner: &mut Owner<C, R>,
+    inbound: &mut mpsc::UnboundedReceiver<Inbound>,
     input_rx: &mut mpsc::UnboundedReceiver<Input>,
     tips: &mut watch::Receiver<TipChanged>,
     latch: &mut watch::Receiver<Option<FollowingDegraded>>,
@@ -770,16 +814,22 @@ where
     C: Clock + Clone + Send + Sync + 'static,
     R: RelayRng + Send + 'static,
 {
-    while let Ok(input) = input_rx.try_recv() {
-        owner.input(input)?;
-    }
-    if tips.has_changed().unwrap_or(false) {
-        let tip = *tips.borrow_and_update();
-        owner.tip(&tip);
-    }
-    if latch.has_changed().unwrap_or(false) {
-        let set = latch.borrow_and_update().is_some();
-        owner.latch(set);
+    let pending = inbound.len();
+    for _ in 0..pending {
+        match inbound.try_recv() {
+            Ok(inbound_one) => owner.inbound(inbound_one),
+            Err(mpsc::error::TryRecvError::Empty) => return ControlFlow::Continue(()),
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                return ControlFlow::Break(EndCause::PortClosed);
+            }
+        }
+        let ready = pump_local(input_rx, tips, latch, |input| owner.input(input))?;
+        if let Some(tip) = ready.tip {
+            owner.tip(&tip);
+        }
+        if let Some(latch_set) = ready.latch_set {
+            owner.latch(latch_set);
+        }
     }
     ControlFlow::Continue(())
 }
@@ -1237,16 +1287,16 @@ where
         });
     }
 
-    /// Apply one input of the owner's own spawned work. `Break` is the
-    /// owner's end, with its cause: every caller stops reading and the
-    /// task's loop ends on it, so an ended owner applies no further input.
+    /// Apply one input of the owner's own spawned work. `Break` is
+    /// [`end_of`]: that input was not applied.
     fn input(&mut self, input: Input) -> ControlFlow<EndCause> {
+        let input = end_of(input)?;
         match input {
+            Input::Unjudged(_) => unreachable!("end_of returned this as the owner's end"),
             Input::Proven { job, results } => {
                 tracing::trace!(?job, proved = results.len(), last = ?results.last().map(outcome::proved_kind), "a prove job answered");
                 self.event(Event::Proven { job, results });
             }
-            Input::Unjudged(fault) => return ControlFlow::Break(Self::unjudged(fault)),
             Input::Entry { tag, reply } => {
                 let offered = self.offered.remove(&tag);
                 if let Some(offered) = &offered {
@@ -1422,14 +1472,6 @@ where
         }
         self.commands(out);
         self.published.alarm_tx.send_replace(self.sync.alarm());
-    }
-
-    /// A prove job could not judge an item: the owner's end. Logged here,
-    /// once: [`Self::input`] breaks on what this returns, and no caller
-    /// reads another input after a break, so no second fault arrives.
-    fn unjudged(fault: ProveFault) -> EndCause {
-        tracing::error!(%fault, "a proof could not be judged: chain sync stops");
-        EndCause::ProofUnjudged(fault)
     }
 
     /// Publish the model's header frontier for the ranked list, when it
