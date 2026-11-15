@@ -108,7 +108,7 @@ fn load_naming(
         cli,
         &Platform {
             home: Some(dir.to_path_buf()),
-            program_data: None,
+            service_parent: None,
             session_dir: None,
             service_rendezvous: None,
         },

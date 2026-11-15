@@ -109,7 +109,7 @@ command=/usr/sbin/daemon
 # No -r and no -R. Those flags restart a clean exit; shekyld_supervise
 # is where a failure is retried. -P is the supervisor's pid, so
 # `service stop` signals daemon(8), which signals this script.
-command_args="-f -S -T ${name} -P ${pidfile} -u shekyl /bin/sh /usr/local/etc/rc.d/${name} supervise --service --data-dir /var/db/shekyl --log-file /var/log/shekyl/shekyld.log ${shekyld_args}"
+command_args="-f -S -T ${name} -P ${pidfile} -u shekyl /bin/sh /usr/local/etc/rc.d/${name} supervise --service --log-file /var/log/shekyl/shekyld.log ${shekyld_args}"
 start_precmd="${name}_prestart"
 
 shekyld_prestart()

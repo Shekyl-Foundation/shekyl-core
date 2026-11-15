@@ -141,7 +141,7 @@ fn pair_overrides(w_ref: u64) -> Vec<Override> {
 
 /// The Standard transaction the baseline scenario's first block is built
 /// with under `params`.
-fn genesis_standard_tx(params: &SimParams) -> OrdinaryTx {
+pub(crate) fn genesis_standard_tx(params: &SimParams) -> OrdinaryTx {
     let config = scenario_named(params, BASELINE_STEADY_STATE);
     let economic = params.economic();
     ChainCursor::default()
@@ -427,7 +427,7 @@ fn ratio(fee: u64, ceiling: u64) -> f64 {
 
 /// The Standard fees carried in year 1 over the Standard transactions
 /// carried, atomic units.
-fn year_one_standard_fee(aggs: &[A1YearAgg]) -> Option<u64> {
+pub(crate) fn year_one_standard_fee(aggs: &[A1YearAgg]) -> Option<u64> {
     let year = &aggs.first()?.rungs[Rung::Standard];
     (year.carried_txs > 0)
         .then(|| u64::try_from(year.fees_atomic / year.carried_txs).expect("one fee fits"))

@@ -144,6 +144,9 @@ pub struct SimParams {
     /// transaction (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-1). The sim's
     /// own input, not a production value.
     pub fee: FeeModel,
+    /// What the fold's blocks read from the volume window: production's
+    /// sum, or one of J's arms (§5.33). The sim's own input.
+    pub volume_signal: crate::volume_window::VolumeSignal,
 }
 
 impl Default for SimParams {
@@ -152,6 +155,7 @@ impl Default for SimParams {
             run: Baseline::shipped(),
             overrides: Vec::new(),
             fee: FeeModel::PRODUCTION_DEFAULT,
+            volume_signal: crate::volume_window::VolumeSignal::Sum,
         }
     }
 }
@@ -169,6 +173,7 @@ impl SimParams {
             run: Baseline::shipped().with(&overrides)?,
             overrides,
             fee: FeeModel::PRODUCTION_DEFAULT,
+            volume_signal: crate::volume_window::VolumeSignal::Sum,
         })
     }
 
@@ -197,6 +202,7 @@ impl SimParams {
             run: Baseline::shipped().with(&overrides)?,
             overrides,
             fee: self.fee,
+            volume_signal: self.volume_signal,
         })
     }
 

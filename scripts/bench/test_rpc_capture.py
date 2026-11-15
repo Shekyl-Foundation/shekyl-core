@@ -100,7 +100,7 @@ class Capture(unittest.TestCase):
             cells = line.split("\t")
             if len(cells) > 1 and cells[1] == "method":
                 table.add(cells[0])
-        self.assertEqual(len(table), 42)
+        self.assertEqual(len(table), 47)
         asked = {r["method"] for r in C.chain_requests(5, "ab" * 32, "cd" * 32, "ee" * 32)}
         omitted = [m for m, _ in C.OMITTED]
         self.assertEqual(len(omitted), len(set(omitted)))

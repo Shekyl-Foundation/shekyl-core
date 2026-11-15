@@ -97,7 +97,7 @@ mod identity;
 use identity::{dh, Ephemeral};
 
 pub use crate::static_public::{InvalidStaticPublic, StaticPublic};
-pub use identity::StaticKeypair;
+pub use identity::{KeyFileError, StaticKeypair, KEY_FILE_LEN, KEY_FILE_MAGIC, KEY_FILE_VERSION};
 
 /// The Noise protocol name. It is hashed into the transcript, so it is part
 /// of the wire format.
@@ -126,6 +126,18 @@ pub const MESSAGE3_OVERHEAD: usize =
 /// Message 4 without its payload: the sealed `skem` ciphertext and the
 /// payload's tag.
 pub const MESSAGE4_OVERHEAD: usize = MLKEM768_CT_LEN + TAG_LEN + TAG_LEN;
+
+/// Message 3's and message 4's payload: one length for every grant set,
+/// so each message is one size on the wire (RT-O31). Message 3 carries what
+/// the client asks for and message 4 the client's ceiling (RT-O30), each a
+/// [`shekyl_rpc_grants::GrantSet::to_payload`].
+pub const PAYLOAD_LEN: usize = shekyl_rpc_grants::PAYLOAD_LEN;
+
+/// Message 3 with its payload. The handshake refuses any other length.
+pub const MESSAGE3_LEN: usize = MESSAGE3_OVERHEAD + PAYLOAD_LEN;
+
+/// Message 4 with its payload. The handshake refuses any other length.
+pub const MESSAGE4_LEN: usize = MESSAGE4_OVERHEAD + PAYLOAD_LEN;
 
 /// Associated data of this handshake's transport messages.
 ///
@@ -413,6 +425,16 @@ impl<'a> ClientReadyForMessage3<'a> {
     ///
     /// [`HandshakeError::Local`] only: nothing from the peer is read here.
     pub fn write_message3(
+        self,
+        payload: &[u8; PAYLOAD_LEN],
+    ) -> Result<(ClientAwaitingMessage4<'a>, Vec<u8>), HandshakeError> {
+        self.seal_message3(payload)
+    }
+
+    /// Message 3 around a payload of any length. Only [`Self::write_message3`]
+    /// calls it in production, with RT-O31's length; a test seals the
+    /// wrong length here to show the daemon refuses it.
+    fn seal_message3(
         mut self,
         payload: &[u8],
     ) -> Result<(ClientAwaitingMessage4<'a>, Vec<u8>), HandshakeError> {
@@ -458,14 +480,15 @@ impl ClientAwaitingMessage4<'_> {
     ///
     /// # Errors
     ///
-    /// [`HandshakeError::Message4`] for every way message 4 can be wrong.
+    /// [`HandshakeError::Message4`] for every way message 4 can be wrong,
+    /// its length other than [`MESSAGE4_LEN`] among them.
     pub fn read_message4(
         mut self,
         message4: &[u8],
-    ) -> Result<(Established, Vec<u8>), HandshakeError> {
+    ) -> Result<(Established, [u8; PAYLOAD_LEN]), HandshakeError> {
         const SKEM: usize = MLKEM768_CT_LEN + TAG_LEN;
         let fail = HandshakeError::Message4;
-        if message4.len() < MESSAGE4_OVERHEAD {
+        if message4.len() != MESSAGE4_LEN {
             return Err(fail);
         }
 
@@ -490,6 +513,7 @@ impl ClientAwaitingMessage4<'_> {
             .sym
             .decrypt_and_hash(&message4[SKEM..])
             .map_err(|_| fail)?;
+        let payload = array(&payload).ok_or(fail)?;
         Ok((Established { sym: self.sym }, payload))
     }
 }
@@ -529,7 +553,7 @@ pub struct DaemonAwaitingMessage3 {
 pub struct DaemonReadyForMessage4 {
     sym: SymmetricState,
     client: StaticPublic,
-    request: Vec<u8>,
+    request: [u8; PAYLOAD_LEN],
 }
 
 impl<'a> Daemon<'a> {
@@ -703,7 +727,8 @@ impl DaemonAwaitingMessage3 {
     ///
     /// # Errors
     ///
-    /// [`HandshakeError::Message3`] for every way message 3 can be wrong.
+    /// [`HandshakeError::Message3`] for every way message 3 can be wrong,
+    /// its length other than [`MESSAGE3_LEN`] among them.
     pub fn read_message3(
         mut self,
         message3: &[u8],
@@ -711,7 +736,7 @@ impl DaemonAwaitingMessage3 {
         const S_KEM: usize = X25519_PUBLIC_LEN + TAG_LEN;
         const PAYLOAD: usize = S_KEM + MLKEM768_EK_LEN + TAG_LEN;
         let fail = HandshakeError::Message3;
-        if message3.len() < MESSAGE3_OVERHEAD {
+        if message3.len() != MESSAGE3_LEN {
             return Err(fail);
         }
 
@@ -735,6 +760,7 @@ impl DaemonAwaitingMessage3 {
             .sym
             .decrypt_and_hash(&message3[PAYLOAD..])
             .map_err(|_| fail)?;
+        let payload: [u8; PAYLOAD_LEN] = array(&payload).ok_or(fail)?;
 
         // FIPS 203's input check on the key message 4 will encapsulate to.
         let client = StaticPublic::from_parts(x25519, mlkem_ek).map_err(|_| fail)?;
@@ -767,12 +793,22 @@ impl DaemonReadyForMessage4 {
     /// [`HandshakeError::Local`] only.
     pub fn write_message4(
         self,
-        payload: &[u8],
+        payload: &[u8; PAYLOAD_LEN],
     ) -> Result<(PendingSession, Vec<u8>), HandshakeError> {
         self.write_from(payload, &mut OsRng)
     }
 
     fn write_from(
+        self,
+        payload: &[u8; PAYLOAD_LEN],
+        rng: &mut impl CryptoRngCore,
+    ) -> Result<(PendingSession, Vec<u8>), HandshakeError> {
+        self.seal_message4(payload, rng)
+    }
+
+    /// Message 4 around a payload of any length; see
+    /// [`ClientReadyForMessage3::seal_message3`].
+    fn seal_message4(
         mut self,
         payload: &[u8],
         rng: &mut impl CryptoRngCore,
@@ -883,7 +919,7 @@ impl Established {
 pub struct PendingSession {
     sym: SymmetricState,
     client: StaticPublic,
-    request: Vec<u8>,
+    request: [u8; PAYLOAD_LEN],
 }
 
 /// A [`PendingSession`] whose receiving direction has been lent out.
@@ -916,7 +952,7 @@ pub struct WithheldSession {
     handshake_hash: [u8; HANDSHAKE_HASH_LEN],
     send: SendDirection,
     client: StaticPublic,
-    request: Vec<u8>,
+    request: [u8; PAYLOAD_LEN],
 }
 
 /// What the client's first transport message proved, and everything that was
@@ -926,7 +962,7 @@ pub struct AuthenticatedSession {
     /// is the identity to log, count and record against.
     pub client: StaticPublic,
     /// Message 3's payload: what the client asked for.
-    pub request: Vec<u8>,
+    pub request: [u8; PAYLOAD_LEN],
     /// The daemon's sending direction. Its nonce is still 0.
     pub send: SendDirection,
     /// The daemon's receiving direction, past the first message.
@@ -950,7 +986,7 @@ impl core::fmt::Display for FirstMessageRefused {
 impl std::error::Error for FirstMessageRefused {}
 
 impl PendingSession {
-    fn new(sym: SymmetricState, client: StaticPublic, request: Vec<u8>) -> Self {
+    fn new(sym: SymmetricState, client: StaticPublic, request: [u8; PAYLOAD_LEN]) -> Self {
         Self {
             sym,
             client,
@@ -1183,3 +1219,7 @@ mod admission;
 #[cfg(test)]
 #[path = "pinned_handshake.rs"]
 mod pinned;
+
+#[cfg(test)]
+#[path = "key_file_tests.rs"]
+mod key_file;

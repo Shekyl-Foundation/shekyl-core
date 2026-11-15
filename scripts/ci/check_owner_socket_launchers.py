@@ -51,6 +51,7 @@ REQUIRED = (
     "rust/shekyl-levin/tests/live_daemon/mod.rs",
     "rust/shekyl-daemon/tests/owner_socket.rs",
     "rust/shekyl-daemon/tests/owning_connection.rs",
+    "rust/shekyl-daemon/tests/service_rendezvous.rs",
     "rust/shekyl-daemon/tests/interrupt_inherited_ignore.rs",
     "rust/shekyl-wire/tests/vectors/capture_coinbase.py",
     "rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py",
@@ -63,7 +64,7 @@ REQUIRED = (
 NOT_A_SPAWN = {
     "scripts/ci/check_armed_lever_launchers.py": "a gate; its fixtures are the patterns it matches",
     "scripts/bench/test_drs_bench.py": "tests drs_bench's argv and artifact logic; spawns nothing",
-    "rust/shekyl-daemon/src/run.rs": "runs the daemon in-process with a test platform whose session directory is private",
+    "rust/shekyl-daemon/src/run_tests.rs": "runs the daemon in-process with a test platform whose session directory is private",
     "rust/shekyl-daemon/src/verify.rs": "runs the walk in-process with a test platform whose session directory is private",
     "rust/shekyl-daemon-config/src/announce.rs": "builds a configuration in-process; starts nothing",
     "rust/shekyl-daemon-config/src/owner_socket.rs": "the plan's own tests; start nothing",
@@ -73,6 +74,11 @@ NOT_A_SPAWN = {
 
 NAMED = ("--rpc-socket-dir", "owner_socket.argv(")
 
+# A service serves no owner socket and is refused a socket directory
+# (INPUT_GRAMMAR.md IG-Q105), so a launch that passes `--service`, as one
+# quoted argument, has nothing to name.
+SERVICE = '"--service"'
+
 
 def is_launcher(text, suffix):
     stripped = L.code(text, suffix)
@@ -81,7 +87,7 @@ def is_launcher(text, suffix):
 
 def names_the_directory(text, suffix):
     stripped = L.code(text, suffix)
-    return any(token in stripped for token in NAMED)
+    return any(token in stripped for token in NAMED) or SERVICE in stripped
 
 
 def find_launchers(root):
@@ -122,6 +128,12 @@ def selftest():
             "a spawn that names the directory passes",
             {"a.py": '["shekyld", "--network", "regtest"] + owner_socket.argv("a")'},
             ("a.py",),
+            [],
+        ),
+        (
+            "a service launch needs no socket directory",
+            {"a.rs": 'let b = "shekyld"; cmd.args(["--network", "regtest", "--service"]);'},
+            ("a.rs",),
             [],
         ),
         (
