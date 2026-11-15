@@ -89,7 +89,11 @@ jobs:
           echo "crates=$crates" >> "$GITHUB_OUTPUT"
 
   compile:
-    name: "Fuzz harness: ${{ matrix.crate }}"
+    # A plain name: GitHub adds the leg's crate, "Fuzz harness (<crate>)".
+    # The per-leg names are not required checks; fuzz-harness-pass is the
+    # verdict, so the job may be skipped whole when no crate is reached (an
+    # empty matrix is not a valid one).
+    name: "Fuzz harness"
     needs: scope
     if: needs.scope.outputs.crates != '[]'
     runs-on: ubuntu-latest
