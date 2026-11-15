@@ -262,6 +262,36 @@ pub fn generate_tx_key() -> (Zeroizing<[u8; 32]>, EdwardsPoint) {
     (secret, public)
 }
 
+/// The pseudo-out blind that balances a spend: the sum of its outputs'
+/// commitment masks less every other input's blind, so the inputs' pseudo
+/// outputs and the outputs' commitments (with the fee at mask zero) sum to
+/// the same point. Every spend takes its last input's blind from here,
+/// whatever drew the others: the OS for a solo spend, the intent for a
+/// multisig one.
+///
+/// # Errors
+///
+/// [`CryptoError::InvalidKeyMaterial`] for a blind or a mask that is not a
+/// canonical scalar.
+pub fn balancing_pseudo_out_blind(
+    other_blinds: &[Zeroizing<[u8; 32]>],
+    output_masks: &[[u8; 32]],
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    let scalar = |bytes: &[u8; 32]| {
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(*bytes))
+            .map(Zeroizing::new)
+            .ok_or(CryptoError::InvalidKeyMaterial)
+    };
+    let mut balance = Zeroizing::new(Scalar::ZERO);
+    for mask in output_masks {
+        *balance += &*scalar(mask)?;
+    }
+    for blind in other_blinds {
+        *balance -= &*scalar(blind)?;
+    }
+    Ok(Zeroizing::new(balance.to_bytes()))
+}
+
 /// Construct a two-component output with deterministic KEM from `tx_key_secret`.
 ///
 /// `spend_key` is interpreted as a **compressed Edwards point** (opaque B),

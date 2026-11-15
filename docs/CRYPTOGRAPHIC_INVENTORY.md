@@ -141,10 +141,10 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-11-12, counted from the TSV's production rows): 122 registered rows across the five mechanisms —
-127 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
+**Census (dated snapshot, 2026-11-15, counted from the TSV's production rows): 125 registered rows across the five mechanisms —
+130 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 127: the five mechanisms 122, plus the two micro-buckets, 1 + 4.) **This table is a
+sums to 130: the five mechanisms 125, plus the two micro-buckets, 1 + 4.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
@@ -263,10 +263,20 @@ admitted bundles: the receipt key signs every serve receipt, and
 labels. The same refresh recounts every row from the TSV, mechanism 2
 included (7 salts + 35 infos).
 
+The 2026-11-15 refresh (multisig E′ slice 4a-1, R-14) adds three
+mechanism-2 info labels, each an HKDF-SHA-512 expand of a spend intent's
+`kem_randomness_seed`: `shekyl/multisig-intent-tx-key-v1` (the
+transaction key), `shekyl/multisig-intent-pseudo-out-blind-v1` (each
+input's pseudo-out blind but the last, which balances the outputs' masks)
+and `shekyl/multisig-intent-rerandomize-v1` (each input's FCMP++
+rerandomization seed). Every member of a group derives them alike, so the
+group builds one transaction without exchanging its randomness
+(`PQC_MULTISIG.md` §9.5).
+
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
 | 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 54 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 35 infos | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 38 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
@@ -278,13 +288,13 @@ three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused by the w
 derivation and the harness fixture wallet's test-only derivation, which differ only by
 salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 127 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 130 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
 carve-outs** (a rebrand sweep skips them) — enumerated with per-seam consequences in
 [`FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md), and the CI gate
-cross-checks that every frozen row still has its entry there. The remaining 116 are
+cross-checks that every frozen row still has its entry there. The remaining 119 are
 Shekyl-authored **live** strings: still byte-load-bearing, but ours to version (mint
 a `…-v2` alongside a migration, never edit `…-v1` in place — SIGNATURE_ALIGNMENT §5).
 

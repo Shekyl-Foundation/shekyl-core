@@ -22,7 +22,7 @@ use rand_core::OsRng;
 use zeroize::Zeroizing;
 
 use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
-use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_crypto_pq::output::{balancing_pseudo_out_blind, EncryptedOutputField};
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
@@ -116,19 +116,14 @@ pub fn sign_transaction_with_terms(
     validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
 
     let n_in = inputs.len();
-    let n_out = outputs.len();
 
     // ── 2. Bulletproofs+ range proof ─────────────────────────────────
     // Use HKDF-derived commitment masks from OutputInfo (pre-derived by construct_output).
-    let mut masks = Zeroizing::new(Vec::with_capacity(n_out));
     let commitments_for_bp: Vec<Commitment> = outputs
         .iter()
         .map(|out| {
-            let opening =
-                Commitment::from_canonical_mask(&out.commitment_mask, out.amount.to_raw())
-                    .expect("commitment_mask is not a valid scalar");
-            masks.push(opening.mask);
-            opening
+            Commitment::from_canonical_mask(&out.commitment_mask, out.amount.to_raw())
+                .expect("commitment_mask is not a valid scalar")
         })
         .collect();
 
@@ -160,26 +155,24 @@ pub fn sign_transaction_with_terms(
     let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_label).collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
-    // Generate random blindings for all-but-last input; the last mask is
-    // constrained so that: sum(pseudo_masks) == sum(output_masks) + 0 (fee
-    // is committed with mask 0: fee*H).
-    let mut pseudo_masks = Zeroizing::new(Vec::with_capacity(n_in));
-    let sum_out_masks: Scalar = masks.iter().copied().sum();
-
-    for i in 0..n_in {
-        if i < n_in - 1 {
-            pseudo_masks.push(Scalar::random(&mut OsRng));
-        } else {
-            let sum_pseudo: Scalar = pseudo_masks.iter().copied().sum();
-            pseudo_masks.push(sum_out_masks - sum_pseudo);
-        }
-    }
+    // Random blinds for all but the last input; the last balances the
+    // outputs' masks (the fee is committed with mask 0, fee*H), through the
+    // balancer every spend uses, a multisig one included.
+    let mut pseudo_masks: Vec<Zeroizing<[u8; 32]>> = (1..n_in)
+        .map(|_| Zeroizing::new(Scalar::random(&mut OsRng).to_bytes()))
+        .collect();
+    let output_masks: Zeroizing<Vec<[u8; 32]>> =
+        Zeroizing::new(outputs.iter().map(|out| out.commitment_mask).collect());
+    pseudo_masks.push(
+        balancing_pseudo_out_blind(&pseudo_masks, &output_masks)
+            .expect("every mask opened its commitment above and every blind is a drawn scalar"),
+    );
 
     // ── 6. Build ProveInput for FCMP++ ───────────────────────────────
     let prove_inputs: Vec<ProveInput> = inputs
         .iter()
         .enumerate()
-        .map(|(i, inp)| prove_input_from_spend(i, inp, pseudo_masks[i].to_bytes()))
+        .map(|(i, inp)| prove_input_from_spend(i, inp, *pseudo_masks[i]))
         .collect::<Result<_, _>>()?;
 
     // ── 7. FCMP++ prove ──────────────────────────────────────────────

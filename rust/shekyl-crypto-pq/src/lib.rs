@@ -73,6 +73,7 @@ pub mod montgomery;
 pub mod multisig;
 pub mod multisig_blob;
 pub mod multisig_envelope;
+pub mod multisig_intent;
 pub mod multisig_output;
 pub mod output;
 pub mod output_claim;
