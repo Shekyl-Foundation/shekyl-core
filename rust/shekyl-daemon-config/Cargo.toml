@@ -30,7 +30,7 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # The instance-name rule and the instance the RPC section carries
 # (`RPC_CHANNEL.md` §7.1): the rule lives where the name is hashed into the
 # rendezvous, so the option and the rendezvous cannot disagree.
-shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 
 [target.'cfg(unix)'.dependencies]
 # Safe wrappers for the data-directory lock (`flock`) and the account's

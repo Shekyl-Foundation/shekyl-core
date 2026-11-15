@@ -179,6 +179,15 @@ pub fn start(
     let (owner, owner_listener) = match owner {
         Some(socket) => {
             let (listener, rendezvous) = socket.into_parts();
+            // Into this runtime before the start returns, so the start's
+            // `Ok` means the owner's leg will be served: the daemon writes
+            // its ready line on that `Ok` (IG-Q106). A refusal drops the
+            // rendezvous, which removes the socket.
+            let listener = {
+                let _runtime = rt.enter();
+                crate::owner::serve_ready(listener)
+            }
+            .map_err(|e| format!("the owner's socket could not be served: {e}"))?;
             let (watch_stop, watch_rx) = watch::channel(false);
             let watch = rt.spawn(crate::owner::watch(rendezvous.place(), gone, watch_rx));
             (

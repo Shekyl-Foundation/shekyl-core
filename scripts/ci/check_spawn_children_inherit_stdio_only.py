@@ -7,7 +7,7 @@
 # A production process spawn in a crate whose image can launch a managed tor
 # hands its child standard input, output and error and no other descriptor
 # (docs/design/DAEMON_CONFIG_CUTOVER.md section 2.10; the helper is
-# rust/shekyl-tor-control-client/src/inherit.rs).
+# rust/shekyl-spawn/src/inherit.rs).
 #
 # WHY. Rust opens every descriptor close-on-exec; a C library in the same
 # process does not promise to (the store's, a TLS library's own). Without the
@@ -21,8 +21,10 @@
 # (`Command::new(`, std or tokio, under any alias ending in `Command`) names
 # `inherit::` in its code: `inherit::stdio_only(&mut cmd)`, or
 # `inherit::StdioOnly` applied in the launch's own pre_exec before it clears
-# the one descriptor it keeps. A Windows-only spawn names it too; the call is a
-# no-op there.
+# the one descriptor it keeps; or the pair's child setup, which does exactly
+# that in shekyl-spawn (`ChildKeeps`, `keep_in_child`,
+# rust/shekyl-spawn/src/pair.rs). A Windows-only spawn names it too; the call
+# is a no-op there.
 #
 #   Production means under the crate's `src/`, outside any item whose
 #   `#[cfg(...)]` cannot hold in a shipped build, and in a module file whose
@@ -79,7 +81,7 @@ SUBJECTS = (
     "shekyl-tor-control-client/src/control/launch.rs",
     "shekyl-daemon/src/notify.rs",
 )
-HELPER = re.compile(r"\binherit::")
+HELPER = re.compile(r"\binherit::|\bChildKeeps::prepare\b|\bkeep_in_child\s*\(")
 # The options a shipped build has off (see the module comment). An item under
 # a cfg that is false with these off is test-only.
 OFF_IN_SHIPPED = {("test", None), ("feature", "unpinned-tor-for-tests")}
@@ -340,8 +342,8 @@ def check(root, watched, subjects):
             line = live[: SPAWN.search(live).start()].count("\n") + 1
             errors.append(
                 f"{rel}:{line}: a production spawn whose child is not limited to "
-                "stdio (call inherit::stdio_only, or apply inherit::StdioOnly in "
-                "the pre_exec)"
+                "stdio (call inherit::stdio_only, apply inherit::StdioOnly in "
+                "the pre_exec, or keep a pair's end with ChildKeeps)"
             )
     for subject in subjects:
         if subject not in production:
@@ -373,6 +375,10 @@ def selftest():
         "a production spawn without the helper": (
             {**base, "a/src/other.rs": bare},
             1,
+        ),
+        "a pair's child setup in the pre_exec": (
+            {**base, "a/src/other.rs": bare + "\nfn g() { let k = ChildKeeps::prepare(n); }"},
+            0,
         ),
         "the helper named only in a comment": (
             {**base, "a/src/other.rs": bare + "\n// inherit::stdio_only(&mut c)"},

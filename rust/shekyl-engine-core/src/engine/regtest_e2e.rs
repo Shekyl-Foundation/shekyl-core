@@ -852,7 +852,7 @@ impl RegtestDaemon {
             ]);
         }
         let recipe: Vec<std::ffi::OsString> = cmd.get_args().map(ToOwned::to_owned).collect();
-        let child = shekyl_tor_control_client::spawn_lock::spawn(&mut cmd)
+        let child = shekyl_spawn::spawn_lock::spawn(&mut cmd)
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
         // Base URL only — `Rpc::call` appends the `json_rpc` route itself.
@@ -1180,8 +1180,7 @@ impl RegtestDaemon {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-        let child =
-            shekyl_tor_control_client::spawn_lock::spawn(&mut cmd).expect("spawn shekyl-cli");
+        let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).expect("spawn shekyl-cli");
         let output = child.wait_with_output().expect("wait for shekyl-cli");
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         if !output.stderr.is_empty() {
@@ -1350,7 +1349,7 @@ impl RegtestDaemon {
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
             .stdin(Stdio::null());
-        self.child = shekyl_tor_control_client::spawn_lock::spawn(&mut cmd)
+        self.child = shekyl_spawn::spawn_lock::spawn(&mut cmd)
             .unwrap_or_else(|e| panic!("respawn {}: {e}", bin.display()));
         self.await_ready().await;
         let height_after = self.height().await;
@@ -1639,10 +1638,9 @@ pub(super) async fn try_generate_blocks(
 async fn terminate(daemon: &mut RegtestDaemon) -> std::process::ExitStatus {
     const STOP_WITHIN: Duration = Duration::from_secs(60);
     let pid = daemon.child.id().to_string();
-    let sent = shekyl_tor_control_client::spawn_lock::status(
-        std::process::Command::new("kill").args(["-TERM", &pid]),
-    )
-    .expect("run kill");
+    let sent =
+        shekyl_spawn::spawn_lock::status(std::process::Command::new("kill").args(["-TERM", &pid]))
+            .expect("run kill");
     assert!(sent.success(), "SIGTERM delivered");
     let deadline = std::time::Instant::now() + STOP_WITHIN;
     loop {
@@ -5504,7 +5502,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 /// ran.
 fn capture_build_identity(daemon_version: &str) -> String {
     let git = |args: &[&str]| -> String {
-        let out = shekyl_tor_control_client::spawn_lock::output(
+        let out = shekyl_spawn::spawn_lock::output(
             Command::new("git")
                 .args(args)
                 .current_dir(env!("CARGO_MANIFEST_DIR")),
@@ -5586,9 +5584,8 @@ fn commit_named_by_version(version: &str) -> Option<&str> {
 /// built at. A binary that names no commit, or another commit, is refused
 /// before the committed vector is touched.
 fn replay_build_identity(replay_bin: &Path, head: &str) -> String {
-    let out =
-        shekyl_tor_control_client::spawn_lock::output(Command::new(replay_bin).arg("--version"))
-            .expect("spawn shekyl-chain-replay --version");
+    let out = shekyl_spawn::spawn_lock::output(Command::new(replay_bin).arg("--version"))
+        .expect("spawn shekyl-chain-replay --version");
     assert!(
         out.status.success(),
         "shekyl-chain-replay --version failed: {}",
@@ -5738,8 +5735,8 @@ async fn maybe_capture_chain_vector(
         .arg(count.to_string())
         .arg("--out")
         .arg(&corpus);
-    let fetch = shekyl_tor_control_client::spawn_lock::output(&mut fetch)
-        .expect("spawn shekyl-chain-replay fetch");
+    let fetch =
+        shekyl_spawn::spawn_lock::output(&mut fetch).expect("spawn shekyl-chain-replay fetch");
     assert!(
         fetch.status.success(),
         "shekyl-chain-replay fetch failed: {}\n{}",
@@ -5822,7 +5819,7 @@ async fn maybe_capture_chain_vector(
         .arg(reorg_cap_blocks.to_string())
         .arg("--out")
         .arg(&trace);
-    let baseline = shekyl_tor_control_client::spawn_lock::output(&mut baseline)
+    let baseline = shekyl_spawn::spawn_lock::output(&mut baseline)
         .expect("spawn shekyl-chain-replay baseline");
     assert!(
         baseline.status.success(),
