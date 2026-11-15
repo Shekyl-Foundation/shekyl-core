@@ -470,10 +470,12 @@ async fn a_silent_connection_is_closed_at_the_message_1_deadline() {
 /// **A stop waits for every connection** (Copilot's review of #1377,
 /// finding 5): the listener returns only once a live session and a
 /// connection still in its handshake have both closed, and the handshake
-/// ends on the stop rather than at its deadline. Red edit: drop the wait in
-/// `listener::serve`, and it returns with the handshaking connection still
-/// open; drop the stop from the handshake's `select!`, and the stop waits
-/// out the message-1 deadline.
+/// ends on the stop rather than at its deadline. The handshaking client has
+/// sent message 1 and read message 2, so the daemon waits for message 3
+/// under the 11-second handshake deadline alone. Red edit: drop the wait in
+/// `listener::serve`, and it returns with connections still counted; drop
+/// the stop from the handshake's `select!`, and the stop waits out that
+/// deadline.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
     let served = Served::start(false).await;
@@ -484,13 +486,25 @@ async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
         .expect("a session");
     assert!(session.call("version", json!({})).await.is_some());
     let mut handshaking = TcpStream::connect(served.addr).await.expect("connect");
+    let other = StaticKeypair::generate().unwrap();
+    let (_waiting, message1) =
+        Client::start(&NETWORK, &other, &served.bundle()).expect("message 1");
+    handshaking
+        .write_all(&message1)
+        .await
+        .expect("write message 1");
+    let mut message2 = vec![0u8; MESSAGE2_LEN];
+    handshaking
+        .read_exact(&mut message2)
+        .await
+        .expect("message 2: the daemon now waits for message 3");
     let counted = Instant::now();
     while served.tracker.active_total() < 2 {
         assert!(counted.elapsed() < Duration::from_secs(5), "both counted");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     served.stop.send_replace(true);
-    tokio::time::timeout(Duration::from_secs(2), served.serving)
+    tokio::time::timeout(Duration::from_secs(8), served.serving)
         .await
         .expect("the stop does not wait out the handshake deadline")
         .expect("the listener's task")
