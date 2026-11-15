@@ -18,7 +18,12 @@ use super::probe::{
     uploaded,
 };
 use super::replied;
-use crate::control::{RelayFingerprint, RoundUpload, ServiceDescriptor, UploadEnd};
+use crate::control::{
+    parse_event, parse_service_descriptor, ControlReply, HsDescAction, HsDescContent, HsDescEvent,
+    RelayFingerprint, ReplyFramer, RoundUpload, ServiceDescriptor, ServiceId, TorEvent, UploadEnd,
+    UploadRounds,
+};
+use crate::supervisor::{directory_content_input_of, directory_input_of};
 
 /// This service's revision counter in these tests: a directory's copy carrying it
 /// is the current one.
@@ -1197,111 +1202,138 @@ fn missed_twice_by_directories(core: &mut Core, at: u64) -> (u64, Step) {
     check(core, refetched)
 }
 
-/// Run 4's onion C (SO-D12's walk, 2026-11-14), replayed from the daemon's
-/// debug log (`shekyl-dev` `data/so-d12-walk-2026-11-14/run4/`). The
-/// directories are public relays; the descriptor ids are the blinded keys
-/// of an onion whose key went with its data directory. `CURRENT` is the
-/// descriptor the check's fetches asked for, at the counter Tor gave.
-mod run_four_replay {
-    pub(super) const CURRENT: &str = "yGAaT2++/TpMdKEcKS4NepKxJvJJppM6r+9rxyIH+bE";
-    pub(super) const NEXT: &str = "mfKW5uetKPkYB2B0rT82YX3GMUxdY0b0BV/o1s3+XAI";
-    pub(super) const COUNTER: u64 = 3_763_297_149;
-    /// `CURRENT`'s eight directories, in upload order. The first four never
-    /// reported an end.
-    pub(super) const CURRENT_DIRS: [&str; 8] = [
-        "602A20F90E20D1B9EA4DD87AE948B590C61F8A94",
-        "33728FB7DDB105FB0C2F67A871F094E3EDB671CC",
-        "F2FAB7031B66F7CF09AF7BE6D104A3B72D352AE1",
-        "2739C3580FE65466FE93721EADA1D47478EE718C",
-        "0FF228E319AC2350BCCA4E0345E73430B8E4CC79",
-        "7175B61349B26D68DBAC0298EBBBE1C0B9DAB457",
-        "82A09305C8D771663E070D8D5D479BCD48EA58A8",
-        "E495F147FDFA263C5DC21AE1A105B9EFFDBE2467",
-    ];
-    /// `NEXT`'s eight directories, in upload order. Every one confirmed.
-    pub(super) const NEXT_DIRS: [&str; 8] = [
-        "FA01576E6B5CB77DF2330DEC999A7259BA3A48A3",
-        "99CBE9E61E65D65DFFB23CE35C541F375FB3652D",
-        "92E90B9CDE0FA37937BFA4788D7C96277A1953CB",
-        "1A88A34C7E4842AA658F8437436BDE6462967A64",
-        "2CBB483A11A71E55A2BEB16A0C41703E61968309",
-        "4C2686B7FF7AEF0478EEC7EBE53F7CEA705679E7",
-        "9A70CF244A22A0B5AC67B327420F8BECB8A4522F",
-        "587AC6D887F7054B63ACC683803A7B4C5FE1C8CE",
-    ];
-    /// The `UPLOADED`s, in the order they arrived (07:55:48.99Z to 07:55:50.36Z).
-    pub(super) const UPLOADED: [&str; 12] = [
-        "82A09305C8D771663E070D8D5D479BCD48EA58A8",
-        "7175B61349B26D68DBAC0298EBBBE1C0B9DAB457",
-        "E495F147FDFA263C5DC21AE1A105B9EFFDBE2467",
-        "0FF228E319AC2350BCCA4E0345E73430B8E4CC79",
-        "92E90B9CDE0FA37937BFA4788D7C96277A1953CB",
-        "FA01576E6B5CB77DF2330DEC999A7259BA3A48A3",
-        "587AC6D887F7054B63ACC683803A7B4C5FE1C8CE",
-        "1A88A34C7E4842AA658F8437436BDE6462967A64",
-        "99CBE9E61E65D65DFFB23CE35C541F375FB3652D",
-        "9A70CF244A22A0B5AC67B327420F8BECB8A4522F",
-        "4C2686B7FF7AEF0478EEC7EBE53F7CEA705679E7",
-        "2CBB483A11A71E55A2BEB16A0C41703E61968309",
-    ];
+/// SO-D12's run 4, onion C: the daemon's own debug lines, verbatim (the
+/// fixture's header says where they came from). The run kept no raw `HS_DESC`
+/// lines, only these.
+const RUN_FOUR: &str =
+    include_str!("../../../control/testdata/so_d12_run4_onion_c_daemon_debug.txt");
+
+/// One line of [`RUN_FOUR`], read back from the daemon's Debug form.
+enum Logged {
+    Event(HsDescEvent),
+    Ours(ServiceDescriptor),
+    /// `HS_DESC_CONTENT`. After a `NOT_FOUND` Tor sends an empty one
+    /// (`hs_client.c:1719-1722`), logged with no counter.
+    Copy {
+        hsdir: RelayFingerprint,
+        descriptor_id: String,
+        revision_counter: Option<u64>,
+    },
 }
 
-fn relay(hex: &str) -> RelayFingerprint {
-    let mut bytes = [0u8; 20];
-    for (at, byte) in bytes.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[at * 2..at * 2 + 2], 16).expect("hex");
+/// The value after `key=`, up to the next space.
+fn logged_field<'a>(line: &'a str, key: &str) -> &'a str {
+    let at = line.find(&format!(" {key}=")).expect(key) + key.len() + 2;
+    line[at..].split(' ').next().expect(key)
+}
+
+/// `None`, `Some("text")` or `Some(RelayFingerprint($HEX))`, as Debug prints them.
+fn logged_option(value: &str) -> Option<String> {
+    let inner = value.strip_prefix("Some(")?.strip_suffix(')')?;
+    let inner = inner
+        .strip_prefix("RelayFingerprint($")
+        .and_then(|hex| hex.strip_suffix(')'))
+        .unwrap_or(inner);
+    Some(inner.trim_matches('"').to_owned())
+}
+
+fn logged(line: &str, address: &ServiceId) -> Option<Logged> {
+    let relay = |value: &str| {
+        logged_option(value).map(|hex| RelayFingerprint::parse(&hex).expect("a fingerprint"))
+    };
+    if line.contains("Tor's descriptor event") {
+        let action = match logged_field(line, "action") {
+            "Created" => HsDescAction::Created,
+            "Upload" => HsDescAction::Upload,
+            "Uploaded" => HsDescAction::Uploaded,
+            "Requested" => HsDescAction::Requested,
+            "Received" => HsDescAction::Received,
+            "Failed" => HsDescAction::Failed,
+            other => panic!("an action this fixture does not hold: {other}"),
+        };
+        return Some(Logged::Event(HsDescEvent {
+            action,
+            address: Some(address.clone()),
+            hsdir: relay(logged_field(line, "hsdir")),
+            descriptor_id: logged_option(logged_field(line, "descriptor_id")),
+            reason: logged_option(logged_field(line, "reason")),
+        }));
     }
-    RelayFingerprint::from_bytes(bytes)
+    if line.contains("this onion's current descriptor") {
+        return Some(Logged::Ours(ServiceDescriptor {
+            descriptor_id: logged_field(line, "descriptor_id").to_owned(),
+            revision_counter: logged_field(line, "revision_counter")
+                .parse()
+                .expect("a counter"),
+        }));
+    }
+    if line.contains("a directory's copy") {
+        return Some(Logged::Copy {
+            hsdir: relay(logged_field(line, "hsdir")).expect("a directory"),
+            descriptor_id: logged_option(logged_field(line, "descriptor_id")).expect("an id"),
+            revision_counter: logged_option(logged_field(line, "revision_counter"))
+                .map(|counter| counter.parse().expect("a counter")),
+        });
+    }
+    None
 }
 
-/// **Run 4, replayed: the check now reads C's round as a miss.** C's round
-/// uploaded `CURRENT` to eight directories and four never reported an end.
-/// Its probe went ahead at the round's wait (07:56:48Z, 60 s after the first
-/// `UPLOADED`), asked only the four that confirmed, found our copy at each,
-/// and C read Reachable at 07:57:44Z; from 07:59:40Z to 08:04:23Z peers
-/// dialling C gave up three times after 105 s waiting for its descriptor.
-/// Tor's own refetch asked one of the four, 602A20F9, which never answered. Replayed through the coalescer and the core: all eight are
-/// asked, the four silent ones are missing when their windows pass, and
-/// four of eight is a first miss. Fails if `UploadRounds` drops uploads
-/// still open, or `directories_drawn` leaves the round's hung uploads
-/// unasked.
+/// **Run 4, replayed from its own lines: the check now reads C's round as a
+/// miss.** C's round uploaded its current descriptor to eight directories,
+/// and four never reported an end. Its probe went ahead at the round's wait
+/// (07:56:48Z, 60 s after the first `UPLOADED`), asked only the four that
+/// confirmed, found our copy at each, and C read Reachable at 07:57:44Z;
+/// from 07:59:40Z to 08:04:23Z peers dialling C gave up three times after
+/// 105 s waiting for its descriptor. Tor's own refetch asked one of the four,
+/// 602A20F9, which never answered.
+///
+/// The fixture's lines are fed as the driver feeds Tor's: each event to the
+/// coalescer when it owns the line, else through `directory_input_of` to
+/// the core, and each copy as `directory_content_input_of` makes it, the
+/// empty one after a `NOT_FOUND` included. The check draws
+/// at the round's wait, as C's did, with the four still open. It now asks
+/// all sixteen directories; the four silent ones are missing when their
+/// windows pass, the next period's eight are excluded once a fetch names
+/// the current descriptor, and four of eight is a first miss. Fails if
+/// `UploadRounds` drops uploads still open, or `directories_drawn` leaves
+/// the round's hung uploads unasked.
 #[test]
-fn run_four_replayed_is_a_miss() {
-    use crate::control::{HsDescAction, HsDescEvent, ServiceId, UploadRounds};
-    use run_four_replay::{COUNTER, CURRENT, CURRENT_DIRS, NEXT, NEXT_DIRS, UPLOADED};
+fn run_four_replayed_from_its_own_lines_is_a_miss() {
     let address = ServiceId::parse("url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid")
         .expect("a test address");
-    let event = |action, hsdir: &str, descriptor: Option<&str>| HsDescEvent {
-        action,
-        address: Some(address.clone()),
-        hsdir: Some(relay(hsdir)),
-        descriptor_id: descriptor.map(str::to_owned),
-        reason: None,
-    };
+    let lines: Vec<Logged> = RUN_FOUR
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| logged(line, &address))
+        .collect();
+    let drawn_at = lines
+        .iter()
+        .position(|line| matches!(line, Logged::Ours(_)))
+        .expect("the check's own descriptor");
+
+    // The round, up to the check.
     let mut rounds = UploadRounds::new(address.clone());
-    for hsdir in CURRENT_DIRS {
-        rounds.observe(&event(HsDescAction::Upload, hsdir, Some(CURRENT)));
-    }
-    for hsdir in NEXT_DIRS {
-        rounds.observe(&event(HsDescAction::Upload, hsdir, Some(NEXT)));
-    }
-    for hsdir in UPLOADED {
-        rounds.observe(&event(HsDescAction::Uploaded, hsdir, None));
+    for line in &lines[..drawn_at] {
+        let Logged::Event(event) = line else {
+            panic!("the round holds events only");
+        };
+        assert!(
+            rounds.owns_line(event) || event.action == HsDescAction::Created,
+            "{event:?}"
+        );
+        rounds.observe(event);
     }
     assert!(rounds.in_round(), "four uploads never reported");
+    let Logged::Ours(ours) = &lines[drawn_at] else {
+        unreachable!("found above");
+    };
     let unconfirmed: Vec<_> = rounds
         .directories()
         .iter()
-        .filter(|upload| !upload.ended.confirmed())
+        .filter(|upload| upload.descriptor_id == ours.descriptor_id && !upload.ended.confirmed())
         .map(|upload| upload.hsdir)
         .collect();
-    assert_eq!(
-        unconfirmed,
-        CURRENT_DIRS[..4]
-            .iter()
-            .map(|hex| relay(hex))
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(unconfirmed.len(), 4);
 
     // The core: the round began at 0, its first upload landed at 2 s, and
     // its wait draws the check at 62 s, while the four are still open.
@@ -1316,58 +1348,186 @@ fn run_four_replayed_is_a_miss() {
             draw: 0,
         })
         .collect();
-    let ours = ServiceDescriptor {
-        descriptor_id: CURRENT.to_owned(),
-        revision_counter: COUNTER,
-    };
     let sent_at = secs(62 + 15);
-    let launched = drive(&mut core, sent_at, &mut Some(fetches), &ours);
+    let launched = drive(&mut core, sent_at, &mut Some(fetches), ours);
     assert_eq!(probes(&launched), 1);
     assert_eq!(fetched(&launched).len(), 16, "every upload's directory");
     core.on(Input::ProbeDialed { minted_at: sent_at }, sent_at);
-    // The first fetch answered names `CURRENT`: the `NEXT` directories leave.
-    core.on(
-        Input::DirectoryAsked {
-            hsdir: relay(CURRENT_DIRS[4]),
-            descriptor_id: CURRENT.to_owned(),
-        },
-        sent_at + secs(1),
-    );
-    for hsdir in &CURRENT_DIRS[4..] {
-        core.on(
-            Input::DirectoryAnswered {
-                hsdir: relay(hsdir),
-                descriptor_id: Some(CURRENT.to_owned()),
-                answer: DirectoryAnswer::Received {
-                    revision_counter: Some(COUNTER),
-                },
-            },
-            sent_at + secs(2),
-        );
+
+    // The answers, in the order C's daemon logged them.
+    let mut at = sent_at;
+    for line in &lines[drawn_at + 1..] {
+        at += secs(1);
+        let input = match line {
+            Logged::Event(event) if rounds.owns_line(event) => {
+                panic!("an upload's line after the round: {event:?}")
+            }
+            Logged::Event(event) => directory_input_of(event),
+            Logged::Copy {
+                hsdir,
+                descriptor_id,
+                revision_counter,
+            } => directory_content_input_of(&HsDescContent {
+                address: Some(address.clone()),
+                descriptor_id: Some(descriptor_id.clone()),
+                hsdir: Some(*hsdir),
+                revision_counter: *revision_counter,
+            }),
+            Logged::Ours(_) => panic!("one check"),
+        };
+        if let Some(input) = input {
+            core.on(input, at);
+        }
     }
-    let arrived = core.on(arrival(sent_at, sent_at + secs(3)), sent_at + secs(3));
-    assert_eq!(refetches(&arrived), 0, "the four silent windows still run");
+    let arrived = core.on(arrival(sent_at, at), at);
+    assert_eq!(refetches(&arrived), 0, "the silent windows still run");
     let window = core.on_deadline(sent_at + secs(60));
     let window = served(&mut core, window, sent_at + secs(60));
     assert_eq!(refetches(&window), 1, "four of eight: a first miss");
     let report = settled(&window);
+    let counted = |wanted: Counted| -> Vec<RelayFingerprint> {
+        report
+            .iter()
+            .filter(|line| line.counted == wanted)
+            .map(|line| line.hsdir)
+            .collect()
+    };
+    assert_eq!(counted(Counted::Missing), unconfirmed);
+    assert_eq!(counted(Counted::Found).len(), 4);
+    assert_eq!(
+        counted(Counted::Excluded(Exclusion::OtherDescriptor)).len(),
+        8
+    );
+}
+
+/// A cut round captured from tor 0.4.9.14 (the fixture's header says how):
+/// four uploads of each descriptor left unfinished, then a directed fetch of
+/// every directory. Verbatim bytes, as tor wrote them to the controller.
+const UPLOAD_CUT: &str =
+    include_str!("../../../control/testdata/hs_desc_upload_cut_tor_0_4_9_14.txt");
+
+/// [`UPLOAD_CUT`]'s replies after its header, framed as the control client
+/// frames them.
+fn upload_cut_replies() -> Vec<ControlReply> {
+    let mut rest = UPLOAD_CUT;
+    while rest.starts_with('#') {
+        rest = &rest[rest.find('\n').expect("a header line ends") + 1..];
+    }
+    let mut framer = ReplyFramer::default();
+    framer.push_bytes(rest.as_bytes());
+    let mut replies = Vec::new();
+    while let Some(reply) = framer.next_reply().expect("tor's own framing") {
+        replies.push(reply);
+    }
+    replies
+}
+
+/// **A cut round, from tor's own bytes through the real parser, is a miss.**
+/// The capture is run 4's condition made on purpose: a second controller
+/// closed the upload circuits to four of each descriptor's eight
+/// directories, so those uploads never report an end, and a directed fetch
+/// then asked all sixteen. Fed as the driver feeds them (the framer,
+/// `parse_event`, the coalescer when it owns the line, else
+/// `directory_input_of`; `HS_DESC_CONTENT` through
+/// `directory_content_input_of`; our descriptor through
+/// `parse_service_descriptor`), with the check drawn at the round's wait
+/// while the four are open: the four that confirmed hold our copy, the four
+/// cut ones answer `NOT_FOUND` or nothing, and four of eight is a first
+/// miss. The capture was taken between 12:00 and 00:00 UTC, when clients
+/// ask for `desc_next`. Fails if a cut upload's directory is not asked, or
+/// if its `NOT_FOUND` or silence is not counted missing.
+#[test]
+fn a_cut_round_from_tors_own_bytes_is_a_miss() {
+    let replies = upload_cut_replies();
+    let address = replies
+        .iter()
+        .find_map(|reply| {
+            reply
+                .lines()
+                .iter()
+                .find_map(|line| line.strip_prefix("ServiceID="))
+        })
+        .and_then(ServiceId::parse)
+        .expect("ADD_ONION's reply names the onion");
+    let drawn_at = replies
+        .iter()
+        .position(|reply| parse_service_descriptor(reply).is_some())
+        .expect("the check's own descriptor");
+    let ours = parse_service_descriptor(&replies[drawn_at]).expect("found above");
+
+    let mut rounds = UploadRounds::new(address.clone());
+    for reply in &replies[..drawn_at] {
+        if let Some(TorEvent::HsDesc(event)) = parse_event(reply) {
+            rounds.observe(&event);
+        }
+    }
+    assert!(rounds.in_round(), "the cut uploads never report");
+    let unconfirmed: Vec<_> = rounds
+        .directories()
+        .iter()
+        .filter(|upload| !upload.ended.confirmed())
+        .collect();
+    assert_eq!(unconfirmed.len(), 8, "four of each descriptor");
+
+    let mut core = published();
+    core.on(Input::UploadRoundStarted, 0);
+    core.on(Input::FirstUploaded { draw: 0 }, secs(2));
+    let fetches = rounds
+        .directories()
+        .iter()
+        .map(|upload| DirectoryFetch {
+            upload: upload.clone(),
+            draw: 0,
+        })
+        .collect();
+    let sent_at = secs(62 + 15);
+    let launched = drive(&mut core, sent_at, &mut Some(fetches), &ours);
+    assert_eq!(fetched(&launched).len(), 16, "every upload's directory");
+    core.on(Input::ProbeDialed { minted_at: sent_at }, sent_at);
+
+    let mut at = sent_at;
+    let mut asked_for = None;
+    for reply in &replies[drawn_at + 1..] {
+        at += secs(1) / 10;
+        let input = match parse_event(reply) {
+            Some(TorEvent::HsDesc(event)) if rounds.owns_line(&event) => {
+                panic!("an upload's line after the round: {event:?}")
+            }
+            Some(TorEvent::HsDesc(event)) => {
+                if event.action == HsDescAction::Requested && asked_for.is_none() {
+                    asked_for = event.descriptor_id.clone();
+                }
+                directory_input_of(&event)
+            }
+            Some(TorEvent::HsDescContent(content)) => directory_content_input_of(&content),
+            _ => None,
+        };
+        if let Some(input) = input {
+            core.on(input, at);
+        }
+    }
+    let asked_for = asked_for.expect("a fetch names the descriptor clients ask for");
+    core.on(arrival(sent_at, at), at);
+    let window = core.on_deadline(sent_at + secs(60));
+    let window = served(&mut core, window, sent_at + secs(60));
+    assert_eq!(refetches(&window), 1, "four of eight: a first miss");
+    let report = settled(&window);
+    let cut: Vec<_> = unconfirmed
+        .iter()
+        .filter(|upload| upload.descriptor_id == asked_for)
+        .map(|upload| upload.hsdir)
+        .collect();
     let missing: Vec<_> = report
         .iter()
         .filter(|line| line.counted == Counted::Missing)
         .map(|line| line.hsdir)
         .collect();
-    assert_eq!(
-        missing,
-        CURRENT_DIRS[..4]
-            .iter()
-            .map(|hex| relay(hex))
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(missing, cut, "the cut directories, and only those");
     assert_eq!(
         report
             .iter()
-            .filter(|line| line.counted == Counted::Excluded(Exclusion::OtherDescriptor))
+            .filter(|line| line.counted == Counted::Found)
             .count(),
-        8
+        4
     );
 }

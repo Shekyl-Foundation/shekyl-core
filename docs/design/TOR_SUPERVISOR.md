@@ -833,6 +833,25 @@ it.
   round began would count it missing. Tor starts a round's uploads in one
   pass, so the round's start is each upload's.
 
+  **What has been shown, and what has not (Rick, 2026-11-15).** The
+  condition, an upload left unfinished, has never been produced against a
+  live daemon. The managed Tor has no control port (`launch.rs`: the owning
+  controller's descriptor only), so nothing can cut its uploads without a
+  hook in production code, and this design takes none. It is replayed
+  instead: run 4's own lines, the daemon's debug lines, since the run kept
+  no raw `HS_DESC` (`run_four_replayed_from_its_own_lines_is_a_miss`); and a
+  rig's raw lines through the real parser: tor 0.4.9.14 on the floor device,
+  one controller publishing a fresh onion and a second closing its upload
+  circuits (`PURPOSE=HS_SERVICE_HSDIR`) to four directories of each
+  descriptor (`a_cut_round_from_tors_own_bytes_is_a_miss`). In five trials
+  no cut upload reported an end. A cut directory mostly answered the
+  check's fetch `NOT_FOUND` and sometimes not at all; once, one returned
+  our copy, its upload having landed before its circuit closed, which the
+  check counts as found (`shekyl-dev`
+  `data/tsr-acceptance/2026-11-15-pi-upload-cut/`).
+  `ExcludeNodes` cannot make the cut: Tor uses a pre-chosen last hop on an
+  upload circuit even when excluded (`circuitbuild.c:2180-2184`).
+
 - **The copy must be ours (Rick, 2026-11-01).** A directory counts as
   holding the descriptor only when its copy's `revision-counter` is ours,
   read with the check from `GETINFO hs/service/desc/id/<onion>`
@@ -850,7 +869,13 @@ it.
   signed-with-key extension (`hs_service.c:1794-1796`), and only a copy of
   that descriptor is compared; a copy of the other counts by being there.
   Comparing every copy with `desc_current` made a healthy node miss twice
-  and republish at 17:00Z on 2026-11-01 (§7). `GETINFO hs/client/desc/id`
+  and republish at 17:00Z on 2026-11-01 (§7). **A limit that stands:** from 12:00
+  to 00:00 UTC any stored copy of `desc_next` counts as found, an older
+  one included, since no counter of ours can be compared with it. With
+  unconfirmed uploads now asked, a directory holding an earlier upload's
+  copy reads as found in that half of the day, though clients may get an
+  out-of-date descriptor there. The control port giving `desc_current`
+  only is one more item for the Tor Project report. `GETINFO hs/client/desc/id`
   cannot answer this: the client cache holds one copy and discards a fetched
   one with a lower counter (`hs_cache.c:837-842`), so it cannot say which
   directory held what; `HS_DESC_CONTENT` carries each directory's copy.
