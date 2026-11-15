@@ -756,9 +756,9 @@ mod tests {
     /// directory a round sent to (SO-D12's run 4). A directory that took both
     /// descriptors pairs its ends with its uploads in order. The set is the
     /// open round's once it has a success, and the last such round's after;
-    /// a later round with no success leaves it. Fails if `close` pairs an end
-    /// with any but the earliest open record (`swap_remove`), if failed
-    /// uploads are dropped, or if `directories` shows a round with no success.
+    /// a later round with no success leaves it. Fails if a failed upload's
+    /// end is not recorded, or if `directories` shows a round with no
+    /// success.
     #[test]
     fn every_upload_is_kept_with_its_descriptor_and_its_end() {
         use HsDescAction::{Failed, Upload, Uploaded};
@@ -798,6 +798,28 @@ mod tests {
         rounds.observe(&round_event_for(Upload, 4, Some("cur")));
         rounds.observe(&round_event_for(Failed, 4, None));
         assert_eq!(rounds.directories(), ended);
+    }
+
+    /// **An end pairs with the earliest upload still open to its directory.**
+    /// An `UPLOADED` names no descriptor. Directory 2 took the current
+    /// descriptor, then the next one; once directory 1's upload has ended
+    /// ahead of them, directory 2's first `UPLOADED` is still the current
+    /// one's. Fails if `close` takes the open upload out with `swap_remove`,
+    /// which moves directory 2's later upload ahead of its earlier one.
+    #[test]
+    fn an_end_pairs_with_the_earliest_open_upload_to_its_directory() {
+        use HsDescAction::{Failed, Upload, Uploaded};
+        use UploadEnd::{Failed as Fail, Open, Uploaded as Done};
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        rounds.observe(&round_event_for(Upload, 1, Some("cur")));
+        rounds.observe(&round_event_for(Upload, 2, Some("cur")));
+        rounds.observe(&round_event_for(Upload, 2, Some("next")));
+        rounds.observe(&round_event_for(Failed, 1, None));
+        rounds.observe(&round_event_for(Uploaded, 2, None));
+        assert_eq!(
+            rounds.directories(),
+            [to(1, "cur", Fail), to(2, "cur", Done), to(2, "next", Open)]
+        );
     }
 
     /// **An upload still open when its round ends is kept as unfinished**,
