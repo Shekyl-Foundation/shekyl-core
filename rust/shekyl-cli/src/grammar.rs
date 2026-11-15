@@ -1005,6 +1005,27 @@ mod tests {
             parse("send 1 addr --priority 2"),
             ResolvedCommand::Diagnostic { .. }
         ));
+        // One spelling per tier (IG-1): the uppercase names and the retired
+        // `priority` are no tier.
+        for word in ["HIGH", "Standard", "priority", "PRIORITY"] {
+            assert!(
+                matches!(
+                    parse(&format!("send 1 addr --priority {word}")),
+                    ResolvedCommand::Diagnostic { .. }
+                ),
+                "{word}"
+            );
+        }
+        for (word, tier) in [
+            ("economy", FeePriority::Economy),
+            ("standard", FeePriority::Standard),
+            ("high", FeePriority::High),
+        ] {
+            match parse(&format!("send 1 addr --priority {word}")) {
+                ResolvedCommand::Transfer { priority, .. } => assert_eq!(priority, tier),
+                other => panic!("{word}: {other:?}"),
+            }
+        }
         assert!(matches!(
             parse("send 1 addr typo"),
             ResolvedCommand::Diagnostic { .. }

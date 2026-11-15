@@ -1160,6 +1160,28 @@ pub struct CheckReserveProofResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fee reply prints the three tiers by their one name each: the
+    /// default as `standard`, the fees under `economy`, `standard`, `high`.
+    #[test]
+    fn the_fee_reply_prints_the_three_tier_names() {
+        use shekyl_units::AtomicUnits;
+        let reply = GetDefaultFeePriorityResult {
+            default_priority: shekyl_engine_core::FeePriority::default(),
+            economy: AtomicUnits::from_raw(1).into(),
+            standard: AtomicUnits::from_raw(4).into(),
+            high: AtomicUnits::from_raw(8).into(),
+            tree_depth: 3,
+        };
+        let json = serde_json::to_value(&reply).unwrap();
+        assert_eq!(json["default_priority"], "standard");
+        assert_eq!(json["economy"], "1");
+        assert_eq!(json["standard"], "4");
+        assert_eq!(json["high"], "8");
+        for gone in ["economy_fee", "standard_fee", "priority_fee"] {
+            assert!(json.get(gone).is_none(), "{gone}");
+        }
+    }
     use crate::error::WalletRpcErrorCode;
     use serde_json::json;
 

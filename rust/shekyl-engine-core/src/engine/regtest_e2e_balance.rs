@@ -431,8 +431,9 @@ async fn parked_money_stays_in_the_balance_and_out_of_a_send() {
     );
     assert_eq!(after.parked, parked);
 
-    // More than the spendable and incoming money, less than that plus the
-    // parked output, fee included.
+    // A send of nearly the whole balance: all of it but half the parked
+    // output, so its amount plus fee is more than the spendable and incoming
+    // money and less than the balance.
     let sent = after
         .spendable
         .checked_add(after.incoming)
