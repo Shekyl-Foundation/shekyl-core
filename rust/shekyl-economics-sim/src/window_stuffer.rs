@@ -113,6 +113,8 @@ pub(crate) struct TraceProbe<'p> {
     params: &'p SimParams,
     ranges: Vec<(u64, u64)>,
     samples: BTreeMap<u64, (u64, u64)>,
+    /// The operand over the baseline at the same blocks, unclamped.
+    ratios: BTreeMap<u64, u64>,
 }
 
 impl FoldProbe for TraceProbe<'_> {
@@ -129,6 +131,7 @@ impl FoldProbe for TraceProbe<'_> {
                     seen.priced.burn_pct,
                 ),
             );
+            self.ratios.insert(seen.block, ratio_at(seen, self.params));
         }
     }
 }
@@ -141,8 +144,20 @@ pub(crate) fn settles(
     edge: u64,
     pick: impl Fn((u64, u64)) -> u64,
 ) -> Option<u64> {
-    let old = i128::from(pick(*samples.get(&(edge - 1))?));
-    let new = i128::from(pick(*samples.get(&(edge + TRACE_AFTER - 1))?));
+    let old = pick(*samples.get(&(edge - 1))?);
+    let new = pick(*samples.get(&(edge + TRACE_AFTER - 1))?);
+    settles_between(samples, edge, (old, new), pick)
+}
+
+/// Blocks from `edge` until a series first covers 95 % of its move from
+/// `old` to `new`. `None` when they are equal.
+fn settles_between(
+    samples: &BTreeMap<u64, (u64, u64)>,
+    edge: u64,
+    (old, new): (u64, u64),
+    pick: impl Fn((u64, u64)) -> u64,
+) -> Option<u64> {
+    let (old, new) = (i128::from(old), i128::from(new));
     let span = new - old;
     if span == 0 {
         return None;
@@ -158,10 +173,51 @@ pub(crate) fn scaled(value: u64) -> f64 {
     value as f64 / SCALE as f64
 }
 
+/// The operand the block was priced at over the baseline, scaled and
+/// unclamped: what `M_r` reads before the release rails (§5.34).
+fn ratio_at(seen: &BlockSeen<'_, '_>, params: &SimParams) -> u64 {
+    seen.priced
+        .volume
+        .ratio_scaled(params.economic().tx_volume_baseline)
+}
+
+/// The mean of scaled values, by integer division.
+fn mean_of(values: impl Iterator<Item = u64>) -> u64 {
+    let (sum, n) = values.fold((0u128, 0u128), |(s, n), v| (s + u128::from(v), n + 1));
+    u64::try_from(sum / n.max(1)).expect("a mean of u64s fits")
+}
+
+/// The mean of a series over its last window ([`TX_VOLUME_WINDOW`] values,
+/// or all of them when it is shorter).
+pub(crate) fn at_rest(series: &[u64]) -> u64 {
+    let window = usize::try_from(TX_VOLUME_WINDOW).expect("the window fits");
+    mean_of(
+        series[series.len().saturating_sub(window)..]
+            .iter()
+            .copied(),
+    )
+}
+
+/// The declared step's reading at one edge (§5.33's honest step, §5.34's
+/// window means).
+pub(crate) struct StepRead {
+    /// `M_r` over the window before the edge, and over the trace's last
+    /// window.
+    pub(crate) before: f64,
+    pub(crate) after: f64,
+    /// Blocks from the edge until `M_r` first covers 95 % of that move.
+    pub(crate) settles: Option<u64>,
+    /// The operand over the baseline, unclamped, over the window before the
+    /// edge: where the honest chain rests.
+    pub(crate) resting_ratio: f64,
+}
+
 /// The declared step's reading at one parameter set (§5.33's honest step):
-/// at each edge, `M_r` before and after, and the blocks it takes to cover
-/// 95 % of its move.
-pub(crate) fn honest_step(params: &SimParams) -> Vec<(u64, f64, f64, Option<u64>)> {
+/// at each edge, `M_r` before and after as window means, the blocks it
+/// takes to cover 95 % of that move, and the ratio the honest chain rests
+/// at before it (§5.34). On steady traffic both windows are flat, so the
+/// means are the single blocks §5.33.1 read.
+pub(crate) fn honest_step(params: &SimParams) -> Vec<StepRead> {
     let bpy = params.blocks_per_year();
     let mut config = step_scenario(params);
     let edges = [bpy, 2 * bpy];
@@ -172,22 +228,26 @@ pub(crate) fn honest_step(params: &SimParams) -> Vec<(u64, f64, f64, Option<u64>
         params,
         ranges: edges
             .iter()
-            .map(|&edge| (trace_start(edge), edge + TRACE_AFTER))
+            .map(|&edge| (edge - TX_VOLUME_WINDOW, edge + TRACE_AFTER))
             .collect(),
         samples: BTreeMap::new(),
+        ratios: BTreeMap::new(),
     };
     a1_year_aggs_probed(params, &config, &mut probe);
+    let window = |from: u64| from..from + TX_VOLUME_WINDOW;
     edges
         .iter()
         .map(|&edge| {
-            let before = probe.samples[&(edge - 1)].0;
-            let after = probe.samples[&(edge + TRACE_AFTER - 1)].0;
-            (
-                edge,
-                scaled(before),
-                scaled(after),
-                settles(&probe.samples, edge, |s| s.0),
-            )
+            let before_blocks = window(edge - TX_VOLUME_WINDOW);
+            let after_blocks = window(edge + TRACE_AFTER - TX_VOLUME_WINDOW);
+            let before = mean_of(before_blocks.clone().map(|b| probe.samples[&b].0));
+            let after = mean_of(after_blocks.map(|b| probe.samples[&b].0));
+            StepRead {
+                before: scaled(before),
+                after: scaled(after),
+                settles: settles_between(&probe.samples, edge, (before, after), |s| s.0),
+                resting_ratio: scaled(mean_of(before_blocks.map(|b| probe.ratios[&b]))),
+            }
         })
         .collect()
 }
@@ -232,6 +292,7 @@ pub(crate) fn write_step_response(
                 .map(|&edge| (trace_start(edge), edge + TRACE_AFTER))
                 .collect(),
             samples: BTreeMap::new(),
+            ratios: BTreeMap::new(),
         };
         a1_year_aggs_probed(&arm.params, &schedule.config, &mut probe);
         (schedule.config.name, schedule.edges, probe.samples)
@@ -384,6 +445,7 @@ struct StufferProbe<'p> {
     params: &'p SimParams,
     campaign: Campaign,
     m_r: Vec<u64>,
+    ratio: Vec<u64>,
     owed: Vec<u64>,
     own_fees: u128,
     listed: u64,
@@ -423,6 +485,7 @@ impl FoldProbe for StufferProbe<'_> {
             );
         }
         self.m_r.push(release_multiplier_at(seen, self.params));
+        self.ratio.push(ratio_at(seen, self.params));
         self.owed.push(seen.priced.paid.owed.to_raw());
         self.own_fees += u128::from(seen.priced.filled.own.fees_atomic);
         self.listed += seen.priced.filled.own.txs;
@@ -440,6 +503,8 @@ impl FoldProbe for StufferProbe<'_> {
 /// One campaign folded, or its counterfactual.
 pub(crate) struct Folded {
     pub(crate) m_r: Vec<u64>,
+    /// Every measured block's operand over the baseline, unclamped.
+    pub(crate) ratio: Vec<u64>,
     /// Every measured block's `PaidEmission::owed`, in order.
     owed: Vec<u64>,
     pub(crate) own_fees: u128,
@@ -479,6 +544,7 @@ pub(crate) fn fold_campaign(params: &SimParams, start_year: u64, campaign: Campa
         params,
         campaign,
         m_r: Vec::new(),
+        ratio: Vec::new(),
         owed: Vec::new(),
         own_fees: 0,
         listed: 0,
@@ -488,6 +554,7 @@ pub(crate) fn fold_campaign(params: &SimParams, start_year: u64, campaign: Campa
     let aggs = a1_year_aggs_probed(params, &config, &mut probe);
     Folded {
         m_r: probe.m_r,
+        ratio: probe.ratio,
         owed: probe.owed,
         own_fees: probe.own_fees,
         listed: probe.listed,

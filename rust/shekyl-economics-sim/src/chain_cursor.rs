@@ -63,6 +63,30 @@ pub(crate) struct ChainStep {
     pub(crate) closed_shards: ClosedShardCount,
 }
 
+/// What each block is offered (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.34).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Traffic {
+    /// The scenario's demand, every block.
+    #[default]
+    Steady,
+    /// A count drawn at the block's height, geometric around the
+    /// scenario's demand ([`crate::rng::honest_count`]): Poisson arrivals
+    /// over production's exponential block intervals. What a block does not
+    /// list waits in the pool, as on the chain. A declared arm.
+    Varied,
+}
+
+impl Traffic {
+    /// The transactions offered to the block at `height` when the scenario
+    /// asks for `demand`.
+    pub(crate) fn offered(self, demand: u64, height: u64) -> u64 {
+        match self {
+            Self::Steady => demand,
+            Self::Varied => crate::rng::honest_count(height, demand),
+        }
+    }
+}
+
 /// What a producer's own bodies pay ([`ChainCursor::price_with_own`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OwnFee {
@@ -144,7 +168,9 @@ impl ChainCursor {
         params: &'a SimParams,
         economic: &'a EconomicParams,
     ) -> PricedBlock<'a> {
-        let volume = self.window.signal_operand(params.volume_signal);
+        let volume = self
+            .window
+            .signal_operand(params.volume_signal, economic.tx_volume_baseline);
         let medians = self.space.medians(economic);
         let supply = net_supply(step.already_generated, step.total_burned);
         let share = economic.emission_schedule().share_at(step.chain_height);
@@ -173,7 +199,9 @@ impl ChainCursor {
             }
             _ => mix,
         };
-        let demand = self.split.split(mix, step.demand);
+        let demand = self
+            .split
+            .split(mix, params.traffic.offered(step.demand, step.chain_height));
         let arrivals: Vec<Arrival> = Rung::ADMISSION
             .into_iter()
             .filter(|&rung| demand[rung] > 0)
@@ -235,7 +263,68 @@ impl ChainCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::volume_window::VolumeSignal;
     use shekyl_economics::FEE_QUANTIZATION_MASK;
+
+    /// The operand, burn and `C` a cursor prices its next block at after
+    /// `blocks` blocks offered `demand` each, on `signal`.
+    fn priced_after(signal: VolumeSignal, demand: u64, blocks: u64) -> (TxVolume, u64, u64) {
+        let mut params = SimParams::default();
+        params.volume_signal = signal;
+        let economic = params.economic();
+        let mut cursor = ChainCursor::default();
+        let step = |h: u64, demand: u64| ChainStep {
+            chain_height: h,
+            demand,
+            leaves: 0,
+            already_generated: 0,
+            total_burned: 0,
+            closed_shards: ClosedShardCount::new(0),
+        };
+        for h in 0..blocks {
+            cursor.price(step(h, demand), &params, economic);
+        }
+        let priced = cursor.price(step(blocks, demand), &params, economic);
+        let c = shekyl_economics::fee_correction(
+            priced.volume,
+            priced.emission_share,
+            priced.burn_pct,
+            economic,
+        );
+        (priced.volume, priced.burn_pct, c.as_scaled())
+    }
+
+    /// Arm 5 (§5.34): with the baseline in place of volume, a busy window
+    /// and an empty one price the same operand, burn and `C`. On the sum
+    /// they differ, so the comparison has something to find.
+    #[test]
+    fn the_baseline_arm_reads_no_volume() {
+        let quiet = priced_after(VolumeSignal::Baseline, 0, 60);
+        let busy = priced_after(VolumeSignal::Baseline, 20, 60);
+        assert_eq!(quiet, busy);
+        assert_eq!(
+            quiet.0,
+            TxVolume::per_block(SimParams::default().economic().tx_volume_baseline)
+        );
+        assert_ne!(
+            priced_after(VolumeSignal::Sum, 0, 60),
+            priced_after(VolumeSignal::Sum, 20, 60)
+        );
+    }
+
+    /// Steady traffic offers the scenario's demand; varied traffic offers
+    /// the count drawn at the block's height.
+    #[test]
+    fn varied_traffic_offers_the_count_drawn_at_the_height() {
+        assert_eq!(Traffic::Steady.offered(50, 9), 50);
+        for h in 0..100 {
+            assert_eq!(
+                Traffic::Varied.offered(50, h),
+                crate::rng::honest_count(h, 50)
+            );
+        }
+        assert!((0..100).any(|h| Traffic::Varied.offered(50, h) != 50));
+    }
 
     /// E15-1. One baseline year, every block's ordinary fee on the lattice.
     /// Red: price the block with the unrounded product.

@@ -37,6 +37,9 @@ pub enum VolumeSignal {
     /// The lower middle of the window's per-block counts, as the sum of
     /// that many blocks at it (J's arm 1). A declared arm.
     Median,
+    /// The baseline, whatever the window holds: release, the burn and `C`
+    /// cut off from volume together (J's arm 5, §5.34). A declared arm.
+    Baseline,
 }
 
 /// The prefix sums of a fold's transaction counts, as far back as CEN-F20's
@@ -74,11 +77,13 @@ impl<const W: u64> VolumeFold<W> {
     }
 
     /// The operand `signal` prices the next block at: [`Self::operand`] for
-    /// the production sum, [`Self::median_operand`] for the median arm.
-    pub(crate) fn signal_operand(&self, signal: VolumeSignal) -> TxVolume {
+    /// the production sum, [`Self::median_operand`] for the median arm, and
+    /// `baseline` a block for the arm that reads no volume.
+    pub(crate) fn signal_operand(&self, signal: VolumeSignal, baseline: u64) -> TxVolume {
         match signal {
             VolumeSignal::Sum => self.operand(),
             VolumeSignal::Median => self.median_operand(),
+            VolumeSignal::Baseline => TxVolume::per_block(baseline),
         }
     }
 
@@ -183,7 +188,19 @@ mod tests {
                 TxVolume::window(last[usize::try_from((n - 1) / 2).unwrap()] * n, n)
             };
             assert_eq!(window.median_operand(), expected, "height {h}");
-            assert_eq!(window.signal_operand(VolumeSignal::Sum), window.operand());
+            assert_eq!(
+                window.signal_operand(VolumeSignal::Sum, 50),
+                window.operand()
+            );
+            assert_eq!(
+                window.signal_operand(VolumeSignal::Median, 50),
+                window.median_operand()
+            );
+            assert_eq!(
+                window.signal_operand(VolumeSignal::Baseline, 50),
+                TxVolume::per_block(50),
+                "arm 5 reads the baseline whatever the window holds"
+            );
             window.push(txs(h));
             all.push(txs(h));
         }
