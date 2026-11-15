@@ -10,5 +10,5 @@
   ],
   "oracle": "clatter =2.3.0, default features off, RustCrypto ml-kem as locked",
   "regeneration_command": "cargo test -p shekyl-rpc-channel-xcheck --test hybrid_xk regenerate -- --ignored",
-  "vectors_sha3_256_hex": "aadf89954cb95ece23a38cbb28fdb5970fa917a702757a068c99d5532dc09b1f"
+  "vectors_sha3_256_hex": "5f23a7bd8b349604804040cc55ccd1793565cd72cd37e009e897f0b05b571a9e"
 }

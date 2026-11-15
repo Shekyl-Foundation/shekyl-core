@@ -17,7 +17,7 @@ use std::path::PathBuf;
 pub enum RunMode {
     /// Run as a user: the per-account root.
     User,
-    /// Run by the Windows service manager: the machine-wide root.
+    /// The machine's service instance: the machine-wide root.
     Service,
 }
 
@@ -28,8 +28,12 @@ pub struct Platform {
     /// The account's home: the passwd entry on Unix, `FOLDERID_LocalAppData`
     /// on Windows. `None` when the account has none.
     pub home: Option<PathBuf>,
-    /// `%ProgramData%` on Windows; `None` elsewhere.
-    pub program_data: Option<PathBuf>,
+    /// The machine-wide parent of a service's data home, which is `shekyl`
+    /// under it (Rick, 2026-11-14): `%ProgramData%` on Windows, `/var/lib`
+    /// on Linux, `/var/db` on FreeBSD and macOS. `None` where the platform
+    /// names none. The daemon checks the data home and never creates it; on
+    /// Windows its ACL admits the service account and Administrators only.
+    pub service_parent: Option<PathBuf>,
     /// The account's per-user session directory, from the platform's own
     /// interface and never the environment (IG-Q14): `/run/user/<uid>` on
     /// Linux when the session or linger keeps it, and
@@ -38,11 +42,13 @@ pub struct Platform {
     /// FreeBSD, and Windows, whose owner leg is a pipe
     /// (`RPC_CHANNEL.md` §7.1).
     pub session_dir: Option<PathBuf>,
-    /// The service's rendezvous directory, fixed per platform and separate
-    /// from the data directory (`RPC_CHANNEL.md` §7.1): `/run/shekyl` on
-    /// Linux, `/var/run/shekyl` on FreeBSD,
-    /// `/Library/Application Support/Shekyl` on macOS and
-    /// `%ProgramData%\shekyl` on Windows. `None` where the platform names
-    /// none. A service daemon checks it and never creates it.
+    /// The service's rendezvous directory, fixed per platform
+    /// (`RPC_CHANNEL.md` §7.1): `/run/shekyl` on Linux, `/var/run/shekyl` on
+    /// FreeBSD and `/Library/Application Support/Shekyl` on macOS, separate
+    /// from the data directory, which a service daemon checks and never
+    /// creates; and `%ProgramData%\shekyl\rendezvous` on Windows, inside the
+    /// data home, which the daemon creates with its owner, DACL and
+    /// no-read-up label (Rick, 2026-11-14; RT-W14). `None` where the platform
+    /// names none.
     pub service_rendezvous: Option<PathBuf>,
 }

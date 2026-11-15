@@ -481,6 +481,19 @@ ban_show	parameter	ban	host	bans	text
 ban_show	field	ban	host	bans	text
 ban_show	field	ban	duration	bans	duration or null
 ban_show	field	ban	permanent	bans	switch
+rpc_client_add	method		rpc_client_add	enrol	nothing
+rpc_client_add	parameter	rpc client	fingerprint	enrol	hash
+rpc_client_add	parameter	rpc client	ceiling	enrol	list of one-of health|status|chain|pool|peers|submit|mining-work|mining-control|bans|node|config|enrol|view|wallet|miner|admin
+rpc_client_set	method		rpc_client_set	enrol	nothing
+rpc_client_set	parameter	rpc client	fingerprint	enrol	hash
+rpc_client_set	parameter	rpc client	ceiling	enrol	list of one-of health|status|chain|pool|peers|submit|mining-work|mining-control|bans|node|config|enrol|view|wallet|miner|admin
+rpc_client_remove	method		rpc_client_remove	enrol	nothing
+rpc_client_remove	parameter	rpc client	fingerprint	enrol	hash
+rpc_client_list	method		rpc_client_list	enrol	list of object (rpc client)
+rpc_client_list	field	rpc client	fingerprint	enrol	hash
+rpc_client_list	field	rpc client	ceiling	enrol	list of one-of health|status|chain|pool|peers|submit|mining-work|mining-control|bans|node|config|enrol
+rpc_bundle_show	method		rpc_bundle_show	enrol	object (rpc)
+rpc_bundle_show	field	rpc	bundle	enrol	bytes
 relay_stats	method		relay_stats	host-only	object (relay)
 relay_stats	field	relay	floor	host-only	list of object (relay floor)
 relay_stats	field	relay floor	connector	host-only	one-of clearnet|tor
