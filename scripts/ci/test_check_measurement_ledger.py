@@ -1213,8 +1213,58 @@ def scenario_dispositions(results: Results) -> None:
         )
 
 
+def scenario_full_ids(results: Results) -> None:
+    """Every commit id the ledger writes is the full 40 hex and names a
+    commit (Rick, 2026-11-15). A parent ledger written before the rule is
+    still read."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        rev = init_tree(root)
+        c1 = rev["c1"]
+        write(root, "src/hot/a.rs", "fn a() { /* slower */ }\n")
+        c3 = commit(root, "c3: changes the hot path")
+        stale = constant("control", "stale", c1, body=stale_body(c3))
+        results.expect(
+            root, document(path_set(body=heard(c3)), stale), 0,
+            "full ids everywhere pass",
+        )
+        short = c3[:10]
+        results.expect(
+            root, document(path_set(body=heard(short)), stale), 1,
+            "a short through is refused, though it resolves", "written in full",
+        )
+        results.expect(
+            root,
+            document(path_set(body=heard(c3)), constant("control", "stale", c1, body=stale_body(short))),
+            1, "a short stale_since is refused", "stale_since is not a commit id written in full",
+        )
+        results.expect(
+            root,
+            document(path_set(body=heard(c3)), constant("control", "stale", c1[:9], body=stale_body(c3))),
+            1, "a short capture_rev is refused", "capture_rev is not a commit id written in full",
+        )
+        results.expect(
+            root, document(path_set(body=heard(c3.upper())), stale), 1,
+            "upper-case hex is not the id", "written in full",
+        )
+        unknown = "0123456789abcdef0123456789abcdef01234567"
+        results.expect(
+            root, document(path_set(body=heard(unknown)), stale), 1,
+            "a full id that names no commit is refused", "not a commit",
+        )
+        # A parent ledger in the old short form is history: the rule is the
+        # ledger under review's, and the parent is still read.
+        write(root, LEDGER, document(path_set(body=heard(short)), constant("control", "stale", c1[:10], body=stale_body(short))))
+        commit(root, "the parent ledger, short ids", ledger=True)
+        results.expect(
+            root, document(path_set(body=heard(c3)), stale), 0,
+            "a full-id ledger over a short-id parent passes",
+        )
+
+
 def selftest() -> int:
     results = Results()
+    scenario_full_ids(results)
     scenario_dispositions(results)
     scenario_gated_rows(results)
     scenario_estimated(results)

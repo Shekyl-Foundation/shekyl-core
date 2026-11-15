@@ -82,6 +82,13 @@ COMMITS_NAMED = 3
 OID_SHOWN = 10
 
 COMMIT_ID_RE = re.compile(rf"[0-9a-f]{{{MIN_COMMIT_ID_HEX},{MAX_COMMIT_ID_HEX}}}")
+# Every commit id the ledger under review writes is the full object id
+# (Rick, 2026-11-15): a prefix unique today can become ambiguous as the
+# repository grows, and the gate would then fail on a row nobody touched.
+# [`COMMIT_ID_RE`] stays the shape `resolve` reads, so a parent ledger
+# written before the rule (`HEAD^1`, the base branch) is still read.
+FULL_COMMIT_ID_RE = re.compile(rf"[0-9a-f]{{{MAX_COMMIT_ID_HEX}}}")
+FULL_ID_SAYS = f"is not a commit id written in full ({MAX_COMMIT_ID_HEX} lowercase hex)"
 PATH_SET_ID_RE = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 T_ROW_RE = re.compile(r"^BA-T\d+$")
 CAPTURE_REV_RE = re.compile(r"git[_ ]rev(?:ision)?[\"'\s:=]+([0-9a-f]{7,40})", re.I)
@@ -478,8 +485,8 @@ def parse_acks(
         if unknown:
             fails.append(f"{where} has unknown key {unknown[0]!r}")
         raw_id = item.get(id_key, "")
-        if not isinstance(raw_id, str) or not COMMIT_ID_RE.fullmatch(raw_id):
-            fails.append(f"{where}.{id_key} is not a commit id")
+        if not isinstance(raw_id, str) or not FULL_COMMIT_ID_RE.fullmatch(raw_id):
+            fails.append(f"{where}.{id_key} {FULL_ID_SAYS}")
             continue
         text = _sentence(item.get(text_key, ""))
         if text is None:
@@ -612,6 +619,8 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     if status in (Status.CURRENT, Status.STALE):
         capture = _require_str(table, "capture", fails, name) or None
         capture_rev = _require_str(table, "capture_rev", fails, name) or None
+        if capture_rev is not None and not FULL_COMMIT_ID_RE.fullmatch(capture_rev):
+            fails.append(f"{name}: capture_rev {FULL_ID_SAYS}")
         rev_source = _require_str(table, "rev_source", fails, name) or None
     if status is not Status.CURRENT:
         carrier = _sentence(table.get("carrier", ""))
@@ -676,8 +685,8 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
                 )
     if status is Status.STALE:
         raw_since = table.get("stale_since", "")
-        if not isinstance(raw_since, str) or not COMMIT_ID_RE.fullmatch(raw_since):
-            fails.append(f"{name}: stale_since is not a commit id")
+        if not isinstance(raw_since, str) or not FULL_COMMIT_ID_RE.fullmatch(raw_since):
+            fails.append(f"{name}: stale_since {FULL_ID_SAYS}")
         else:
             stale_since = raw_since
     if fails and (not path_set or not needle or not defined_in):
@@ -1255,7 +1264,9 @@ def parse_retired(
         if not isinstance(capture, str) or not _is_tracked_file(root, capture):
             found.append(f"{label}: capture {capture!r} is not a tracked file")
         raw_rev = table.get("capture_rev")
-        if not isinstance(raw_rev, str) or resolve(root, raw_rev) is None:
+        if isinstance(raw_rev, str) and not FULL_COMMIT_ID_RE.fullmatch(raw_rev):
+            found.append(f"{label}: capture_rev {FULL_ID_SAYS}")
+        elif not isinstance(raw_rev, str) or resolve(root, raw_rev) is None:
             if isinstance(raw_rev, str) and COMMIT_ID_RE.fullmatch(raw_rev) and shallow_boundary(root):
                 raise GateError(SHALLOW_MSG)
             found.append(f"{label}: capture_rev {raw_rev!r} is not a commit in this repository")
