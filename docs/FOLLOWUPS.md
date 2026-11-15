@@ -1320,9 +1320,12 @@ Exceptional deferral with a named blocker. This list stays tiny.
   - Target: post-genesis
 
 - **Multisig: an online mailbox for ceremony files.** DEFERRED (rule 23, R-9 ruled 2026-11-12): files are the only transport and the wallet moves no bytes; the three-relay, operator-directory and heartbeat design is removed from `PQC_MULTISIG.md` §12.4. Named blocker: evidence that file-based sessions are what stops groups from spending. Reopen from an outbound-only mailbox over Tor with a per-intent drop-box address. Zero code exists.
-- **Multisig: a rate limit on proposals.** DEFERRED (rule 23, R-19 ruled 2026-11-15): `PQC_MULTISIG.md` §11.6's per-signing-key limit is deleted; under file transport a proposal costs work only when a human imports it, files are size-capped and inputs are reserved by one live intent at a time. Named blocker: a transport that delivers files without a human (a mailbox or relay), where unattended verification work is the cost again. Zero code exists.
   - Target: post-genesis
   - Owner: the multisig protocol — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§12.4, R-9)
+
+- **Multisig: a rate limit on proposals.** DEFERRED (rule 23, R-19 ruled 2026-11-15): `PQC_MULTISIG.md` §11.6's per-signing-key limit is deleted; under file transport a proposal costs work only when a human imports it, files are size-capped and inputs are reserved by one live intent at a time. Named blocker: a transport that delivers files without a human (a mailbox or relay), where unattended verification work is the cost again. Zero code exists.
+  - Target: post-genesis
+  - Owner: the multisig protocol — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§11.6, R-19)
 
 - **Multisig: 1-of-N with provable attribution.** DEFERRED (rule 23, R-11 ruled 2026-11-12): either of two people can spend with separate keys, and it is provable which one did. E′ refuses `m < 2` and cannot deliver this honestly: the dealer generated every member's keys, and whoever built an output (for change, a group member) can derive every member's per-output signing key for it, so the attribution is forgeable by either party. Named blocker: per-output keys only the recipient can derive (the sender-known-seed round in core). Zero code exists.
   - Target: post-genesis
