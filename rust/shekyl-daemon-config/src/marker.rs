@@ -177,19 +177,29 @@ fn write(
     sync_dir(data_dir)
 }
 
+/// Make `dir`'s entries durable: a file created or renamed in it survives a
+/// power loss once this returns. Unix syncs the directory itself.
+///
+/// # Errors
+///
+/// The directory could not be opened or synced.
 #[cfg(unix)]
-fn sync_dir(dir: &Path) -> std::io::Result<()> {
+pub fn sync_dir(dir: &Path) -> std::io::Result<()> {
     File::open(dir)?.sync_all()
 }
 
-/// Windows has no directory handle to sync; the rename is durable on its
-/// own once the file was.
+/// Make `dir`'s entries durable. Windows has no directory handle to sync;
+/// the rename is durable on its own once the file was.
+///
+/// # Errors
+///
+/// None on Windows; the Unix arm's signature.
 #[cfg(windows)]
 #[expect(
     clippy::unnecessary_wraps,
     reason = "the Unix arm's signature: callers handle both platforms the same way"
 )]
-fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+pub fn sync_dir(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 

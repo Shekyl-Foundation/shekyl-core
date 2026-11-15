@@ -11,10 +11,26 @@
 //! commit that already names that journal. The journal's name is the
 //! destination's file name plus [`.new`](JOURNAL_SUFFIX), one rule for
 //! every caller.
+//!
+//! **Durable at each step.** A new file's bytes are synced, and then its
+//! directory, before [`write_new`] returns; a rename is followed by a sync
+//! of its directory before [`StagedWrite::commit`] returns. A store
+//! transaction that names a journal (the console key's) therefore never
+//! outlives the journal across a power loss. Unix syncs the directory;
+//! Windows has no directory handle to sync, and the file's own flush is
+//! the platform's whole durability step
+//! ([`shekyl_daemon_config::marker::sync_dir`], the daemon's one rule).
+//!
+//! **The mode is set, not requested.** On Unix the creating call's mode is
+//! filtered by the umask, so the file's mode is then set to exactly its
+//! [`Access`]: a service's rendezvous record is readable by every account
+//! under any umask.
 
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use shekyl_daemon_config::marker::sync_dir;
 
 /// Appended to a destination's file name to name its journal.
 const JOURNAL_SUFFIX: &str = ".new";
@@ -67,13 +83,16 @@ impl StagedWrite {
         })
     }
 
-    /// Rename the journal over the destination.
+    /// Rename the journal over the destination, and make the rename
+    /// durable.
     ///
     /// # Errors
     ///
-    /// The rename failed. The journal is left for a later start.
+    /// The rename failed, and the journal is left for a later start; or the
+    /// directory could not be synced after it.
     pub(crate) fn commit(self) -> std::io::Result<()> {
-        std::fs::rename(&self.staged, &self.live)
+        std::fs::rename(&self.staged, &self.live)?;
+        sync_dir(parent(&self.live))
     }
 
     /// Remove the journal. The destination is left as it is.
@@ -97,30 +116,44 @@ pub(crate) fn staged_path(live: &Path) -> PathBuf {
     live.with_file_name(name)
 }
 
-/// Create `path` as a new file and write `bytes` to it.
+/// Create `path` as a new file with `access`, write `bytes` to it, and make
+/// the file and its directory entry durable.
 ///
 /// # Errors
 ///
-/// The create, the write or the sync failed. An existing path is an error.
+/// The create, the write or a sync failed. An existing path is an error.
 pub(crate) fn write_new(path: &Path, bytes: &[u8], access: Access) -> std::io::Result<()> {
     let mut file = create(path, access)?;
     file.write_all(bytes)?;
     file.sync_all()?;
-    Ok(())
+    sync_dir(parent(path))
 }
 
+/// The directory `path` is in.
+fn parent(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
+/// `O_EXCL` with the mode in the creating call, so the file is never wider
+/// than `access`; then the mode set exactly, because the umask may have
+/// narrowed it.
 #[cfg(unix)]
 fn create(path: &Path, access: Access) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mode = match access {
         Access::OwnerOnly => OWNER_ONLY_MODE,
         Access::WorldReadable => WORLD_READABLE_MODE,
     };
-    std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(mode)
-        .open(path)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    Ok(file)
 }
 
 #[cfg(windows)]
@@ -135,5 +168,56 @@ fn create(path: &Path, access: Access) -> std::io::Result<std::fs::File> {
             .write(true)
             .create_new(true)
             .open(path),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    /// Set in the child this test starts: the directory it writes in.
+    const CHILD_DIR: &str = "SHEKYL_STAGE_UMASK_CHILD_DIR";
+
+    /// A world-readable file is readable by every account whatever the
+    /// umask, and an owner-only one stays the owner's. The umask is the
+    /// process's, so the writes run in a child of this test binary under
+    /// umask 077. Red edit: drop the `set_permissions` in `create`, and the
+    /// record published through its journal is 0600.
+    #[test]
+    fn the_mode_is_the_access_under_any_umask() {
+        if let Some(dir) = std::env::var_os(CHILD_DIR) {
+            let dir = PathBuf::from(dir);
+            rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
+            StagedWrite::create(&dir.join("record"), b"public", Access::WorldReadable)
+                .expect("the journal")
+                .commit()
+                .expect("the rename");
+            write_new(&dir.join("key"), b"private", Access::OwnerOnly).expect("the key");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("a directory");
+        let status = std::process::Command::new(std::env::current_exe().expect("this binary"))
+            .args([
+                "--exact",
+                "channel::stage::tests::the_mode_is_the_access_under_any_umask",
+                "--test-threads",
+                "1",
+            ])
+            .env(CHILD_DIR, dir.path())
+            .status()
+            .expect("the child runs");
+        assert!(status.success(), "{status}");
+        let mode = |name: &str| {
+            std::fs::metadata(dir.path().join(name))
+                .expect("written")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode("record"), WORLD_READABLE_MODE);
+        assert_eq!(mode("key"), OWNER_ONLY_MODE);
+        assert!(!staged_path(&dir.path().join("record")).exists());
     }
 }

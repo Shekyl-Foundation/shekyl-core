@@ -123,6 +123,11 @@ zeroize = { workspace = true }
 # The channel's key file is refused unless this account owns it.
 rustix = { version = "1", features = ["process"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+# channel::stage's test sets a child's umask to show the mode is set, not
+# requested.
+rustix = { version = "1", features = ["process", "fs"] }
+
 [target.'cfg(windows)'.dependencies]
 # The owner's pipe, its rendezvous directory and file, and the start-up
 # dial's peer check: the workspace's Windows `unsafe` lives there.
