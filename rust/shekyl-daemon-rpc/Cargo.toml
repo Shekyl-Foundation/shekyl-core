@@ -105,6 +105,28 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 # and linking `h2` brought in RUSTSEC-2026-0258.
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio", "service"] }
+# The RPC channel (RT-W10 step 4): the handshake and the key's file form,
+# the grant payloads, the record framer and the stream hyper serves over,
+# and the enrolled set's store (redb, the daemon's backend; RT-O34).
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
+shekyl-rpc-stream = { path = "../shekyl-rpc-stream" }
+shekyl-noise = { path = "../shekyl-noise" }
+# The rendezvous names and records (the owner's Windows record, a service's
+# record), which the client that resolves "this computer" reads from the
+# same crate (RPC_CHANNEL.md RT-15, §7.1).
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
+redb = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# The channel's key file is refused unless this account owns it.
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+# channel::stage's test sets a child's umask to show the mode is set, not
+# requested.
+rustix = { version = "1", features = ["process", "fs"] }
 
 [target.'cfg(windows)'.dependencies]
 # The owner's pipe, its rendezvous directory and file, and the start-up
@@ -113,11 +135,11 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 # The owner's pipe name is drawn at random on every start (RPC_CHANNEL.md
 # §7.1). The pin the channel crate already carries.
 rand_core = { version = "0.6", features = ["getrandom"] }
-# The rendezvous record's format, which the client that resolves "this
-# computer" reads from the same crate (RPC_CHANNEL.md RT-15, §7.1).
-shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
-
 [dev-dependencies]
+# The channel's tests drive the real handshake and HTTP over the record
+# stream from the client's side (src/channel/tests.rs).
+hyper = { version = "1", default-features = false, features = ["http1", "client"] }
+http-body-util = "0.1"
 # Real consensus-valid spend fixture for the production-verifier oracle test
 # (tests/submit_verifier.rs) — the same dev-only construction stack as
 # shekyl-wire's fcmp_spend_e2e.rs (tree build, path assembly, signing).
@@ -138,7 +160,6 @@ http = "1"
 # The owner's socket tests bind in a private directory of their own, and
 # build the plan the walk hands the RPC, whose instance is the rendezvous's.
 tempfile = "3"
-shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 # `start_paused` for the plaintext header-bound and write-stall tests.
 # Production tokio stays `full` without `test-util`.
 tokio = { version = "1", features = ["full", "test-util"] }

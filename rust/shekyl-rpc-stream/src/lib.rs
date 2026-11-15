@@ -37,8 +37,8 @@
 //!   including a byte after the close. [`InboundShape`] is the verdict at
 //!   the last data record, decided as the record is admitted: a finished
 //!   padded frame, or exactly [`SUBMISSION_RECORDS`] largest-class payload
-//!   records since a message boundary. The daemon checks it on a
-//!   `tx_submit` call (RT-W10).
+//!   records since a message boundary. The channel binds it to one HTTP
+//!   message before `tx_submit` reads it (RT-W10).
 //! - **An authenticated end.** Shutting down the write side flushes, seals
 //!   the close record (occupancy 0 in the smallest class, which nothing
 //!   else sends), then shuts the transport's write side. A reader sees the
@@ -245,6 +245,10 @@ pub struct RecordStream<T> {
     plain_pos: usize,
     frame: Frame,
     shape: InboundShape,
+    /// Payload bytes admitted, in the order the reader copies them.
+    queued: u64,
+    /// [`Self::queued`] where the open message's payload began.
+    origin: u64,
     /// The peer's close record has been read.
     peer_closed: bool,
     eof: bool,
@@ -305,6 +309,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             plain_pos: 0,
             frame: Frame::new(),
             shape: InboundShape::default(),
+            queued: 0,
+            origin: 0,
             peer_closed: false,
             eof: false,
             idle: RECORD_IDLE,
@@ -315,6 +321,37 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             #[cfg(test)]
             counters: Arc::default(),
         }
+    }
+
+    /// A stream whose first record the handshake already opened, that
+    /// record admitted into the stream's record shapes as if this stream had
+    /// read it: its class and whether it was empty. A submission that starts
+    /// in the first record is then counted whole, so the connection's first
+    /// `tx_submit` is shaped as one ([`InboundShape`]). This is what the
+    /// daemon's listener calls; [`Self::after_first_record`] is the payload
+    /// alone.
+    ///
+    /// # Errors
+    ///
+    /// The first record is in a shape no sender makes, or is the close:
+    /// [`RecordShapeRefused`], as an [`io::ErrorKind::InvalidData`].
+    pub fn after_first_opened(
+        io: T,
+        send: SendDirection,
+        recv: RecvDirection,
+        first: shekyl_noise::Opened,
+        unread_wire: Vec<u8>,
+    ) -> io::Result<Self> {
+        let class = first.class;
+        let payload_len = first.payload.len();
+        let mut stream = Self::after_first_record(io, send, recv, first.payload, unread_wire);
+        if stream.admit_shape(class, payload_len)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                RecordShapeRefused,
+            ));
+        }
+        Ok(stream)
     }
 
     /// The idle RT-W11's pool sets. A session waits this long with no
@@ -583,12 +620,22 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
     /// Check an opened record against what a sender makes, and publish the
     /// verdict. Returns whether it is the peer's close. The close record
     /// leaves the verdict as the last data record set it.
-    fn admit_shape(&mut self, class: ClassId, empty: bool) -> io::Result<bool> {
+    ///
+    /// `payload_len` is the bytes this record delivers. Padding delivers
+    /// none, so it does not move the submission's span.
+    fn admit_shape(&mut self, class: ClassId, payload_len: usize) -> io::Result<bool> {
+        let empty = payload_len == 0;
+        let opens = self.frame.opening_payload();
         let largest = self.recv.table().largest();
         match self.frame.admit(class, empty, largest) {
             Ok(Admit::Close) => Ok(true),
             Ok(Admit::Data) => {
-                self.shape.set(self.frame.submission());
+                if payload_len > 0 && opens {
+                    self.origin = self.queued;
+                }
+                self.queued += payload_len as u64;
+                let submission = self.frame.submission();
+                self.shape.publish(submission, self.origin, self.queued);
                 Ok(false)
             }
             Err(Refused) => Err(io::Error::new(
@@ -639,14 +686,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
                         debug_assert!(index < counters.received.len());
                         counters.received[index] += 1;
                     }
-                    let empty = opened.payload.is_empty();
-                    if self.admit_shape(opened.class, empty)? {
+                    let payload_len = opened.payload.len();
+                    if self.admit_shape(opened.class, payload_len)? {
                         self.peer_closed = true;
                         return self.read_after_close(cx);
                     }
                     self.plain = Zeroizing::new(opened.payload);
                     self.plain_pos = 0;
-                    if empty {
+                    if payload_len == 0 {
                         // Padding delivers nothing and is not the end of
                         // the stream. A run of it yields now and then.
                         empty_run += 1;
