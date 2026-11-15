@@ -825,13 +825,17 @@ it.
   105 s waiting for its descriptor. Tor's own refetch asked one of the four,
   which never answered.
   So the round
-  keeps every upload with its end (`UploadRounds::directories`,
+  keeps every upload in one record (`UploadRounds::directories`,
   `RoundUpload`, `UploadEnd`), and the check asks them all. An upload still
   open is asked only once its round is older than `Policy::round_wait` (§10
   `TSR-M3`), the age at which the round's own probe goes ahead without it:
   younger, it may yet land, and a second probe drawn seconds after a new
-  round began would count it missing. Tor starts a round's uploads in one
-  pass, so the round's start is each upload's.
+  round began would count it missing. The driver reads that age in the same
+  turn as the list (`Core::open_uploads`) and the check keeps the reading
+  with the list (`OpenUploads` on `Input::DirectoriesDrawn`). The round may
+  end while the descriptor is being read, and a later reading would be a
+  different round. Tor starts a round's uploads in one pass, so the round's
+  start is each upload's.
 
   **What has been shown, and what has not (Rick, 2026-11-15).** The
   condition, an upload left unfinished, has never been produced against a

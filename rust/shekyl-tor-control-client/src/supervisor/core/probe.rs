@@ -38,10 +38,11 @@
 use super::super::posture::{Cause, Inbound, InboundCause};
 use super::announce::Cadence;
 use super::directories::{
-    DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryVerdict, OpenUploads,
+    Counted, DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryRow,
+    DirectoryVerdict, Exclusion, OpenUploads,
 };
 use super::{duration_ns, Action, Core, Duty, Phase, RoundTally};
-use crate::control::{RelayFingerprint, ServiceDescriptor};
+use crate::control::{RelayFingerprint, ServiceDescriptor, UploadEnd};
 
 /// The probe's place in its round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -381,37 +382,60 @@ impl Core {
     /// the probe is already [`Probe::Judging`]. A draw that arrives after
     /// the check was dropped is ignored.
     ///
-    /// An upload still open belongs to the open round, and is asked only
-    /// once that round is older than `Policy::round_wait`: the age at which
-    /// the round's own probe goes ahead without it (§4.5). A second probe
+    /// An upload still open is asked only when `open_uploads` says so. That
+    /// value was read with the list (§4.5): the round's own probe goes ahead
+    /// once the round is older than `Policy::round_wait`, and a second probe
     /// drawn seconds after a new round began leaves that round's uploads in
-    /// flight alone. Tor starts a round's uploads in one pass
-    /// (`UploadRounds`), so the round's start is each upload's.
+    /// flight. The check does not read the live round. It may have ended
+    /// while the descriptor was being read, and the list would then be
+    /// classified against a different round. Tor starts a round's uploads in
+    /// one pass (`UploadRounds`), so the round's start is each upload's.
     pub(super) fn directories_drawn(
         &mut self,
         now: u64,
         fetches: Vec<DirectoryFetch>,
         ours: Option<ServiceDescriptor>,
+        open_uploads: OpenUploads,
     ) -> Vec<Action> {
         if !matches!(self.directories, Some(DirectoryHalf::AwaitingDraw)) {
             return Vec::new();
         }
-        let round_wait = duration_ns(self.policy.round_wait);
-        let open = match self.round {
-            Some(track) if now >= track.started_at.saturating_add(round_wait) => OpenUploads::Hung,
-            _ => OpenUploads::InFlight,
-        };
-        let fetches = fetches
+        let rows = fetches
             .into_iter()
             .map(|fetch| {
                 let due = now.saturating_add(self.probe_delay(fetch.draw));
-                (fetch.upload, due)
+                if fetch.upload.ended == UploadEnd::Open && !open_uploads.asks() {
+                    DirectoryRow::Settled {
+                        upload: fetch.upload,
+                        counted: Counted::Excluded(Exclusion::UploadInFlight),
+                    }
+                } else {
+                    DirectoryRow::Ask {
+                        upload: fetch.upload,
+                        due,
+                    }
+                }
             })
             .collect();
-        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(
-            fetches, ours, open,
-        )));
+        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(rows, ours)));
         self.judge(now)
+    }
+
+    /// How the round open at `now` treats uploads that have not ended.
+    /// The driver reads this in the same turn as the directory list.
+    #[must_use]
+    pub fn open_uploads(&self, now: u64) -> OpenUploads {
+        match self.round {
+            Some(track)
+                if now
+                    >= track
+                        .started_at
+                        .saturating_add(duration_ns(self.policy.round_wait)) =>
+            {
+                OpenUploads::Hung
+            }
+            _ => OpenUploads::InFlight,
+        }
     }
 
     pub(super) fn directories_due(&self) -> Option<u64> {

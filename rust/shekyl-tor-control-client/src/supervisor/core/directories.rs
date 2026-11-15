@@ -30,10 +30,10 @@
 //! For an upload Tor confirmed, an answer that says nothing about the copy
 //! (a failure other than `NOT_FOUND`, or a counter that cannot be read) is
 //! not counted. For one it never confirmed, anything but a matching copy is
-//! missing: nothing shows the directory took it. An upload still open is
-//! asked only once its round is older than `Policy::round_wait`; before
-//! that it may yet land, and a second probe drawn just after a new round
-//! began would otherwise count it missing.
+//! missing: nothing shows the directory took it. An upload still open
+//! arrives already settled, from the reading taken with the list
+//! ([`OpenUploads`]): asked once its round is older than
+//! `Policy::round_wait`, and left in flight before that.
 //!
 //! Each fetch's answer window is `probe_within` from the moment Tor accepts
 //! that command. It is the supervisor's wait for the `HS_DESC` line, not the
@@ -121,15 +121,45 @@ pub struct DirectoryReport {
     pub counted: Counted,
 }
 
-/// Whether the open round's uploads still in flight are asked (§4.5).
+/// How the round a directory list was read from treats uploads that have
+/// not ended (§4.5). The driver reads it in the same turn as the list and
+/// the check keeps that reading: the round may end while the descriptor is
+/// being read, and a later reading would be a different round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum OpenUploads {
-    /// The round is older than `Policy::round_wait`: an upload still open
-    /// is hung, as §4.5 counts it, and its directory is asked.
+pub enum OpenUploads {
+    /// That round was already older than `Policy::round_wait`. An upload
+    /// still open is hung, and its directory is asked.
     Hung,
-    /// The round is younger, or not known: an upload still open may yet
-    /// land, and is not asked.
+    /// That round was younger, or none was open. An upload still open may
+    /// yet land, and is not asked.
     InFlight,
+}
+
+impl OpenUploads {
+    /// Uploads still open in that round are asked.
+    #[must_use]
+    pub const fn asks(self) -> bool {
+        matches!(self, Self::Hung)
+    }
+}
+
+/// One directory as the probe hands it to the check. A settled row was
+/// decided with the list. The check does not revisit it.
+pub(super) enum DirectoryRow {
+    /// Ask this directory at `due`.
+    Ask {
+        /// The upload, and how it ended.
+        upload: RoundUpload,
+        /// When the fetch comes due.
+        due: u64,
+    },
+    /// Already counted. No fetch, and no answer window.
+    Settled {
+        /// The upload, and how it ended.
+        upload: RoundUpload,
+        /// How it was counted.
+        counted: Counted,
+    },
 }
 
 /// The directory half of one probe, from the moment the check is asked.
@@ -166,6 +196,19 @@ struct Ask {
 }
 
 impl Ask {
+    fn start(upload: RoundUpload, due: Option<u64>, counted: Option<Counted>) -> Self {
+        Self {
+            hsdir: upload.hsdir,
+            descriptor_id: upload.descriptor_id,
+            upload: upload.ended,
+            due,
+            sent: false,
+            answer_by: None,
+            answer: None,
+            counted,
+        }
+    }
+
     fn is_pending(&self) -> bool {
         self.counted.is_none()
     }
@@ -215,33 +258,20 @@ pub(super) struct DirectoryCheck {
 }
 
 impl DirectoryCheck {
-    /// `fetches` are `(upload, when to send)`. An upload still open is
-    /// asked only when `open` says its round is old enough. A check with
-    /// nothing to ask is complete: nothing to count, so the probe decides.
-    /// So is a missing counter of ours: no fetch is sent, and the probe is
-    /// not held for answer windows it cannot compare (§4.5).
-    pub(super) fn new(
-        fetches: Vec<(RoundUpload, u64)>,
-        ours: Option<ServiceDescriptor>,
-        open: OpenUploads,
-    ) -> Self {
+    /// `rows` are the directories the probe handed over. One already settled
+    /// is not asked. A check with nothing to ask is complete: nothing to
+    /// count, so the probe decides. So is a missing counter of ours: no
+    /// fetch is sent, and the probe is not held for answer windows it
+    /// cannot compare (§4.5).
+    pub(super) fn new(rows: Vec<DirectoryRow>, ours: Option<ServiceDescriptor>) -> Self {
         let asks = if ours.is_none() {
             Vec::new()
         } else {
-            fetches
-                .into_iter()
-                .map(|(upload, due)| {
-                    let in_flight =
-                        upload.ended == UploadEnd::Open && open == OpenUploads::InFlight;
-                    Ask {
-                        hsdir: upload.hsdir,
-                        descriptor_id: upload.descriptor_id,
-                        upload: upload.ended,
-                        due: (!in_flight).then_some(due),
-                        sent: false,
-                        answer_by: None,
-                        answer: None,
-                        counted: in_flight.then_some(Counted::Excluded(Exclusion::UploadInFlight)),
+            rows.into_iter()
+                .map(|row| match row {
+                    DirectoryRow::Ask { upload, due } => Ask::start(upload, Some(due), None),
+                    DirectoryRow::Settled { upload, counted } => {
+                        Ask::start(upload, None, Some(counted))
                     }
                 })
                 .collect()

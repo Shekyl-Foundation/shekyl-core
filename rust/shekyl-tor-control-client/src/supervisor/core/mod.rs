@@ -36,7 +36,9 @@ use announce::{Announcements, Cadence};
 use backoff::Backoff;
 use dials::Dials;
 pub use dials::{DialTally, TorCensus};
-pub use directories::{Counted, DirectoryAnswer, DirectoryFetch, DirectoryReport, Exclusion};
+pub use directories::{
+    Counted, DirectoryAnswer, DirectoryFetch, DirectoryReport, Exclusion, OpenUploads,
+};
 use probe::Probe;
 
 /// How long a respawn waits, and how often a failure is said again.
@@ -550,6 +552,10 @@ pub enum Input {
         /// counts by being there. `None` when Tor gave none: the check
         /// counts nothing and the probe alone decides.
         ours: Option<ServiceDescriptor>,
+        /// How the round this list was read from treats uploads still open.
+        /// Read in the same turn as `fetches`. The check keeps this reading
+        /// and does not consult the live round.
+        open_uploads: OpenUploads,
     },
     /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
     /// window starts at this fold.
@@ -904,7 +910,11 @@ impl Core {
             }
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
-            Input::DirectoriesDrawn { fetches, ours } => self.directories_drawn(now, fetches, ours),
+            Input::DirectoriesDrawn {
+                fetches,
+                ours,
+                open_uploads,
+            } => self.directories_drawn(now, fetches, ours, open_uploads),
             Input::DirectoryFetchAccepted { hsdir } => self.directory_fetch_accepted(now, hsdir),
             Input::DirectoryAsked {
                 hsdir,
