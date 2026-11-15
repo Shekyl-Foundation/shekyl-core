@@ -820,7 +820,8 @@ Its `sender_index` must equal `proposer_index`.
 8. `reference_block_hash` matches the chain's block at
    `reference_block_height` per the verifier's local view
 9. All `input_global_indices` are owned by the group, unspent, and in the
-   tree at the reference height; `1 ≤ count ≤ MAX_INPUTS`
+   tree at the reference height; `1 ≤ count ≤ MAX_INPUTS`; none is listed
+   twice
 10. Recipients are sorted; none is repeated; at most `MAX_RECIPIENTS`;
     each payable on the group's network (a single-signer address decodes
     there in its full form, a group's payload names it;
@@ -888,9 +889,26 @@ table is what the ceremony and the builder both read:
 | Each input's pseudo-out blind `a_j`, but the last, which balances the commitments as solo does | `shekyl/multisig-intent-pseudo-out-blind-v1` | input position |
 | Each input's rerandomization (`RerandomizedOutput`'s blinds) | `shekyl/multisig-intent-rerandomize-v1` | input position |
 
-The three labels are RESERVED: no code derives under them yet. The
-derivation lands with the multisig builder (slice 4a), and each label is
-registered in `CRYPTO_DOMAIN_REGISTRY.tsv` with the code that uses it.
+Each value is an HKDF-SHA-512 expansion with no salt and the seed as the
+input key material (`shekyl_crypto_pq::multisig_intent::IntentSeed`):
+
+- the transaction key `r`: `expand(label, 64)`, reduced wide modulo
+  `ℓ`; its public key `r·G` is the `tx_extra` key;
+- input `j`'s pseudo-out blind, for every input but the last:
+  `expand(label ‖ u64_le(j), 64)`, reduced wide; the last input's blind
+  is the sum of the outputs' masks less every other blind
+  (`balancing_pseudo_out_blind`, the solo signer's own balancer);
+- input `j`'s rerandomization seed: `expand(label ‖ u64_le(j), 32)`.
+
+`j` is the input's position in the intent's `input_global_indices`, not
+in the transaction, so a member derives every value before it knows the
+key images that order the transaction's inputs. Recipient `i` is output
+`i`. The range proof's and the membership proof's own blinds are not
+derived: the proposer draws them, and every member verifies the proofs
+instead of rebuilding them. The labels are registered in
+`CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 2), and
+`shekyl_multisig::ceremony::DerivedSpend::derive` is the one place a
+spend is derived.
 
 ### 9.6 The session clock (R-13)
 
@@ -1111,33 +1129,42 @@ deletes durably before it returns (the wallet's store, slice 4a).
 
 ### 11.5 What a member brings
 
-- **`SigningContext`**, built by the caller from the validated intent
-  and the member's own ledger: the network id; per input the spent
-  output (`O`, `C`, `x`, `y_kem`, `z`), its pseudo-out blind and
-  rerandomization seed (§9.5), its key image, its committed form and the
-  member's own `0x0D` ciphertexts; what the member's construction adds
-  to the intent (the outputs, their `tx_extra` fields and the committed
-  base); the reference root and layer count; and the member file, from
-  which the member's threshold keys load. What the intent fixes is not
-  carried twice: the fee and the reference block are read from the
-  intent, and the inputs are the member's own key images, put in the
-  transaction's order. So the transaction every member hashes and signs
-  is built in one place, and an unsigned spend that disagrees with its
-  intent cannot be written down. The constructor checks that the member
-  signs the intent, that there is one input per intent input and no key
-  image twice, that each committed form is for this group, that a spend
-  proves under the layer count, and that the member's keys open every
-  input.
-- **`ProposerInputs`**, A only: each output's opening, a commitment
-  with its amount and mask that wipes on drop (for the range proof), and
-  each input's path to the reference root, named by the input's key
-  image (for the membership proof). The ceremony never reads a mask
-  itself: the opening is the crypto crate's type (rule 36).
+- **`GroupOutput`**: the member's ledger record of each output the
+  intent spends, named by its global index: the spent output (`O`, `C`,
+  `x`, `y_kem`, `z`), its key image, its committed form and the member's
+  own `0x0D` ciphertexts.
+- **`DerivedSpend`**, made only by `DerivedSpend::derive` from the
+  validated intent and those records (R-7, §9.5). It consumes the
+  intent, so no spend can be paired with another intent. Recipient `i`
+  is output `i`, built to its resolved payee by the builder every spend
+  uses, under the transaction key the intent's seed derives; that gives
+  the outputs, their `tx_extra` and the committed base, and each
+  output's opening (a commitment that wipes on drop, for the range
+  proof). Input `j` of the intent takes the `j`-th derived pseudo-out
+  blind and rerandomization seed; the last blind balances the outputs'
+  masks. The inputs are then put in the transaction's order. The
+  derivation refuses a ledger that lacks an input, records one twice or
+  hands an output the intent does not spend, and two inputs with one key
+  image. `InputContext` and `UnsignedSpend` have private fields and no
+  other constructor: a member cannot sign a blind, a seed or an output
+  the intent does not determine.
+- **`SigningContext`**, built from the `DerivedSpend`, the reference
+  root and layer count, and the member file, from which the member's
+  threshold keys load. What the intent fixes is not carried twice: the
+  fee and the reference block are read from the intent, and the inputs
+  are the member's own key images. So the transaction every member
+  hashes and signs is built in one place, and an unsigned spend that
+  disagrees with its intent cannot be written down. The constructor
+  checks that the member signs the intent, that each committed form is
+  for this group, that a spend proves under the layer count, and that
+  the member's keys open every input.
+- **`ProposerInputs`**, A only: each input's path to the reference root,
+  named by the input's key image (for the membership proof). The
+  ceremony combines no mask itself: the openings are the crypto crate's
+  type (rule 36).
 - **`HeldNonceStore`**, **`NonceCounterSink`** and **`LiveCeremonies`**:
   the durable writes the ceremony needs but does not own.
 
-The unsigned spend's derivation from the intent, and the size of a
-scheme-2 fee, are the multisig builder's (slice 4a).
 
 ### 11.6 Rate limiting (by signing pubkey, not index)
 
@@ -1615,8 +1642,9 @@ rust/shekyl-multisig/src/
 ├── lib.rs                 — crate root + re-exports
 ├── ceremony/              — the signing ceremony (§11)
 │   ├── mod.rs             — Role, CeremonyError
-│   ├── context.rs         — SigningContext, InputContext, UnsignedSpend,
-│   │                        ProposerInputs, InputPath (§11.5)
+│   ├── context.rs         — SigningContext, ProposerInputs, InputPath (§11.5)
+│   ├── derivation.rs      — GroupOutput, DerivedSpend, InputContext,
+│   │                        UnsignedSpend (§9.5, §11.5)
 │   ├── files.rs           — the bodies, Authenticated<B>, import (§11.1,
 │   │                        wire format §3.1)
 │   ├── nonce.rs           — HeldNonce, HeldNonceStore, NonceCounterSink,

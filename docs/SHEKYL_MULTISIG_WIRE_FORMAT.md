@@ -169,6 +169,7 @@ than `0x03`; `m < 2` or `m > n`; `proposer_index ≥ n`; a signer count
 other than `m`; signers not strictly ascending; a signer `≥ n`; a
 proposer who is not a signer; a responder who is not a signer; a
 responder who is the proposer; an input count outside `1..=MAX_INPUTS`;
+an input listed twice;
 more than `MAX_RECIPIENTS` recipients; a recipient kind other than
 `KIND_SINGLE` or `KIND_GROUP`; an address longer than `MAX_ADDRESS_LEN`;
 recipients out of order or repeated; a recipient its group cannot pay

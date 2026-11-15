@@ -41,13 +41,17 @@ shekyl-types = { path = "../shekyl-types" }
 # The signing ceremony (`ceremony/`): the FROST SAL machines and the FCMP++
 # prove and verify (`shekyl-fcmp`, feature `multisig`), the transaction it
 # assembles and signs over (`shekyl-wire`), and the range proof the proposer
-# makes and every signer verifies (`shekyl-bulletproofs`). The proposer is
-# handed the outputs' openings as `shekyl-curve-primitives` commitments,
-# which wipe on drop; this crate never reads a mask (rule 36), and does no
-# curve arithmetic of its own. Crypto and wire crates only: none reaches a
-# transport crate. `shekyl-fcmp` takes no edge back to this crate.
+# makes and every signer verifies (`shekyl-bulletproofs`). Each member
+# builds the spend's outputs with the builder every spend uses
+# (`shekyl-tx-builder::outputs`, R-7), so a group's transaction is built
+# exactly as a solo one is; the outputs' openings are
+# `shekyl-curve-primitives` commitments, which wipe on drop. This crate
+# combines no mask (rule 36) and does no curve arithmetic of its own.
+# Crypto, builder and wire crates only: none reaches a transport crate, and
+# none takes an edge back to this crate.
 shekyl-fcmp = { path = "../shekyl-fcmp", features = ["multisig"] }
 shekyl-wire = { path = "../shekyl-wire" }
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
@@ -69,7 +73,6 @@ serde_json = "1"
 ciphersuite = "0.4"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
-shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 rand_core = { version = "0.6", features = ["std"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 

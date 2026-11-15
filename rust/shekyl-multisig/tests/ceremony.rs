@@ -18,7 +18,7 @@ mod common;
 use rand_core::OsRng;
 
 use common::wallet::{
-    context, derive, import_into, intent, proposer_inputs, validate, verify_from_the_wire, Wallet,
+    context, import_into, intent, proposer_inputs, validate, verify_from_the_wire, Wallet,
 };
 use common::{found_group, pay_group_twice};
 use shekyl_multisig::{Cosigner, Holder, MemberFile, Proposer, Responder, ResponderInput};
@@ -32,17 +32,16 @@ use shekyl_multisig::{Cosigner, Holder, MemberFile, Proposer, Responder, Respond
 fn two_of_three_spends_two_group_outputs() {
     let (address, files) = found_group(3, 2);
     let mut paid = pay_group_twice(&address, &files);
-    let derived = derive(&address);
     let [a, _, b]: [MemberFile; 3] = files.try_into().ok().unwrap();
     let mut a = Wallet::new(a);
     let mut b = Wallet::new(b);
     let intent = intent(&address, 0, &[0, 2], 2);
 
     // 1: A proposes.
-    let ctx_a = context(&a.file, validate(&a.file, intent.clone()), &paid, &derived);
+    let ctx_a = context(&a.file, validate(&a.file, intent.clone()), &paid);
     let (proposer, proposal) = Proposer::propose(
         ctx_a,
-        proposer_inputs(&mut paid, &derived),
+        proposer_inputs(&mut paid),
         &mut a.store,
         &mut a.live,
         &mut OsRng,
@@ -56,7 +55,6 @@ fn two_of_three_spends_two_group_outputs() {
         &b.file,
         validate(&b.file, at_b.body().intent.clone()),
         &paid,
-        &derived,
     );
     let response = Responder::respond(
         &ctx_b,
@@ -100,17 +98,16 @@ fn two_of_three_spends_two_group_outputs() {
 fn three_of_five_spends_two_group_outputs() {
     let (address, files) = found_group(5, 3);
     let mut paid = pay_group_twice(&address, &files);
-    let derived = derive(&address);
     let mut files: Vec<Option<MemberFile>> = files.into_iter().map(Some).collect();
     let mut wallet = |i: usize| Wallet::new(files[i].take().unwrap());
     let (mut a, mut h, mut b) = (wallet(1), wallet(3), wallet(4));
     let intent = intent(&address, 1, &[1, 3, 4], 4);
 
     // 1: A proposes; the holder receives it.
-    let ctx_a = context(&a.file, validate(&a.file, intent.clone()), &paid, &derived);
+    let ctx_a = context(&a.file, validate(&a.file, intent.clone()), &paid);
     let (proposer, proposal) = Proposer::propose(
         ctx_a,
-        proposer_inputs(&mut paid, &derived),
+        proposer_inputs(&mut paid),
         &mut a.store,
         &mut a.live,
         &mut OsRng,
@@ -123,7 +120,6 @@ fn three_of_five_spends_two_group_outputs() {
         &h.file,
         validate(&h.file, at_h.body().intent.clone()),
         &paid,
-        &derived,
     );
     let (holder, commitment) =
         Holder::commit(ctx_h, &at_h, &mut h.store, &mut h.live, &mut OsRng).unwrap();
@@ -142,7 +138,6 @@ fn three_of_five_spends_two_group_outputs() {
         &b.file,
         validate(&b.file, proposal_at_b.body().intent.clone()),
         &paid,
-        &derived,
     );
     let response = Responder::respond(
         &ctx_b,
@@ -177,7 +172,7 @@ fn three_of_five_spends_two_group_outputs() {
         .unwrap();
 
     // 9: B and the holder each build the transaction and sign.
-    let ctx_h2 = context(&h.file, validate(&h.file, intent.clone()), &paid, &derived);
+    let ctx_h2 = context(&h.file, validate(&h.file, intent.clone()), &paid);
     let from_h = Cosigner::sign_final_tx(
         &ctx_h2,
         &expect!(import_into(&h, &final_tx), FinalTx),

@@ -15,8 +15,8 @@ mod common;
 use rand_core::OsRng;
 
 use common::wallet::{
-    context, derive, import_for, input_contexts, intent, openings, try_context, validate,
-    verify_from_the_wire, Derived, Live, Sink, Store,
+    context, group_outputs, import_for, intent, try_context, validate, verify_from_the_wire, Live,
+    Sink, Store,
 };
 use common::{found_group, pay_group_twice, rebuild_paths, GroupOutputs, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
@@ -29,15 +29,15 @@ use shekyl_multisig::ceremony::nonce::{ConsumeError, InputInUse};
 use shekyl_multisig::ceremony::roles::{Committed, SharesPending};
 use shekyl_multisig::intent::SpendIntent;
 use shekyl_multisig::{
-    import, seal_envelope, CeremonyError, Cosigner, Holder, ImportError, MemberFile, Proposer,
-    ProposerInputs, Responder, ResponderInput, SigningContext,
+    import, seal_envelope, CeremonyError, Cosigner, DeriveError, DerivedSpend, Holder, ImportError,
+    MemberFile, Proposer, ProposerInputs, Responder, ResponderInput, SigningContext,
 };
+use shekyl_types::KeyImage;
 
 /// A 3-of-5 group that owns two outputs, and an intent to spend them.
 struct Spend {
     address: MultisigAddressPayload,
     paid: GroupOutputs,
-    derived: Derived,
     intent: SpendIntent,
 }
 
@@ -59,7 +59,6 @@ struct Caps {
 fn setup() -> (Spend, Members, Caps, Caps, Caps) {
     let (address, files) = found_group(5, 3);
     let paid = pay_group_twice(&address, &files);
-    let derived = derive(&address);
     let mut files: Vec<Option<MemberFile>> = files.into_iter().map(Some).collect();
     let mut take = |i: usize| files[i].take().unwrap();
     let members = Members {
@@ -72,7 +71,6 @@ fn setup() -> (Spend, Members, Caps, Caps, Caps) {
         Spend {
             address,
             paid,
-            derived,
             intent,
         },
         members,
@@ -88,12 +86,11 @@ impl Spend {
     }
 
     fn ctx_for<'w>(&self, file: &'w MemberFile, intent: SpendIntent) -> SigningContext<'w> {
-        context(file, validate(file, intent), &self.paid, &self.derived)
+        context(file, validate(file, intent), &self.paid)
     }
 
     fn proposer_inputs(&self) -> ProposerInputs {
         ProposerInputs {
-            output_openings: openings(&self.derived),
             input_paths: rebuild_paths(&self.paid),
         }
     }
@@ -377,12 +374,18 @@ fn a_final_tx_that_is_not_the_intents_is_refused_before_signing() {
         expect!(import_for(&m.b, &s.sealed(&m.a, &body)), FinalTx)
     };
 
-    // The member's own transaction pays another output: the proofs are
-    // not over it.
-    let mut other = derive(&s.address);
-    other.blinds = s.derived.blinds;
-    other.seeds = s.derived.seeds;
-    let ctx_other = context(&m.b, validate(&m.b, s.intent.clone()), &s.paid, &other);
+    // A member whose ledger records an input under another key image
+    // derives another transaction from the same intent: the proofs are not
+    // over it. The input that sorts first takes the greatest key image, so
+    // the inputs keep their order and only the transaction differs.
+    let mut ledger = group_outputs(&m.b, &s.paid);
+    let first = ledger
+        .iter_mut()
+        .max_by_key(|output| *output.key_image.as_bytes())
+        .unwrap();
+    first.key_image = KeyImage::from_bytes([u8::MAX; 32]);
+    let other = DerivedSpend::derive(validate(&m.b, s.intent.clone()), ledger, NET).unwrap();
+    let ctx_other = SigningContext::new(&m.b, other, s.paid.root, s.paid.layers).unwrap();
     assert!(matches!(
         Cosigner::sign_final_tx(&ctx_other, &honest, &mut OsRng),
         Err(CeremonyError::MembershipProof)
@@ -862,30 +865,60 @@ fn a_context_needs_a_layer_count_a_spend_proves_under() {
     let (s, m, ..) = setup();
     for layers in [0, 1, shekyl_fcmp::MAX_TREE_DEPTH + 1] {
         assert!(matches!(
-            try_context(&m.b, validate(&m.b, s.intent.clone()), &s.paid, &s.derived, layers),
+            try_context(&m.b, validate(&m.b, s.intent.clone()), &s.paid, layers),
             Err(ContextError::TreeLayers { layers: refused }) if refused == layers
         ));
     }
 }
 
-/// A member's inputs are put in the transaction's order whatever order it
-/// supplies them in: the context built from them reversed signs the same
-/// message.
+/// A member's inputs are put in the transaction's order whatever order its
+/// ledger hands them over in: the spend derived from them reversed signs
+/// the same message.
 #[test]
-fn a_context_orders_its_inputs_by_key_image() {
+fn a_derivation_orders_its_inputs_by_key_image() {
     let (s, m, ..) = setup();
     let in_order = s.ctx(&m.b);
-    let mut reversed = input_contexts(&m.b, &s.paid, &s.derived);
+    let mut reversed = group_outputs(&m.b, &s.paid);
     reversed.reverse();
-    let from_reversed = SigningContext::new(
-        &m.b,
-        NET,
-        validate(&m.b, s.intent.clone()),
-        reversed,
-        s.derived.unsigned.clone(),
-        s.paid.root,
-        s.paid.layers,
-    )
-    .unwrap();
+    let derived = DerivedSpend::derive(validate(&m.b, s.intent.clone()), reversed, NET).unwrap();
+    let from_reversed = SigningContext::new(&m.b, derived, s.paid.root, s.paid.layers).unwrap();
     assert_eq!(in_order.tx_signable(), from_reversed.tx_signable());
+}
+
+/// A ledger that does not hold exactly the intent's inputs derives
+/// nothing, each refusal by name: an input it lacks, an output it records
+/// twice, an output the intent does not spend.
+#[test]
+fn a_derivation_spends_exactly_the_intents_inputs() {
+    let (s, m, ..) = setup();
+    let derive_from = |edit: &dyn Fn(&mut Vec<shekyl_multisig::GroupOutput>)| {
+        let mut ledger = group_outputs(&m.b, &s.paid);
+        edit(&mut ledger);
+        DerivedSpend::derive(validate(&m.b, s.intent.clone()), ledger, NET).err()
+    };
+    assert!(matches!(
+        derive_from(&|l| {
+            l.pop();
+        }),
+        Some(DeriveError::MissingInput { .. })
+    ));
+    assert!(matches!(
+        derive_from(&|l| l[1].global_index = l[0].global_index),
+        Some(DeriveError::DuplicateRecord { .. })
+    ));
+    assert!(matches!(
+        derive_from(&|l| {
+            let mut extra = group_outputs(&m.b, &s.paid).remove(0);
+            extra.global_index = 99;
+            l.push(extra);
+        }),
+        Some(DeriveError::InputCount {
+            expected: 2,
+            got: 3
+        })
+    ));
+    assert!(matches!(
+        derive_from(&|l| l[1].key_image = l[0].key_image),
+        Some(DeriveError::DuplicateKeyImage)
+    ));
 }

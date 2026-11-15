@@ -3,21 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What one member brings to a ceremony: [`SigningContext`], everything it
-//! derives from the intent and its own ledger (R-7), and, for the proposer
-//! alone, [`ProposerInputs`].
+//! What one member brings to a ceremony: [`SigningContext`], its derived
+//! spend (`super::derivation`) with its keys and its view of the tree,
+//! and, for the proposer alone, [`ProposerInputs`].
 //!
 //! The intent is the only input a signer trusts. Every value here is the
-//! member's own: the spent outputs as its scan recovered them, the
-//! rerandomization seeds and pseudo-out blinds derived from the intent's
-//! `kem_randomness_seed` (slice 4a derives them under the reserved labels,
-//! `PQC_MULTISIG.md` §9.5; this slice's tests build them directly), and
-//! the outputs its own construction yields. Nothing another member sends
+//! member's own: the spent outputs as its ledger records them, and what
+//! the intent derives from them (R-7, R-14). Nothing another member sends
 //! enters this type.
 //!
 //! What the intent fixes is never carried twice: the fee and the reference
 //! block are read from the intent, and the inputs are the context's own key
-//! images. [`UnsignedSpend`] carries only what the construction adds, so an
+//! images. [`UnsignedSpend`] carries only what the derivation adds, so an
 //! unsigned spend that disagrees with its intent cannot be written down.
 //!
 //! The ceremony's input order is the transaction's: key images strictly
@@ -25,81 +22,21 @@
 //! member orders its inputs alike, and every per-input list in a ceremony
 //! file is in this order.
 
-use shekyl_crypto_pq::kem::X25519_KEM_CT_LEN;
-use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::multisig_output::{MemberOwnCiphertext, MultisigMemberView};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::frost_sal::{
     check_keys_open, threshold_keys, Ed25519T, FrostKeyError, FrostSalError, SalSigningParams,
-    SpentOutput, ThresholdKeys, RERANDOMIZATION_SEED_LEN,
+    ThresholdKeys,
 };
 use shekyl_fcmp::proof::ProveInputLeafChunk;
 use shekyl_network::NetworkId;
 use shekyl_types::{BlockHash, CurveTreeRoot, KeyImage, TxSignableHash};
-use shekyl_wire::{Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
-use zeroize::Zeroizing;
+use shekyl_wire::{Ct, Input, PqcAuth, Prunable, Transaction, TxPrefix};
 
+use super::derivation::{DerivedSpend, InputContext, UnsignedSpend};
 use super::{CeremonyError, Role};
 use crate::invariants::ValidatedIntent;
 use crate::member_file::MemberFile;
-
-/// One spent input, as this member knows it.
-pub struct InputContext {
-    /// The output's key `O`.
-    pub output_key: [u8; 32],
-    /// The output's commitment `C`.
-    pub commitment: [u8; 32],
-    /// `x = ho + b`, group-plaintext.
-    pub spend_scalar: Zeroizing<[u8; 32]>,
-    /// The output's `y_kem`.
-    pub y_kem: Zeroizing<[u8; 32]>,
-    /// The output's commitment mask `z`.
-    pub commitment_mask: Zeroizing<[u8; 32]>,
-    /// The input's pseudo-out blind `a`, derived from the intent.
-    pub pseudo_out_blind: Zeroizing<[u8; 32]>,
-    /// The input's rerandomization seed, derived from the intent.
-    pub rerandomization_seed: Zeroizing<[u8; RERANDOMIZATION_SEED_LEN]>,
-    /// The input's key image.
-    pub key_image: KeyImage,
-    /// The committed form the output's leaf binds (`0x02 ‖ n ‖ m ‖ h_1 … h_n`).
-    pub committed_form: MultisigCommittedForm,
-    /// This member's own `0x0D` X25519 ciphertext for the output.
-    pub own_x25519_ct: [u8; X25519_KEM_CT_LEN],
-    /// This member's own `0x0D` ML-KEM-768 ciphertext for the output.
-    pub own_ml_kem_ct: Vec<u8>,
-}
-
-impl InputContext {
-    /// The input's signing parameters, built from this member's own values.
-    /// Every signer builds the same value from the same intent.
-    fn params(&self, signable: TxSignableHash) -> Result<SalSigningParams, FrostSalError> {
-        SalSigningParams::new(
-            &self.rerandomization_seed,
-            &SpentOutput {
-                output_key: &self.output_key,
-                commitment: &self.commitment,
-                spend_scalar: &self.spend_scalar,
-                y_kem: &self.y_kem,
-                commitment_mask: &self.commitment_mask,
-            },
-            &self.pseudo_out_blind,
-            signable,
-        )
-    }
-}
-
-/// What this member's construction adds to the intent: the outputs, their
-/// `tx_extra` fields and the committed base. The inputs, the fee and the
-/// reference block are the intent's, so they are not here.
-#[derive(Clone, Debug)]
-pub struct UnsignedSpend {
-    /// The outputs, in output order.
-    pub outputs: Vec<Output>,
-    /// `tx_extra`: every output's PQC fields.
-    pub extra: Vec<u8>,
-    /// The committed base: output commitments and encrypted fields.
-    pub base: CtBase,
-}
 
 /// Why a member's context cannot be built.
 #[derive(Debug, thiserror::Error)]
@@ -107,12 +44,6 @@ pub enum ContextError {
     /// This member is not one of the intent's signers.
     #[error("this member is not a signer of the intent")]
     NotASigner,
-    /// The context's inputs are not the intent's.
-    #[error("the context has {got} inputs; the intent spends {expected}")]
-    InputCount { expected: usize, got: usize },
-    /// Two inputs have one key image: one output spent twice.
-    #[error("two inputs have one key image")]
-    DuplicateKeyImage,
     /// An input's committed form is not for this group.
     #[error("input {input}'s committed form is not for this group")]
     CommittedForm { input: usize },
@@ -135,6 +66,7 @@ pub struct SigningContext<'a> {
     pub(crate) intent: ValidatedIntent,
     pub(crate) inputs: Vec<InputContext>,
     unsigned: UnsignedSpend,
+    output_openings: Vec<Commitment>,
     pub(crate) tree_root: CurveTreeRoot,
     pub(crate) fcmp_layers: u8,
     tree_depth: u64,
@@ -142,53 +74,38 @@ pub struct SigningContext<'a> {
 }
 
 impl<'a> SigningContext<'a> {
-    /// Build `member`'s context for `intent`.
+    /// Build `member`'s context for its derived spend `derived`, under a
+    /// tree whose root is `tree_root` and whose layer count is
+    /// `fcmp_layers`.
     ///
-    /// Puts `inputs` in the transaction's order, and checks what can be
-    /// checked without the derivation itself (slice 4a's): this member
-    /// signs the intent; one input context per intent input, each spending
-    /// its own output; every committed form is for this group's size; a
-    /// spend proves under `fcmp_layers`; this member's share loads; and
-    /// every input's parameters build and are opened by this member's keys.
+    /// Checks this member signs the intent; every committed form is for
+    /// this group's size; a spend proves under `fcmp_layers`; this
+    /// member's share loads; and every input's parameters build and are
+    /// opened by this member's keys.
     ///
     /// # Errors
     ///
     /// The first [`ContextError`] that holds.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "each argument is a distinct part of the member's own view"
-    )]
     pub fn new(
         member: &'a MemberFile,
-        network_id: NetworkId,
-        intent: ValidatedIntent,
-        mut inputs: Vec<InputContext>,
-        unsigned: UnsignedSpend,
+        derived: DerivedSpend,
         tree_root: CurveTreeRoot,
         fcmp_layers: u8,
     ) -> Result<Self, ContextError> {
+        let DerivedSpend {
+            network_id,
+            intent,
+            inputs,
+            unsigned,
+            output_openings,
+        } = derived;
         if !intent.intent().signers.contains(&member.member_index()) {
             return Err(ContextError::NotASigner);
         }
-        let expected = intent.intent().input_global_indices.len();
-        if inputs.len() != expected {
-            return Err(ContextError::InputCount {
-                expected,
-                got: inputs.len(),
-            });
-        }
-        inputs.sort_unstable_by(|a, b| b.key_image.as_bytes().cmp(a.key_image.as_bytes()));
-        if inputs
-            .windows(2)
-            .any(|pair| pair[0].key_image == pair[1].key_image)
-        {
-            return Err(ContextError::DuplicateKeyImage);
-        }
         let address = member.address();
-        for (input, ctx) in inputs.iter().enumerate() {
-            if ctx.committed_form.n_total() != address.n_total()
-                || ctx.committed_form.m_required() != address.m_required()
-            {
+        for (input, spent) in inputs.iter().enumerate() {
+            let form = spent.committed_form();
+            if form.n_total() != address.n_total() || form.m_required() != address.m_required() {
                 return Err(ContextError::CommittedForm { input });
             }
         }
@@ -221,6 +138,7 @@ impl<'a> SigningContext<'a> {
             intent,
             inputs,
             unsigned,
+            output_openings,
             tree_root,
             fcmp_layers,
             tree_depth,
@@ -284,17 +202,18 @@ impl<'a> SigningContext<'a> {
 
     /// This member's own `0x0D` ciphertext for `input`.
     pub(crate) fn own_ciphertext(&self, input: usize) -> MemberOwnCiphertext<'_> {
-        let spent = &self.inputs[input];
-        MemberOwnCiphertext {
-            n: self.member.address().n_total(),
-            own_x25519_ct: &spent.own_x25519_ct,
-            own_ml_kem_ct: &spent.own_ml_kem_ct,
-        }
+        self.inputs[input].own_ciphertext(self.member.address().n_total())
     }
 
-    /// The output commitments this member's construction yields.
+    /// The output commitments this member's derivation yields.
     pub(crate) fn output_commitments(&self) -> &[[u8; 32]] {
-        &self.unsigned.base.commitments
+        &self.unsigned.base().commitments
+    }
+
+    /// Each output's opening, in output order: what the range proof
+    /// covers.
+    pub(crate) fn output_openings(&self) -> &[Commitment] {
+        &self.output_openings
     }
 
     /// The on-chain tree depth of a spend proving under this context's
@@ -337,15 +256,15 @@ fn spend(
             unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: inputs
                 .iter()
-                .map(|spent| Input::fcmp_spend(spent.key_image))
+                .map(|spent| Input::fcmp_spend(spent.key_image()))
                 .collect(),
-            outputs: unsigned.outputs.clone(),
-            extra: unsigned.extra.clone(),
+            outputs: unsigned.outputs().to_vec(),
+            extra: unsigned.extra().to_vec(),
         },
         ct: Ct::Fcmp {
             fee: intent.fee.to_raw(),
             reference_block: BlockHash::from_bytes(intent.reference_block_hash),
-            base: unsigned.base.clone(),
+            base: unsigned.base().clone(),
             pqc_auths,
             prunable,
         },
@@ -360,24 +279,22 @@ pub struct InputPath {
     pub leaf_chunk: ProveInputLeafChunk,
 }
 
-/// What the proposer alone needs to finish the transaction: each output's
-/// opening (the range proof covers them) and each input's path to the
-/// reference root (the membership proof).
+/// What the proposer alone needs to finish the transaction, beyond what
+/// it derives: each input's path to the reference root (the membership
+/// proof).
 pub struct ProposerInputs {
-    /// Per output, in output order: its amount and mask, wiped on drop.
-    pub output_openings: Vec<Commitment>,
     /// One per input, in any order: each names its input.
     pub input_paths: Vec<InputPath>,
 }
 
 impl ProposerInputs {
-    /// These inputs for `ctx`: an opening per output, and a path per input
-    /// put in the context's input order.
+    /// These inputs for `ctx`: a path per input, put in the context's
+    /// input order.
     ///
     /// # Errors
     ///
-    /// [`CeremonyError::InputCount`] when an output has no opening or an
-    /// input no path, or one has two.
+    /// [`CeremonyError::InputCount`] when an input has no path, or one has
+    /// two.
     pub(crate) fn for_context(mut self, ctx: &SigningContext<'_>) -> Result<Self, CeremonyError> {
         self.input_paths
             .sort_unstable_by(|a, b| b.key_image.as_bytes().cmp(a.key_image.as_bytes()));
@@ -385,8 +302,8 @@ impl ProposerInputs {
             .input_paths
             .iter()
             .map(|path| path.key_image)
-            .eq(ctx.inputs.iter().map(|spent| spent.key_image));
-        if !paths_match || self.output_openings.len() != ctx.output_commitments().len() {
+            .eq(ctx.inputs.iter().map(InputContext::key_image));
+        if !paths_match {
             return Err(CeremonyError::InputCount);
         }
         Ok(self)

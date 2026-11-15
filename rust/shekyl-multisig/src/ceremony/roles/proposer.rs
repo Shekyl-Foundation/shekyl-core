@@ -7,9 +7,10 @@
 //! shares, completes the SALs, proves, and assembles and releases the
 //! transaction (`PQC_MULTISIG.md` §11.1, steps 1, 3, 5, 7 and 10).
 //!
-//! Each state carries only what its steps need. The outputs' openings and
-//! the inputs' tree paths ([`ProposerInputs`]) live until the proofs are
-//! made and are dropped, wiped, at [`Proposer::finish`]. A restart is
+//! Each state carries only what its steps need. The inputs' tree paths
+//! ([`ProposerInputs`]) live until the proofs are made and are dropped at
+//! [`Proposer::finish`]; the outputs' openings are the context's own,
+//! derived, and wiped with it. A restart is
 //! recovered from the last file the proposer sent: its `Proposal` until
 //! [`Proposer::finish`] ([`Proposer::resume`], then replay what it
 //! received), its `FinalTx` after ([`Proposer::resume_after_finish`]).
@@ -350,16 +351,13 @@ impl<'a> Proposer<'a, SharesPending> {
         let signed = sign_held(consumed, &own, &set)?;
         let sals = complete_sals(signed, &responder, &holder_shares)?;
 
-        let ProposerInputs {
-            output_openings,
-            input_paths,
-        } = inputs;
+        let ProposerInputs { input_paths } = inputs;
         let leaf_chunks: Vec<ProveInputLeafChunk> = input_paths
             .into_iter()
             .map(|path| path.leaf_chunk)
             .collect();
         let membership = prove_membership(ctx, sals, &leaf_chunks)?;
-        let range = prove_range(ctx, output_openings, rng)?;
+        let range = prove_range(ctx, ctx.output_openings().to_vec(), rng)?;
         let keys = SignerKeys::check(ctx, signer_keys(ctx, &own, &commitments, &responder)?)?;
         let signable = SignableTransaction::assemble(ctx, &membership, &range, &keys)?;
 

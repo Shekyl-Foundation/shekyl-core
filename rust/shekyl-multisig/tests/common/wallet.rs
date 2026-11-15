@@ -11,18 +11,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use rand_core::{OsRng, RngCore};
-use zeroize::Zeroizing;
 
 use super::{paths, random_scalar, GroupOutputs, AMOUNTS, NET};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-use curve25519_dalek::Scalar as DalekScalar;
 use shekyl_address::multisig_address::{address_fingerprint, MultisigAddressPayload};
 use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation, X25519_KEM_CT_LEN};
 use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::signature::verify_pqc_auth;
-use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_multisig::ceremony::context::ContextError;
@@ -31,11 +28,10 @@ use shekyl_multisig::intent::{
     ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
-    import, HeldNonce, HeldNonceStore, Incoming, InputContext, LedgerView, LiveCeremonies,
-    MemberFile, NonceCounterError, NonceCounterSink, ProposerInputs, SigningContext, UnsignedSpend,
-    ValidatedIntent,
+    import, DerivedSpend, GroupOutput, HeldNonce, HeldNonceStore, Incoming, LedgerView,
+    LiveCeremonies, MemberFile, NonceCounterError, NonceCounterSink, ProposerInputs,
+    SigningContext, ValidatedIntent,
 };
-use shekyl_tx_builder::outputs::{build_output, BuiltOutput, Payee, RecipientKeys, SpendOutputs};
 use shekyl_types::{BlockHash, KeyImage};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
@@ -162,67 +158,6 @@ pub fn payee() -> &'static ShekylAddress {
     })
 }
 
-/// What slice 4a derives from the intent and every member derives alike:
-/// the outputs and their fields, each input's pseudo-out blind and
-/// rerandomization seed, and each output's mask.
-pub struct Derived {
-    pub unsigned: UnsignedSpend,
-    pub blinds: [[u8; 32]; 2],
-    pub seeds: [[u8; 32]; 2],
-    pub out_masks: Vec<[u8; 32]>,
-}
-
-/// A spend of `group`'s two outputs: its outputs built by the builder
-/// every spend uses and carried as the chain carries them, its pseudo-out
-/// blinds balancing the outputs' masks.
-pub fn derive(group: &MultisigAddressPayload) -> Derived {
-    let tx_key = random_scalar();
-    let tx_pubkey = (&tx_key * ED25519_BASEPOINT_TABLE).compress().to_bytes();
-    let payee_keys = RecipientKeys::of_address(payee()).unwrap();
-    let payees = [
-        payee_keys.payee(&SENTINEL_PLAINTEXT),
-        Payee::Group {
-            address: group,
-            network: &NET,
-        },
-    ];
-    let built: Vec<BuiltOutput> = payees
-        .into_iter()
-        .zip(OUTPUT_AMOUNTS)
-        .zip(0u64..)
-        .map(|((payee, amount), index)| {
-            build_output(&tx_key.to_bytes(), payee, amount, index).unwrap()
-        })
-        .collect();
-    let out_masks: Vec<[u8; 32]> = built.iter().map(|out| out.info.commitment_mask).collect();
-    let mask_sum: DalekScalar = out_masks
-        .iter()
-        .map(|z| DalekScalar::from_canonical_bytes(*z).unwrap())
-        .sum();
-    let a0 = random_scalar();
-    let a1 = mask_sum - a0;
-    let mut seeds = [[0u8; 32]; 2];
-    for seed in &mut seeds {
-        OsRng.fill_bytes(seed);
-    }
-    let SpendOutputs {
-        outputs,
-        extra,
-        base,
-    } = SpendOutputs::of(&tx_pubkey, &built).unwrap();
-    let unsigned = UnsignedSpend {
-        outputs,
-        extra,
-        base,
-    };
-    Derived {
-        unsigned,
-        blinds: [a0.to_bytes(), a1.to_bytes()],
-        seeds,
-        out_masks,
-    }
-}
-
 pub fn chain_fingerprint() -> [u8; 32] {
     ChainStateFingerprint {
         reference_block_hash: REFERENCE_HASH,
@@ -295,57 +230,24 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
     .expect("the intent is valid for every member")
 }
 
-/// `file`'s context: its own scans and ciphertexts, the shared derivation.
-pub fn context<'a>(
-    file: &'a MemberFile,
-    intent: ValidatedIntent,
-    paid: &GroupOutputs,
-    derived: &Derived,
-) -> SigningContext<'a> {
-    try_context(file, intent, paid, derived, paid.layers).expect("every member's context builds")
-}
-
-/// [`context`] under `layers` FCMP++ layers, refusals returned.
-pub fn try_context<'a>(
-    file: &'a MemberFile,
-    intent: ValidatedIntent,
-    paid: &GroupOutputs,
-    derived: &Derived,
-    layers: u8,
-) -> Result<SigningContext<'a>, ContextError> {
-    SigningContext::new(
-        file,
-        NET,
-        intent,
-        input_contexts(file, paid, derived),
-        derived.unsigned.clone(),
-        paid.root,
-        layers,
-    )
-}
-
-/// `file`'s view of each input, in payment order: its own scans and
-/// ciphertexts, and the shared derivation.
-pub fn input_contexts(
-    file: &MemberFile,
-    paid: &GroupOutputs,
-    derived: &Derived,
-) -> Vec<InputContext> {
+/// `file`'s ledger records of `paid`'s outputs, in payment order: the
+/// scan every member shares, its own ciphertexts, and each output's global
+/// index ([`GLOBAL_INDICES`]).
+pub fn group_outputs(file: &MemberFile, paid: &GroupOutputs) -> Vec<GroupOutput> {
     let me = usize::from(file.member_index());
     paid.outputs
         .iter()
         .zip(&paid.scans)
-        .enumerate()
-        .map(|(i, ((out, _, _), s))| {
+        .zip(GLOBAL_INDICES)
+        .map(|(((out, _, _), s), global_index)| {
             let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
-            InputContext {
+            GroupOutput {
+                global_index,
                 output_key: out.output_key,
                 commitment: out.commitment,
                 spend_scalar: s.x.clone(),
                 y_kem: s.y_kem.clone(),
                 commitment_mask: s.z.clone(),
-                pseudo_out_blind: Zeroizing::new(derived.blinds[i]),
-                rerandomization_seed: Zeroizing::new(derived.seeds[i]),
                 key_image: s.key_image,
                 committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
                 own_x25519_ct: x25519.try_into().unwrap(),
@@ -355,24 +257,38 @@ pub fn input_contexts(
         .collect()
 }
 
-/// The proposer's own inputs. The leaf chunks are taken: the prover is
-/// their only reader.
-pub fn proposer_inputs(paid: &mut GroupOutputs, derived: &Derived) -> ProposerInputs {
-    let chunks = std::mem::take(&mut paid.chunks);
-    ProposerInputs {
-        output_openings: openings(derived),
-        input_paths: paths(paid, chunks),
-    }
+/// `file`'s spend of `intent`, derived from its own ledger.
+pub fn derive(file: &MemberFile, intent: ValidatedIntent, paid: &GroupOutputs) -> DerivedSpend {
+    DerivedSpend::derive(intent, group_outputs(file, paid), NET)
+        .expect("every member derives the spend")
 }
 
-/// Each output's opening, in output order.
-pub fn openings(derived: &Derived) -> Vec<Commitment> {
-    derived
-        .out_masks
-        .iter()
-        .zip(OUTPUT_AMOUNTS)
-        .map(|(mask, amount)| Commitment::from_canonical_mask(mask, amount).unwrap())
-        .collect()
+/// `file`'s context: its own derivation of the intent from its own ledger.
+pub fn context<'a>(
+    file: &'a MemberFile,
+    intent: ValidatedIntent,
+    paid: &GroupOutputs,
+) -> SigningContext<'a> {
+    try_context(file, intent, paid, paid.layers).expect("every member's context builds")
+}
+
+/// [`context`] under `layers` FCMP++ layers, refusals returned.
+pub fn try_context<'a>(
+    file: &'a MemberFile,
+    intent: ValidatedIntent,
+    paid: &GroupOutputs,
+    layers: u8,
+) -> Result<SigningContext<'a>, ContextError> {
+    SigningContext::new(file, derive(file, intent, paid), paid.root, layers)
+}
+
+/// The proposer's own inputs. The leaf chunks are taken: the prover is
+/// their only reader.
+pub fn proposer_inputs(paid: &mut GroupOutputs) -> ProposerInputs {
+    let chunks = std::mem::take(&mut paid.chunks);
+    ProposerInputs {
+        input_paths: paths(paid, chunks),
+    }
 }
 
 pub fn import_into(wallet: &Wallet, file: &[u8]) -> Incoming {

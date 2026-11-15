@@ -136,6 +136,9 @@ pub enum SpendIntentError {
     #[error("{0} inputs; an intent spends 1..={MAX_INPUTS}")]
     InputCount(usize),
 
+    #[error("input {0} is listed twice")]
+    DuplicateInput(u64),
+
     #[error("{0} recipients; an intent pays at most {MAX_RECIPIENTS}")]
     RecipientCount(usize),
 
@@ -526,7 +529,8 @@ impl SpendIntent {
     /// of §9.2) for an `m_required`-of-`n_total` group: the version, the
     /// group shape (R-11), the proposer, the signer set and the responder
     /// (R-5), the size bounds [`MAX_INPUTS`], [`MAX_RECIPIENTS`] and
-    /// [`MAX_ADDRESS_LEN`], and the recipients' order. Nothing here reads a
+    /// [`MAX_ADDRESS_LEN`], no input listed twice, and the recipients'
+    /// order. Nothing here reads a
     /// clock (R-13).
     pub fn validate_structural(&self, n_total: u8, m_required: u8) -> Result<(), SpendIntentError> {
         if self.version != SPEND_INTENT_VERSION {
@@ -565,6 +569,14 @@ impl SpendIntent {
         let inputs = self.input_global_indices.len();
         if inputs == 0 || inputs > MAX_INPUTS as usize {
             return Err(SpendIntentError::InputCount(inputs));
+        }
+        let mut listed = std::collections::HashSet::with_capacity(inputs);
+        if let Some(&twice) = self
+            .input_global_indices
+            .iter()
+            .find(|&&index| !listed.insert(index))
+        {
+            return Err(SpendIntentError::DuplicateInput(twice));
         }
         if self.recipients.len() > MAX_RECIPIENTS as usize {
             return Err(SpendIntentError::RecipientCount(self.recipients.len()));
@@ -997,6 +1009,10 @@ mod tests {
         assert!(matches!(
             refused(&|i| i.input_global_indices.clear()),
             Some(SpendIntentError::InputCount(0))
+        ));
+        assert!(matches!(
+            refused(&|i| i.input_global_indices = vec![42, 99, 42]),
+            Some(SpendIntentError::DuplicateInput(42))
         ));
         assert!(matches!(
             refused(&|i| i.input_global_indices = (0..=u64::from(MAX_INPUTS)).collect()),

@@ -1284,6 +1284,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-ct-balance"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-curve-generators",
+ "shekyl-units",
+]
+
+[[package]]
 name = "shekyl-curve-generators"
 version = "0.4.0"
 dependencies = [
@@ -1417,6 +1426,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-fcmp",
  "shekyl-network",
+ "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
@@ -1449,6 +1459,31 @@ dependencies = [
  "rand",
  "sha2",
  "shekyl-heap-secret",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-tx-builder"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "fips204",
+ "rand_core",
+ "shekyl-address",
+ "shekyl-bulletproofs",
+ "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
+ "shekyl-ct-balance",
+ "shekyl-curve-generators",
+ "shekyl-curve-io",
+ "shekyl-curve-primitives",
+ "shekyl-fcmp",
+ "shekyl-network",
+ "shekyl-types",
+ "shekyl-units",
+ "shekyl-wire",
+ "thiserror",
  "zeroize",
 ]
 

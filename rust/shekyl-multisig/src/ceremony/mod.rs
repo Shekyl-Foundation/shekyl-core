@@ -34,8 +34,10 @@
 //! - a file from the member it names is an [`files::Authenticated`], made
 //!   only by [`files::import`], and each step takes the one body it
 //!   expects;
-//! - the intent is a [`crate::invariants::ValidatedIntent`], and the
-//!   member's [`SigningContext`] is built from it;
+//! - the intent is a [`crate::invariants::ValidatedIntent`]; the member's
+//!   spend is a [`DerivedSpend`], made only by deriving it from that intent
+//!   and the member's own ledger, and its [`SigningContext`] is built from
+//!   that;
 //! - a per-output key that matches its committed hash is a
 //!   [`proofs::CommittedMemberKey`];
 //! - a held nonce owns its parameters ([`nonce::HeldNonce`]); only a
@@ -53,14 +55,14 @@
 //! member sent and the files it received.
 
 pub mod context;
+pub mod derivation;
 pub mod files;
 pub mod nonce;
 pub mod proofs;
 pub mod roles;
 
-pub use context::{
-    ContextError, InputContext, InputPath, ProposerInputs, SigningContext, UnsignedSpend,
-};
+pub use context::{ContextError, InputPath, ProposerInputs, SigningContext};
+pub use derivation::{DeriveError, DerivedSpend, GroupOutput, InputContext, UnsignedSpend};
 pub use files::{import, Authenticated, BodyError, ImportError, Incoming};
 pub use nonce::{
     ConsumeError, ConsumedNonce, HeldNonce, HeldNonceStore, InputInUse, LiveCeremonies,
