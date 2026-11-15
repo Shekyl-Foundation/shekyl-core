@@ -81,7 +81,9 @@ impl SpendHorizon {
     }
 
     /// Blocks the tip must advance until an output eligible at
-    /// `eligible_height` is in the reference block's tree.
+    /// `eligible_height` is in the reference block's tree. Never less for a
+    /// later eligible height.
+    #[inline]
     #[must_use]
     pub fn wait(self, eligible_height: BlockHeight) -> BlockCount {
         shekyl_curve_tree::tip_blocks_until_in_tree(eligible_height, self.tip)

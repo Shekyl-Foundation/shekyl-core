@@ -26,10 +26,10 @@
 //! spendable by the rule stays in `spendable` while the wallet's tree
 //! catches up, and a send in that window is refused with its own error.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use shekyl_engine_state::{OutputState, SendJournalBlock, SpendHorizon};
-use shekyl_types::BlockCount;
+use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_units::AtomicUnits;
 
 use crate::transfer::TransferDetails;
@@ -93,42 +93,60 @@ impl BalanceSummary {
         journal: &SendJournalBlock,
     ) -> Self {
         let locks = journal.spend_locks();
-        // The in-flight sends' inputs, to learn in the one pass below
-        // whether a scan has spent any of them. Empty for a wallet with no
-        // send in flight, which is the common read.
-        let mut scanned: BTreeMap<u64, bool> = journal
-            .in_flight()
-            .flat_map(|(_, row)| row.inputs.iter().map(|input| (input.gindex, false)))
-            .collect();
+        // The in-flight sends' inputs (the lock set's keys) that a scan has
+        // already spent. Walked only when a send is in flight, which the
+        // common read has none of.
+        let scanned: BTreeSet<u64> = if locks.is_empty() {
+            BTreeSet::new()
+        } else {
+            transfers
+                .iter()
+                .filter(|td| td.spent && locks.contains(td.global_output_index))
+                .map(|td| td.global_output_index.to_raw())
+                .collect()
+        };
 
-        let mut summary = Self::default();
+        // The legs are summed in locals and written once, so the loop keeps
+        // them in registers (`hot_path_bench_balance_compute`).
+        let (mut spendable, mut incoming, mut parked, mut unspendable) = (
+            AtomicUnits::ZERO,
+            AtomicUnits::ZERO,
+            AtomicUnits::ZERO,
+            AtomicUnits::ZERO,
+        );
+        // The wait grows with the eligible height, so the soonest incoming
+        // output's wait is the wait at the least eligible height: taken
+        // once, after the walk.
+        let mut first_incoming: Option<BlockHeight> = None;
         for td in transfers {
-            if td.spent && !scanned.is_empty() {
-                if let Some(seen) = scanned.get_mut(&td.global_output_index.to_raw()) {
-                    *seen = true;
-                }
-            }
             let amount = td.amount();
             match td.state(horizon, &locks) {
                 OutputState::Spent | OutputState::InFlight => {}
-                OutputState::Unspendable => {
-                    summary.unspendable = accumulate(summary.unspendable, amount);
+                OutputState::Unspendable => unspendable = accumulate(unspendable, amount),
+                OutputState::Parked => parked = accumulate(parked, amount),
+                OutputState::Incoming { .. } => {
+                    incoming = accumulate(incoming, amount);
+                    first_incoming = Some(
+                        first_incoming.map_or(td.eligible_height, |h| h.min(td.eligible_height)),
+                    );
                 }
-                OutputState::Parked => summary.parked = accumulate(summary.parked, amount),
-                OutputState::Incoming { wait } => {
-                    summary.incoming = accumulate(summary.incoming, amount);
-                    summary.incoming_wait =
-                        Some(summary.incoming_wait.map_or(wait, |w| w.min(wait)));
-                }
-                OutputState::Spendable => summary.spendable = accumulate(summary.spendable, amount),
+                OutputState::Spendable => spendable = accumulate(spendable, amount),
             }
         }
+        let mut summary = Self {
+            spendable,
+            incoming,
+            incoming_wait: first_incoming.map(|h| horizon.wait(h)),
+            parked,
+            outgoing: AtomicUnits::ZERO,
+            unspendable,
+        };
 
         for (_, row) in journal.in_flight() {
             if row
                 .inputs
                 .iter()
-                .any(|input| scanned.get(&input.gindex).copied().unwrap_or(false))
+                .any(|input| scanned.contains(&input.gindex))
             {
                 continue;
             }

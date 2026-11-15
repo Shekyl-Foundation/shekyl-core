@@ -205,7 +205,9 @@ struct GenSend {
 fn gen_output() -> impl Strategy<Value = GenOutput> {
     (
         1u64..1_000_000,
-        0u64..TIP,
+        // Half near the tip, where outputs are incoming with different
+        // waits, so the soonest wait is chosen among several.
+        prop_oneof![0u64..TIP, TIP - 40..TIP],
         prop::bool::weighted(0.15),
         prop::bool::weighted(0.15),
         prop::bool::weighted(0.1),
@@ -331,14 +333,17 @@ proptest! {
     ///    value is exactly the unscanned in-flight sends' outgoing plus
     ///    change;
     /// 2. for every in-flight send, Σ inputs = Σ recipients + fee + change;
-    /// 3. balance = spendable + incoming + parked.
+    /// 3. balance = spendable + incoming + parked;
+    /// 4. `incoming_wait` is the least wait among the incoming outputs on
+    ///    chain, absent when there are none.
     ///
     /// The edits that make it fail: the classifier no longer consulting the
     /// locks (an in-flight input then reads spendable, and (1) breaks on
     /// the in-flight sum); the change of a scanned send still added to
     /// incoming (counted twice: (1) breaks on incoming); outgoing summed
     /// over every row rather than the in-flight ones (an abandoned or
-    /// released send's money counted as leaving).
+    /// released send's money counted as leaving); the wait taken at any
+    /// incoming output but the soonest ((4) breaks).
     #[test]
     fn every_unspent_output_is_in_exactly_one_leg(
         outputs in prop::collection::vec(gen_output(), 0..24),
@@ -350,12 +355,16 @@ proptest! {
         let summary = BalanceSummary::compute(&rows, horizon, &journal);
 
         let mut by_state = [0u64; 5]; // spendable, incoming, parked, in flight, unspendable
+        let mut soonest: Option<BlockCount> = None;
         for row in &rows {
             let amount = row.amount().to_raw();
             match row.state(horizon, &locks) {
                 OutputState::Spent => {}
                 OutputState::Spendable => by_state[0] += amount,
-                OutputState::Incoming { .. } => by_state[1] += amount,
+                OutputState::Incoming { wait } => {
+                    by_state[1] += amount;
+                    soonest = Some(soonest.map_or(wait, |w| w.min(wait)));
+                }
                 OutputState::Parked => by_state[2] += amount,
                 OutputState::InFlight => by_state[3] += amount,
                 OutputState::Unspendable => by_state[4] += amount,
@@ -378,6 +387,7 @@ proptest! {
         prop_assert_eq!(summary.parked.to_raw(), by_state[2]);
         prop_assert_eq!(summary.unspendable.to_raw(), by_state[4]);
         prop_assert_eq!(summary.outgoing.to_raw(), outgoing);
+        prop_assert_eq!(summary.incoming_wait, soonest);
         prop_assert_eq!(by_state[3], outgoing + change, "in-flight inputs = outgoing + change");
 
         for (_, row) in journal.in_flight() {
