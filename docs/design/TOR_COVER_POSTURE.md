@@ -80,8 +80,8 @@ Three consequences follow immediately:
   `--out-peers` does not change the address-hiding target. A live own-edge is not
   re-pointed; a dead one is replaced from the peers still up. No cover
   on Tor by ruling; on cover-bearing links the own-edge is slot-aligned.
-  Tor's cover class is `Volume`. That ruling is unmeasured, pending TRC-1.
-  **Measured 2026-11-15: falsified (banner).**
+  Tor's cover class is `Volume`. **Measured 2026-11-15, that ruling is
+  falsified (banner).**
   *Records-was as of 2026-10-08: this bullet is what the code does today.
   The ruling below removes the separate draw.*
 - **UPDATE 2026-10-08 (Rick). Own transactions ride a stem slot.** A node's
@@ -281,20 +281,21 @@ requirement.
 
 ## 8. Falsifiers and reopen criteria — step 3 MET 2026-11-15: the ruling reopened (banner)
 
-**The measurement this ruling rests on has not been taken.** A Shekyl node
-whose Tor **client is the same process as** a modest non-exit relay, and how
-much traffic that process actually carries across hours and consensus weights.
-A sidecar client Tor is not this measurement's subject — originated cells
-would not be on the relay's OR connections. It is the one input that cannot
-be reasoned to, and it decides whether the cover is real at the sizes an
-ordinary operator runs.
+**The measurement this ruling rested on has been taken, and it found no
+cover** (banner). Its subject was a Shekyl node whose Tor **client is the
+same process as** a modest non-exit relay, and how much traffic that process
+carries across hours and consensus weights. A sidecar client Tor was not its
+subject — originated cells would not be on the relay's OR connections. It
+was the one input that could not be reasoned to.
 
 Falsifier chain, in the [`PWD-E8`](P2P_2_ENDPOINT_ROUND.md) shape — the subject
 must exist before the measurement can:
 
 1. The posture is documented (`docs/TOR_RELAY.md`: shared-instance bind) and
-   that operator topology is running.
-2. Carried traffic is measured across hours and weights.
+   that operator topology is running. **MET 2026-10-06**
+   ([`trc1_relay_posture_20261006.md`](../benchmarks/trc1_relay_posture_20261006.md)).
+2. Carried traffic is measured across hours and weights. **MET 2026-11-11**
+   ([`trc1_carried_traffic_20261012.md`](../benchmarks/trc1_carried_traffic_20261012.md)).
 3. If measured cover at ordinary operator scale is insufficient to make
    originated cells indistinguishable, **this ruling reopens** and the carrier's
    scope re-expands to the Tor zone. **MET 2026-11-15** (banner).
@@ -380,7 +381,27 @@ Discharged in the 2026-09-12 recording change that landed this document.
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md): one pre-genesis row for the §8 measurement,
   blocker named as the falsifier chain's first link.
 
-## 10. A complete-tree fetch can show a holding set — reported 2026-10-22
+Discharged in the 2026-11-15 reopening change (#1390), which withdraws the
+claim and does not restate the design:
+
+- This document's banner and line-local REOPENED statuses; the TRC index
+  rows; [`docs/TOR_RELAY.md`](../TOR_RELAY.md), the user guide,
+  [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) and the docs index.
+- [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md) and
+  [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md): REOPENED banners, and
+  a marker on each Tor-zone SUPERSEDED note; `DAEMON_RELAY_PRIVACY.md` §96
+  item 4 met on its second branch.
+- [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md)'s cover-class cell and
+  [`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)'s TRC-1 input
+  to BD-Q4.
+- [`FOLLOWUPS.md`](../FOLLOWUPS.md): the §8 row removed; a post-genesis row
+  for the carrier's reliance on Tor's classical encryption.
+
+What replaces the withdrawn text is the cover-traffic lane's Round 0. The
+Rust doc comments that describe `CoverClass::Volume` change with that class
+when Round 0 rules on it.
+
+## 11. A complete-tree fetch can show a holding set — reported 2026-10-22
 
 `ARCHIVAL_SUPPORT_DRAW.md` §8. Each read builds its own circuit
 (`SF-D3`). Nothing spreads the fetches of one new holding over time or
