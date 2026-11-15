@@ -8,6 +8,10 @@
 //! through the enrolment methods and the console key's reset. There is no
 //! file to edit behind the daemon's back.
 //!
+//! The file is the account's alone, as the channel's key files are
+//! ([`super::files::private_store`]): created owner-only on a first start
+//! and refused, never repaired, when another account can read it.
+//!
 //! One record per client fingerprint: its ceiling as expanded grants (never
 //! a preset's name, IG-Q87), when it was enrolled, and by whom. The console
 //! key, a service's, is not an enrolment: it sits in a cell of its own and
@@ -107,6 +111,8 @@ impl Enrolment {
 /// Why the store could not answer.
 #[derive(Debug)]
 pub enum StoreError {
+    /// The store's file is exposed, or could not be created or read.
+    File(super::files::FileRefused),
     /// redb refused.
     Db(String),
     /// A record this build does not read.
@@ -116,6 +122,7 @@ pub enum StoreError {
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::File(e) => write!(f, "the enrolment store: {e}"),
             Self::Db(e) => write!(f, "the enrolment store: {e}"),
             Self::Corrupt => {
                 f.write_str("the enrolment store holds a record this build does not read")
@@ -136,13 +143,17 @@ pub struct Store {
 }
 
 impl Store {
-    /// Open the store in `data_dir`, creating it on a first start.
+    /// Open the store in `data_dir`, creating it owner-only on a first
+    /// start.
     ///
     /// # Errors
     ///
+    /// [`StoreError::File`] when its file is exposed or cannot be made;
     /// [`StoreError::Db`] when redb cannot open or create it.
     pub fn open(data_dir: &Path) -> Result<Self, StoreError> {
-        let db = Database::create(data_dir.join(STORE_FILE)).map_err(db_err)?;
+        let path = data_dir.join(STORE_FILE);
+        super::files::private_store(&path).map_err(StoreError::File)?;
+        let db = Database::create(&path).map_err(db_err)?;
         let txn = db.begin_write().map_err(db_err)?;
         txn.open_table(ENROLMENTS).map_err(db_err)?;
         txn.open_table(SINGLES).map_err(db_err)?;
@@ -316,6 +327,38 @@ fn reset_note(at: u64) -> [u8; SINGLE_CELL] {
 mod tests {
     use super::*;
     use shekyl_rpc_grants::Preset;
+
+    /// The store is the account's alone, as a key file is: created
+    /// owner-only, and refused when another account can read it. Red edit:
+    /// drop the check in `Store::open`, and the exposed store opens.
+    #[cfg(unix)]
+    #[test]
+    fn the_store_is_the_accounts_alone_and_an_exposed_one_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        drop(Store::open(dir.path()).unwrap());
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        drop(Store::open(dir.path()).unwrap());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            Store::open(dir.path()),
+            Err(StoreError::File(super::super::files::FileRefused::Exposed(..)))
+        ));
+    }
+
+    /// Windows: the store is created with the owner-only, no-read-up
+    /// descriptor a key file has, and passes the same check.
+    #[cfg(windows)]
+    #[test]
+    fn the_store_is_created_owner_only_and_labelled() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(Store::open(dir.path()).unwrap());
+        shekyl_win_sec::rendezvous::check_owner_only_labelled(&dir.path().join(STORE_FILE))
+            .expect("owner-only and labelled");
+        drop(Store::open(dir.path()).unwrap());
+    }
 
     /// An enrolment is stored as its expanded grants and reads back whole,
     /// across a reopen; the console cell is separate from the enrolments.

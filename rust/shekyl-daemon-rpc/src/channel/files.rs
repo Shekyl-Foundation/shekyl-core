@@ -5,7 +5,7 @@
 
 //! The channel's files in the network's data directory, the one the
 //! exclusive lock covers (RT-O34; Rick, 2026-11-14): the daemon's key, its
-//! public bundle, and a service's console key.
+//! public bundle, a service's console key, and the enrolled set's store.
 //!
 //! Each is readable by the daemon's account alone: created `0600` with
 //! `O_EXCL` on Unix, and on Windows with an owner-only descriptor and the
@@ -99,6 +99,26 @@ pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), FileRefused> {
     journal
         .commit()
         .map_err(|error| FileRefused::Io(path.to_path_buf(), error))
+}
+
+/// The enrolled set's store at `path`, made ready for redb: created empty
+/// and owner-only on a first start, in the creating call as a key file is,
+/// and checked before it is opened. The ceilings and the console cell are
+/// what admission trusts, so a store anyone else can read or write is
+/// refused, not repaired.
+///
+/// # Errors
+///
+/// [`FileRefused::Io`] when it cannot be created or read;
+/// [`FileRefused::Exposed`] when another account can read it, it is not
+/// this account's, or it is a link.
+pub fn private_store(path: &Path) -> Result<(), FileRefused> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => write_private(path, &[])?,
+        Err(e) => return Err(FileRefused::Io(path.to_path_buf(), e)),
+    }
+    private(path)
 }
 
 /// Whether only this account can read `path`.
