@@ -439,6 +439,35 @@ async fn the_opened_first_record_is_read_before_the_transport() {
     assert_eq!(got, b"firstsecondthird");
 }
 
+/// A submission that is the connection's first message starts in the
+/// record the handshake opens. Admitted through `after_first_opened`, it is
+/// still shaped as a submission. Red edit: build the daemon's stream with
+/// `after_first_record`, and the verdict misses the first record.
+#[tokio::test]
+async fn a_submission_in_the_first_record_is_still_a_submission() {
+    let ((c_send, c_recv), (d_send, d_recv)) = directions();
+    let (a, mut raw) = duplex(1 << 20);
+    let mut client = RecordStream::new(a, c_send, c_recv);
+    client.submission_mark().arm();
+    client.write_all(&bytes(1_000)).await.unwrap();
+    client.flush().await.unwrap();
+    drop(client);
+    let mut wire = Vec::new();
+    raw.read_to_end(&mut wire).await.unwrap();
+
+    let mut opener = ClassedOpener::new(d_recv, class_table());
+    let first = opener.open(&wire).unwrap();
+    let rest = wire[first.consumed..].to_vec();
+    let d_recv = opener.into_direction();
+    let (_, x) = duplex(1 << 20);
+    let mut daemon = RecordStream::after_first_opened(x, d_send, d_recv, first, rest).unwrap();
+    let shape = daemon.inbound_shape();
+    let mut got = vec![0u8; 1_000];
+    daemon.read_exact(&mut got).await.unwrap();
+    assert_eq!(got, bytes(1_000));
+    assert!(shape.ends_in_submission());
+}
+
 /// SUBMISSION_RECORDS is derived from the consensus bound (RT-O28): the
 /// largest admissible transaction's base64 request body fits
 /// SUBMISSION_RECORDS records with room for a request head, and does not

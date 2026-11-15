@@ -237,6 +237,24 @@ class Daemon(object):
     def ban_show(self, host):
         return self.call('ban_show', {'host': host})
 
+    # Enrolment over the channel (IG-Q87): each under the `enrol` grant. A
+    # ceiling is a list of grant and preset keywords.
+
+    def rpc_client_add(self, fingerprint, ceiling):
+        return self.call('rpc_client_add', {'fingerprint': fingerprint, 'ceiling': ceiling})
+
+    def rpc_client_set(self, fingerprint, ceiling):
+        return self.call('rpc_client_set', {'fingerprint': fingerprint, 'ceiling': ceiling})
+
+    def rpc_client_remove(self, fingerprint):
+        return self.call('rpc_client_remove', {'fingerprint': fingerprint})
+
+    def rpc_client_list(self):
+        return self.call('rpc_client_list')
+
+    def rpc_bundle_show(self):
+        return self.call('rpc_bundle_show')
+
     # The armed levers (RT-O9.2): served only by a daemon started armed.
 
     def dev_block_generate(self, count = 1):
