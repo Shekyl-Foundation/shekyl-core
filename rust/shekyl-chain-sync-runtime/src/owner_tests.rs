@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The owner's reply conversion and its end guard. The owner end to
-//! end is the loopback harness's (`shekyl-p2p-harness`,
-//! `tests/chain_sync_loopback.rs`).
+//! The owner's reply conversion, its end guard, and the local drain's
+//! stop. The owner end to end is the loopback harness's
+//! (`shekyl-p2p-harness`, `tests/chain_sync_loopback.rs`).
 
 use shekyl_chain_ingest::service::{ArrivalTag, CannotFollow, Refusal, Reply};
 use shekyl_chain_ingest::PopBeyondReorgCap;
@@ -278,14 +278,14 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
 
 /// A prove job that could not judge an item ends the owner, and the end
 /// names the fault with its seeds: what `Node::ended()` carries as
-/// `NodeEnd::Sync` and the daemon's stop line prints. The owner's loop
-/// takes [`super::Owner::unjudged`]'s record before it waits again; the
-/// guard reports it as every other end.
+/// `NodeEnd::Sync` and the daemon's stop line prints. The guard reports
+/// that end as every other end.
 ///
 /// The job's half is `executor_tests::an_item_under_another_seed_is_not_judged`.
 /// No test drives a whole owner into this end: the model names one seed
 /// per job by construction, and the executor's boundary is the production
-/// one, so neither fault can be caused from outside the task.
+/// one, so neither fault can be caused from outside the task. The drain
+/// that stops on the fault is `an_unjudged_input_leaves_the_rest_unread`.
 ///
 /// Red edit: have `EndCause`'s `Display` write `text()` for every cause:
 /// the line loses the two seeds.
@@ -321,4 +321,70 @@ fn an_unjudged_proof_is_an_end_that_names_its_fault() {
         how: super::Ended::Failed(cause),
     });
     assert_eq!(*ended.borrow(), Some(super::Ended::Failed(cause)));
+}
+
+/// An unjudged proof stops `pump_local` on that fault. The input queued
+/// behind it stays queued, and the tip and latch watches stay unseen.
+/// The closure is `end_of`, which `Owner::input` applies through.
+/// Building an `Owner` would stand up the store, the door and the timer
+/// for a drain that does not touch them.
+///
+/// Red edit: in `pump_local`, keep applying after `apply` returns
+/// `Break`. The input behind the fault is consumed, or a watch is
+/// marked seen.
+#[test]
+fn an_unjudged_input_leaves_the_rest_unread() {
+    use std::ops::ControlFlow;
+
+    use crate::executor::ProveFault;
+    use shekyl_chain_store::codec::FollowingDegraded;
+    use shekyl_types::BlockHash;
+
+    let asked = BlockHash::from_bytes([7; 32]);
+    let lent = BlockHash::from_bytes([6; 32]);
+    let fault = ProveFault::SeedNotLent { asked, lent };
+    let cause = super::EndCause::ProofUnjudged(fault);
+
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
+    input_tx
+        .send(super::Input::Unjudged(fault))
+        .expect("the input queue is open");
+    input_tx
+        .send(super::Input::AlarmRefused)
+        .expect("the input queue is open");
+
+    let (_tip_tx, mut tips) =
+        tokio::sync::watch::channel(shekyl_chain_ingest::TipChanged { seq: 0, tip: None });
+    tips.mark_changed();
+    let (_latch_tx, mut latch) = tokio::sync::watch::channel::<Option<FollowingDegraded>>(None);
+    latch.mark_changed();
+
+    let mut applied = false;
+    let flow = super::pump_local(&mut input_rx, &mut tips, &mut latch, |input| {
+        let kept = super::end_of(input)?;
+        assert!(
+            !matches!(kept, super::Input::Unjudged(_)),
+            "an unjudged proof was applied"
+        );
+        applied = true;
+        ControlFlow::Continue(())
+    });
+
+    match flow {
+        ControlFlow::Break(end) => assert_eq!(end, cause),
+        ControlFlow::Continue(_) => panic!("the drain applied past the fault"),
+    }
+    assert!(!applied, "an input behind the fault was applied");
+    assert!(
+        matches!(input_rx.try_recv(), Ok(super::Input::AlarmRefused)),
+        "the input behind the fault was consumed"
+    );
+    assert!(
+        tips.has_changed().expect("the tip watch is open"),
+        "the tip watch was marked seen"
+    );
+    assert!(
+        latch.has_changed().expect("the latch watch is open"),
+        "the latch watch was marked seen"
+    );
 }
