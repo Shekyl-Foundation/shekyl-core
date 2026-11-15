@@ -38,34 +38,13 @@
 //! ```
 
 use bech32::primitives::decode::{CheckedHrpstring, CheckedHrpstringError};
-
-/// The library's refusal as this crate names it, so the `bech32` crate's
-/// error types stay out of this crate's public API.
-fn named(e: CheckedHrpstringError) -> EncodingError {
-    match e {
-        CheckedHrpstringError::Checksum(_) => EncodingError::Checksum,
-        other => EncodingError::Malformed(other.to_string()),
-    }
-}
 use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
-
-/// HRP for spend proof encoding.
-pub const HRP_SPEND_PROOF: &str = "shekylspendproof";
 
 /// HRP for transaction proof encoding.
 pub const HRP_TX_PROOF: &str = "shekyltxproof";
 
 /// HRP for reserve proof encoding.
 pub const HRP_RESERVE_PROOF: &str = "shekylreserveproof";
-
-/// HRP for message signature encoding.
-pub const HRP_MESSAGE_SIG: &str = "shekylsig";
-
-/// HRP for multisig signature encoding.
-pub const HRP_MULTISIG_SIG: &str = "shekylmultisig";
-
-/// HRP for signer key encoding.
-pub const HRP_SIGNER_KEY: &str = "shekylsigner";
 
 /// Errors that can occur during Bech32m encoding or decoding.
 #[derive(Debug, thiserror::Error)]
@@ -95,6 +74,15 @@ pub enum EncodingError {
     /// (non-zero padding bits, for one).
     #[error("not the canonical bech32m encoding of its contents")]
     NotCanonical,
+}
+
+/// The library's refusal as this crate names it, so the `bech32` crate's
+/// error types stay out of this crate's public API.
+fn named(e: CheckedHrpstringError) -> EncodingError {
+    match e {
+        CheckedHrpstringError::Checksum(_) => EncodingError::Checksum,
+        other => EncodingError::Malformed(other.to_string()),
+    }
 }
 
 /// The one Bech32m writer: lowercase, Bech32m checksum, zero padding.
@@ -190,14 +178,7 @@ mod tests {
     #[test]
     fn roundtrip_proof_hrps() {
         let data = vec![0xab; 64];
-        for hrp in [
-            HRP_SPEND_PROOF,
-            HRP_TX_PROOF,
-            HRP_RESERVE_PROOF,
-            HRP_MESSAGE_SIG,
-            HRP_MULTISIG_SIG,
-            HRP_SIGNER_KEY,
-        ] {
+        for hrp in [HRP_TX_PROOF, HRP_RESERVE_PROOF] {
             let encoded = encode_blob(hrp, &data).unwrap();
             assert!(encoded.starts_with(hrp));
             let (decoded_hrp, decoded_data) = decode_blob(&encoded).unwrap();

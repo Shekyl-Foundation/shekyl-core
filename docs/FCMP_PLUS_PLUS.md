@@ -858,8 +858,8 @@ An address has exactly one string: the lowercase one its encoder writes.
 Bech32m as specified also admits the all-uppercase spelling, and a
 general Bech32 decoder also admits the older Bech32 checksum and
 non-zero padding bits; Shekyl accepts none of them. Every segment, and
-every other Shekyl Bech32m string (multisig fingerprints, wallet proofs,
-message signatures), is read by `shekyl-encoding::decode_blob`, which
+every other Shekyl Bech32m string (multisig fingerprints, the transaction
+and reserve proofs), is read by `shekyl-encoding::decode_blob`, which
 refuses an uppercase letter by name (`EncodingError::NotLowercase`) and
 then re-encodes what it decoded and refuses any string that differs
 (`EncodingError::NotCanonical`). One address therefore has one string to
@@ -891,17 +891,18 @@ Network discrimination is handled via the Human-Readable Part (HRP):
 Address encoding lives in two standalone crates:
 
 - `rust/shekyl-encoding/` — generic Bech32m blob encode/decode with
-  arbitrary HRPs. Also defines HRP constants for wallet proofs
-  (`shekylspendproof`, `shekyltxproof`, `shekylreserveproof`, `shekylsig`,
-  `shekylmultisig`, `shekylsigner`).
+  arbitrary HRPs, and the HRPs of the two wallet proofs (`shekyltxproof`,
+  `shekylreserveproof`).
 - `rust/shekyl-address/` — network-aware segmented Bech32m address
   encoding. Depends on `shekyl-encoding`. Defines the `Network` enum,
   HRP lookup tables, and the `ShekylAddress` struct with `encode()` /
   `decode()` / `decode_for_network()`.
 
 `shekyl-crypto-pq` re-exports `shekyl-address` as its `address` module.
-Wallet proofs, message signatures and signer keys are `shekyl-encoding`
-blobs with purpose-specific HRPs. There is no Base58 code path.
+The transaction and reserve proofs are `shekyl-encoding` blobs under
+their own HRPs; a message signature is its own armored string
+(`shekylmsgsig1.`, [`WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md)). There is no Base58 code
+path.
 
 ---
 
