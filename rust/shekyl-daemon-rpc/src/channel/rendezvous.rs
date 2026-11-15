@@ -81,6 +81,24 @@ impl ServiceRendezvous {
     }
 }
 
+/// Remove a record at `path`, if one is there.
+///
+/// A service that is not listening publishes nothing. A previous run may
+/// have left the file (it is removed on a clean stop, and a crash does
+/// not run that). The path is this instance's, so the leftover is this
+/// instance's previous record.
+///
+/// # Errors
+///
+/// The file is there and could not be removed.
+pub fn retire(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 impl Drop for ServiceRendezvous {
     fn drop(&mut self) {
         if std::fs::read(&self.path).is_ok_and(|bytes| bytes == self.record) {
@@ -156,5 +174,18 @@ mod tests {
         std::fs::write(&path, b"someone else's").unwrap();
         drop(published);
         assert!(path.exists(), "a record this daemon no longer owns is left");
+    }
+
+    /// A start that is not listening removes a record a crash left, and
+    /// removing one that is already gone is the same state. Red edit:
+    /// skip `retire` when `rpc-listen` is none, and the file stays.
+    #[test]
+    fn a_record_left_by_a_crash_is_removed_when_nothing_is_published() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shekyl-record");
+        std::fs::write(&path, b"shekyl-service-rendezvous 1\n").unwrap();
+        retire(&path).unwrap();
+        assert!(!path.exists());
+        retire(&path).unwrap();
     }
 }

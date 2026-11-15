@@ -238,6 +238,11 @@ pub(crate) fn note_admitted(authority: Authority, row: &Method) {
     tracing::info!(target: "global", "rpc request: {}", row.name);
 }
 
+/// The owner's socket or pipe. Present on that leg's requests and absent
+/// on the plaintext listeners, which stamp the same host authority.
+#[derive(Clone, Copy, Debug)]
+pub struct OwnerLeg;
+
 /// The layer that stamps `authority` on every request. The `/json_rpc`
 /// handler admits each call against its method's row; no path is a method
 /// of its own (RW-Q1).

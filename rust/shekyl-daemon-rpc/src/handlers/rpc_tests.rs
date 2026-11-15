@@ -111,8 +111,8 @@ fn call(method: &str, params: Value) -> Value {
 /// The reply to `body`, as JSON. Every reply is a result or an error,
 /// never both and never neither: a refusal is never a result.
 async fn reply_to(state: &Arc<AppState>, authority: Authority, body: &[u8]) -> Value {
-    let reply =
-        serde_json::to_value(answer(state, authority, None, body).await).expect("serializes");
+    let reply = serde_json::to_value(answer(state, authority, None, false, body).await)
+        .expect("serializes");
     assert_eq!(reply["jsonrpc"], "2.0", "{reply}");
     assert!(
         reply.get("result").is_some() != reply.get("error").is_some(),
@@ -263,6 +263,49 @@ async fn every_table_row_is_answered_on_the_admin_listener() {
             row.name
         );
     }
+}
+
+/// Enrolment is not a plaintext method. The admin listener holds every
+/// grant and is reachable by any local account until RT-W12; an enrolment
+/// made there would outlive that listener (§5). The owner's socket is the
+/// host and is not refused for the leg: with no channel open it reaches
+/// the store. Red edit: treat a missing `ChannelCall` as the host, and
+/// the admin listener's code is `rpc.client.store`.
+#[tokio::test]
+async fn enrolment_is_refused_on_a_plaintext_listener() {
+    let (_scratch, state) = state("enrol-leg");
+    let request = call("rpc_client_list", json!({}));
+    // The admin listener holds `enrol`. The refusal is the leg.
+    let admin = send(&state, ADMIN, &request).await;
+    assert_eq!(
+        refusal(&admin).map(|(_, code)| code).as_deref(),
+        Some(crate::channel::codes::PLAINTEXT),
+        "{admin}"
+    );
+    // The view listener does not hold `enrol`, so admission refuses it
+    // before the leg is asked.
+    let view = send(&state, Authority::VIEW_LISTENER, &request).await;
+    assert_eq!(
+        refusal(&view).map(|(_, code)| code).as_deref(),
+        Some(grant::OUTSIDE_THE_GRANT),
+        "{view}"
+    );
+    let owner = serde_json::to_value(
+        answer(
+            &state,
+            Authority::owner(false),
+            None,
+            true,
+            request.to_string().as_bytes(),
+        )
+        .await,
+    )
+    .unwrap();
+    assert_eq!(
+        refusal(&owner).map(|(_, code)| code).as_deref(),
+        Some(crate::channel::codes::STORE),
+        "{owner}"
+    );
 }
 
 /// A key a method's request does not have is `rpc.params`, for every row:

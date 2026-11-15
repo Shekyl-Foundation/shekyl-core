@@ -263,7 +263,18 @@ where
     io.read_exact(wire.get_mut(1..)?).await.ok()?;
     let opened = opener.open(&wire);
     let recv = opener.into_direction();
-    let (session, first) = withheld.release(recv, opened).ok()?;
+    // Message 3 authenticated the classical static. The first record is
+    // the post-quantum confirmation (§4.5): a failure here is a warning,
+    // and the connection still closes with nothing further sent.
+    let Ok((session, first)) = withheld.release(recv, opened) else {
+        tracing::warn!(
+            target: "global",
+            "client {} from {peer} passed classical authentication and failed post-quantum \
+             confirmation",
+            hex::encode(claim)
+        );
+        return None;
+    };
     let request = GrantSet::from_payload(&session.request).ok()?;
     Some(Handshaken {
         session,

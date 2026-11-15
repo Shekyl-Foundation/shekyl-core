@@ -60,6 +60,9 @@ pub mod codes {
     pub const BEYOND_CALLER: &str = "rpc.client.beyond-caller";
     /// The console key, which is not an enrolment (§5).
     pub const CONSOLE: &str = "rpc.client.console";
+    /// Enrolment on a plaintext listener. It is served on the owner's
+    /// socket and over the channel (§5).
+    pub const PLAINTEXT: &str = "rpc.client.plaintext";
     /// The enrolled set could not be read or written.
     pub const STORE: &str = "rpc.client.store";
     /// A `tx_submit` over the channel whose body was not padded to the
@@ -100,6 +103,30 @@ pub struct ChannelCall {
     /// finished is exactly one submission (RT-O28). `tx_submit` reads the
     /// message's claim, not the last record on the connection.
     pub shape: shekyl_rpc_stream::InboundShape,
+}
+
+/// Who is enrolling. A channel caller is that caller. The owner's socket
+/// is the host. A plaintext listener is refused: it is reachable by any
+/// local account until RT-W12, and an enrolment made there would outlive
+/// it (§5, RT-O33).
+///
+/// # Errors
+///
+/// [`codes::PLAINTEXT`] when the caller is a plaintext listener.
+pub fn enrolment_caller(call: Option<&ChannelCall>, owner: bool) -> Result<Enroller, RpcError> {
+    if let Some(call) = call {
+        return Ok(call.enroller());
+    }
+    if owner {
+        return Ok(Enroller::Host);
+    }
+    Err(RpcError::new(
+        ErrorClass::RefusedByMethod,
+        Diagnostic::new(
+            codes::PLAINTEXT,
+            "enrolment is served on the owner's socket and over the channel".to_owned(),
+        ),
+    ))
 }
 
 impl ChannelCall {

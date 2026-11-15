@@ -182,6 +182,19 @@ pub fn start(
     // rendezvous record once its listeners are bound; one that does not
     // publishes nothing (`RPC_CHANNEL.md` §7.1; Rick, 2026-11-14).
     let service_rendezvous = match (&channel, channel_listen.is_empty()) {
+        (Some(channel), true) => {
+            // Not listening: a record a crash left would still name the
+            // previous endpoint. The path is this instance's.
+            if let Some(path) = &channel.service_rendezvous {
+                crate::channel::rendezvous::retire(path).map_err(|e| {
+                    format!(
+                        "the service's rendezvous {} could not be removed: {e}",
+                        path.display()
+                    )
+                })?;
+            }
+            None
+        }
         (Some(channel), false) => match &channel.service_rendezvous {
             Some(path) => {
                 let bound: Vec<SocketAddr> = channel_listen

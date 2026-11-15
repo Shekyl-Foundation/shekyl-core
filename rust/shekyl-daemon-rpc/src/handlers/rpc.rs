@@ -82,12 +82,13 @@ pub async fn handle(
     State(state): State<Arc<AppState>>,
     Extension(authority): Extension<Authority>,
     call: Option<Extension<crate::channel::ChannelCall>>,
+    owner: Option<Extension<crate::authority::OwnerLeg>>,
     body: Bytes,
 ) -> (StatusCode, Json<JsonRpcResponse>) {
     let call = call.map(|Extension(call)| call);
     (
         StatusCode::OK,
-        Json(answer(&state, authority, call.as_ref(), &body).await),
+        Json(answer(&state, authority, call.as_ref(), owner.is_some(), &body).await),
     )
 }
 
@@ -96,6 +97,7 @@ async fn answer(
     state: &Arc<AppState>,
     authority: Authority,
     call: Option<&crate::channel::ChannelCall>,
+    owner: bool,
     body: &[u8],
 ) -> JsonRpcResponse {
     let refused = |id: Value, error: RpcError| refusal(id, &error);
@@ -139,7 +141,7 @@ async fn answer(
         return refused(id, error);
     }
     note_admitted(authority, row);
-    match dispatch(state, authority, call, called, params).await {
+    match dispatch(state, authority, call, owner, called, params).await {
         Ok(result) => JsonRpcResponse::success(id, result),
         Err(Failure::Error(error)) => {
             if matches!(error.class, ErrorClass::Internal | ErrorClass::StoreFault) {
@@ -249,6 +251,7 @@ async fn dispatch(
     state: &Arc<AppState>,
     authority: Authority,
     call: Option<&crate::channel::ChannelCall>,
+    owner: bool,
     called: Id,
     params: Value,
 ) -> Result<Value, Failure> {
@@ -446,30 +449,31 @@ async fn dispatch(
         }
         Id::RpcClientAdd => {
             let req = request::<wire::RpcClientAdd>(params)?;
+            let by = crate::channel::enrolment_caller(call, owner)?;
             let channel = channel_of(state)?;
-            let by = call.map_or(
-                crate::channel::store::Enroller::Host,
-                crate::channel::ChannelCall::enroller,
-            );
             channel.client_add(authority, by, req.fingerprint.to_bytes(), &req.ceiling)?;
             framed(Done)
         }
         Id::RpcClientSet => {
             let req = request::<wire::RpcClientSet>(params)?;
+            crate::channel::enrolment_caller(call, owner)?;
             channel_of(state)?.client_set(authority, req.fingerprint.to_bytes(), &req.ceiling)?;
             framed(Done)
         }
         Id::RpcClientRemove => {
             let req = request::<wire::RpcClientRemove>(params)?;
+            crate::channel::enrolment_caller(call, owner)?;
             channel_of(state)?.client_remove(authority, req.fingerprint.to_bytes())?;
             framed(Done)
         }
         Id::RpcClientList => {
             request::<wire::RpcClientList>(params)?;
+            crate::channel::enrolment_caller(call, owner)?;
             framed(channel_of(state)?.client_list(authority)?)
         }
         Id::RpcBundleShow => {
             request::<wire::RpcBundleShow>(params)?;
+            crate::channel::enrolment_caller(call, owner)?;
             framed(channel_of(state)?.bundle_show())
         }
         Id::RelayStats => {

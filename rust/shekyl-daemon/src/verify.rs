@@ -61,7 +61,15 @@ pub(crate) fn walk(
     // it is the machine's service, and a non-service account that gives
     // `service` is refused for that, not for a data directory it could
     // not open (`RPC_CHANNEL.md` §7.1).
-    let service_rendezvous = owner_socket::service_rendezvous(config, platform).map_err(one)?;
+    // A console-key reset is not a start: the service is stopped, and on
+    // Linux its `RuntimeDirectory` (`/run/shekyl`) is already gone. The
+    // reset still checks the data home and takes its lock. The rendezvous
+    // directory is the running service's.
+    let service_rendezvous = if config.session.console_key_reset {
+        None
+    } else {
+        owner_socket::service_rendezvous(config, platform).map_err(one)?
+    };
     // A service's data home is the service manager's or the installer's,
     // checked and never created (Rick, 2026-11-14): the given data
     // directory, or the service's root the default one sits in.
@@ -526,5 +534,63 @@ mod tests {
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].code, Code::ServiceRendezvous, "{}", ds[0].render());
         assert!(!d.path().join("data").exists(), "nothing was created");
+    }
+
+    /// A console-key reset does not need the service's rendezvous
+    /// directory. On Linux that directory is `RuntimeDirectory` and is
+    /// removed when the service stops, which is when the reset runs. The
+    /// same start without the reset is refused on the missing directory.
+    /// Red edit: check the directory on a reset, and the missing one
+    /// refuses before the lock. A root runner is the data home's refusal
+    /// either way, so the reset's path is this test only for an ordinary
+    /// account.
+    #[cfg(unix)]
+    #[test]
+    fn a_console_key_reset_does_not_need_the_rendezvous_directory() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let d = tempfile::tempdir().unwrap();
+        let me = std::fs::metadata(d.path()).unwrap().uid();
+        if me == 0 {
+            return;
+        }
+        let data = d.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let platform = Platform {
+            home: Some(d.path().to_path_buf()),
+            service_parent: Some(d.path().to_path_buf()),
+            session_dir: None,
+            service_rendezvous: Some(d.path().join("no-such-run")),
+        };
+        let log = d.path().join("shekyld.log");
+        let list = [
+            "--service",
+            "--network",
+            "regtest",
+            "--clearnet",
+            "off",
+            "--tor",
+            "off",
+            "--data-dir",
+            data.to_str().unwrap(),
+            "--log-file",
+            log.to_str().unwrap(),
+        ];
+        let load_at = |reset: bool| {
+            let mut a = args(&list);
+            if reset {
+                a.insert(1, OsString::from("--rpc-console-key-reset"));
+            }
+            let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+            load(cli, &platform).unwrap()
+        };
+        let reset = load_at(true);
+        walk(&reset.config, &reset.resolved, &platform).expect("the reset walks");
+        let start = load_at(false);
+        let ds = walk(&start.config, &start.resolved, &platform)
+            .err()
+            .expect("a start still needs the directory");
+        assert_eq!(ds[0].code, Code::ServiceRendezvous, "{}", ds[0].render());
+        assert!(!log.exists(), "the walk created nothing");
     }
 }

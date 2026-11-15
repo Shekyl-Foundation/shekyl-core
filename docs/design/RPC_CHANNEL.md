@@ -1257,7 +1257,11 @@ R0 RT-7 stands: generated material only, never typed from memory.
 - **Enrolment and revocation are operator actions over the channel**:
   the methods `rpc_client_add`, `rpc_client_set`, `rpc_client_remove` and `rpc_client_list`, with `shekyl-cli`'s words `rpc client add <fingerprint> --ceiling <grants>` and the rest (`INPUT_GRAMMAR.md` IG-Q87; a ceiling is stored as its expanded grants, never as a preset's name).
   `rpc_bundle_show` gives the daemon's public bundle. No CA, no issuance key (R0 RT-4's
-  argument carries over).
+  argument carries over). The plaintext listeners do not serve these
+  methods. The admin listener is reachable by any local account until
+  RT-W12 retires it (RT-O33), and an enrolment made there would outlive
+  that listener. A run-as-me daemon's owner enrols on the owner's socket;
+  a service's administrator enrols with the console key, over the channel.
 - **Who may enrol, and how far (RULED, RT-O9.1).** Enrolment is the `enrol`
   grant, carried by the `admin` preset only. **An enrolled ceiling can
   never exceed the enroller's own effective grant** — otherwise every
@@ -1945,7 +1949,10 @@ a demonstrated operator recovery need returns it as a ruled capability.
   ruled. A service publishes its machine-wide rendezvous (§7.1) only when
   it listens on the channel, naming the address loopback reaches (a
   wildcard by its family's loopback address) and its public bundle; a
-  service that does not listen publishes none and says so at start.
+  service that does not listen publishes none and says so at start, and
+  removes a record a previous run left at its path: a crash does not run
+  the clean-stop removal, and the leftover would still name the previous
+  endpoint.
   Until RT-W12, a same-user tool reaches a run-as-me daemon on the owner's
   socket or the plaintext admin listener, and a service on the plaintext
   admin listener. **RT-W12 rules the channel port and gives a service a

@@ -284,7 +284,18 @@ pub async fn serve_listeners(
         );
     }
 
-    let owner = owner.map(|listener| (router_at(Authority::owner(config.armed)), listener));
+    let owner = owner.map(|listener| {
+        // Outside the authority stamp, so it runs first: the owner's leg
+        // carries [`OwnerLeg`], and the plaintext listeners, which stamp
+        // the same host authority, do not.
+        let router = router_at(Authority::owner(config.armed)).layer(axum::middleware::from_fn(
+            |mut request: axum::extract::Request, next: axum::middleware::Next| async move {
+                request.extensions_mut().insert(crate::authority::OwnerLeg);
+                next.run(request).await
+            },
+        ));
+        (router, listener)
+    });
     let channel = match (&config.channel, channel_listen.is_empty()) {
         (Some(channel), false) => Some((
             channel_router(state_for(), &config.cors_origins),
