@@ -53,7 +53,7 @@ Practical consequences for anonymity relay:
 | Active bandwidth shaping | High | No second anonymity network is integrated | Tor circuits remain vulnerable |
 | Stream reuse (2+ tx same circuit) | Medium | Outgoing-only selection, 5-min rotation, 20-min change lock time | Small fixed outgoing pool → non-trivial reuse probability |
 | v3 tx size burst (new) | High | None on mainnet: the cover carrier is a testnet development flag, being redesigned | A guard-connection observer picks out the node's own sends (`TOR_COVER_POSTURE.md` banner) |
-| Levin 8-byte signature (DPI) | Low | SSL/BIP-151/Noise proposals | Not yet implemented; clearnet traffic is identifiable |
+| Levin 8-byte signature (DPI) | Low | Noise (`Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`) behind `dev-clearnet-encrypt`: testnet, stagenet and regtest only, off by default | Clearnet is plaintext Levin until the flag becomes the default; with it on, each connection still opens with a fixed eight-byte prefix per network, so clearnet traffic stays identifiable |
 
 ### Recommended Pre-Mainnet Testing
 

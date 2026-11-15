@@ -1,7 +1,8 @@
 # Tor cover posture — relay contribution, not a protocol carrier — REOPENED 2026-11-15
 
-**Status: OPEN — reopened 2026-11-15 (Rick), Round 0 of the cover-traffic
-lane. Relay volume is not cover on Tor.**
+**Status: OPEN — reopened 2026-11-15 (Rick). Relay volume is not cover on
+Tor.** The redesign was ruled the same day in the cover-traffic lane's
+Round 0; this document records those rulings with the lane's build.
 §8 step 3 is met. TRC-1's guard-connection reading
 ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md),
 #1388) watched the relay's three
@@ -28,10 +29,10 @@ one relay and one daemon on a quiet testnet, kernel counters read every
   Tor's also stand.
 - **Not Tor only** (Rick, 2026-11-15): encryption hides content, not when
   a send happens or how big it is, so the same holds on every encrypted
-  link, clearnet included. The redesign is the cover-traffic lane's
-  Round 0, its own lane and not on the alpha.12 critical path. Until it
-  rules, the sections below are the 2026-09-04 ruling as recorded, each
-  marked where it no longer holds.
+  link, clearnet included. The redesign is the cover-traffic lane's, its
+  own lane and not on the alpha.12 critical path. Until its build records
+  the rulings here, the sections below are the 2026-09-04 ruling as
+  recorded, each marked where it no longer holds.
 
 RULED 2026-09-04, recorded 2026-09-12. UPDATE 2026-10-08: own transactions
 ride a stem slot (§1). Identifier family `TRC-1…TRC-n` (index row registered
@@ -303,10 +304,11 @@ must exist before the measurement can:
 **What the TRC-1 measurement leaves, with its disposition (2026-11-15):**
 - **Which step 2 series is an ordinary operator** (that record's ruling 3):
   moot. No relay scale is cover, so the question gates nothing.
-- **The `PM-3` watermark test** (`DAEMON_RELAY_PRIVACY.md` §96 item 4) stays
-  open under its own row (`PM-1…PM-3`). It tests an active watermark, which
-  the guard reading did not. Whether it becomes the cover redesign's
-  acceptance test is a question for that lane's Round 0.
+- **The `PM-3` watermark test** stays open under its own row
+  (`PM-1…PM-3`) as a check, not the cover redesign's acceptance test
+  (Rick, 2026-11-15). It tests an active watermark, which the guard
+  reading did not. The acceptance test is `DAEMON_RELAY_PRIVACY.md` §96
+  item 4's, restated the same day.
 - **A sidecar client Tor:** covered by §9's second-Tor rejection, and moot
   with the reopening.
 - **Reciprocity:** the falsifier below is open and is not met by any of
@@ -397,9 +399,10 @@ claim and does not restate the design:
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md): the §8 row removed; a post-genesis row
   for the carrier's reliance on Tor's classical encryption.
 
-What replaces the withdrawn text is the cover-traffic lane's Round 0. The
-Rust doc comments that describe `CoverClass::Volume` change with that class
-when Round 0 rules on it.
+What replaces the withdrawn text was ruled 2026-11-15 in the cover-traffic lane's Round 0, and
+this document records it with that lane's build. The Rust doc comments
+that describe `CoverClass::Volume` go with that class, which the build
+deletes.
 
 ## 11. A complete-tree fetch can show a holding set — reported 2026-10-22
 

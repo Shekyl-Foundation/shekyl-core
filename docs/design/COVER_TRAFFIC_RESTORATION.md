@@ -11,8 +11,8 @@ not startable. See §2.9 for the series, §3 for what has landed.
 > relay volume as Tor's cover. TRC-1 measured it and found no cover
 > ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md);
 > TRC banner), so TRC §8 step 3 is met and the carrier's scope is open again
-> for every encrypted link, Tor included. How the carrier covers each link is
-> the cover-traffic lane's Round 0. **The machinery is retained**; §1.6 is
+> for every encrypted link, Tor included. How the carrier covers each link was
+> ruled 2026-11-15 in the cover-traffic lane's Round 0; this document records it with that lane's build. **The machinery is retained**; §1.6 is
 > **not** triggered. Each place below that confines the carrier to zones
 > other than Tor, or calls Tor's wire-observer cell posture-conditional, is
 > marked REOPENED and no longer holds.
@@ -373,6 +373,11 @@ to this axis we do not have.
 > time of the run rather than the numbers above.
 
 #### Axis 3 — relay co-location does NOT retire the carrier. **Ruled 2026-08-23; SUPERSEDED for the Tor zone 2026-09-12 (TRC); REOPENED 2026-11-15 (banner)**
+
+**REOPENED 2026-11-15 (banner).** Volume cover does not replace this carrier
+on Tor: TRC-1 measured relay volume and found no cover. The 2026-09-12
+supersession below no longer holds, so this section's ruling holds again on
+every encrypted link, Tor included, and Tor takes the carrier's envelope.
 
 Ruled 2026-08-23 rather than measured later, because after the build it becomes
 an argument about sunk work. **Tor-zone substitution is SUPERSEDED 2026-09-12**
