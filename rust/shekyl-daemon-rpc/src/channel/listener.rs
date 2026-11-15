@@ -21,6 +21,13 @@
 //!
 //! What a failed handshake logs is uniform here: nothing, except an
 //! unenrolled claim, which §4.5 names.
+//!
+//! **A stop waits for every connection**, as a plaintext listener's does:
+//! each connection task holds the stop's receiver, and [`serve`] returns
+//! only when the last one has dropped it, so the runtime is never dropped
+//! under a handler still draining. A session is shut down gracefully; a
+//! connection still in its handshake ends at once rather than holding the
+//! stop for its deadline.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -51,8 +58,9 @@ struct Handshaken {
     request: GrantSet,
 }
 
-/// Serve the channel on `listener` until `signal` completes. `router` is the
-/// one router, not yet stamped: each connection stamps its own authority.
+/// Serve the channel on `listener` until `signal` completes, then wait for
+/// every connection to end. `router` is the one router, not yet stamped:
+/// each connection stamps its own authority.
 pub(crate) async fn serve<L>(
     mut listener: crate::conn_limit::LimitedListener<L>,
     channel: Arc<Channel>,
@@ -72,32 +80,44 @@ where
         };
         let accepted_at = Instant::now();
         tokio::spawn(connection(
+            stop_rx.clone(),
             io,
             peer,
             accepted_at,
             Arc::clone(&channel),
             router.clone(),
-            stop_rx.clone(),
         ));
     }
     stop_tx.send_replace(true);
+    drop(stop_rx);
+    drop(listener);
+    stop_tx.closed().await;
     Ok(())
 }
 
+/// One connection, from `accept` to its close. `stop` is the first
+/// parameter so it is the last value dropped: parameters drop in reverse
+/// order, and [`serve`] counts this connection as ended only when its
+/// receiver is gone, by which time the connection's socket is closed.
 async fn connection<S>(
+    mut stop: watch::Receiver<bool>,
     mut io: S,
     peer: SocketAddr,
     accepted_at: Instant,
     channel: Arc<Channel>,
     router: Router,
-    mut stop: watch::Receiver<bool>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let deadline = tokio::time::Instant::from_std(accepted_at + HANDSHAKE_DEADLINE);
-    let Ok(Some(handshaken)) =
-        tokio::time::timeout_at(deadline, handshake(&mut io, &channel, accepted_at, peer)).await
-    else {
+    let handshaken = tokio::select! {
+        result = tokio::time::timeout_at(
+            deadline,
+            handshake(&mut io, &channel, accepted_at, peer),
+        ) => result,
+        _stopped = stop.wait_for(|&stopped| stopped) => return,
+    };
+    let Ok(Some(handshaken)) = handshaken else {
         return;
     };
     let Handshaken {

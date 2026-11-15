@@ -56,7 +56,9 @@ struct Served {
     data_dir: PathBuf,
     channel: Arc<Channel>,
     addr: SocketAddr,
-    _stop: watch::Sender<bool>,
+    stop: watch::Sender<bool>,
+    serving: tokio::task::JoinHandle<std::io::Result<()>>,
+    tracker: Arc<ConnTracker>,
 }
 
 impl Served {
@@ -79,8 +81,9 @@ impl Served {
         let addr = bound.local_addr();
         let (_, listener) = bound.into_parts();
         let (stop, mut stopped) = watch::channel(false);
-        tokio::spawn(super::listener::serve(
-            LimitedListener::new(listener, ConnTracker::new(ConnLimits::default())),
+        let tracker = ConnTracker::new(ConnLimits::default());
+        let serving = tokio::spawn(super::listener::serve(
+            LimitedListener::new(listener, Arc::clone(&tracker)),
             Arc::clone(&channel),
             router,
             async move {
@@ -92,7 +95,9 @@ impl Served {
             data_dir,
             channel,
             addr,
-            _stop: stop,
+            stop,
+            serving,
+            tracker,
         }
     }
 
@@ -460,6 +465,50 @@ async fn a_silent_connection_is_closed_at_the_message_1_deadline() {
         waited >= Duration::from_secs(3) && waited < Duration::from_secs(8),
         "{waited:?}"
     );
+}
+
+/// **A stop waits for every connection** (Copilot's review of #1377,
+/// finding 5): the listener returns only once a live session and a
+/// connection still in its handshake have both closed, and the handshake
+/// ends on the stop rather than at its deadline. Red edit: drop the wait in
+/// `listener::serve`, and it returns with the handshaking connection still
+/// open; drop the stop from the handshake's `select!`, and the stop waits
+/// out the message-1 deadline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
+    let served = Served::start(false).await;
+    let client = StaticKeypair::generate().unwrap();
+    served.enrol(&client, &[CeilingWord::View]);
+    let mut session = connect(&served, &client, Preset::View.grants())
+        .await
+        .expect("a session");
+    assert!(session.call("version", json!({})).await.is_some());
+    let mut handshaking = TcpStream::connect(served.addr).await.expect("connect");
+    let counted = Instant::now();
+    while served.tracker.active_total() < 2 {
+        assert!(counted.elapsed() < Duration::from_secs(5), "both counted");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    served.stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(2), served.serving)
+        .await
+        .expect("the stop does not wait out the handshake deadline")
+        .expect("the listener's task")
+        .expect("the listener");
+    assert_eq!(
+        served.tracker.active_total(),
+        0,
+        "every connection ended before the listener returned"
+    );
+    let mut byte = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_millis(500), handshaking.read(&mut byte))
+        .await
+        .expect("the handshaking connection is closed when the listener returns");
+    assert_eq!(read.ok(), Some(0));
+    let after = tokio::time::timeout(Duration::from_millis(500), session.call("version", json!({})))
+        .await
+        .expect("the session is closed when the listener returns");
+    assert!(after.is_none(), "{after:?}");
 }
 
 /// **The console key's reset replaces the console enrolment and nothing
