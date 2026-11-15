@@ -10,10 +10,11 @@
 //! `Transaction::weight()` **without constructing a transaction** — pinned by
 //! [`predict_weight_matches_wire_weight`](crate::tests) (the single-source
 //! guarantee). The `fcmp_proof_size` term reads the measured 2a-3 KAT table.
-//! [`predict_group_weight`] is the same field model for a spend a multisig
-//! group signs (scheme 2): each input's auth is the group's key blob and
-//! `m`-signature container, and each output paying a group carries its
-//! `0x0D` entry.
+//! [`predict_spend_weight`] is the same field model for any spend's
+//! [`SpendShape`]: its [`Signer`] (a single signer, or a multisig group
+//! whose inputs each carry the group's key blob and `m`-signature
+//! container, scheme 2) and the groups it pays, each output paying a group
+//! carrying its `0x0D` entry.
 //!
 //! **Two parity tests, different jobs.** The one named above builds a wire
 //! `Transaction` *by hand* at five shapes, so it pins the field model against a
@@ -122,20 +123,29 @@ impl GroupSize {
     }
 }
 
-/// The shape of a spend a multisig group signs (scheme 2): its counts, the
-/// spending group's size, and the size of every group it pays, its change
-/// included, in output order.
+/// Who authorizes a spend's inputs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Signer {
+    /// One wallet: each input carries a single hybrid key and signature.
+    Solo,
+    /// A multisig group (scheme 2): each input's key blob names the group's
+    /// `n` members and carries `m` signers' keys, and its container `m`
+    /// signatures.
+    Group(GroupSize),
+}
+
+/// The shape of a spend: its counts, its signer, and the size of every
+/// group it pays, a group's change included, in output order.
 #[derive(Clone, Copy, Debug)]
-pub struct GroupSpendShape<'a> {
-    /// The inputs, every one the spending group's.
+pub struct SpendShape<'a> {
+    /// The inputs, every one the signer's.
     pub n_in: InputCount,
     /// The outputs, those paying a group among them.
     pub n_out: OutputCount,
     /// The on-chain tree depth the spend proves under.
     pub tree_depth: u8,
-    /// The spending group: each input's key blob names its `n` members and
-    /// carries `m` signers' keys, and its container `m` signatures.
-    pub signers: GroupSize,
+    /// Who signs the inputs.
+    pub signer: Signer,
     /// The groups the spend pays, one per output paying a group: each such
     /// output carries a `0x0D` entry with one ciphertext per member.
     pub group_payees: &'a [GroupSize],
@@ -302,13 +312,17 @@ fn pqc_auth_weight() -> usize {
     pqc_auth_weight_of(PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN)
 }
 
-/// One per-input `PqcAuth` of an `m`-of-`n` group (scheme 2): the group's
-/// key blob and an `m`-signature container, at their canonical lengths.
-fn group_pqc_auth_weight(signers: GroupSize) -> usize {
-    pqc_auth_weight_of(
-        MultisigKeyBlob::expected_len(signers.n, signers.m),
-        MultisigSigContainer::expected_sig_len(signers.m),
-    )
+/// One per-input `PqcAuth` of `signer`: a solo hybrid key and signature,
+/// or an `m`-of-`n` group's key blob and `m`-signature container (scheme
+/// 2), at their canonical lengths.
+fn signer_pqc_auth_weight(signer: Signer) -> usize {
+    match signer {
+        Signer::Solo => pqc_auth_weight(),
+        Signer::Group(group) => pqc_auth_weight_of(
+            MultisigKeyBlob::expected_len(group.n, group.m),
+            MultisigSigContainer::expected_sig_len(group.m),
+        ),
+    }
 }
 
 /// `ExtraField::PqcMultisig` (`0x0D`): tag + varint(len) + one entry per
@@ -356,16 +370,18 @@ pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee:
     spend_weight(n_in, n_out, tree_depth, fee, pqc_auth_weight(), 0)
 }
 
-/// [`predict_weight`] for a spend a multisig group signs (scheme 2): each
-/// input's auth is the group's key blob and `m`-signature container, and
-/// each output paying a group carries its `0x0D` entry. It equals the
-/// signed spend's `Transaction::weight()`, pinned against a real 3-of-5
-/// spend in `shekyl-multisig`'s ceremony gate. Consensus weight is that
-/// serialized size; this is the wallet's estimate of it before signing.
+/// [`predict_weight`] for any [`SpendShape`]: each input's auth is its
+/// signer's (a solo key and signature, or a group's key blob and
+/// `m`-signature container), and each output paying a group carries its
+/// `0x0D` entry. A solo shape paying no group is [`predict_weight`]. It
+/// equals the signed spend's `Transaction::weight()`, pinned against real
+/// 2-of-3 and 3-of-5 group spends in `shekyl-multisig`'s ceremony gate.
+/// Consensus weight is that serialized size; this is the wallet's estimate
+/// of it before signing.
 ///
 /// `None` when the shape pays more groups than it has outputs.
 #[must_use]
-pub fn predict_group_weight(shape: &GroupSpendShape<'_>, fee: u64) -> Option<usize> {
+pub fn predict_spend_weight(shape: &SpendShape<'_>, fee: u64) -> Option<usize> {
     if shape.group_payees.len() > shape.n_out.get() {
         return None;
     }
@@ -374,7 +390,7 @@ pub fn predict_group_weight(shape: &GroupSpendShape<'_>, fee: u64) -> Option<usi
         shape.n_out,
         shape.tree_depth,
         fee,
-        group_pqc_auth_weight(shape.signers),
+        signer_pqc_auth_weight(shape.signer),
         extra_multisig_field_weight(shape.group_payees),
     ))
 }
@@ -795,47 +811,66 @@ mod tests {
         assert!(GroupSize::new(6, 2).is_none());
     }
 
-    /// A group spend outweighs the solo spend of its shape by exactly its
-    /// auths and its `0x0D` entries, each at the crypto and wire crates'
-    /// own lengths; a shape paying more groups than it has outputs has no
-    /// weight.
+    /// A spend outweighs the solo spend paying no group by exactly its
+    /// signer's auths and its `0x0D` entries, each at the crypto and wire
+    /// crates' own lengths: a solo spend paying a 3-of-5 group carries that
+    /// group's entry and solo auths, a group spend the group's auths too.
+    /// A solo shape paying no group is `predict_weight`; a shape paying
+    /// more groups than it has outputs has no weight.
     #[test]
-    fn a_group_spend_weighs_its_auths_and_its_member_entries() {
-        let signers = GroupSize::new(5, 3).unwrap();
+    fn a_spend_weighs_its_signers_auths_and_its_payees_entries() {
+        let three_of_five = GroupSize::new(5, 3).unwrap();
         let other_group = GroupSize::new(3, 2).unwrap();
         let (n_in, n_out, layers, fee) = (InputCount::clamped(2), OutputCount::clamped(3), 7, 900);
         let solo = predict_weight(n_in, n_out, layers, fee);
-        let weigh = |group_payees: &[GroupSize]| {
-            predict_group_weight(
-                &GroupSpendShape {
+        let weigh = |signer: Signer, group_payees: &[GroupSize]| {
+            predict_spend_weight(
+                &SpendShape {
                     n_in,
                     n_out,
                     tree_depth: layers,
-                    signers,
+                    signer,
                     group_payees,
                 },
                 fee,
             )
         };
-        let group_auth = pqc_auth_weight_of(
-            MultisigKeyBlob::expected_len(signers.n(), signers.m()),
-            MultisigSigContainer::expected_sig_len(signers.m()),
-        );
-        let auths = n_in.get() * (group_auth - pqc_auth_weight());
-        let entries =
-            MultisigEntry::wire_len(signers.n()) + MultisigEntry::wire_len(other_group.n());
-        let field = 1 + varint_len(entries as u64) + entries;
-        // The `tx_extra` length prefix may grow by a byte with the field.
+        // The `0x0D` field for `payees`, and the byte the `tx_extra`
+        // length prefix may grow by with it.
         let extra_base = EXTRA_PUBKEY_FIELD_WEIGHT
             + extra_kem_field_weight(n_out.get())
             + extra_leaf_hashes_field_weight(n_out.get());
-        let prefix_growth = varint_len((extra_base + field) as u64) - varint_len(extra_base as u64);
-        assert_eq!(
-            weigh(&[signers, other_group]),
-            Some(solo + auths + field + prefix_growth)
+        let entries_weight = |payees: &[GroupSize]| {
+            let entries: usize = payees.iter().map(|g| MultisigEntry::wire_len(g.n())).sum();
+            let field = 1 + varint_len(entries as u64) + entries;
+            field + varint_len((extra_base + field) as u64) - varint_len(extra_base as u64)
+        };
+        let group_auth = pqc_auth_weight_of(
+            MultisigKeyBlob::expected_len(three_of_five.n(), three_of_five.m()),
+            MultisigSigContainer::expected_sig_len(three_of_five.m()),
         );
-        assert_eq!(weigh(&[]), Some(solo + auths));
-        assert_eq!(weigh(&[other_group; MAX_OUTPUTS + 1][..=n_out.get()]), None);
+        let group_auths = n_in.get() * (group_auth - pqc_auth_weight());
+
+        assert_eq!(weigh(Signer::Solo, &[]), Some(solo));
+        assert_eq!(
+            weigh(Signer::Solo, &[three_of_five]),
+            Some(solo + entries_weight(&[three_of_five]))
+        );
+        assert_eq!(
+            weigh(Signer::Group(three_of_five), &[three_of_five, other_group]),
+            Some(solo + group_auths + entries_weight(&[three_of_five, other_group]))
+        );
+        assert_eq!(
+            weigh(Signer::Group(three_of_five), &[]),
+            Some(solo + group_auths)
+        );
+        assert_eq!(
+            weigh(
+                Signer::Solo,
+                &[other_group; MAX_OUTPUTS + 1][..=n_out.get()]
+            ),
+            None
+        );
     }
 }
 

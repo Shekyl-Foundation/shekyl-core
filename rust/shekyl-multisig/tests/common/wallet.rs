@@ -31,7 +31,9 @@ use shekyl_multisig::{
     import, DerivedSpend, GroupOutput, GroupOutputs, HeldNonceStore, Incoming, LedgerView,
     LiveCeremonies, MemberFile, SigningContext, ValidatedIntent,
 };
-use shekyl_tx_weight::{predict_group_weight, GroupSize, GroupSpendShape, InputCount, OutputCount};
+use shekyl_tx_weight::{
+    predict_spend_weight, GroupSize, InputCount, OutputCount, Signer, SpendShape,
+};
 use shekyl_types::{BlockHash, KeyImage};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
@@ -266,14 +268,14 @@ pub fn assert_weight_predicted(tx: &Transaction, group: &MultisigAddressPayload,
     let Ct::Fcmp { fee, .. } = &tx.ct else {
         panic!("an FCMP++ spend");
     };
-    let signers = GroupSize::new(group.n_total(), group.m_required()).unwrap();
-    let predicted = predict_group_weight(
-        &GroupSpendShape {
+    let size = GroupSize::new(group.n_total(), group.m_required()).unwrap();
+    let predicted = predict_spend_weight(
+        &SpendShape {
             n_in: InputCount::clamped(tx.prefix.inputs.len()),
             n_out: OutputCount::clamped(tx.prefix.outputs.len()),
             tree_depth: paid.layers,
-            signers,
-            group_payees: &[signers],
+            signer: Signer::Group(size),
+            group_payees: &[size],
         },
         *fee,
     );

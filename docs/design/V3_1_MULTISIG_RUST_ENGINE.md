@@ -1070,8 +1070,8 @@ session itself is bounded by the intent's reference block
 
 **Slice 4a.** 4a-1 derives every member's spend from the intent
 (`DerivedSpend`, `PQC_MULTISIG.md` §9.5) through the one output builder
-in `shekyl-tx-builder`, prices a group spend
-(`shekyl_tx_weight::predict_group_weight`), and keeps held nonces in
+in `shekyl-tx-builder`, prices any spend by its signer and the groups it
+pays (`shekyl_tx_weight::predict_spend_weight`), and keeps held nonces in
 memory only (R-20). The wallet's state (`.wallet.multisig`, the ledger's
 `GroupOutput`, `Engine<MultisigSignerV2>`) is 4a-2.
 
