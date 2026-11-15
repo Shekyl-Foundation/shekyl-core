@@ -198,6 +198,14 @@ pub(crate) fn step(convention: Convention, code: i32, entry: Option<Entry>) -> S
             (Convention::ReturnEnoent, libc::ENOENT)
             | (Convention::ReturnZero | Convention::Errno, 0) => Step::End,
             (Convention::ReturnEnoent, libc::ERANGE) => Step::Grow,
+            // FreeBSD, DragonFly and NetBSD refuse here rather than retry
+            // (ruled 2026-11-15). Their `getpwent_r` advances the cursor past
+            // the entry before it finds that the entry does not fit, so a
+            // retry with a larger buffer would read the NEXT account and skip
+            // this one. A skipped account is one whose primary group the
+            // check never sees: it would pass a group with another member
+            // in it, failing open. These targets start at the largest buffer,
+            // so only an entry over that size reaches this branch.
             (Convention::ReturnZero, libc::ERANGE) => Step::Refused(
                 "the system's account list holds an entry larger than the largest buffer, \
                  and this library moves past an entry it could not fit"
