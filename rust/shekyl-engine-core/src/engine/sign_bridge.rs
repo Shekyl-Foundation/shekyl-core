@@ -648,6 +648,62 @@ mod tests {
         ));
     }
 
+    /// The bytes a transfer's outputs and `tx_extra` are made of, pinned for
+    /// a fixed transaction key: a payment and a change output built by
+    /// `build_output`, and `tx_extra` assembled as `sign_tx` assembles it.
+    /// Output construction is deterministic given the transaction key, so a
+    /// move of the builder that changes any byte of a solo transfer fails
+    /// here.
+    #[test]
+    fn a_transfers_outputs_and_extra_are_pinned_for_a_fixed_tx_key() {
+        const SEED: [u8; 32] = [21u8; 32];
+        let tx_key = Scalar::from(23u64);
+        let tx_key_secret = tx_key.to_bytes();
+        let tx_pubkey = &tx_key * ED25519_BASEPOINT_TABLE;
+
+        let recipient_keys = LocalKeys::from_test_seed(SEED);
+        let address = recipient_keys
+            .keys
+            .to_address(Network::Mainnet)
+            .encode()
+            .expect("encode recipient address");
+        let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
+        let recipient_x25519 =
+            ed25519_pk_to_x25519_pk(&decoded.view_key).expect("map view key to X25519");
+        let outputs: Vec<BuiltOutput> = [(7_000_000u64, 0u64), (2_500_000, 1)]
+            .into_iter()
+            .map(|(amount, index)| {
+                build_output(
+                    &tx_key_secret,
+                    &decoded.spend_key,
+                    &recipient_x25519,
+                    &decoded.ml_kem_encap_key,
+                    amount,
+                    index,
+                    &sentinel_plaintext(),
+                )
+                .expect("build output")
+            })
+            .collect();
+        let kem_blobs: Vec<Vec<u8>> = outputs.iter().map(|b| b.kem_blob.clone()).collect();
+        let leaf_entry_blob: Vec<u8> = outputs.iter().flat_map(|b| b.pqc_leaf).collect();
+        let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
+        extra.push_pqc_leaf_entries(leaf_entry_blob);
+
+        let mut transcript = extra.serialize();
+        for out in &outputs {
+            transcript.extend_from_slice(&out.output_key);
+            transcript.push(out.view_tag.expect("a transfer output carries a view tag"));
+            transcript.extend_from_slice(&out.info.commitment_mask);
+            transcript.extend_from_slice(&out.info.enc_amount.to_bytes());
+            transcript.extend_from_slice(&out.info.enc_label.to_bytes());
+        }
+        assert_eq!(
+            hex::encode(shekyl_crypto_hash::keccak256(&transcript)),
+            "2e6b5e6f1c43fa346958b51b211c2d02f880f2f6f61b6491435faf9122ada0cb"
+        );
+    }
+
     /// A payment that answers a `shekyl:` link echoes the request id in its
     /// encrypted label and the recipient reads it back; a payment with no
     /// request carries the sentinel through the same construction. This is
