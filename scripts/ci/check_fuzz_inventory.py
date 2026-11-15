@@ -18,13 +18,24 @@
 #     a fuzzer exercises the dependency versions that ship, and `cargo audit`
 #     (which reads only the workspace lockfile) sees every one of them;
 #   - the compile workflow builds its matrix from this script
-#     (`--matrix`), so a fuzz crate cannot exist without being compiled.
+#     (`--matrix`), so a fuzz crate cannot exist without being compiled;
+#   - every `seeds/<name>/` directory in a fuzz crate is named for one of
+#     its targets (a seed directory whose target was renamed seeds
+#     nothing);
+#   - every target of the weekly long run (`WEEKLY`) exists, and the
+#     nightly workflow reads its target list from this script
+#     (`--targets`), so a target cannot exist without being run.
 #
 # Modes:
 #   (none)        the check; exit 0, 1 on a finding, 2 when the question
 #                 cannot be asked (no fuzz crate found: rule 47).
 #   --matrix      the crates a change reaches, as a JSON list for the
 #                 workflow's matrix (below).
+#   --targets nightly|weekly [<crate>/<target>]
+#                 the targets the nightly fuzz job runs (every one) or the
+#                 weekly long run's, as a JSON list of `<crate>/<target>`;
+#                 naming one target narrows the list to it (refused, exit
+#                 2, when it is not in the list).
 #   --regenerate  rewrite every fuzz crate's `Cargo.lock` from the
 #                 workspace's: copy it in, then `cargo update --workspace
 #                 --offline` re-resolves the fuzz crate's own entries only,
@@ -53,6 +64,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ".github/workflows/fuzz-harness.yml"
+NIGHTLY = ".github/workflows/nightly.yml"
+# The weekly long run: the parsers that take bytes from anyone before
+# anything about the sender is known, run for thirty minutes each (ruled
+# 2026-11-15). The Noise handshake's reader is the responder reading an
+# unknown initiator's first message; transaction and block decode are the
+# wire parsers; KEM decapsulation reads a ciphertext an output carries.
+WEEKLY = (
+    "shekyl-crypto-pq/fuzz_kem_decapsulate",
+    "shekyl-p2p-transport/fuzz_read_message1",
+    "shekyl-wire/fuzz_block_parse",
+    "shekyl-wire/fuzz_tx_parse",
+)
 WORKSPACE_LOCK = "rust/Cargo.lock"
 # A change to any of these reaches every harness.
 EVERY_HARNESS = (
@@ -116,7 +139,17 @@ def path_deps(root: Path, crate: str, manifest: dict) -> set[str]:
     return names
 
 
-def check(root: Path) -> tuple[list[str], list[str], int]:
+def targets(root: Path, files: list[str] | None = None) -> list[str]:
+    """Every fuzz target, as `<crate>/<target>`, sorted."""
+    files = tracked(root) if files is None else files
+    out = []
+    for crate in fuzz_crates(files):
+        manifest = tomllib.loads((root / "rust" / crate / "fuzz" / "Cargo.toml").read_text())
+        out.extend(f"{crate}/{entry.get('name')}" for entry in manifest.get("bin", []))
+    return sorted(out)
+
+
+def check(root: Path, weekly: tuple[str, ...] = WEEKLY) -> tuple[list[str], list[str], int]:
     """Findings, the crates, and the number of targets."""
     files = tracked(root)
     file_set = set(files)
@@ -126,7 +159,7 @@ def check(root: Path) -> tuple[list[str], list[str], int]:
         raise GateError(f"{WORKSPACE_LOCK} is missing — missing subject (rule 47)")
     workspace = locked(lock_path.read_text())
     fails: list[str] = []
-    targets = 0
+    n_targets = 0
     for crate in crates:
         base = f"rust/{crate}/fuzz"
         manifest = tomllib.loads((root / base / "Cargo.toml").read_text())
@@ -144,7 +177,20 @@ def check(root: Path) -> tuple[list[str], list[str], int]:
         )
         if not bins:
             fails.append(f"{base}: no [[bin]] target")
-        targets += len(bins)
+        n_targets += len(bins)
+        bin_names = {entry.get("name") for entry in bins}
+        seed_dirs = sorted(
+            {
+                m.group(1)
+                for f in files
+                if (m := re.fullmatch(re.escape(base) + r"/seeds/([^/]+)/.+", f))
+            }
+        )
+        fails.extend(
+            f"{base}/seeds/{name}/ is named for no target of this crate, so it seeds nothing"
+            for name in seed_dirs
+            if name not in bin_names
+        )
         lock = f"{base}/Cargo.lock"
         if lock not in file_set:
             fails.append(
@@ -162,6 +208,20 @@ def check(root: Path) -> tuple[list[str], list[str], int]:
                     f"{', '.join(sorted(workspace[name]))}. Regenerate it "
                     "(scripts/ci/check_fuzz_inventory.py --regenerate)"
                 )
+    every = set(targets(root, files))
+    fails.extend(
+        f"the weekly long run names {name}, which is not a fuzz target"
+        for name in weekly
+        if name not in every
+    )
+    nightly = root / NIGHTLY
+    if not nightly.is_file():
+        fails.append(f"{NIGHTLY} is missing: nothing runs the fuzz targets")
+    elif "check_fuzz_inventory.py --targets" not in nightly.read_text():
+        fails.append(
+            f"{NIGHTLY} does not read its fuzz targets from `check_fuzz_inventory.py --targets`, "
+            "so a target can exist that it does not run"
+        )
     workflow = root / WORKFLOW
     if not workflow.is_file():
         fails.append(f"{WORKFLOW} is missing: nothing compiles the fuzz crates")
@@ -170,7 +230,7 @@ def check(root: Path) -> tuple[list[str], list[str], int]:
             f"{WORKFLOW} does not build its matrix from `check_fuzz_inventory.py --matrix`, "
             "so a fuzz crate can exist that it does not compile"
         )
-    return fails, crates, targets
+    return fails, crates, n_targets
 
 
 def matrix(root: Path, rust_tests: str, changed: list[str]) -> list[str]:
@@ -206,9 +266,25 @@ def regenerate(root: Path) -> int:
     return 0
 
 
-def run(root: Path) -> int:
+def listed(root: Path, which: str, only: str | None, weekly: tuple[str, ...] = WEEKLY) -> list[str]:
+    """`--targets`: every target, or the weekly run's, narrowed to `only`."""
+    every = targets(root)
+    if which == "nightly":
+        out = every
+    elif which == "weekly":
+        out = [name for name in weekly if name in every]
+    else:
+        raise GateError(f"--targets takes nightly or weekly, not {which!r}")
+    if only is not None:
+        if only not in out:
+            raise GateError(f"{only} is not one of the {which} fuzz targets")
+        out = [only]
+    return out
+
+
+def run(root: Path, weekly: tuple[str, ...] = WEEKLY) -> int:
     try:
-        fails, crates, targets = check(root)
+        fails, crates, n_targets = check(root, weekly)
     except GateError as exc:
         print(f"FAIL: {exc}")
         return 2
@@ -218,8 +294,9 @@ def run(root: Path) -> int:
             print("  " + finding)
         return 1
     print(
-        f"fuzz inventory: {len(crates)} fuzz crates, {targets} targets, every [[bin]] a file "
-        f"and every file a [[bin]], every lockfile at the workspace's versions"
+        f"fuzz inventory: {len(crates)} fuzz crates, {n_targets} targets, every [[bin]] a file "
+        f"and every file a [[bin]], every lockfile at the workspace's versions, "
+        f"{len(weekly)} weekly targets"
     )
     return 0
 
@@ -238,10 +315,21 @@ def main() -> int:
             print(f"FAIL: {exc}", file=sys.stderr)
             return 2
         return 0
+    if args[:1] == ["--targets"] and len(args) in (2, 3):
+        try:
+            print(json.dumps(listed(ROOT, args[1], args[2] if len(args) == 3 else None)))
+        except GateError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 2
+        return 0
     if args == ["--regenerate"]:
         return regenerate(ROOT)
     if args:
-        print(f"usage: {sys.argv[0]} [--matrix | --regenerate | --selftest]", file=sys.stderr)
+        print(
+            f"usage: {sys.argv[0]} [--matrix | --targets nightly|weekly [<crate>/<target>] "
+            "| --regenerate | --selftest]",
+            file=sys.stderr,
+        )
         return 2
     return run(ROOT)
 

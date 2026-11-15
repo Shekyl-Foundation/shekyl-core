@@ -50,6 +50,9 @@ version = "0.1.0"
 """
 
 WORKFLOW = "jobs:\n  scope:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --matrix\n"
+NIGHTLY = "jobs:\n  fuzz-targets:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n"
+# The planted trees' weekly run: the one target they have.
+WEEKLY = ("shekyl-a/fuzz_one",)
 
 
 def write(root: Path, rel: str, text: str) -> None:
@@ -76,6 +79,8 @@ def tree(
     rand="0.8.5",
     lock=True,
     workflow=WORKFLOW,
+    nightly=NIGHTLY,
+    seeds=(),
     fuzz=True,
 ) -> None:
     subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -87,8 +92,12 @@ def tree(
             write(root, f"rust/shekyl-a/fuzz/fuzz_targets/{name}.rs", "fn main() {}\n")
         if lock:
             write(root, "rust/shekyl-a/fuzz/Cargo.lock", FUZZ_LOCK.format(rand=rand))
+        for name in seeds:
+            write(root, f"rust/shekyl-a/fuzz/seeds/{name}/seed1", "seed\n")
     if workflow is not None:
         write(root, gate.WORKFLOW, workflow)
+    if nightly is not None:
+        write(root, gate.NIGHTLY, nightly)
     subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
 
 
@@ -97,13 +106,13 @@ class Results:
         self.passed = 0
         self.failures: list[str] = []
 
-    def expect(self, why: str, want: int, says: str = "", **planted) -> None:
+    def expect(self, why: str, want: int, says: str = "", weekly=WEEKLY, **planted) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             tree(root, **planted)
             buf = io.StringIO()
             with redirect_stdout(buf):
-                code = gate.run(root)
+                code = gate.run(root, weekly)
             out = buf.getvalue()
             if code != want or (says and says not in out):
                 wanted = f"exit {want}" + (f" naming {says!r}" if says else "")
@@ -118,6 +127,22 @@ class Results:
             got = gate.matrix(root, rust_tests, changed)
             if got != want:
                 self.failures.append(f"{why}: wanted {json.dumps(want)}, got {json.dumps(got)}")
+            else:
+                self.passed += 1
+
+    def expect_listed(self, why: str, which: str, only, want) -> None:
+        """`--targets`: the list, or the refusal (`want` None)."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            tree(root, bins=("fuzz_one", "fuzz_two"), files=("fuzz_one", "fuzz_two"))
+            try:
+                got = gate.listed(root, which, only, WEEKLY)
+            except gate.GateError as exc:
+                got = None
+                refusal = str(exc)
+            if got != want:
+                said = refusal if got is None else json.dumps(got)
+                self.failures.append(f"{why}: wanted {json.dumps(want)}, got {said}")
             else:
                 self.passed += 1
 
@@ -144,6 +169,26 @@ def selftest() -> int:
         "a workflow that lists its own matrix", 1, "does not build its matrix",
         workflow="jobs:\n  compile:\n    strategy:\n      matrix:\n        crate: [shekyl-a]\n",
     )
+    r.expect("a seed directory named for its target", 0, seeds=("fuzz_one",))
+    r.expect(
+        "a seed directory named for no target", 1,
+        "seeds/fuzz_gone/ is named for no target of this crate", seeds=("fuzz_gone",),
+    )
+    r.expect(
+        "a weekly target that does not exist", 1,
+        "the weekly long run names shekyl-a/fuzz_gone, which is not a fuzz target",
+        weekly=("shekyl-a/fuzz_one", "shekyl-a/fuzz_gone"),
+    )
+    r.expect("no nightly workflow", 1, "nightly.yml is missing: nothing runs", nightly=None)
+    r.expect(
+        "a nightly workflow that lists its own targets", 1, "does not read its fuzz targets",
+        nightly="jobs:\n  fuzz:\n    strategy:\n      matrix:\n        target: [shekyl-a/fuzz_one]\n",
+    )
+    r.expect_listed("the nightly list is every target", "nightly", None, ["shekyl-a/fuzz_one", "shekyl-a/fuzz_two"])
+    r.expect_listed("the weekly list is the weekly targets", "weekly", None, ["shekyl-a/fuzz_one"])
+    r.expect_listed("one target narrows the list", "nightly", "shekyl-a/fuzz_two", ["shekyl-a/fuzz_two"])
+    r.expect_listed("a target outside the list is refused", "weekly", "shekyl-a/fuzz_two", None)
+    r.expect_listed("an unknown list is refused", "hourly", None, None)
     r.expect_matrix("a change the closure reaches", "shekyl-a", ["rust/shekyl-a/src/lib.rs"], ["shekyl-a"])
     r.expect_matrix("a change it does not reach", "shekyl-b", ["rust/shekyl-b/src/lib.rs"], [])
     r.expect_matrix("the fuzz crate's own file", "none", ["rust/shekyl-a/fuzz/fuzz_targets/fuzz_one.rs"], ["shekyl-a"])
