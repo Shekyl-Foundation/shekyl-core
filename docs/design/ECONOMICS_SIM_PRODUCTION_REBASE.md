@@ -4056,6 +4056,134 @@ even proportion of the blocks and 51 % joins the shares, which moves the
 --eup4 narrations campaign rows; recorded in
 ECONOMICS_SIM_PRODUCTION_REBASE.md §5.33.1"` at `85135e868`.
 
+### 5.34 Honest traffic that varies, and arm 5 cut off from volume, predicted before they are built (2026-11-15)
+
+Written against `dev` at `c4638e952`, before any code. The review of
+#1387 (Rick, 2026-11-15) found that §5.33's median result rests on honest
+traffic that never varies: every honest block carries the same count, so
+a minority cannot move the lower middle, by construction (§5.33, "Decided
+before the build"). It also found that arm 5 is decoupled in `M_r` alone:
+the burn and `C` still read the stuffed sum. J is ruled on this
+section's numbers, not §5.33.1's. G's economic columns stand from
+§5.33.1, with the depth question the umbrella's §4.3 records. The family
+is `JG-6`…`JG-10`. Nothing below is a result.
+
+**What is built.**
+
+- **A demand arm, `varied`, beside `steady`.** Production's chain has
+  exponential block intervals and arrivals that do not wait for a block.
+  A block lists the pool, which holds the arrivals since the last block
+  and anything older that did not fit. Poisson arrivals at rate λ over an
+  exponential interval of mean τ give a count that is geometric with mean
+  λτ. So each block's offered count is drawn geometric, with the
+  schedule's demand as its mean. It is drawn in integers, as the number
+  of draws `below(mean + 1)` that come up nonzero before one comes up
+  zero, with no floating point to differ between hosts. The draw is keyed
+  on the chain height with a seed of its own, so a stuffed fold, its
+  unstuffed counterfactual and every thread of the parallel map see the
+  same honest blocks. It leaves the existing Poisson trace's stream
+  alone. Production's pool carries what a block does not list into the
+  next one, so a draw above the room is delayed, not lost. `steady` is the
+  default, and no fold outside the grid draws.
+- **Arm 5, full.** The operand that release, the burn and `C` read is
+  the baseline, `TxVolume::per_block(tx_volume_baseline)`, whatever the
+  window holds. That is one substitution at the cursor's one operand line,
+  so the three move together. The arm §5.33 ran (the release rails at
+  1.0, the burn and `C` on the sum) stays, renamed `rails-only`.
+- **Readings added.** The release multiplier clamps to [0.8, 1.3], and a
+  median reads about 0.7 of the mean on geometric traffic, so a shift
+  inside the floor would print as no shift. Every row now also prints the
+  operand over the baseline, unclamped (the ratio).
+  - **At rest** is a window's mean: `M_r` and the ratio over the measured
+    span's last 720 blocks. The last block's `M_r` stays beside it. One
+    block of a window statistic carries a few percent of sampling noise
+    on varied traffic.
+  - **The honest chain's resting values** are `M_r` and the ratio over
+    the 720 blocks before the declared step.
+  - **The step's endpoints** are means over the window before the edge
+    and the trace's last window. The settle time is still the per-block
+    series' first crossing of 95 % of the move. On steady traffic both
+    windows are flat, so §5.33.1's step figures are unchanged.
+- **The grid** crosses demand (steady, varied) with five signal arms
+  (SMA, median, median with the floor, decoupled, rails-only) and §5.33's
+  zones, `w_ref` levels, shares and start years. The nightly slice adds
+  varied demand to its SMA and median cells.
+- **Not built.** A median restated in median terms, with
+  `tx_volume_baseline` set to the honest median rather than the mean, is
+  not an arm here. The sim's baseline scenario reads the same parameter
+  as its demand, so a restated cell needs the two separated. The printed
+  ratio shows what such a median would read before the clamp.
+
+**JG-6. The honest chain's resting ratio (blind; a queue model of the
+pool, mean 50, the stuffer's rail from §5.33.1's every-miner bodies).**
+The SMA reads about 1.0 at every zone with room, within ±0.04. The median
+depends on how close the room is to demand, because the pool's queue
+lifts the counts:
+
+| N | Room a block | Median's ratio | `M_r` |
+| --- | --- | --- | --- |
+| 45 | 61 | 1.22 | 1.22 |
+| 60 | 81 | 1.03 | 1.03 |
+| 75 | 102 | 0.84 | 0.84 |
+| 90 | 122 | 0.78 | 0.81 |
+| 150 | 204 | 0.72 | 0.80 (floor) |
+
+Where there is no room (N ≤ 35 at `w_ref` 3 000), varied rows match steady
+within 0.05. The blocks are full either way.
+
+**JG-7. The median's resting ratio and `M_r` per share (blind; the
+review's table, run through the same queue model).** Every share now
+moves the median wherever there is room.
+
+| N | 10 % | 20 % | 33 % | 51 % |
+| --- | --- | --- | --- | --- |
+| 60 | 1.27 → 1.24 | 1.47 → 1.30 | 1.62 → 1.30 | 1.62 → 1.30 |
+| 90 | 0.94 → 0.94 | 1.11 → 1.11 | 1.56 → 1.30 | 2.44 → 1.30 |
+| 150 | 0.81 → 0.82 | 1.03 → 1.03 | 1.43 → 1.30 | 4.08 → 1.30 |
+
+Under steady demand the median's rows reproduce §5.33.1's exactly.
+
+**JG-8. The net gain at 20 % (blind).** On varied traffic the median is
+about as stuffable as the sum where it matters:
+
+- **N = 90, `w_ref` 3 000, year 5.** The SMA gains about 74 600 SKL, as
+  on steady traffic. The median gains about 75 000, within 15 % of the
+  SMA: from 0.81 to 1.11, after about a third of a window.
+- **N = 150.** The median gains about 0.7 of the SMA, because its unstuffed
+  value sits under the floor.
+- **N = 60.** The median gains more than the SMA. The queue holds its
+  unstuffed value near the room, so a stuffer lifts it to the cap.
+- **Median with the floor.** Each of the above, less under 1 % for the
+  fees' burn.
+
+**JG-9. Arm 5 full (blind).**
+
+- **The stuffer's net gain is 0.00 SKL in every cell,** and the burn and
+  `C` at rest equal the unstuffed fold's. Nothing the stuffer lists
+  reaches any operand, and its unenforced bodies pay nothing.
+- **Honest rows** equal the SMA's year-1 fee, fill and design load
+  wherever the SMA reads exactly the baseline (steady traffic, N ≥ 35 at
+  `w_ref` 3 000). They differ where the blocks cap the count.
+- **The step does not move it.**
+- **`rails-only` on steady traffic** reproduces §5.33.1's decoupled rows
+  exactly.
+
+**JG-10. What does not move (blind).**
+
+- Every narration other than `--jg-grid`'s is byte-identical, before any
+  fixture is regenerated.
+- In the new `--jg-grid` fixture, the steady rows of the four arms
+  §5.33.1 ran reproduce its figures exactly, `rails-only` for
+  `decoupled`.
+- Year-1 fees, day's fills and design-load years on varied traffic are
+  within 2 % of steady where the blocks have room.
+
+**Cost (blind).** Twice the demand axis, with a fifth campaign arm and a
+fourth honest one: about 2.5 times §5.33.1's 4 061 s, so about 10 000 s
+on an eight-thread fleet host. The full grid is pinned on demand. The
+slice, with varied demand added, takes about 230 s, within the per-PR
+narrations job's 55 minutes.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
