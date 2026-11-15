@@ -60,6 +60,18 @@ mod tests {
         assert!(!text.contains("[command...]"));
         assert!(!text.contains("dev-difficulty"), "levers are hidden");
         assert!(!text.contains("in-peers"), "rejected rows are hidden");
-        assert!(!text.contains("rpc-listen"), "reserved rows are hidden");
+        for row in TABLE.rows {
+            if matches!(row.visibility, shekyl_options::Visibility::Reserved { .. }) {
+                assert!(
+                    !text.contains(row.name),
+                    "reserved rows are hidden: {}",
+                    row.name
+                );
+            }
+        }
+        assert!(
+            text.contains("--rpc-listen"),
+            "the channel listener is public"
+        );
     }
 }

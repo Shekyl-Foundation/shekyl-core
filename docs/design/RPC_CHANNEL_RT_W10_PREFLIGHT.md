@@ -266,6 +266,23 @@ This document is step 0 and is the only content of the first.
 | 4 | The key, the channel listener and enrolment | steps 1–3; RT-O30, RT-O31, RT-O34 | The key file; `rpc-listen` (the reserved row); the handshake driven with the 4 s and 11 s deadlines, mac1, the budget and busy; the fixed payloads; `RecordStream` into the router; per-client admission by fingerprint; the enrolment store and its methods `rpc_client_add`, `rpc_client_set`, `rpc_client_remove`, `rpc_client_list` and `rpc_bundle_show` (`INPUT_GRAMMAR.md` IG-Q87; RT-O9.1's bounds), removal and a lowered ceiling closing live sessions; the `submit_transaction` route refusing a body whose `InboundShape` is not a submission (close-out F2) |
 | 5 | The posture's remainder | step 4 | §11.2's rows that this slice owns, `bind.rs`'s remedy text and its test, `shekyl-daemon-ctl` onto the socket, `Dockerfile:71`, `DAEMON_RPC_RUST.md`'s restricted-mode text. RT-W13's check runs after |
 
+**Step 4 built (PR #1377, 2026-11-14).** The key file (`StaticKeypair`'s
+versioned file form, pinned by the hybridXK vectors' daemon static), owner-only
+at creation and refused if exposed; RT-O31's 16-byte payloads, the handshake
+refusing any other length on messages 3 and 4 (the named edit "payload length"),
+with the oracle's vectors regenerated; `rpc-listen` (any address, `none` by
+default, the channel port to be ruled at RT-W12); admission by fingerprint, no
+message 4 for an unenrolled claim, the ceiling in message 4 and the request
+clamped to it, each request stamped with `Authority::channel`; the enrolled set
+in its own redb store with `INPUT_GRAMMAR.md` IG-Q87's five methods at
+`CORE_RPC_VERSION` 4.6 under RT-O9.1's bounds, removal and a lowered ceiling
+closing live sessions (the named edit "revocation"); `tx_submit` over the channel
+refusing an unpadded body (the named edit "submission shape"); a service's
+console key and `--rpc-console-key-reset` under the lock, which amends RT-O35
+by Rick's relay of 2026-11-14; and a service's machine-wide rendezvous,
+published only when it listens on the channel. A service's data home is a fixed
+root per platform, checked and never created.
+
 **Named edits, fixed now so they are not improvised later.**
 
 - *Grant gate:* serve a `view` connection a `submit` method with the gate

@@ -137,6 +137,32 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     if let Err(d) = marker::check_or_write(&lock, network, network_id) {
         return refuse(&[d]);
     }
+    // The console key's reset (IG-Q88): under the lock just taken, held
+    // through the whole replacement, so it cannot run beside a daemon and a
+    // start waits on it (`RPC_CHANNEL.md` §5). It touches no other
+    // enrolment, and exits without starting the node.
+    if config.session.console_key_reset {
+        return match shekyl_daemon_rpc::channel::reset_console_key(&config.data_dir) {
+            Ok(path) => {
+                tell(
+                    &mut std::io::stdout(),
+                    &format!(
+                        "the console key was replaced; its private half is {}",
+                        path.display()
+                    ),
+                );
+                drop(lock);
+                0
+            }
+            Err(e) => {
+                tell(
+                    &mut std::io::stderr(),
+                    &format!("shekyld: the console key was not replaced: {e}"),
+                );
+                EXIT_FAILED
+            }
+        };
+    }
     if let Err(d) = log_location_writable(&config.logging.file) {
         return refuse(&[d]);
     }
@@ -173,6 +199,20 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
             .as_ref()
             .map(|plan| owner_socket_line(network.name(), plan.instance_label(), &plan.path)),
     );
+    announced
+        .rest
+        .extend(walked.service_rendezvous.as_deref().map(|dir| {
+            service_rendezvous_line(
+                network.name(),
+                config.rpc.instance.label(),
+                &shekyl_daemon_rpc::channel::rendezvous::record_path(
+                    dir,
+                    &network_id,
+                    &config.rpc.instance,
+                ),
+                !config.rpc.channel_listen.is_empty(),
+            )
+        }));
     let lines = announced.into_lines();
     announce_all(&lines);
 
@@ -180,16 +220,33 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     // node opens: a second daemon of this account, network and instance
     // refuses here, with nothing opened (`RPC_CHANNEL.md` §7.1). The RPC
     // serves it once the node is up.
+    // The RPC channel's state too, under the lock: its key made on the
+    // first start, its enrolled set, a service's console key (RT-O34).
+    let channel = shekyl_daemon_rpc::channel::ChannelSetup {
+        data_dir: config.data_dir.clone(),
+        network_id,
+        service: config.run_mode == shekyl_daemon_config::RunMode::Service,
+        service_rendezvous: walked.service_rendezvous.clone(),
+        instance: config.rpc.instance.clone(),
+    };
     let prepared = match shekyl_daemon_rpc::run::prepare(
         walked
             .owner_socket
             .as_ref()
             .map(|plan| (plan, network.name())),
+        Some(&channel),
     ) {
         Ok(prepared) => prepared,
         Err(shekyl_daemon_rpc::run::PrepareError::Owner(d)) => return refuse(&[d]),
         Err(shekyl_daemon_rpc::run::PrepareError::Runtime(e)) => {
             tell(&mut std::io::stderr(), &format!("shekyld: the RPC's {e}"));
+            return EXIT_FAILED;
+        }
+        Err(shekyl_daemon_rpc::run::PrepareError::Channel(e)) => {
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: the RPC channel cannot start: {e}"),
+            );
             return EXIT_FAILED;
         }
     };
@@ -605,6 +662,29 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
 /// on one and does not open the log beside the rolling writer. Standard
 /// error is prefixed `shekyld:`; the log line is the line alone. The
 /// closing [`shekyl_logging::flush`] delivers a line queued before it.
+/// What a service says at start about its machine-wide rendezvous (§7.1):
+/// where it publishes the record when it listens on the channel, and that
+/// it publishes none when it does not.
+fn service_rendezvous_line(
+    network: &str,
+    instance: &str,
+    path: &std::path::Path,
+    listens: bool,
+) -> String {
+    if listens {
+        format!(
+            "service rendezvous: network {network}, instance {instance}, at {}",
+            path.display()
+        )
+    } else {
+        format!(
+            "service rendezvous: none for network {network}, instance {instance}: rpc-listen is none, \
+             so no client finds this service by its rendezvous; local tools reach it on the \
+             plaintext admin listener"
+        )
+    }
+}
+
 /// The line a start announces about its owner's socket (`RPC_CHANNEL.md`
 /// §7.1): the socket's name is a hash, so the operator is told which
 /// network and instance it serves and where it is.
@@ -637,340 +717,5 @@ pub(crate) fn hold_process_table() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-    use std::sync::Mutex;
-
-    /// The signal owner's request and the schedule latches are
-    /// process-global: the tests that drive them run one at a time.
-    /// [`super::hold_process_table`] is the same lock for a test outside
-    /// this module.
-    pub(super) static SERIAL: Mutex<()> = Mutex::new(());
-
-    /// A logged-in account: its home, and a private session directory
-    /// for the owner's socket (`RPC_CHANNEL.md` §7.1), one per test.
-    fn platform(home: &Path) -> Platform {
-        Platform {
-            home: Some(home.to_path_buf()),
-            program_data: None,
-            session_dir: crate::test_session_dir(home),
-            service_rendezvous: None,
-        }
-    }
-
-    fn args(list: &[&str]) -> Vec<OsString> {
-        std::iter::once("shekyld")
-            .chain(list.iter().copied())
-            .map(OsString::from)
-            .collect()
-    }
-
-    #[test]
-    fn a_refusal_exits_with_two_and_help_and_version_with_zero() {
-        let d = tempfile::tempdir().unwrap();
-        assert_eq!(main(&args(&["--bogus"]), &platform(d.path())), EXIT_REFUSED);
-        assert_eq!(main(&args(&["--help"]), &platform(d.path())), 0);
-        assert_eq!(main(&args(&["--version"]), &platform(d.path())), 0);
-        assert_eq!(
-            main(
-                &args(&["--network", "regtest", "--dev-difficulty", "0"]),
-                &platform(d.path())
-            ),
-            EXIT_REFUSED
-        );
-        assert!(!d.path().join(".shekyl").exists(), "nothing was created");
-    }
-
-    /// `mine = on` without `mine-address` is the parser's refusal, naming
-    /// that row; a `mine-threads` count above the host's parallelism is
-    /// the configuration check's. Both exit 2 before anything starts
-    /// (Rick, 2026-11-02): no data directory, no lock, no log. Red edit:
-    /// let either reach the node.
-    #[test]
-    fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
-        let d = tempfile::tempdir().unwrap();
-        assert_eq!(
-            main(
-                &args(&["--network", "regtest", "--mine", "on"]),
-                &platform(d.path())
-            ),
-            EXIT_REFUSED
-        );
-        let host_threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-        let past = (host_threads + 1).to_string();
-        assert_eq!(
-            main(
-                &args(&[
-                    "--network",
-                    "regtest",
-                    "--clearnet",
-                    "off",
-                    "--tor",
-                    "off",
-                    "--mine-threads",
-                    &past
-                ]),
-                &platform(d.path())
-            ),
-            EXIT_REFUSED
-        );
-        assert!(!d.path().join(".shekyl").exists(), "nothing started");
-    }
-
-    /// A bare word is refused before the load, the lock, or any socket.
-    #[test]
-    fn a_bare_word_is_refused_before_the_daemon_starts() {
-        let d = tempfile::tempdir().unwrap();
-        assert_eq!(main(&args(&["status"]), &platform(d.path())), EXIT_REFUSED);
-        assert!(!d.path().join(".shekyl").exists(), "nothing was created");
-    }
-
-    /// An offline regtest node in `data`, with no RPC listener, and the
-    /// configuration it was built from.
-    fn offline_node(d: &Path, data: &Path, log: &Path) -> (DaemonConfig, shekyl_node::Node) {
-        let a = args(&[
-            "--network",
-            "regtest",
-            "--clearnet",
-            "off",
-            "--tor",
-            "off",
-            "--rpc-admin-listen",
-            "none",
-            "--data-dir",
-            data.to_str().unwrap(),
-            "--log-file",
-            log.to_str().unwrap(),
-        ]);
-        let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let config = load(cli, &platform(d)).unwrap().config;
-        let node = shekyl_node::Node::open(shekyl_node::OpenArgs {
-            config: &config,
-            version: "test".to_owned(),
-            protocol_version: u64::from(shekyl_version::PROTOCOL_VERSION),
-            release_build: false,
-            request_stop: Arc::new(crate::signals::request_stop),
-            plan: network::plan(&config, [3u8; 16]),
-            supervisor: None,
-        })
-        .expect("the node opens");
-        (config, node)
-    }
-
-    /// The daemon's own request, the RPC's `daemon_stop`, reaches the one
-    /// owner, and the run ends with 0: one stop path, whatever asked. The
-    /// RPC that served it is started and stopped by the run.
-    #[test]
-    fn a_stop_request_runs_the_one_stop_path() {
-        let _serial = SERIAL
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let d = tempfile::tempdir().unwrap();
-        let data = d.path().join("data");
-        let log = d.path().join("shekyld.log");
-        let (config, node) = offline_node(d.path(), &data, &log);
-        let budget = RuntimeBudget {
-            workers: NonZeroUsize::MIN,
-            blocking: NonZeroUsize::MIN,
-        };
-        let pool =
-            shekyl_runtime::runtime(budget, &ThreadName::new("test-signals").unwrap()).unwrap();
-        // Clears a stop an earlier test latched.
-        signals::own(pool.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
-        let requester = std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            crate::signals::request_stop();
-        });
-        let status = supervise(
-            &config,
-            &pool,
-            Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
-            node,
-            crate::tor::prepare().0,
-            shekyl_daemon_rpc::run::prepare(None).expect("the RPC's runtime"),
-            None,
-        );
-        requester.join().unwrap();
-        assert_eq!(status, 0, "a requested stop is the exit status 0");
-        assert_eq!(
-            pool.block_on(signals::stop_requested()),
-            signals::StopCause::Requested
-        );
-        pool.shutdown_background();
-    }
-
-    /// The one test that starts a daemon: logging installs once per
-    /// process, so this is the only test that reaches it. It locks, marks,
-    /// logs, announces, opens the node and its network, runs until a stop
-    /// is requested, and releases the lock. Red edit: return success when
-    /// the node fails to open, or skip the marker.
-    #[test]
-    fn a_daemon_start_locks_marks_logs_announces_runs_and_stops_on_request() {
-        let _serial = SERIAL
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let d = tempfile::tempdir().unwrap();
-        let data = d.path().join("data");
-        let log = d.path().join("logs").join("shekyld-regtest.log");
-        // Offline: the subject is the lock, the marker, the log and the
-        // announcements, and a managed Tor would look for a binary here.
-        let a = args(&[
-            "--network",
-            "regtest",
-            "--clearnet",
-            "off",
-            "--tor",
-            "off",
-            "--rpc-admin-listen",
-            "none",
-            "--data-dir",
-            data.to_str().unwrap(),
-            "--log-file",
-            log.to_str().unwrap(),
-        ]);
-        // The start clears the latch when it installs the signal owner,
-        // after the marker and the node; a request made before that is
-        // cleared with it. So the requester asks again until the run has
-        // returned: the first request after the owner is installed ends it.
-        let marker = data.join("shekyld.network");
-        let returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let seen = Arc::clone(&returned);
-        let requester = std::thread::spawn(move || {
-            while !seen.load(std::sync::atomic::Ordering::SeqCst) {
-                if marker.is_file() {
-                    crate::signals::request_stop();
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-        });
-        let status = main(&a, &platform(d.path()));
-        returned.store(true, std::sync::atomic::Ordering::SeqCst);
-        requester.join().unwrap();
-        assert_eq!(status, 0);
-        assert!(data.join("shekyld.lock").is_file());
-        let m = std::fs::read_to_string(data.join("shekyld.network")).unwrap();
-        assert!(m.contains("network = \"regtest\""), "{m}");
-        let text = std::fs::read_to_string(&log).unwrap();
-        assert!(text.contains("effective configuration:"), "{text}");
-        assert!(text.contains("posture:"), "{text}");
-        // The stop was asked for: an announcement, in the log whatever the
-        // level, with no level tag (IG-14; alpha.11 bug hunt).
-        let stop = text
-            .lines()
-            .find(|line| line.contains("stop requested by"))
-            .unwrap_or_else(|| panic!("no stop announcement: {text}"));
-        assert_eq!(stop, "stop requested by the RPC's daemon_stop", "{text}");
-        // The lock was released at the end: it can be taken again.
-        assert!(Lock::take(&data).is_ok());
-    }
-
-    /// **A node task that ends on its own stops the daemon, and the exit
-    /// is a failure** (the CS-5 tune-up, and the ingest fault of
-    /// 2026-11-02). A watch that reports nothing does not end the wait. A
-    /// reported end does, with its cause: the cause reaches the one stop
-    /// owner, so every waiter sees it, and the status the teardown returns
-    /// is a failure. The cases are the node's two producers.
-    #[test]
-    fn a_node_task_that_ends_on_its_own_stops_the_daemon_with_its_cause() {
-        for end in [
-            shekyl_node::NodeEnd::Sync(shekyl_node::EndCause::PortClosed),
-            shekyl_node::NodeEnd::Ingest(shekyl_node::ServiceEnd::words("connector unreachable")),
-        ] {
-            a_reported_end_stops_the_daemon(end);
-        }
-    }
-
-    fn a_reported_end_stops_the_daemon(end: shekyl_node::NodeEnd) {
-        let _serial = SERIAL
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        // Clears a stop an earlier test latched.
-        signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
-        let (ended_tx, mut ended) = watch::channel(None);
-        let waited = rt.block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_millis(50),
-                run_or_stop(&mut ended),
-            )
-            .await
-        });
-        assert!(waited.is_err(), "a watch with no end ended the wait");
-        ended_tx.send_replace(Some(end.clone()));
-        let wait = rt.block_on(run_or_stop(&mut ended));
-        assert_eq!(wait, RunWait::NodeEnded(end.clone()));
-        let mut preserve_status = true;
-        note_run(&mut preserve_status, wait);
-        assert!(!preserve_status, "the exit was not made a failure");
-        assert_eq!(
-            rt.block_on(signals::stop_requested()),
-            signals::StopCause::Fatal(end)
-        );
-    }
-
-    /// **A fatal cause on the stop arm fails the exit.** The owner's
-    /// failed end is the other arm; this is a waiter that sees the cause
-    /// the latch already holds. Red edit: leave `preserve_status` set.
-    #[test]
-    fn a_latched_fatal_cause_fails_the_exit() {
-        let _serial = SERIAL
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
-        let end = shekyl_node::NodeEnd::Sync(shekyl_node::EndCause::EngineClosed);
-        signals::fatal(end.clone());
-        let (_ended_tx, mut ended) = watch::channel(None);
-        let wait = rt.block_on(run_or_stop(&mut ended));
-        assert_eq!(wait, RunWait::StopRequested(signals::StopCause::Fatal(end)));
-        let mut preserve_status = true;
-        note_run(&mut preserve_status, wait);
-        assert!(!preserve_status, "a fatal cause kept the exit");
-    }
-
-    /// **An asked-for stop is announced, a forced one is the sync error.**
-    /// The report matches the cause. Red edit: announce a fatal cause,
-    /// or report an asked-for stop as an error.
-    #[test]
-    fn an_asked_for_stop_is_announced_and_a_forced_one_is_an_error() {
-        use signals::StopCause;
-        assert_eq!(
-            stop_report(StopCause::Requested),
-            StopReport::Announce("stop requested by the RPC's daemon_stop".to_owned())
-        );
-        #[cfg(unix)]
-        assert_eq!(
-            stop_report(StopCause::Signal(signals::Signal::Terminate)),
-            StopReport::Announce("stop requested by SIGTERM".to_owned())
-        );
-        #[cfg(windows)]
-        assert_eq!(
-            stop_report(StopCause::Signal(signals::Signal::Shutdown)),
-            StopReport::Announce("stop requested by shutdown".to_owned())
-        );
-        assert_eq!(
-            stop_report(StopCause::Fatal(shekyl_node::NodeEnd::Sync(
-                shekyl_node::EndCause::PortClosed
-            ))),
-            StopReport::Error(
-                "chain sync stopped: the session layer dropped the sync owner; the daemon stops"
-                    .to_owned()
-            )
-        );
-        assert_eq!(
-            stop_report(StopCause::Fatal(shekyl_node::NodeEnd::Ingest(
-                shekyl_node::ServiceEnd::words("connector unreachable")
-            ))),
-            StopReport::Error(
-                "the ingest service stopped: connector unreachable; the daemon stops".to_owned()
-            )
-        );
-    }
-}
+#[path = "run_tests.rs"]
+mod tests;

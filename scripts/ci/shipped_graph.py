@@ -102,10 +102,6 @@ class GraphError(ValueError):
 HEADED_FOR_PRODUCTION: dict[str, str] = {
     "shekyl-multisig": "the multisig wallet's signing ceremony; the wallet engine links it in "
     "multisig slice 4a-2 (MULTISIG_SLICE4A_BRIEF)",
-    "shekyl-rpc-channel": "the RPC channel's hybridXK handshake; the daemon's listener and the "
-    "wallets' dial take it in RT-W10 step 4",
-    "shekyl-rpc-stream": "the RPC channel's stream adapter the daemon's router serves over "
-    "(RT-W10 step 4; RPC_CHANNEL_RT_W10_PREFLIGHT.md F-11)",
 }
 
 # Members no release builds, and why (CF-R26).

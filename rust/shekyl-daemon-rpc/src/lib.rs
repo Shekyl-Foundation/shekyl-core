@@ -38,6 +38,7 @@ pub mod authority;
 pub mod ban_methods;
 pub mod bind;
 pub mod chain_facts;
+pub mod channel;
 
 /// The consensus constants this crate reads, generated from the JSON
 /// authority (`config/consensus_constants.json`) by `build.rs` — the same
