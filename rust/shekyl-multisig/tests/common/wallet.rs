@@ -32,6 +32,7 @@ use shekyl_multisig::{
     LiveCeremonies, MemberFile, NonceCounterError, NonceCounterSink, ProposerInputs,
     SigningContext, ValidatedIntent,
 };
+use shekyl_tx_weight::{predict_group_weight, GroupSize, GroupSpendShape, InputCount, OutputCount};
 use shekyl_types::{BlockHash, KeyImage};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
@@ -315,6 +316,32 @@ macro_rules! expect {
 // ---------------------------------------------------------------------------
 // The checks a node runs, from the wire
 // ---------------------------------------------------------------------------
+
+/// The weight the wallet predicts for `group`'s spend of `paid` paying
+/// the intent's recipients (a single-signer address and the group's
+/// change) equals the signed spend's own `weight()`: the scheme-2 auths and
+/// the change's `0x0D` entry are priced exactly (slice 4a §2.4).
+pub fn assert_weight_predicted(
+    tx: &Transaction,
+    group: &MultisigAddressPayload,
+    paid: &GroupOutputs,
+) {
+    let Ct::Fcmp { fee, .. } = &tx.ct else {
+        panic!("an FCMP++ spend");
+    };
+    let signers = GroupSize::new(group.n_total(), group.m_required()).unwrap();
+    let predicted = predict_group_weight(
+        &GroupSpendShape {
+            n_in: InputCount::clamped(tx.prefix.inputs.len()),
+            n_out: OutputCount::clamped(tx.prefix.outputs.len()),
+            tree_depth: paid.layers,
+            signers,
+            group_payees: &[signers],
+        },
+        *fee,
+    );
+    assert_eq!(predicted, Some(tx.weight()));
+}
 
 /// Serialize, parse back, and check from the parsed bytes alone: the
 /// structural rules the pool applies first, the intent's fee and reference

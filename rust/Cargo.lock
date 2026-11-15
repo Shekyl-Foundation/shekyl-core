@@ -4726,6 +4726,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-network",
  "shekyl-tx-builder",
+ "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",

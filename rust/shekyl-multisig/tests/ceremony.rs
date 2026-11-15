@@ -18,7 +18,8 @@ mod common;
 use rand_core::OsRng;
 
 use common::wallet::{
-    context, import_into, intent, proposer_inputs, validate, verify_from_the_wire, Wallet,
+    assert_weight_predicted, context, import_into, intent, proposer_inputs, validate,
+    verify_from_the_wire, Wallet,
 };
 use common::{found_group, pay_group_twice};
 use shekyl_multisig::{Cosigner, Holder, MemberFile, Proposer, Responder, ResponderInput};
@@ -91,6 +92,7 @@ fn two_of_three_spends_two_group_outputs() {
         .release()
         .unwrap();
     verify_from_the_wire(&tx, &paid);
+    assert_weight_predicted(&tx, &address, &paid);
 }
 
 /// 3-of-5, one holder: every file of the table.
@@ -195,4 +197,5 @@ fn three_of_five_spends_two_group_outputs() {
         .release()
         .unwrap();
     verify_from_the_wire(&tx, &paid);
+    assert_weight_predicted(&tx, &address, &paid);
 }
