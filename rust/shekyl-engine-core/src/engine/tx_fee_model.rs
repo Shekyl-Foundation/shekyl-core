@@ -17,7 +17,6 @@
 //! (`tx_weight_kat`) and call the hoisted `pub` `fcmp_proof_size`.
 
 use shekyl_rpc_client::{tx_fee, FeeRate};
-use shekyl_units::AtomicUnits;
 
 use super::traits::key::FeeDirective;
 
@@ -29,17 +28,6 @@ pub(crate) use shekyl_tx_weight::{
 };
 
 // ── FEE-RATE LAYER (weight model lives in shekyl-tx-weight) ──────────────────
-
-/// Canonical dust predicate inner expression (§3.10.2): the shared dust
-/// formula (`shekyl_rpc_client::tx_fee`) composed with the weight
-/// model's own marginal-input weight — the 2a-3 replacement
-/// (`marginal_input_weight_at_d_ref`) that landed with the proof-size
-/// KAT but was never wired, leaving the zero-proof-increment stub
-/// understating the dust bar until 2026-08-16.
-#[must_use]
-pub(crate) fn dust_threshold_for_rate(rate: &FeeRate) -> u64 {
-    tx_fee::dust_threshold(rate, shekyl_tx_weight::marginal_input_weight_at_d_ref())
-}
 
 /// Fee from structural weight on the lattice (non-panicking on daemon-derived rates).
 #[must_use]
@@ -91,9 +79,7 @@ pub(crate) fn build_fee_directive(
     // With-change adds one output. At the output limit a change output would exceed
     // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
     // `TooManyOutputs`). Mark it impossible with an infinite fee so the signer's
-    // `leftover >= fee_with_change + dust_threshold` selection (sign_bridge) can never
-    // pick it and instead falls through to the buildable no-change variant — rather
-    // than selecting a change output that fails validation. `clamped` returning a
+    // choice (`sign_bridge::fee_and_change`) can never pick it. `clamped` returning a
     // value below the requested `+1` is exactly the "at the limit" signal.
     // That sentinel is not an overflow: overflow is `None` from this function.
     let with_change_request = payment_output_count.get() + 1; // <= MAX_OUTPUTS + 1, no overflow
@@ -107,15 +93,7 @@ pub(crate) fn build_fee_directive(
     Some(FeeDirective {
         fee_no_change,
         fee_with_change,
-        dust_threshold: dust_threshold_for_rate(rate),
     })
-}
-
-/// Fee charged for the no-change variant (orchestrator picks variant in 2a-3).
-#[must_use]
-#[allow(dead_code)] // 2a-3 F4/F8 dust-fold calls this; 2a-2 stores raw fee on `PendingTx`.
-pub(crate) fn fee_no_change_atomic(directive: &FeeDirective) -> AtomicUnits {
-    AtomicUnits::from_raw(directive.fee_no_change)
 }
 
 #[cfg(test)]

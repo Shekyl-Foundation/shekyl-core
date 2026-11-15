@@ -410,8 +410,8 @@ impl Signer for LocalSigner {
         let bulletproof = shekyl_bulletproofs::Bulletproof::read_plus(
             &mut signatures.bulletproof_plus.as_slice(),
         )
-        .map_err(|_| SignerError::RemoteFailure {
-            reason: "bulletproof parse failed during wire encode",
+        .map_err(|_| SignerError::Internal {
+            fault: "bulletproof-parse",
         })?;
 
         let wire_input = shekyl_tx_builder::WireEncodeInput {
@@ -443,11 +443,10 @@ impl Signer for LocalSigner {
             fcmp_layers: signatures.tree_depth,
         };
 
-        let tx_bytes = shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| {
-            SignerError::RemoteFailure {
-                reason: "final wire encode failed",
-            }
-        })?;
+        let tx_bytes =
+            shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| SignerError::Internal {
+                fault: "wire-encode",
+            })?;
 
         Ok(SignedTransfer {
             tx_bytes,
@@ -521,7 +520,6 @@ mod tests {
             fee: FeeDirective {
                 fee_no_change: 0,
                 fee_with_change: 0,
-                dust_threshold: 0,
             },
         }
     }
@@ -557,6 +555,6 @@ mod tests {
             .sign_transfer(context)
             .await
             .expect_err("empty TxToSign cannot be signed");
-        assert!(matches!(err, SignerError::RemoteFailure { .. }));
+        assert!(matches!(err, SignerError::Internal { fault: "primitive" }));
     }
 }

@@ -482,6 +482,25 @@ fn a_rid_the_label_cannot_echo_is_refused_at_the_request() {
     ));
 }
 
+/// More recipients than a transaction carries beside its change are
+/// refused at the request with the signer's own fault, naming the outputs
+/// the send needs (A16: a 20-output build on the TRC-1 seed failed in the
+/// signer as an unnamed fault). Fifteen recipients and their change fill
+/// the limit and pass.
+#[test]
+fn too_many_recipients_are_refused_at_the_request() {
+    let one = standard_request(1_000).recipients[0].clone();
+    let mut req = standard_request(1_000);
+    req.recipients = vec![one.clone(); shekyl_tx_builder::MAX_OUTPUTS - 1];
+    assert!(req.check_recipients(Network::Mainnet).is_ok());
+    req.recipients.push(one);
+    assert!(matches!(
+        req.check_recipients(Network::Mainnet),
+        Err(SendError::Sign(shekyl_tx_builder::SignFault::TooManyOutputs { count }))
+            if count == shekyl_tx_builder::MAX_OUTPUTS + 1
+    ));
+}
+
 /// `check_recipients` names why an address cannot be paid. The sentences
 /// for a version this wallet does not pay and for a damaged address are
 /// pinned on `recipient_reason`: public `encode` cannot emit the first,

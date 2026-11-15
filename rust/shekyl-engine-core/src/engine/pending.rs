@@ -379,7 +379,8 @@ pub struct TxRequest {
 impl TxRequest {
     /// The refusals that need no ledger, no daemon and no permit, run
     /// first on every build path. `network` is the wallet's own, not a
-    /// daemon query. An empty recipient list, an address that cannot be
+    /// daemon query. An empty recipient list, more recipients than a
+    /// transaction carries beside its change, an address that cannot be
     /// paid on that network, and a `rid` the label cannot echo are each
     /// refused here, at the request, not discovered after selection and
     /// proving as a signer failure: a bad address behind an empty wallet
@@ -391,6 +392,15 @@ impl TxRequest {
             return Err(SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
             });
+        }
+        // Every send carries a change output beside its payments, so the
+        // payments get one output fewer than a transaction carries. Refused
+        // here with the signer's own fault, before selection and proving.
+        let outputs = self.recipients.len().saturating_add(1);
+        if outputs > shekyl_tx_builder::MAX_OUTPUTS {
+            return Err(SendError::Sign(
+                shekyl_tx_builder::SignFault::TooManyOutputs { count: outputs },
+            ));
         }
         for recipient in &self.recipients {
             if let TxDestination::Address(address) = &recipient.destination {

@@ -14,7 +14,7 @@ use shekyl_engine_core::engine::{ResendError, SubmitError};
 use shekyl_engine_core::{
     ChangePasswordError, CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError,
     PScanStartError, PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError,
-    SetTxNoteError, StakeInError, StoreOpenFault,
+    SetTxNoteError, SignFault, StakeInError, StoreOpenFault, MAX_INPUTS, MAX_OUTPUTS,
 };
 use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
 use shekyl_engine_prefs::PrefsError;
@@ -224,7 +224,8 @@ wallet_rpc_error_codes! {
     ReselectionRequired = -29117 => "RESELECTION_REQUIRED",
     /// Build: the daemon's fee answer could not be read.
     DaemonFeeResponseInvalid = -29118 => "DAEMON_FEE_RESPONSE_INVALID",
-    /// Build: the signer tried and a downstream failure stopped it.
+    /// Build: the wallet's own signer hit an internal fault; `data.fault`
+    /// names which.
     SignerFailed = -29119 => "SIGNER_FAILED",
     /// Submit: the send's record could not be saved, so nothing was sent;
     /// the reservation is kept (A19).
@@ -233,6 +234,15 @@ wallet_rpc_error_codes! {
     TxNotHeld = -29121 => "TX_NOT_HELD",
     /// `tx_resend`: the held send has no saved bytes to resend.
     TxBytesMissing = -29122 => "TX_BYTES_MISSING",
+    /// Build: the spend needs more inputs than one transaction may carry.
+    TooManyInputs = -29123 => "TOO_MANY_INPUTS",
+    /// Build: the request has more recipients than one transaction may
+    /// carry with its change.
+    TooManyOutputs = -29124 => "TOO_MANY_OUTPUTS",
+    /// Build: an input's tree path does not hold the output it spends.
+    InputNotInTree = -29125 => "INPUT_NOT_IN_TREE",
+    /// Build: an input was received but can never be spent.
+    InputUnspendable = -29126 => "INPUT_UNSPENDABLE",
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200 => "REFRESH_IN_PROGRESS",
     /// Refresh / rescan / proofs / build: the daemon did not answer.
@@ -725,11 +735,55 @@ pub enum WalletRpcError {
     /// answer refused as unreasonable).
     #[error("the daemon's fee answer could not be read")]
     DaemonFeeResponseInvalid,
-    /// `-29119`: the signer tried and a downstream failure stopped it.
-    #[error("the signer failed: {reason}")]
+    /// `-29119`: the wallet's own signer hit an internal fault, named by
+    /// one keyword: a builder invariant ([`InternalSignFault`]) or the
+    /// wallet state signing reads. A bug, never the request's doing.
+    #[error("the wallet's signer hit an internal fault ({fault}) — report it; the wallet log has the detail")]
     SignerFailed {
-        /// Compile-time-fixed description of the failure.
-        reason: &'static str,
+        /// The fault, one keyword from a closed set.
+        fault: &'static str,
+    },
+    /// `-29123`: the amount needs more inputs than one transaction spends.
+    #[error(
+        "this send needs {count} inputs and one transaction spends at most {limit} — send less, \
+         or first send part of your balance to yourself to merge small amounts"
+    )]
+    TooManyInputs {
+        /// The inputs the build needed.
+        count: usize,
+        /// [`MAX_INPUTS`].
+        limit: usize,
+    },
+    /// `-29124`: more recipients than one transaction carries.
+    #[error(
+        "this send has {count} outputs with its change and one transaction carries at most \
+         {limit} — split the recipients across two sends"
+    )]
+    TooManyOutputs {
+        /// The outputs the request needs, change included.
+        count: usize,
+        /// [`MAX_OUTPUTS`].
+        limit: usize,
+    },
+    /// `-29125`: an input's assembled tree path does not hold it — the
+    /// wallet's copy of the membership data disagrees with the output.
+    #[error(
+        "the wallet's membership data does not hold an output this send spends — refresh the \
+         wallet and build again"
+    )]
+    InputNotInTree {
+        /// The input's position in the transaction.
+        input: usize,
+    },
+    /// `-29126`: an input was received but its leaf does not open to this
+    /// wallet's keys, so it can never be spent.
+    #[error(
+        "an output this send would spend was received but can never be spent by this wallet \
+         (its sender published a leaf this wallet cannot open) — report it"
+    )]
+    InputUnspendable {
+        /// The input's position in the transaction.
+        input: usize,
     },
     /// `-29120`: the send's record (with its signed bytes and tx secret)
     /// could not be saved, so the wallet sent nothing (A19). The
@@ -1230,6 +1284,10 @@ impl WalletRpcError {
             Self::ReselectionRequired => WalletRpcErrorCode::ReselectionRequired,
             Self::DaemonFeeResponseInvalid => WalletRpcErrorCode::DaemonFeeResponseInvalid,
             Self::SignerFailed { .. } => WalletRpcErrorCode::SignerFailed,
+            Self::TooManyInputs { .. } => WalletRpcErrorCode::TooManyInputs,
+            Self::TooManyOutputs { .. } => WalletRpcErrorCode::TooManyOutputs,
+            Self::InputNotInTree { .. } => WalletRpcErrorCode::InputNotInTree,
+            Self::InputUnspendable { .. } => WalletRpcErrorCode::InputUnspendable,
             Self::SendNotSaved => WalletRpcErrorCode::SendNotSaved,
             Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
             Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
@@ -1378,6 +1436,13 @@ impl WalletRpcError {
             })),
             Self::OutputNotYetSpendable { wait_blocks } => {
                 Some(json!({ "wait_blocks": wait_blocks }))
+            }
+            Self::SignerFailed { fault } => Some(json!({ "fault": fault })),
+            Self::TooManyInputs { count, limit } | Self::TooManyOutputs { count, limit } => {
+                Some(json!({ "count": count, "limit": limit }))
+            }
+            Self::InputNotInTree { input } | Self::InputUnspendable { input } => {
+                Some(json!({ "input": input }))
             }
             Self::ChainTooShortToSpend {
                 synced_height,
@@ -1656,12 +1721,12 @@ impl From<SendError> for WalletRpcError {
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
             SendError::Io(io) => from_io_error(io),
-            SendError::Tx(e) => internal_detail("transaction construction", e),
+            SendError::Sign(fault) => from_sign_fault(fault),
             SendError::NotSynced => Self::WalletNotSynced,
             // No spend-key material in scope: the session's signer is gone,
             // which is what `-29006` names — reopen the wallet.
             SendError::SignerUnavailable => Self::WalletSessionEnded,
-            SendError::SignerFailed { reason } => Self::SignerFailed { reason },
+            SendError::SignerFailed { fault } => Self::SignerFailed { fault },
             SendError::BuildInvariant { reason } => internal_detail("build invariant", reason),
             SendError::SpendUnavailableRebuilding { .. } => Self::SpendUnavailableRebuilding,
             SendError::CurveTreeUnavailable { detail } => {
@@ -1682,6 +1747,27 @@ impl From<SendError> for WalletRpcError {
                 cause: terminal_to_reject_cause(kind),
             },
         }
+    }
+}
+
+/// The signing pass's fault to its code: the four the user acts on each
+/// get their own, with the limit or the input named; every internal
+/// invariant is `-29119`, named by its keyword (A16).
+fn from_sign_fault(fault: SignFault) -> WalletRpcError {
+    match fault {
+        SignFault::TooManyInputs { count } => WalletRpcError::TooManyInputs {
+            count,
+            limit: MAX_INPUTS,
+        },
+        SignFault::TooManyOutputs { count } => WalletRpcError::TooManyOutputs {
+            count,
+            limit: MAX_OUTPUTS,
+        },
+        SignFault::SpentOutputNotInLeafChunk { input } => WalletRpcError::InputNotInTree { input },
+        SignFault::PqcLeafMismatch { input } => WalletRpcError::InputUnspendable { input },
+        SignFault::Internal(internal) => WalletRpcError::SignerFailed {
+            fault: internal.keyword(),
+        },
     }
 }
 
@@ -3437,8 +3523,30 @@ mod tests {
             ),
             (
                 SendError::SignerFailed {
-                    reason: "device unplugged",
+                    fault: "handle-mismatch",
                 },
+                WalletRpcErrorCode::SignerFailed,
+            ),
+            (
+                SendError::Sign(SignFault::TooManyInputs { count: 9 }),
+                WalletRpcErrorCode::TooManyInputs,
+            ),
+            (
+                SendError::Sign(SignFault::TooManyOutputs { count: 17 }),
+                WalletRpcErrorCode::TooManyOutputs,
+            ),
+            (
+                SendError::Sign(SignFault::SpentOutputNotInLeafChunk { input: 1 }),
+                WalletRpcErrorCode::InputNotInTree,
+            ),
+            (
+                SendError::Sign(SignFault::PqcLeafMismatch { input: 0 }),
+                WalletRpcErrorCode::InputUnspendable,
+            ),
+            (
+                SendError::Sign(SignFault::Internal(
+                    shekyl_engine_core::InternalSignFault::BalanceSelfCheck,
+                )),
                 WalletRpcErrorCode::SignerFailed,
             ),
             (

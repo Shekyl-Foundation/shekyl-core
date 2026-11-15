@@ -30,7 +30,7 @@ use super::error::KeyEngineError;
 use super::local_keys::LocalKeys;
 use super::pending::TxDestination;
 use super::traits::key::{
-    TxInputSignature, TxInputSigningContext, TxOutputContext, TxSignatures, TxToSign,
+    FeeDirective, TxInputSignature, TxInputSigningContext, TxOutputContext, TxSignatures, TxToSign,
 };
 use crate::outbound_label::label_plaintext_for_recipient;
 
@@ -304,6 +304,47 @@ fn payment_outputs_of(
     Ok((total, payments))
 }
 
+/// The fee and the change a signing pass carries for `leftover` (the
+/// inputs less the payments), from the build's two ladder fees.
+///
+/// The fee is always one of the directive's two, never the leftover:
+/// the fee is cleartext on chain, and a wallet paying a ladder value hides
+/// in that rung's cohort where one paying its leftover marks itself
+/// (`FEE_LADDER_DERIVATION.md` W3). So every leftover at or above the
+/// with-change fee gets a change output, however small, and the no-change
+/// variant is taken only when the leftover is exactly its fee. A leftover
+/// between the two cannot balance at a ladder fee and is refused; the
+/// build's selection, which covers the payments plus the with-change fee,
+/// never produces one.
+///
+/// A leftover inside one dust threshold of the with-change fee used to take
+/// the no-change fee and leave the rest unaccounted, so the transaction did
+/// not balance and the builder's self-check refused it (A16: the TRC-1
+/// wallet's intermittent `BalanceSelfCheck`).
+fn fee_and_change(
+    leftover: u64,
+    directive: &FeeDirective,
+) -> Result<(u64, Option<u64>), KeyEngineError> {
+    if leftover == directive.fee_no_change {
+        return Ok((directive.fee_no_change, None));
+    }
+    // `u64::MAX` is the "no change output fits" sentinel; no leftover reaches it.
+    if directive.fee_with_change != u64::MAX && leftover >= directive.fee_with_change {
+        return Ok((
+            directive.fee_with_change,
+            Some(leftover - directive.fee_with_change),
+        ));
+    }
+    let short_of = if leftover < directive.fee_no_change {
+        directive.fee_no_change
+    } else {
+        directive.fee_with_change
+    };
+    Err(KeyEngineError::InsufficientFunds {
+        shortfall: short_of.saturating_sub(leftover),
+    })
+}
+
 pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, KeyEngineError> {
     let keys = &local.keys;
     if tx.inputs.is_empty() {
@@ -333,19 +374,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                 shortfall: payment_total.saturating_sub(input_amounts),
             })?;
 
-    let (fee, include_change) = if leftover
-        >= fee_directive
-            .fee_with_change
-            .saturating_add(fee_directive.dust_threshold)
-    {
-        (fee_directive.fee_with_change, true)
-    } else if leftover >= fee_directive.fee_no_change {
-        (fee_directive.fee_no_change, false)
-    } else {
-        return Err(KeyEngineError::InsufficientFunds {
-            shortfall: fee_directive.fee_no_change.saturating_sub(leftover),
-        });
-    };
+    let (fee, change) = fee_and_change(leftover, &fee_directive)?;
 
     // `r` is minted canonical by the crypto crate: it is retained for the
     // OUTBOUND proof, which signs with it as a scalar (A19).
@@ -388,10 +417,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         output_index += 1;
     }
 
-    if include_change {
-        let change_amount = leftover
-            .checked_sub(fee)
-            .ok_or(KeyEngineError::InsufficientFunds { shortfall: 1 })?;
+    if let Some(change_amount) = change {
         if change_amount > 0 {
             let change_pk = derived.change_spend_pk();
             let built = build_output(
@@ -515,13 +541,11 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         AtomicUnits::from_raw(fee),
         &tree,
     )
-    .map_err(|e| KeyEngineError::Primitive {
-        detail: match e {
-            shekyl_tx_builder::TxBuilderError::InsufficientFunds { .. } => {
-                "tx-builder insufficient funds"
-            }
-            _ => "tx-builder sign_transaction failed",
-        },
+    .map_err(|e| {
+        // The inner text (a prover's or encoder's message) stays in the
+        // local log; the fault that leaves is the variant, bounded.
+        tracing::debug!(error = %e, "the transaction builder refused the signing pass");
+        KeyEngineError::Sign(e.fault())
     })?;
 
     // The wire shape is assembled by the single shared constructor both this
@@ -968,5 +992,55 @@ mod tests {
             .is_err(),
             "an output encapsulated to the raw Edwards bytes must NOT be recoverable"
         );
+    }
+
+    fn directive(fee_no_change: u64, fee_with_change: u64) -> FeeDirective {
+        FeeDirective {
+            fee_no_change,
+            fee_with_change,
+        }
+    }
+
+    /// The A16 window: a leftover from the with-change fee up to one dust
+    /// threshold above it. It used to take the no-change fee and leave the
+    /// rest unaccounted (the builder's `BalanceSelfCheck` refused the
+    /// transaction); it now carries the with-change fee and the rest as
+    /// change, so inputs = payments + fee + change for every leftover the
+    /// rule accepts. Bites if the choice falls back to the no-change fee
+    /// for a leftover it does not equal.
+    #[test]
+    fn every_accepted_leftover_balances_at_a_ladder_fee() {
+        let d = directive(700, 900);
+        for leftover in [900, 901, 950, 1_000, 5_000, u64::MAX / 2] {
+            let (fee, change) = fee_and_change(leftover, &d).expect("covered");
+            assert_eq!(fee, 900, "leftover {leftover}");
+            assert_eq!(fee + change.expect("a change output"), leftover);
+        }
+        assert_eq!(fee_and_change(700, &d).expect("exact"), (700, None));
+    }
+
+    /// A leftover that no ladder fee balances is refused, never paid as a
+    /// fee of its own (`FEE_LADDER_DERIVATION.md` W3).
+    #[test]
+    fn a_leftover_no_ladder_fee_balances_is_refused() {
+        let d = directive(700, 900);
+        for leftover in [0, 699, 701, 899] {
+            assert!(
+                matches!(
+                    fee_and_change(leftover, &d),
+                    Err(KeyEngineError::InsufficientFunds { .. })
+                ),
+                "leftover {leftover}"
+            );
+        }
+    }
+
+    /// At the output limit no change output fits: only the exact no-change
+    /// leftover signs.
+    #[test]
+    fn at_the_output_limit_only_the_exact_leftover_signs() {
+        let d = directive(700, u64::MAX);
+        assert_eq!(fee_and_change(700, &d).expect("exact"), (700, None));
+        assert!(fee_and_change(5_000, &d).is_err());
     }
 }

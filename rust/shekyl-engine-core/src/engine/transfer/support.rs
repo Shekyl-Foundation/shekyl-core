@@ -11,6 +11,7 @@ use shekyl_curve_tree::{
     AssembleInput, ClientError, CommitmentBytes, OneTimePubkey, StoreOpenFault,
 };
 use shekyl_engine_state::TransferDetails;
+use shekyl_tx_builder::SignFault;
 
 use super::super::curve_tree_actor::CurveTreeHandleError;
 use super::super::diagnostics::{
@@ -229,12 +230,17 @@ pub(super) fn build_error_kind(err: &SendError) -> BuildErrorKind {
         SendError::WalletTooYoungToSpend { .. } | SendError::NotSynced => {
             BuildErrorKind::LedgerNotReady
         }
-        SendError::SignerUnavailable | SendError::SignerFailed { .. } => {
-            BuildErrorKind::SignerUnavailable
+        SendError::SignerUnavailable => BuildErrorKind::SignerUnavailable,
+        // More inputs or outputs than one transaction carries: the request's
+        // shape against a consensus limit.
+        SendError::Sign(SignFault::TooManyInputs { .. } | SignFault::TooManyOutputs { .. }) => {
+            BuildErrorKind::TransactionTooLarge
         }
         // A failed proof or signature, or a broken precondition: a bug, not a
         // state the request put the wallet in.
-        SendError::Tx(_) | SendError::BuildInvariant { .. } => BuildErrorKind::InternalInvariant,
+        SendError::Sign(_) | SendError::SignerFailed { .. } | SendError::BuildInvariant { .. } => {
+            BuildErrorKind::InternalInvariant
+        }
         // A curve-tree actor that cannot be queried is an infrastructure
         // outage indistinguishable, to the caller, from the daemon being down.
         SendError::CurveTreeUnavailable { .. } | SendError::Io(_) | SendError::Fee(_) => {
@@ -280,7 +286,8 @@ pub(super) fn map_fee_estimator_error(err: &FeeEstimatorError) -> SendError {
 pub(super) fn map_signer_error(err: &SignerError) -> SendError {
     match err {
         SignerError::Unavailable => SendError::SignerUnavailable,
-        SignerError::RemoteFailure { reason } => SendError::SignerFailed { reason },
+        SignerError::Sign(fault) => SendError::Sign(*fault),
+        SignerError::Internal { fault } => SendError::SignerFailed { fault },
     }
 }
 

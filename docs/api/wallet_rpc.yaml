@@ -807,6 +807,10 @@ components:
         - -29120   # SEND_NOT_SAVED
         - -29121   # TX_NOT_HELD
         - -29122   # TX_BYTES_MISSING
+        - -29123   # TOO_MANY_INPUTS
+        - -29124   # TOO_MANY_OUTPUTS
+        - -29125   # INPUT_NOT_IN_TREE
+        - -29126   # INPUT_UNSPENDABLE
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -1033,10 +1037,33 @@ components:
                                           wallet could not read. Distinct from
                                           -29102 (no answer) and -29109 (an
                                           answer refused as unreasonable)
-          -29119 SIGNER_FAILED            build: the signer tried and a
-                                          downstream failure stopped it
-                                          (a device error, a remote actor
-                                          disconnecting)
+          -29119 SIGNER_FAILED            build: the wallet's own signer hit
+                                          an internal fault — a bug, never
+                                          the request's doing (data:
+                                          {"fault"}, one keyword: a builder
+                                          invariant — no-inputs, no-outputs,
+                                          zero-input-amount,
+                                          zero-output-amount,
+                                          input-amount-overflow,
+                                          output-amount-overflow,
+                                          insufficient-funds,
+                                          empty-leaf-chunk,
+                                          pqc-leaf-derivation,
+                                          leaf-chunk-too-large,
+                                          zero-tree-depth, tree-too-shallow,
+                                          tree-depth-too-large,
+                                          branch-layer-mismatch,
+                                          invalid-combined-ss-length,
+                                          bulletproof, fcmp-prove, pqc-sign,
+                                          wire, balance-self-check — or the
+                                          wallet state signing reads —
+                                          primitive, fee-variant-shortfall,
+                                          handle-mismatch, missing-key-image,
+                                          source-decapsulation,
+                                          rid-not-encodable, proof,
+                                          bulletproof-parse, wire-encode).
+                                          Report it; the wallet log has the
+                                          detail (A16)
           -29120 SEND_NOT_SAVED           submit: the send's record (its
                                           signed bytes, tx secret and input
                                           locks) is not confirmed on disk,
@@ -1056,6 +1083,32 @@ components:
                                           holds no bytes to resend; abandon
                                           it, or wait for refresh to settle
                                           it
+          -29123 TOO_MANY_INPUTS          build: the amount needs more
+                                          inputs than one transaction spends
+                                          (data: {"count", "limit"}; limit
+                                          is 8) — send less, or first send
+                                          part of the balance to yourself
+                                          to merge small amounts
+          -29124 TOO_MANY_OUTPUTS         build: the request has more
+                                          outputs, its change included,
+                                          than one transaction carries
+                                          (data: {"count", "limit"}; limit
+                                          is 16, so at most 15 recipients)
+                                          — split the recipients across
+                                          sends. Refused at the request,
+                                          before selection
+          -29125 INPUT_NOT_IN_TREE        build: the wallet's membership data
+                                          does not hold an output the send
+                                          spends (data: {"input"}, its
+                                          position) — refresh and build
+                                          again
+          -29126 INPUT_UNSPENDABLE        build: an output the send would
+                                          spend was received but its leaf
+                                          does not open to this wallet's
+                                          keys, so it can never be spent
+                                          (data: {"input"}). The scan
+                                          should have counted it as
+                                          unspendable already — report it
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: the
                                           daemon did not answer — check it

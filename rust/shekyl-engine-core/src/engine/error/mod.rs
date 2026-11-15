@@ -75,7 +75,7 @@ pub use lifecycle::StakeSelfCertFailure;
 pub use lifecycle::{ChangePasswordError, OpenError, PersistenceError};
 pub(crate) use refresh::LedgerError;
 pub use refresh::{CurveTreeIngestFault, FinalityBreach, FinalityStop, RefreshError};
-pub use send::{PendingTxError, SendError, TxError};
+pub use send::{PendingTxError, SendError};
 pub use submit::{
     AmbiguousErrorKind, CenRowName, OutputSelectorError, RetryableRejectCause, SignerError,
     SubmitError, TerminalErrorKind,

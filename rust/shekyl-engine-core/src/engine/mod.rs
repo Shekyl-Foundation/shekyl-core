@@ -450,7 +450,7 @@ pub use diagnostics::{
 };
 pub use error::{
     ChangePasswordError, CurveTreeIngestFault, IoError, KeyError, OpenError, PendingTxError,
-    PersistenceError, RefreshError, SendError, SubmitError, TxError,
+    PersistenceError, RefreshError, SendError, SubmitError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 // `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public

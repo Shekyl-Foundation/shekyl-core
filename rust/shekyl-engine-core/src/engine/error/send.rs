@@ -5,6 +5,7 @@
 
 //! Send / build / tx error vocabulary.
 
+use shekyl_tx_builder::SignFault;
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::engine::pending::ReservationId;
@@ -45,11 +46,14 @@ pub enum SendError {
         reason: &'static str,
     },
 
-    /// Tx-builder layer failed: range proofs, FCMP++ membership proofs,
-    /// hybrid PQC signatures, or assembly. Carries [`TxError`] for
-    /// upstream detail.
-    #[error("transaction construction failure: {0}")]
-    Tx(#[from] TxError),
+    /// The transaction builder refused or failed the signing pass. The
+    /// fault keeps the builder's variant by identity, bounded
+    /// ([`SignFault`]): four are the user's to act on (too many inputs or
+    /// outputs, an input its tree path does not hold, an input that is
+    /// received but unspendable), and every other names the internal
+    /// invariant that failed.
+    #[error("signing failed: {0}")]
+    Sign(SignFault),
 
     /// Daemon-side failure during build (typically: `get_fee_estimates`
     /// or output-spend-status RPC) or submit. Carries [`IoError`] for
@@ -70,13 +74,15 @@ pub enum SendError {
     #[error("the wallet's signer is unavailable")]
     SignerUnavailable,
 
-    /// The signer tried and a downstream failure stopped it (a device
-    /// error, a remote actor disconnecting). `reason` is fixed at the call
-    /// site.
-    #[error("the signer failed: {reason}")]
+    /// The wallet's own signer hit an internal fault outside the builder:
+    /// its state did not hold what signing needs (a key image, an output
+    /// handle, a source ciphertext that decapsulates), or encoding the
+    /// signed transaction failed. A bug, never a state the request put the
+    /// wallet in; `fault` names which, one keyword.
+    #[error("the signer failed: {fault}")]
     SignerFailed {
-        /// Compile-time-fixed description of the downstream failure.
-        reason: &'static str,
+        /// The fault, one keyword from a closed set.
+        fault: &'static str,
     },
 
     /// A precondition the build relies on did not hold: wallet state
@@ -304,48 +310,4 @@ pub enum PendingTxError {
     /// retry submit or discard explicitly.
     #[error("daemon submit failure: {0}")]
     Io(#[from] IoError),
-}
-
-// --- Tx ---------------------------------------------------------------------
-
-/// Failures from the transaction-construction layer
-/// (`shekyl-tx-builder`) and from the wallet's pre-build sanity
-/// checks against daemon-supplied fee estimates.
-#[derive(Debug, thiserror::Error)]
-pub enum TxError {
-    /// Range-proof construction failed (likely indicates a bug in the
-    /// builder or a corrupt input). The variant is named separately
-    /// from the catch-all so audit can distinguish proof-system
-    /// failures from input-selection failures.
-    #[error("range proof construction failed: {detail}")]
-    RangeProof {
-        /// Human-readable detail named at the call site.
-        detail: &'static str,
-    },
-
-    /// FCMP++ membership-proof construction failed. Same audit-distinct
-    /// rationale as [`Self::RangeProof`].
-    #[error("FCMP++ membership proof construction failed: {detail}")]
-    Membership {
-        /// Human-readable detail named at the call site.
-        detail: &'static str,
-    },
-
-    /// Hybrid PQC signature production failed (Ed25519 path or ML-DSA-65
-    /// path). Same audit-distinct rationale.
-    #[error("hybrid PQC signature failed: {detail}")]
-    Signature {
-        /// Human-readable detail named at the call site.
-        detail: &'static str,
-    },
-
-    /// Builder-level assembly produced a transaction that fails
-    /// internal consistency checks (sums, key-image uniqueness, etc.).
-    /// Should be unreachable in practice; surfaced as a typed error so
-    /// it cannot silently land on the wire.
-    #[error("transaction failed internal consistency check: {detail}")]
-    InternalConsistency {
-        /// Human-readable detail named at the call site.
-        detail: &'static str,
-    },
 }

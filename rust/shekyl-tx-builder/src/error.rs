@@ -163,3 +163,138 @@ pub enum TxBuilderError {
     #[error("construct-side CT balance self-check failed: {0}")]
     BalanceSelfCheck(#[from] shekyl_ct_balance::CtBalanceError),
 }
+
+/// What a [`TxBuilderError`] means to a wallet, bounded: the variant's
+/// identity and its counts or input position, never the inner text a
+/// crypto variant carries (which a caller logs locally). `Copy`, so it
+/// crosses an actor boundary and reaches the wire as it is.
+///
+/// Four variants are the user's to act on; every other is an internal
+/// invariant the build path should have made unreachable, named by
+/// [`Self::keyword`] so a report says which one failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SignFault {
+    /// More inputs than one transaction may spend ([`MAX_INPUTS`]).
+    #[error("{count} inputs exceed the limit of {MAX_INPUTS} per transaction")]
+    TooManyInputs {
+        /// How many inputs the build carried.
+        count: usize,
+    },
+    /// More outputs than one transaction may carry ([`MAX_OUTPUTS`],
+    /// the change output included).
+    #[error("{count} outputs exceed the limit of {MAX_OUTPUTS} per transaction")]
+    TooManyOutputs {
+        /// How many outputs the build carried, change included.
+        count: usize,
+    },
+    /// An input's assembled tree path does not hold the output it spends.
+    #[error("input {input}: its tree path does not hold the output it spends")]
+    SpentOutputNotInLeafChunk {
+        /// The input's position in the transaction.
+        input: usize,
+    },
+    /// An input's leaf on chain does not open to this wallet's keys: the
+    /// output was received but can never be spent.
+    #[error("input {input}: received but unspendable (its leaf is not this wallet's)")]
+    PqcLeafMismatch {
+        /// The input's position in the transaction.
+        input: usize,
+    },
+    /// An internal invariant failed; [`InternalSignFault`] names which.
+    #[error("internal signing fault: {}", .0.keyword())]
+    Internal(InternalSignFault),
+}
+
+/// The [`TxBuilderError`] variants a build that passed the wallet's own
+/// checks cannot reach: each is a bug, named and nothing more.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InternalSignFault {
+    NoInputs,
+    NoOutputs,
+    ZeroInputAmount,
+    ZeroOutputAmount,
+    InputAmountOverflow,
+    OutputAmountOverflow,
+    InsufficientFunds,
+    EmptyLeafChunk,
+    PqcLeafDerivation,
+    LeafChunkTooLarge,
+    ZeroTreeDepth,
+    TreeTooShallow,
+    TreeDepthTooLarge,
+    BranchLayerMismatch,
+    InvalidCombinedSsLength,
+    BulletproofError,
+    FcmpProveError,
+    PqcSignError,
+    WireError,
+    BalanceSelfCheck,
+}
+
+impl InternalSignFault {
+    /// The variant's name as one keyword, the closed set a report and the
+    /// wire carry (`data.fault` on the wallet RPC's `-29119`).
+    #[must_use]
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::NoInputs => "no-inputs",
+            Self::NoOutputs => "no-outputs",
+            Self::ZeroInputAmount => "zero-input-amount",
+            Self::ZeroOutputAmount => "zero-output-amount",
+            Self::InputAmountOverflow => "input-amount-overflow",
+            Self::OutputAmountOverflow => "output-amount-overflow",
+            Self::InsufficientFunds => "insufficient-funds",
+            Self::EmptyLeafChunk => "empty-leaf-chunk",
+            Self::PqcLeafDerivation => "pqc-leaf-derivation",
+            Self::LeafChunkTooLarge => "leaf-chunk-too-large",
+            Self::ZeroTreeDepth => "zero-tree-depth",
+            Self::TreeTooShallow => "tree-too-shallow",
+            Self::TreeDepthTooLarge => "tree-depth-too-large",
+            Self::BranchLayerMismatch => "branch-layer-mismatch",
+            Self::InvalidCombinedSsLength => "invalid-combined-ss-length",
+            Self::BulletproofError => "bulletproof",
+            Self::FcmpProveError => "fcmp-prove",
+            Self::PqcSignError => "pqc-sign",
+            Self::WireError => "wire",
+            Self::BalanceSelfCheck => "balance-self-check",
+        }
+    }
+}
+
+impl TxBuilderError {
+    /// This error's [`SignFault`]: its identity, bounded. Exhaustive, so a
+    /// new variant decides here whether the user can act on it.
+    #[must_use]
+    pub const fn fault(&self) -> SignFault {
+        use InternalSignFault as I;
+        let internal = match self {
+            Self::TooManyInputs(count) => return SignFault::TooManyInputs { count: *count },
+            Self::TooManyOutputs(count) => return SignFault::TooManyOutputs { count: *count },
+            Self::SpentOutputNotInLeafChunk { index } => {
+                return SignFault::SpentOutputNotInLeafChunk { input: *index }
+            }
+            Self::PqcLeafMismatch { index } => return SignFault::PqcLeafMismatch { input: *index },
+            Self::NoInputs => I::NoInputs,
+            Self::NoOutputs => I::NoOutputs,
+            Self::ZeroInputAmount { .. } => I::ZeroInputAmount,
+            Self::ZeroOutputAmount { .. } => I::ZeroOutputAmount,
+            Self::InputAmountOverflow => I::InputAmountOverflow,
+            Self::OutputAmountOverflow => I::OutputAmountOverflow,
+            Self::InsufficientFunds { .. } => I::InsufficientFunds,
+            Self::EmptyLeafChunk { .. } => I::EmptyLeafChunk,
+            Self::PqcLeafDerivation { .. } => I::PqcLeafDerivation,
+            Self::LeafChunkTooLarge { .. } => I::LeafChunkTooLarge,
+            Self::ZeroTreeDepth => I::ZeroTreeDepth,
+            Self::TreeTooShallow { .. } => I::TreeTooShallow,
+            Self::TreeDepthTooLarge(_) => I::TreeDepthTooLarge,
+            Self::BranchLayerMismatch { .. } => I::BranchLayerMismatch,
+            Self::InvalidCombinedSsLength { .. } => I::InvalidCombinedSsLength,
+            Self::BulletproofError(_) => I::BulletproofError,
+            Self::FcmpProveError(_) => I::FcmpProveError,
+            Self::PqcSignError { .. } => I::PqcSignError,
+            Self::WireError(_) => I::WireError,
+            Self::BalanceSelfCheck(_) => I::BalanceSelfCheck,
+        };
+        SignFault::Internal(internal)
+    }
+}
