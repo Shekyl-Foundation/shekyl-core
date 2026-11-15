@@ -119,7 +119,7 @@ disposition verbatim**.
 | **G** | The 300 KB zone and `w_ref = 3 000` were never derived for Shekyl; FL-R13 (floor basis) is open on the same surface. | "Yes, and that punt needs to have some derivation behind it - which is why we stopped to run the sim under the new/current paradigm." | ESR-10's second arm; FOLLOWUPS rows (zone capacity leg; `w_ref`). **Requirement from FL-V12** (`FEE_LADDER_DERIVATION.md` §2, 2026-10-16): the served rate is whole atomic units per byte, and where `F` is small that resolution acts as an output quantizer — 18 of `--fee-ladder`'s 600 feedback cells toggle one floor unit, worst 833 bp against FL-E1's 50 bp bar. Whatever basis G derives states the served rate's resolution such that one unit of the rate stays inside that bar across the reachable state space. | EUP-2, EUP-5 |
 | **H** | The challenge doctrine's egress (~80× storage, L19i) breaches the budget in calibrated cells; the two were ruled in different rounds. | "Yes, they need to be reconciled." | Egress into the population model. | EUP-3, EUP-5 |
 | **I** | The bond's magnitude has no derivation; F-G found it the binding burden. | "Yes, which is why we need to re-sim it. Or sim it the first time, since it was not part of the original design, or at least not part of the design that was fully assessed." | First-time sim of the bond. | EUP-3, EUP-5 |
-| **J** | Design goal 5 and the release multiplier are intact. | "Yes, I think the 720-block operand has been tested in a number of ways (check this) and is actually more derived than it looks. However, I think we are still calling it provisional because it has NOT been stress tested." | Checked: FL-R24 ruled the operand's *form* (the exact SMA) from FL-E1–E3; window-length arms were run in round 2b and recorded "not selected, not read for selection". The form is derived, the length is provisional, and no stress test of the length has run. ESR-4 put the window into the fold, so step response, boom/bust and a stuffer working the window's edge are now runnable; they are written into EUP-5 as their own measurement (§4.2). | EUP-5 |
+| **J** | Design goal 5 and the release multiplier are intact. | "Yes, I think the 720-block operand has been tested in a number of ways (check this) and is actually more derived than it looks. However, I think we are still calling it provisional because it has NOT been stress tested." | Checked: FL-R24 ruled the operand's *form* (the exact SMA) from FL-E1–E3; window-length arms were run in round 2b and recorded "not selected, not read for selection". The form is derived, the length is provisional, and no stress test of the length has run. ESR-4 put the window into the fold, so step response, boom/bust and a stuffer working the window's edge are now runnable; they are written into EUP-5 as their own measurement (§4.2). Reopened (Rick, 2026-11-15) to cover the volume signal's form, crossed with the zone: §4.3. | EUP-5 |
 
 **One conflict, resolved by the later ruling.** The relayed program lists
 "dead schedule" under ESR-8. Rick ruled on 2026-10-03 that the stake schedule
@@ -419,6 +419,109 @@ ratified before the run, for the reason §4 gives.
 
 Planning text only: the measurement is EUP-5's to run, and no code
 changes with this section.
+
+### 4.3 The volume signal and the zone, one grid (Rick, 2026-11-15)
+
+**Rick's.** The design load stays 30 2-in/2-out spends a block until the
+sim derives otherwise, he expects the zone near 90 of them, redoing the PB
+rows, fixtures, Chain P and the fee derivation when the number changes is
+an accepted cost, and the zone moves in `config/consensus_constants.json`
+only after his ruling and not before alpha.12
+(`DESIGN_LOAD_RULING_2026-11-13.md`). On 2026-11-15: J (§3) reopens to
+cover the volume signal's form; the sim tests three of its arms, the
+window's median, the median with the floor enforced on a miner's own
+bodies, and `M_r` decoupled from volume; and block capacity must
+increase, to a number not yet derived, which is factored in from the
+start.
+
+**Why one grid.** The signal feeds emission, the burn and `C`, and so the
+fee: a zone graded on today's signal would be graded on one being
+replaced. A minority's result does not depend on the zone, but a cartel's,
+every miner's and the honest step response all depend on the free room a
+larger zone creates. On today's signal the inherited arm is pinned at the
+`M_r` floor by capacity and the re-derived arm at its cap by stuffing
+([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.32.1): more capacity removes the first pin and opens the second, and a
+median removes the second but not the first. The grid crosses the four
+signal arms with the zone, both `w_ref` levels, the stuffers and two start
+years, from one build (§5.33 there).
+
+**Where it stands.** The zone is 300,000 B, inherited (§3, item G). A
+2-in/2-out spend weighs 21,184 B, so a genesis block holds 14 such spends
+penalty-free and 28 at the hard limit, where the penalty takes the whole
+reward. `TX_WEIGHT_LIMIT` is derived from the zone
+(`MIN_BLOCK_WEIGHT / 2 − COINBASE_RESERVE`, `shekyl-wire`). The coinbase
+reserve is not: it is the coinbase grammar's maximum. ESR-10's re-derived
+arm (`esr10::rederived_pair`) declares `w_ref′` = 12,595 B, the ordinary
+1-in/2-out at genesis depth, and `zone′ = 100 · w_ref′` = 1,259,500 B,
+about 59 2-in/2-out spends; the factor 100 is the inherited ratio. Ninety
+spends are 1,906,560 B, plus `COINBASE_RESERVE`.
+
+Everything below that Rick has not ruled is **PROPOSED**, for the reason
+§4 gives.
+
+1. **The basis.** The zone is N reference transactions, the 2-in/2-out
+   spend, times its weight at genesis depth, plus `COINBASE_RESERVE`.
+   `w_ref` is run at two levels each held fixed across N, the shipped
+   3 000 and `w_ref′`, because the fee goes as zone/`w_ref`: tying `w_ref`
+   to N would fix the fill cost and hide the trade the grid measures
+   (§5.33).
+2. **S is derived from the zone.** The surge factor's derivation is
+   `surge_max = (f·T − RandomX) / (zone fill)`, with `f·T` = 40 s and the
+   zone fill the worst cold verify of a block twice the zone on the floor
+   device (`shekyl-verify-cost`, `benches/block_connect_verify.rs`;
+   `BENCHMARK_ALIGNMENT.md`, the S row). At today's 600 kB fill it reads
+   6.42, 5.61 and 3.93 at tree depths 2, 7 and 24 (the consensus maximum),
+   and 5.75, 5.10 and 3.67 on the conservative bracket; S = 3 is the
+   integer below 3.67, an Assumption until BA-T10. The same composition
+   gives the largest zone each S admits: at depth 24, about 1.18 MB at
+   S = 1 (1.10 MB conservative), about 56 2-in/2-out spends, and about
+   0.39 MB at S = 3. The composition uses the worst-verifying shape per
+   byte, not the 2-in/2-out spend. Verify cost is not in the fold, so the
+   sweep reads it from the ledger and prints, per arm and depth tier, the
+   largest S its zone admits.
+3. **Where S and the long-term window enter.** The write, chain-growth and
+   verify columns always cross S and the 100,000-block window: above the
+   zone, they set how fast the worst sustained block grows. The economic
+   columns cross them only where the fold shows an interaction, and the
+   sweep says whether it does. A6's flood ceiling is S times the zone, so
+   the GF-7 slew (§12.4.1 of `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`)
+   grows with the zone as well as with S, and the band (EUP-5 F) is chosen
+   on the zone G sets.
+4. **The operational columns** (**PROPOSED**; each graded only once Rick
+   ratifies it, at the worst sustained block an attacker can hold, and with
+   no threshold its source does not give):
+   - **Writes, PB-R2** (≤ 1 GB a day, `DAEMON_REDB_STORE.md` §1.3a.4).
+     The row is defined at the design load and is graded there. Beside
+     it the sweep prints the daily bytes at each scenario's steady state
+     and under an attacker keeping the zone full; grading the row at
+     either point changes PB-R2 and is Rick's to rule (§1.3a.6, ruling 3).
+     Store overhead is the DRS lane's measured write amplification, or a
+     stated estimate where none is measured.
+   - **Chain growth a year** at each scenario's steady state, against the
+     pruning horizon and the archival band's purse and bond floor
+     (EUP-3's coupling half).
+   - **Verify time on the floor device**, read from the measurement
+     ledger's rows on `dev` at the build's pin: the steady-state block
+     against the 120 s block time with PB-D3's 1.5× catch-up margin, and
+     PB-D1's adversarial block at the arm's limit.
+   - **Propagation, through compact relay** (`shekyl-mempool`
+     `relay.rs`, `shekyl-peer-policy` `block_ingest.rs`): the
+     compact-block delay at a stated rate of missing transactions, the
+     floor device's daily relay bytes over Tor, and the full-byte
+     catch-up under PB-D3. The throughput model and its source are
+     stated; this is the weakest-sourced column.
+5. **What the grid settles.** J: which signal survives a minority and a
+   cartel at every zone. G: its economic columns. The operational columns
+   take the grid's per-cell block sizes as their input and need no new
+   run. Instruments print measures, never verdicts; Rick rules on the
+   zone, and setting it in consensus then re-derives the fee ladder and the
+   floor (FL-R13, with FL-V12's resolution bar), re-states the PB rows,
+   re-mines the corpora and fixtures, and waits on the shard-fill freeze's
+   ruling.
+
+Planning text only: the grid is EUP-5's measurement, and no consensus
+value changes with this section.
 
 ## 5. What this document does not do
 

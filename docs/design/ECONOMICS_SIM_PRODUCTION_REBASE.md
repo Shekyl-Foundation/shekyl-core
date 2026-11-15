@@ -3819,6 +3819,154 @@ Only the --eup4 fixtures moved: the every-miner section, the review's
 blip rows and EI-7's header, and EI-1's notes where a scenario matches
 the baseline.
 
+### 5.33 The volume signal crossed with the zone (J × G), predicted before it is built (2026-11-15)
+
+Written against `dev` at `c1a1e223e`, before any code. Rick's rulings of
+2026-11-15: J reopens to cover the volume signal's form; the sim tests
+three of its arms; block capacity must increase, to a number not yet
+derived, and that is factored in from the start
+([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §4.3). The grid
+crosses the signal with the zone from one build, because each moves the
+other's result: on today's signal the inherited arm is pinned at the
+`M_r` floor by capacity and the re-derived arm at the cap by stuffing
+(§5.32.1). Nothing below is a result. The family is `JG-1`…`JG-5`.
+
+**The grid.**
+
+- **Signal**, four arms.
+  - **SMA (production):** the window's transaction sum, the default.
+  - **Median (arm 1):** the lower middle of the window's per-block counts,
+    passed as `TxVolume::window(median · n, n)`. Release, burn and `C` all
+    read it.
+  - **Median, floor enforced (arm 2):** the median with the stuffer's own
+    bodies paying the relay floor. It is the median arm crossed with
+    enforced terms, not a third operand; the other arms run unenforced.
+  - **Decoupled (arm 5):** `release_min = release_max = 1 000 000`.
+    `M_r` is 1.0 whatever the window holds. The burn and `C` still read
+    the SMA, so a stuffer still raises the burn, which costs it.
+- **Zone**, as N reference transactions times the reference weight, plus
+  `COINBASE_RESERVE`. The reference transaction is the 2-in/2-out spend
+  that Rick's target and the PB budgets count; its weight is
+  `predict_weight` at genesis depth and the genesis Standard fee, about
+  21 184 B. N runs 14, 20, 25, 30, 35, 45, 60, 75, 90, 105, 120 and 150,
+  beside the inherited 300 000 B (N ≈ 14.1) and the re-derived
+  1 259 500 B (N ≈ 59.4). Rick's target is N = 90.
+- **`w_ref`**, two levels, each held fixed across N: the shipped 3 000,
+  and `w_ref′` = 12 595 B, the ordinary 1-in/2-out at genesis depth that
+  ESR-10's re-derived arm declares. N counts 2-in/2-out spends and
+  `w_ref′` is a 1-in/2-out, so N spends are about 1.68 N `w_ref′`. This
+  is the basis choice the zone brief asked for, made once: the fee goes
+  as zone/`w_ref`, so both levels are run rather than tying `w_ref` to N.
+- **Stuffer**, at 10, 20, 33 and 51 % of the hashrate and every miner, from
+  the start of year 5 and of year 30, for one window, uniform timing.
+- **Not crossed:** the edge timing (it matched uniform in every cell of
+  §5.32.1, because the free room binds) and the step schedules beyond
+  the declared 50 → 200 → 50.
+
+**Decided before the build.**
+
+- **A share is a proportion of blocks, spread evenly.** Block `k` of a
+  campaign is the stuffer's when `⌊(k+1)·s/100⌋ > ⌊k·s/100⌋`. The stride
+  rule it replaces (`round(100/s)`) cannot express 51 %: it gives every
+  second block, exactly half, and a lower-middle median over 720 blocks
+  does not move at half. The rule changes for every share, so the 33 %
+  rows of the `--eup4` fixtures move (33 of every 100 blocks against
+  every third), and those fixtures are regenerated here.
+- **The lightest valid shape is the ordinary 1-in/2-out.** CEN-I1 refuses
+  a non-coinbase transaction with fewer than two outputs
+  (`shekyl-chain-rules` `rules/tx_inputs.rs`), and `InputCount` has a
+  floor of one. The stuffer already lists that shape; the only weight
+  left to it is the fee's varint, and the unenforced stuffer pays no fee.
+  The rows at the lightest shape are the rows at the ordinary one.
+- **The design load is a count.** 30 spends are 635 520 B; the baseline's
+  50 ordinary transactions are about 629 750 B. "The year blocks carry
+  the design load" is EI-4's year to carry the baseline's 50.
+- **Not re-derived, and stated.** `TX_WEIGHT_LIMIT` is built from the
+  shipped zone, but the sim does not read it, and it caps one
+  transaction's weight, not a count. `COINBASE_RESERVE` does not depend
+  on the zone. The pool cap follows the zone at run time
+  (`Limits::of_block_limit`).
+- **A minority cannot move the median here, by construction.** The
+  honest chain carries the same count in every block, so a stuffer with
+  under half the blocks leaves the lower middle where it was. Whether
+  honest traffic should vary block to block is Rick's call, not built
+  here.
+
+**Per cell:** `M_r` at rest, its mean and its longest run above 1.0; the
+stuffer's net gain against no stuffing; the burn and `C` (production's
+`fee_correction`) at rest. **Per signal, zone and `w_ref`:** the honest step
+response; the year-1 Standard fee against the ceiling; the cost of filling
+the zone for a day at the year-1 relay floor; the year blocks carry the
+design load.
+
+**JG-1. The largest share that moves `M_r`, per signal (blind).**
+
+- **SMA:** every share, from 10 %, wherever the block has free room
+  (§5.32.1).
+- **Median:** only 51 % and every miner. At 51 % the stuffed blocks are
+  over half the window, so the lower middle is a stuffed count, and `M_r`
+  moves as far as it does when every miner stuffs. The median is a cliff
+  at half, not a ramp.
+- **Decoupled:** none. `M_r` is 1.0.
+
+**JG-2. The net gain at 20 % (blind but for the SMA, restated).**
+
+- **SMA:** 14 816 SKL on the re-derived arm from year 5 (§5.32.1), and
+  more as N grows, since the free room grows with the zone.
+- **Median:** about zero. The median does not move, and the unenforced
+  bodies cost nothing.
+- **Median, floor enforced:** a small loss: the burned share of the
+  floor fees it paid (under 1 % of the SMA's gain).
+- **Decoupled:** a small loss. `M_r` is fixed, and the burn reads the
+  stuffed SMA, so the miner keeps less of its honest fees.
+
+**JG-3. The year-1 Standard fee by zone (blind, first order).** With the
+median at the zone, the Standard fee goes as `w_ref`·`M_r`/M². From the
+inherited cell (1.1888 SKL at M ≈ 315 KB, `M_r` 0.8, §5.29.1):
+`fee(N) ≈ 1.1888 × (315 000/M)² × (w_ref/3 000) × (M_r/0.8)`, with M the
+zone, and `M_r` 1.0 once the zone holds the baseline's demand (N ≥ 30).
+Against the 0.4963 SKL ceiling:
+
+| N | Zone (B) | Fee at `w_ref` 3 000 | Fee at `w_ref′` |
+| --- | --- | --- | --- |
+| 14 | 297 962 | 1.19 (2.40×) | 4.99 |
+| 30 | 636 906 | 0.36 | 1.53 |
+| 60 | 1 272 426 | 0.091 | 0.38 |
+| 90 | 1 907 946 | 0.041 | 0.17 |
+| 150 | 3 178 986 | 0.015 | 0.061 |
+
+At N = 14 the median is the recorded 315 KB, above the zone, so the row
+is the recorded fee. The fee crosses under the ceiling between N = 20
+and 25 (about 23) at `w_ref` 3 000, and near N = 48 at `w_ref′`.
+
+**JG-4. The cost of filling the zone for a day (blind, first order).**
+The floor is `F = R·C·w_ref/M²`, so a day's fill, `720 × zone × F`, goes
+as `w_ref·M_r`/zone. From the inherited cell (about 5 100 SKL a day):
+about 3 000 at N = 30, 1 000 at N = 90 and 600 at N = 150, at `w_ref`
+3 000; times 4.2 at `w_ref′`. A larger zone makes junk cheaper as 1/N,
+the fee as 1/N²: the fee bounds N below and the fill cost bounds it
+above.
+
+**JG-5. The honest step and the design load (blind).**
+
+- **Step, SMA:** as §5.32.1 where blocks have room (`M_r` to its cap in
+  about 250 blocks); flat at the floor where they do not (N < 30).
+- **Step, median:** a step to 200 moves the median only once over half
+  the window carries it, so `M_r` jumps at about 360 blocks, in steps of
+  1/50 of `M_r` per transaction. The median ignores a step shorter than
+  half a window: a signal that resists stuffing also resists short real
+  demand.
+- **Step, decoupled:** `M_r` does not move.
+- **Design load:** year 1 for every N ≥ 30, by arithmetic; below 30 the
+  year the ratchet comes (year 19 at 300 KB on the SMA), earlier as N
+  rises.
+
+**Cost (blind).** About 1 600 campaign folds of 5 or 30 years and 72
+honest folds of 60 years: about 32 000 fold-years, ten CPU-hours, two
+hours on an eight-core fleet host. The year-30 campaigns dominate. The
+full grid runs on demand; the nightly pins a slice (the shipped zone and
+N = 90, SMA and median, 20 % and 51 %, year 5).
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
