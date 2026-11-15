@@ -243,11 +243,22 @@ ARMED=(
   engine::regtest_e2e::send_durable::a_send_that_cannot_be_saved_is_not_sent
   # The wallet lane's PR 2 (A17, A16): the balance's legs and the signer's
   # change through real shekyl-wallet-rpc processes, and parked money at
-  # engine level.
+  # engine level. Each was observed red 2026-11-15 against a build with its
+  # defect put back, and green on a fleet host with release binaries.
+  # Red with the pre-A17 balance rule: "spendable at a tip a build refused
+  # -29112" (50 SKL spendable at a wait of 7). Green 161 s.
   engine::regtest_e2e::balance::the_balance_says_spendable_exactly_when_a_build_can_spend
+  # Red with an in-flight send's change dropped from incoming: "incoming
+  # holds the change". Green 182 s.
   engine::regtest_e2e::balance::a_send_moves_its_input_to_outgoing_and_its_change_to_incoming
+  # Red with outgoing summed over every journal row: "outgoing goes to
+  # zero". Green 158 s.
   engine::regtest_e2e::balance::a_refused_send_returns_its_input_to_spendable
+  # Red with the pre-fix fee choice: -29119, fault balance-self-check (the
+  # TRC-1 wallet's intermittent failure). Green 167 s.
   engine::regtest_e2e::balance::a_change_below_dust_balances
+  # Red without the resolver's parked arm: refused InsufficientFunds,
+  # expected OutputsParked. Green 129 s.
   engine::regtest_e2e::balance::parked_money_stays_in_the_balance_and_out_of_a_send
 )
 

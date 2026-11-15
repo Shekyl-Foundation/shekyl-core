@@ -158,6 +158,11 @@ fn submit(server: &WalletServer, built: &Value) -> Result<Value, RpcRefusal> {
 /// block, so it builds 0–2 blocks behind the daemon at the edge, as the
 /// TRC-1 wallet did. It decides by its own synced tip, so it is refused
 /// `-29112` or builds; nothing reaches the signer to fail there.
+///
+/// Observed red 2026-11-15 against a wallet server rebuilt with the pre-A17
+/// balance rule (spendable from the eligible height): "spendable at a tip a
+/// build refused -29112", the balance at 50 SKL spendable and the build's
+/// wait at 7.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_WALLET_RPC_BIN; spawns a live daemon"]
 async fn the_balance_says_spendable_exactly_when_a_build_can_spend() {
@@ -241,6 +246,10 @@ async fn the_balance_says_spendable_exactly_when_a_build_can_spend() {
 /// the balance drops by exactly the amount plus the fee. Mined and
 /// refreshed, outgoing is zero and the change is a received output with a
 /// wait; matured, it is spendable.
+///
+/// Observed red 2026-11-15 against a wallet server rebuilt to drop an
+/// in-flight send's change from incoming: "incoming holds the change"
+/// (0 where 36271315000 was due).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_WALLET_RPC_BIN; spawns a live daemon"]
 async fn a_send_moves_its_input_to_outgoing_and_its_change_to_incoming() {
@@ -301,6 +310,10 @@ async fn a_send_moves_its_input_to_outgoing_and_its_change_to_incoming() {
 /// submits a send of the same output and the daemon refuses it as a double
 /// spend (`-29106`). The refusal returns the input to spendable and
 /// outgoing to zero.
+///
+/// Observed red 2026-11-15 against a wallet server rebuilt to sum outgoing
+/// over every journal row, in flight or not: "outgoing goes to zero"
+/// (17895351666 after the refusal).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_WALLET_RPC_BIN; spawns a live daemon"]
 async fn a_refused_send_returns_its_input_to_spendable() {
@@ -343,6 +356,10 @@ async fn a_refused_send_returns_its_input_to_spendable() {
 /// the fix the signer took the no-change fee, left the rest unaccounted,
 /// and its balance self-check refused the transaction (the TRC-1 wallet's
 /// intermittent `-29119`).
+///
+/// Observed red 2026-11-15 against a wallet server rebuilt with the
+/// pre-fix fee choice: the build was refused `-29119` with `data.fault`
+/// `balance-self-check`, the TRC-1 wallet's failure under its own name.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_WALLET_RPC_BIN; spawns a live daemon"]
 async fn a_change_below_dust_balances() {
@@ -383,6 +400,10 @@ async fn a_change_below_dust_balances() {
 /// spendable by its amount; a send that only the parked money would cover
 /// is refused `OutputsParked`, naming the parked amount, never as plain
 /// insufficient funds.
+///
+/// Observed red 2026-11-15 against an engine without the resolver's
+/// parked arm: "refused Err(InsufficientFunds { .. }), expected
+/// OutputsParked".
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires SHEKYLD_BIN; spawns a live daemon"]
 async fn parked_money_stays_in_the_balance_and_out_of_a_send() {
