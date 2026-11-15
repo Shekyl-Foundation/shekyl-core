@@ -214,8 +214,11 @@ Duplicate recipients are forbidden.
 
 **Resolution:** a member resolves every recipient on its group's network
 before it signs. A single-signer address must decode as a payable
-address on that network: the full form, not the classical display form.
-A group's payload must parse and name that network. A recipient that
+address on that network: the full form, not the classical display form,
+written as the one string that address encodes to (R-22: one payee has
+one encoding, so one intent hash; a member re-encodes the decoded address
+and compares, whatever the address decoder admits). A group's payload
+must parse and name that network. A recipient that
 does not is refused by its index.
 
 ### 2.4 Intent Hash

@@ -210,6 +210,11 @@ impl IntentPayee {
     /// This payee on `network`: the address decoded, or the group's
     /// payload parsed.
     ///
+    /// A single-signer address must be the string its address encodes to
+    /// (R-22), so one payee has one encoding and one intent hash. The
+    /// address decoder refuses every other string too; this check is the
+    /// intent's own and does not lean on it.
+    ///
     /// # Errors
     ///
     /// The [`PayeeError`] that holds.
@@ -218,10 +223,15 @@ impl IntentPayee {
             Self::Single {
                 address,
                 label_plaintext,
-            } => Ok(ResolvedPayee::Single {
-                address: PaymentAddress::decode(address, network).map_err(PayeeError::Address)?,
-                label_plaintext: *label_plaintext,
-            }),
+            } => {
+                let decoded =
+                    PaymentAddress::decode(address, network).map_err(PayeeError::Address)?;
+                written_as_encoded(&decoded, address)?;
+                Ok(ResolvedPayee::Single {
+                    address: decoded,
+                    label_plaintext: *label_plaintext,
+                })
+            }
             Self::Group { address } => {
                 let payload = MultisigAddressPayload::from_canonical_bytes(address)
                     .map_err(PayeeError::GroupAddress)?;
@@ -231,6 +241,15 @@ impl IntentPayee {
                 Ok(ResolvedPayee::Group(payload))
             }
         }
+    }
+}
+
+/// R-22: `written` is the one string `decoded` encodes to.
+fn written_as_encoded(decoded: &PaymentAddress, written: &str) -> Result<(), PayeeError> {
+    if decoded.as_address().encode().map_err(PayeeError::Address)? == written {
+        Ok(())
+    } else {
+        Err(PayeeError::NotCanonical)
     }
 }
 
@@ -253,6 +272,9 @@ pub enum PayeeError {
     /// The group is on another network.
     #[error("the group is on another network")]
     GroupNetwork,
+    /// The address decodes, but is not the string it encodes to.
+    #[error("the address is not written in its one canonical form")]
+    NotCanonical,
 }
 
 /// A payee resolved on the group's network: what its output is built to.
@@ -886,6 +908,19 @@ mod tests {
         assert!(single("a", 9) < single("b", 0));
         assert!(single("a", 0) < single("a", 1));
         assert!(group_payee(&[1]) < group_payee(&[1, 0]));
+    }
+
+    /// R-22: another spelling of an address is not the same payee. The
+    /// check compares strings itself, whatever the address decoder admits.
+    #[test]
+    fn a_payee_is_the_string_its_address_encodes_to() {
+        let written = single_address(Network::Testnet);
+        let decoded = PaymentAddress::decode(&written, Network::Testnet).unwrap();
+        assert!(written_as_encoded(&decoded, &written).is_ok());
+        assert!(matches!(
+            written_as_encoded(&decoded, &written.to_uppercase()),
+            Err(PayeeError::NotCanonical)
+        ));
     }
 
     /// Each payee resolves on its own network, and is refused by name on
