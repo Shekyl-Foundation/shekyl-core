@@ -325,7 +325,7 @@ fn assemble_scannable_block(
 
     let tx = Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::ToKey {
                 amount: 0,
                 key_offsets: vec![1],
@@ -368,7 +368,7 @@ fn assemble_scannable_block(
     // test_support).
     let miner_tx = Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(0)],
             outputs: vec![],
             extra: vec![],

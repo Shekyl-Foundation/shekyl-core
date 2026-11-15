@@ -12,8 +12,8 @@ A RandomX cache is 256 MiB. Today a cache stays resident until someone remembers
 
 1. **A2 (alpha.11).** The previous epoch's cache stayed resident after the window stopped naming it.
 2. **#1301.** Its release never ran on a live node, because a published record of the slots had drifted from the slots. #1338 fixed that.
-3. **The fork seed (on `dev`).** A branch form prepares a fork's own seed into the second slot (`span.rs:993`, `:1149`). No window names that seed, so nothing releases it before the next epoch's pin.
-4. **Chain sync's branch cache (on `dev`, HA-F1).** The header executor keeps one cache of its own outside the store, and nothing drops it (§3).
+3. **The fork seed (on `dev` until the cutover).** A branch form prepared a fork's own seed into the second slot. No window named that seed, so nothing released it before the next epoch's pin.
+4. **Chain sync's branch cache (on `dev` until the cutover, HA-F1).** The header executor kept one cache of its own outside the store, and nothing dropped it (§3).
 
 Each fix so far made the bookkeeping more careful. This design removes the bookkeeping: one owner holds every cache, and what it holds is computed from what the node needs.
 
@@ -39,6 +39,8 @@ One crate builds, holds and frees a `PreparedCache`: `shekyl-hasher`. Every othe
 The ingest reaches the hasher through one boundary, `Pow` (`shekyl-chain-ingest/src/pow.rs`): `run`, `lend`, `rank`, `wake`, and the seed's readiness. Production plugs in `ProductionPow` over the `Hasher`; a feature test plugs in a fixture that is its own job and holds no cache. The two differ only in the type plugged in.
 
 ## 3. Findings
+
+Recorded 2026-11-10 and 2026-11-11 against `dev` before the cutover. Each reads as it was found, with the paths and lines of that tree; §6 step 3 closed them, and §2 says what runs.
 
 - **HA-F1. Chain sync holds caches the brief's delete list does not name.** The executor derives a branch seed's cache outside the store and keeps it in `Executor::branch` (`executor.rs:54`). The only write to that field is a replacement by another branch seed (`:196–:207`). The ruling it implements says the cache is "dropped when that seed epoch's headers are done" (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 3). The code does not drop it. Initial sync is the branch case, so a node that synced across a seed boundary keeps that cache for the life of the process. Read from the code; not observed on a live node.
 - **HA-F2. The same seed can be built twice.** A fork's headers are proven under the executor's branch cache, then its bodies arrive as alternatives and the ingest prepares the same seed into the transient slot. The two paths share no cache.

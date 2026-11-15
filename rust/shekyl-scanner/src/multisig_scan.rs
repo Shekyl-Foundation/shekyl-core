@@ -12,8 +12,9 @@
 //! comparison: a group output's leaf never commits to the solo per-output
 //! key, which every member could derive.
 
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
+use shekyl_crypto_pq::kem::HybridKemSecretKey;
 use shekyl_crypto_pq::multisig_output::{
     open_multisig_entry, MultisigEntryView, MultisigMemberView, MultisigReceiveError,
 };
@@ -28,8 +29,7 @@ pub struct MultisigMemberScan {
     member_index: u8,
     n_total: u8,
     m_required: u8,
-    member_x25519_sk: Zeroizing<[u8; 32]>,
-    member_ml_kem_dk: Zeroizing<Vec<u8>>,
+    member_kem_secret: HybridKemSecretKey,
     network: [u8; 16],
 }
 
@@ -42,16 +42,14 @@ impl MultisigMemberScan {
         member_index: u8,
         n_total: u8,
         m_required: u8,
-        member_x25519_sk: Zeroizing<[u8; 32]>,
-        member_ml_kem_dk: Zeroizing<Vec<u8>>,
+        member_kem_secret: HybridKemSecretKey,
         network: [u8; 16],
     ) -> Self {
         Self {
             member_index,
             n_total,
             m_required,
-            member_x25519_sk,
-            member_ml_kem_dk,
+            member_kem_secret,
             network,
         }
     }
@@ -85,8 +83,7 @@ impl MultisigMemberScan {
                 member_index: self.member_index,
                 n_total: self.n_total,
                 m_required: self.m_required,
-                member_x25519_sk: &self.member_x25519_sk,
-                member_ml_kem_dk: &self.member_ml_kem_dk,
+                member_kem_secret: &self.member_kem_secret,
                 network: &self.network,
             },
             &MultisigEntryView {
@@ -120,7 +117,6 @@ fn persisted_reason(err: MultisigReceiveError) -> UnspendableReason {
 
 impl Zeroize for MultisigMemberScan {
     fn zeroize(&mut self) {
-        self.member_x25519_sk.zeroize();
-        self.member_ml_kem_dk.zeroize();
+        self.member_kem_secret.zeroize();
     }
 }

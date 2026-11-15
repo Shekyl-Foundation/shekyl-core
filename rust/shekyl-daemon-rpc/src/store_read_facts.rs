@@ -49,7 +49,7 @@ use shekyl_types::{
 };
 use shekyl_wire::{carries_archival_good, Ct, Transaction};
 
-use super::{connecting, count_at, derivation_fault, store_fault, tip_of, StoreFacts};
+use super::{connecting, count_at, derivation_fault, held_draws, store_fault, tip_of, StoreFacts};
 use crate::chain_facts::FactsFault;
 use crate::info_facts::{PoolScope, PoolState};
 use crate::read_facts::{
@@ -381,6 +381,7 @@ impl ChainReadFacts for StoreFacts {
     /// state, read like any other (`SB-Q2`, `PDM-Q10`).
     fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
         let snap = self.snapshot()?;
+        let (tip, _) = tip_of(&snap)?;
         let mut blocks = Vec::with_capacity(heights.len());
         for &height in heights {
             let AtHeight::Recorded(blob) = snap.block_blob(height).map_err(store_fault)? else {
@@ -430,6 +431,7 @@ impl ChainReadFacts for StoreFacts {
                     .map(shekyl_types::archival::BundleReferences::into_inner)
                     .unwrap_or_default(),
                 bundle_bodies,
+                draws: held_draws(&snap, tip, height, self.rules.as_ref())?,
             });
         }
         Ok(BlocksAt {

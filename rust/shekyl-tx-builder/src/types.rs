@@ -136,7 +136,7 @@ pub struct TreeContext {
 /// `shekyl_wire::PqcAuth` requires this value; [`crate::sign_pqc_auths`] and
 /// [`crate::open_spend`] write it, and a placeholder slot hashed in phase 1
 /// carries the same version as the signature that later replaces it.
-pub const PQC_AUTH_VERSION: u8 = 1;
+pub const PQC_AUTH_VERSION: u8 = shekyl_wire::PqcAuth::VERSION;
 
 /// Per-input PQC authentication data (hybrid signature).
 ///

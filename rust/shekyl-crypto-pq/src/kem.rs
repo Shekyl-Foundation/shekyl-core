@@ -15,7 +15,7 @@ use curve25519_dalek::{constants::X25519_BASEPOINT, montgomery::MontgomeryPoint,
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
@@ -31,6 +31,13 @@ pub const ML_KEM_768_CT_LEN: usize = 1088;
 
 /// ML-KEM-768 shared secret size (FIPS 203).
 pub const ML_KEM_768_SS_LEN: usize = 32;
+
+/// X25519 secret scalar size.
+pub const X25519_SECRET_LEN: usize = 32;
+
+/// Canonical size of a [`HybridKemSecretKey`]: the X25519 secret, then the
+/// ML-KEM-768 decapsulation key.
+pub const HYBRID_KEM_SECRET_LEN: usize = X25519_SECRET_LEN + ML_KEM_768_DK_LEN;
 
 /// X25519 component size of a per-output hybrid KEM ciphertext: the
 /// ephemeral public key that plays the "ciphertext" role of the
@@ -112,6 +119,44 @@ pub struct HybridKemPublicKey {
 pub struct HybridKemSecretKey {
     pub x25519: [u8; 32],
     pub ml_kem: Vec<u8>,
+}
+
+impl HybridKemSecretKey {
+    /// Parse the canonical bytes: the X25519 secret, then the ML-KEM-768
+    /// decapsulation key ([`HYBRID_KEM_SECRET_LEN`] bytes). This is the one
+    /// place the layout is read; a caller holding the bytes never splits
+    /// them (rule 36).
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::InvalidKeyMaterial`] for any other length.
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
+        if bytes.len() != HYBRID_KEM_SECRET_LEN {
+            return Err(CryptoError::InvalidKeyMaterial);
+        }
+        let (x25519, ml_kem) = bytes.split_at(X25519_SECRET_LEN);
+        Ok(Self {
+            x25519: x25519.try_into().expect("split at X25519_SECRET_LEN"),
+            ml_kem: ml_kem.to_vec(),
+        })
+    }
+
+    /// The canonical bytes, wiped on drop: the inverse of
+    /// [`Self::from_canonical_bytes`].
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::InvalidKeyMaterial`] when the ML-KEM-768 key is not
+    /// [`ML_KEM_768_DK_LEN`] bytes.
+    pub fn to_canonical_bytes(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        if self.ml_kem.len() != ML_KEM_768_DK_LEN {
+            return Err(CryptoError::InvalidKeyMaterial);
+        }
+        let mut bytes = Zeroizing::new(Vec::with_capacity(HYBRID_KEM_SECRET_LEN));
+        bytes.extend_from_slice(&self.x25519);
+        bytes.extend_from_slice(&self.ml_kem);
+        Ok(bytes)
+    }
 }
 
 impl std::fmt::Debug for HybridKemSecretKey {
@@ -318,6 +363,25 @@ pub(crate) fn combine_shared_secrets(
 
 #[cfg(test)]
 mod tests {
+
+    /// A hybrid KEM secret's canonical bytes round-trip, and only its exact
+    /// length parses.
+    #[test]
+    fn a_hybrid_kem_secret_round_trips_through_its_canonical_bytes() {
+        let (_, secret) = HybridX25519MlKem.keypair_generate().unwrap();
+        let bytes = secret.to_canonical_bytes().unwrap();
+        assert_eq!(bytes.len(), HYBRID_KEM_SECRET_LEN);
+        let parsed = HybridKemSecretKey::from_canonical_bytes(&bytes).unwrap();
+        assert_eq!(parsed.x25519, secret.x25519);
+        assert_eq!(parsed.ml_kem, secret.ml_kem);
+        assert!(HybridKemSecretKey::from_canonical_bytes(&bytes[1..]).is_err());
+        let short = HybridKemSecretKey {
+            x25519: secret.x25519,
+            ml_kem: secret.ml_kem[1..].to_vec(),
+        };
+        assert!(short.to_canonical_bytes().is_err());
+    }
+
     use super::*;
 
     #[test]

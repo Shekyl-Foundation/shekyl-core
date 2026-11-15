@@ -251,7 +251,7 @@ mod tests {
             .unwrap_or_default();
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(0)],
                 outputs,
                 extra,

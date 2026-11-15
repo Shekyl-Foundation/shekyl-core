@@ -208,6 +208,8 @@ it at this pin); its deletion **LANDED 2026-09-15** with Phase 4.
 
 ## 3. Architecture: v1-C → v2-Rust, pre-genesis
 
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
+
 ### 3.1 What changes
 
 Today, for non-genesis blocks the daemon computes
@@ -371,6 +373,8 @@ is a 3c deliverable. Until then the C constants
 (`rx-slow-hash.c:137-138`) are authoritative and unchanged.
 
 ## 6. Phase 3a — FFI export + flag-gated coherent swap
+
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
 
 ### 6.1 Deliverables
 

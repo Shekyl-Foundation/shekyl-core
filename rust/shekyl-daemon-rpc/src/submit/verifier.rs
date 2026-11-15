@@ -88,8 +88,8 @@ use shekyl_archival_retention::{
 use shekyl_bulletproofs::{verify_batch, BatchEntry};
 use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
-use shekyl_crypto_pq::multisig::MULTISIG_KEY_BLOB_MIN;
-use shekyl_crypto_pq::signature::verify_pqc_auth;
+use shekyl_crypto_pq::multisig::{HYBRID_SCHEME_ID_MULTISIG, MULTISIG_KEY_BLOB_MIN};
+use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof, VerifyError};
@@ -105,11 +105,6 @@ use shekyl_wire::transaction::{
 use crate::submit::facts::{EpochClaimStanding, SubmitFacts};
 use crate::submit::phase_a::{ParsedSubmission, SubmitTxKind};
 use crate::submit::verify::{TxVerifier, VerifyReject};
-
-/// PQC scheme ids: single hybrid signer / M-of-N multisig. The closed set
-/// — anything else is `Malformed`, as CEN-I16 refuses it.
-const PQC_SCHEME_SINGLE: u8 = 1;
-const PQC_SCHEME_MULTISIG: u8 = 2;
 
 /// Compressed identity — `ct::identity()` byte-for-byte; the O6
 /// comparison is over compressed encodings, exactly as the C++
@@ -1123,10 +1118,14 @@ fn verify_pqc_auth_slot(
     payload_hash: &SigningPayloadHash,
     network: &NetworkId,
 ) -> Result<(), VerifyReject> {
-    if auth.auth_version != 1 || auth.flags != 0 {
+    if auth.auth_version != PqcAuth::VERSION || auth.flags != PqcAuth::NO_FLAGS {
         return Err(VerifyReject::malformed("K13: auth_version/flags"));
     }
-    if auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG {
+    // The closed scheme set: anything else is `Malformed`, as CEN-I16
+    // refuses it.
+    if auth.scheme_id != HYBRID_SCHEME_ID_ED25519_ML_DSA_65
+        && auth.scheme_id != HYBRID_SCHEME_ID_MULTISIG
+    {
         return Err(VerifyReject::malformed("K13: unknown scheme_id"));
     }
     if auth.hybrid_public_key.is_empty() {
@@ -1137,12 +1136,12 @@ fn verify_pqc_auth_slot(
     // refuses a blob the DoS ceiling excludes before parsing it). The
     // multisig floor is crypto-pq's, the one CEN-I16 also imports.
     match auth.scheme_id {
-        PQC_SCHEME_SINGLE => {
+        HYBRID_SCHEME_ID_ED25519_ML_DSA_65 => {
             if auth.hybrid_public_key.len() != PQC_HYBRID_SINGLE_KEY_LEN {
                 return Err(VerifyReject::malformed("K13 single: key length"));
             }
         }
-        PQC_SCHEME_MULTISIG => {
+        HYBRID_SCHEME_ID_MULTISIG => {
             if auth.hybrid_public_key.len() < MULTISIG_KEY_BLOB_MIN
                 || auth.hybrid_public_key.len() > PQC_MAX_PUBLIC_KEY_BLOB
             {

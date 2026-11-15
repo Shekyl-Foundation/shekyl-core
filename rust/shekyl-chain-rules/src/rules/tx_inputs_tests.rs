@@ -44,11 +44,7 @@ fn two_input_spend() -> Transaction {
         crate::harness::fixture::point_at(22),
     );
     let (hi, lo) = if a > b { (a, b) } else { (b, a) };
-    let image = |key_image| Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image,
-    };
+    let image = |key_image| Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(key_image));
     let mut tx = with_inputs(vec![image(hi), image(lo)]);
     if let Ct::Fcmp {
         pqc_auths,
@@ -113,11 +109,7 @@ fn i4_the_ninth_input_is_refused_and_the_eighth_admitted() {
         let mut tx = with_inputs(
             images
                 .into_iter()
-                .map(|key_image| Input::ToKey {
-                    amount: 0,
-                    key_offsets: Vec::new(),
-                    key_image,
-                })
+                .map(|key_image| Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(key_image)))
                 .collect(),
         );
         // Balance kept so H18 (which runs first) passes: `n` pseudo-outs of

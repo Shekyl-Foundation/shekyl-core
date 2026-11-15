@@ -101,6 +101,7 @@ block_show	field	tx	shard	chain	integer
 block_show	field	block	output_index	chain	integer
 block_show	field	block	section	chain	list of bytes
 block_show	field	block	section_body	chain	list of bytes
+block_show	field	block	draws	chain	count or null
 block_list	method		block_list	chain	list of object (block), or state missing|archived or null
 block_list	parameter	block	height	chain	list of height
 block_list	parameter	tx	prune	chain	switch, optional
@@ -136,6 +137,7 @@ block_list	field	tx	shard	chain	integer
 block_list	field	block	output_index	chain	integer
 block_list	field	block	section	chain	list of bytes
 block_list	field	block	section_body	chain	list of bytes
+block_list	field	block	draws	chain	count or null
 block_list	field	tx	id	chain	hash
 block_list	field	tx	shard	chain	integer
 tx_show	method		tx_show	chain	object (tx), or state archived

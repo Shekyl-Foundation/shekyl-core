@@ -1217,7 +1217,7 @@ mod gate_tests {
             .collect();
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 // Non-miner classification — [`Input::ToKey`] (rather than
                 // [`Input::Gen`]) so the tx is treated as a normal user
                 // transaction subject to the per-tx output cap documented on
@@ -1504,7 +1504,7 @@ mod cancel_tests {
             .collect();
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::ToKey {
                     amount: 0,
                     key_offsets: vec![1],
@@ -1694,7 +1694,7 @@ mod cancel_tests {
         // only the outer per-tx-loop check can deliver cancellation.
         let miner_tx = Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(0)],
                 outputs: vec![],
                 extra: vec![],
@@ -1761,7 +1761,7 @@ mod cancel_tests {
         };
         let miner_tx = Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(0)],
                 outputs: vec![Output {
                     amount: 0,

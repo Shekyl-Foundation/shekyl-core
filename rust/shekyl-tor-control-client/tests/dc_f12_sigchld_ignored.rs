@@ -35,9 +35,8 @@ fn an_ignored_sigchld_takes_the_exit_status_from_a_tokio_child() {
         .expect("runtime");
     runtime.block_on(async {
         // Control: under the default disposition the status comes back.
-        let mut control =
-            shekyl_tor_control_client::spawn_lock::with(|| Command::new("true").spawn())
-                .expect("spawn `true` under the default disposition");
+        let mut control = shekyl_spawn::spawn_lock::with(|| Command::new("true").spawn())
+            .expect("spawn `true` under the default disposition");
         let status = control
             .wait()
             .await
@@ -54,9 +53,8 @@ fn an_ignored_sigchld_takes_the_exit_status_from_a_tokio_child() {
         let previous = unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
         assert_ne!(previous, libc::SIG_ERR, "signal(SIGCHLD, SIG_IGN) failed");
 
-        let mut child =
-            shekyl_tor_control_client::spawn_lock::with(|| Command::new("true").spawn())
-                .expect("spawn `true` under SIG_IGN");
+        let mut child = shekyl_spawn::spawn_lock::with(|| Command::new("true").spawn())
+            .expect("spawn `true` under SIG_IGN");
         let outcome = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
         assert!(
             !matches!(outcome, Ok(Ok(_))),
