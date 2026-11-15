@@ -36,10 +36,10 @@ pub(crate) struct ChainCursor {
     window: VolumeWindow,
     space: BlockSpace,
     split: RungSplit,
-    /// Priority's fee at the fold's first block, which an elastic mix's
-    /// Priority demand is measured against
-    /// ([`crate::rung_mix::RungMix::priority_at`]).
-    priority_reference_fee: Option<u64>,
+    /// High's fee at the fold's first block, which an elastic mix's
+    /// High demand is measured against
+    /// ([`crate::rung_mix::RungMix::high_at`]).
+    high_reference_fee: Option<u64>,
 }
 
 /// What one block offers the cursor. `chain_height` is the consensus height
@@ -165,11 +165,9 @@ impl ChainCursor {
         let tx = txs[FeePriority::Standard].expect("every arm prices the Standard rung");
         let mix = params.fee.mix();
         let mix = match txs[FeePriority::High] {
-            Some(priority) if mix.is_priority_elastic() => {
-                let reference = *self
-                    .priority_reference_fee
-                    .get_or_insert(priority.fee_atomic);
-                mix.priority_at(reference, priority.fee_atomic)
+            Some(high) if mix.is_high_elastic() => {
+                let reference = *self.high_reference_fee.get_or_insert(high.fee_atomic);
+                mix.high_at(reference, high.fee_atomic)
             }
             _ => mix,
         };

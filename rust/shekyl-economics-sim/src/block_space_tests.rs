@@ -545,7 +545,7 @@ fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
 
 /// ESR-10's three rungs: the cohort walk lists what the template's walk over
 /// every transaction lists, rung by rung, on pools where the rungs pay the
-/// ladder's ratios (Priority 50× Standard per byte and a byte heavier for
+/// ladder's ratios (High 50× Standard per byte and a byte heavier for
 /// its fee's longer varint, Standard 4× Economy), with cohorts of every age.
 /// The rung orders nothing: each transaction's rank is its rate, hour and
 /// hash, as the pool's.
@@ -560,7 +560,7 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
         FeePriority::High,
     );
     let pools: [&[Cohort]; 3] = [
-        // The constrained era: a Priority sprinkle, Standard over the room,
+        // The constrained era: a High sprinkle, Standard over the room,
         // Economy behind both, the oldest of each the richest.
         &[
             rung_cohort(p, 60_000_000_000, 14_644, 3, 7),
@@ -569,7 +569,7 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
             rung_cohort(e, 300_000_000, 14_643, 8, 5),
             rung_cohort(e, 297_500_000, 14_643, 7, 6),
         ],
-        // Priority enough to buy into the penalty zone.
+        // High enough to buy into the penalty zone.
         &[
             rung_cohort(p, 60_000_000_000, 14_644, 40, 7),
             rung_cohort(s, 1_200_000_000, 14_643, 30, 5),
@@ -745,9 +745,9 @@ fn at_equal_weights_the_admission_order_relabels_a_drop_and_leaves_the_pool() {
 
 /// At unequal weights the order can change the pool, which is why
 /// [`ADMISSION`](crate::rung_mix::ADMISSION) is a declared assumption. A 20-byte pool holds a
-/// 10-byte Standard entry. Priority (11 bytes) first evicts Standard, and
+/// 10-byte Standard entry. High (11 bytes) first evicts Standard, and
 /// Economy (9 bytes) then fits beside it. Economy first fits beside
-/// Standard, and Priority then evicts both, the cheapest first, until it
+/// Standard, and High then evicts both, the cheapest first, until it
 /// fits.
 #[test]
 fn at_unequal_weights_the_admission_order_can_change_the_pool() {
@@ -761,7 +761,7 @@ fn at_unequal_weights_the_admission_order_can_change_the_pool() {
             weight: 9,
         },
     };
-    let priority = Arrival {
+    let high = Arrival {
         rung: FeePriority::High,
         count: 1,
         tx: OrdinaryTx {
@@ -769,17 +769,17 @@ fn at_unequal_weights_the_admission_order_can_change_the_pool() {
             weight: 11,
         },
     };
-    let richest_first = admit_in_order(&pool, &[priority, economy], limit);
-    let cheapest_first = admit_in_order(&pool, &[economy, priority], limit);
+    let richest_first = admit_in_order(&pool, &[high, economy], limit);
+    let cheapest_first = admit_in_order(&pool, &[economy, high], limit);
     assert_eq!(
         richest_first.rungs(),
         [FeePriority::High, FeePriority::Economy],
-        "richest first: Priority and Economy"
+        "richest first: High and Economy"
     );
     assert_eq!(
         cheapest_first.rungs(),
         [FeePriority::High],
-        "cheapest first: Priority alone"
+        "cheapest first: High alone"
     );
     assert_eq!(
         (
@@ -787,7 +787,7 @@ fn at_unequal_weights_the_admission_order_can_change_the_pool() {
             cheapest_first.evicted[FeePriority::Standard]
         ),
         (1, 1),
-        "cheapest first: Priority evicts both"
+        "cheapest first: High evicts both"
     );
 }
 

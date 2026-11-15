@@ -349,9 +349,10 @@ async fn a_refused_send_returns_its_input_to_spendable() {
     assert_eq!(after.balance, before.balance);
 }
 
-/// A16, the change below dust. The payee holds one output and sends it
-/// less the with-change fee and one atomic unit, so the leftover is one
-/// unit above the fee. The build signs and the daemon accepts: the fee is
+/// A16, the change below dust. The payee holds one output. A send of it
+/// less the with-change fee, which would leave a change of zero, is refused
+/// before signing. A send of it less the with-change fee and one atomic
+/// unit leaves a leftover one unit above the fee. The build signs and the daemon accepts: the fee is
 /// the with-change ladder fee and the change is one atomic unit. Before
 /// the fix the signer took the no-change fee, left the rest unaccounted,
 /// and its balance self-check refused the transaction (the TRC-1 wallet's
@@ -372,6 +373,18 @@ async fn a_change_below_dust_balances() {
         json!({"n_inputs": 1, "n_outputs": 2}),
     );
     let fee_with_change = amount(&quote, "standard");
+
+    // A leftover of exactly the with-change fee would leave a change of zero
+    // and a fee sized for an output the transaction does not carry: the
+    // selection does not cover it, so the send is refused before signing.
+    match w.payee.call(
+        "build_pending_tx",
+        build_params(&w.funder_address, PAID - fee_with_change),
+    ) {
+        Err(RpcRefusal { code: -29101, .. }) => {}
+        other => panic!("a zero change must not be built: {other:?}"),
+    }
+
     let sent = PAID - fee_with_change - 1;
     let built = match w
         .payee

@@ -809,8 +809,6 @@ pub struct EstimateTxSizeAndWeightResult {
 /// `get_default_fee_priority` result (WI-RPC-1 fees).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetDefaultFeePriorityResult {
-    /// The tier a send uses when it names none (`standard`).
-    pub default_priority: shekyl_engine_core::FeePriority,
     /// Converged fee at the economy rung for the given shape.
     pub economy: AtomicUnitsString,
     /// Converged fee at the standard rung.
@@ -1161,20 +1159,22 @@ pub struct CheckReserveProofResult {
 mod tests {
     use super::*;
 
-    /// The fee reply prints the three tiers by their one name each: the
-    /// default as `standard`, the fees under `economy`, `standard`, `high`.
+    /// The fee reply prints the three tiers by their one name each, the
+    /// fees under `economy`, `standard`, `high`, and nothing else.
     #[test]
     fn the_fee_reply_prints_the_three_tier_names() {
         use shekyl_units::AtomicUnits;
         let reply = GetDefaultFeePriorityResult {
-            default_priority: shekyl_engine_core::FeePriority::default(),
             economy: AtomicUnits::from_raw(1).into(),
             standard: AtomicUnits::from_raw(4).into(),
             high: AtomicUnits::from_raw(8).into(),
             tree_depth: 3,
         };
         let json = serde_json::to_value(&reply).unwrap();
-        assert_eq!(json["default_priority"], "standard");
+        assert!(
+            json.get("default_priority").is_none(),
+            "no front end reads it"
+        );
         assert_eq!(json["economy"], "1");
         assert_eq!(json["standard"], "4");
         assert_eq!(json["high"], "8");

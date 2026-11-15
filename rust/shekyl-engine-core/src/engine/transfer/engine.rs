@@ -42,7 +42,7 @@ use super::super::transaction_submitter::{SubmitSuccess, SubmitterError, Transac
 use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::build_fee_directive;
 
-use super::candidates::CandidatePartition;
+use super::candidates::{selection_target, CandidatePartition};
 use super::dispatch::DispatchFacts;
 use super::support::{
     assemble_input, build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
@@ -486,14 +486,8 @@ where
         let fee_pass_a = estimate(1, payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
-        let needed = total_amount.checked_add(fee_pass_a).ok_or_else(|| {
-            fail_build_after_attempted(
-                self.sink.as_ref(),
-                SendError::InvalidRecipient {
-                    reason: "amount + fee overflowed u64",
-                },
-            )
-        })?;
+        let needed = selection_target(total_amount, fee_pass_a)
+            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         let mut selected: SelectedOutputs = self
             .output_selector
@@ -512,14 +506,8 @@ where
         let fee_pass_b = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
         if fee_pass_b > fee_pass_a {
-            let needed_b = total_amount.checked_add(fee_pass_b).ok_or_else(|| {
-                fail_build_after_attempted(
-                    self.sink.as_ref(),
-                    SendError::InvalidRecipient {
-                        reason: "amount + refined fee overflowed u64",
-                    },
-                )
-            })?;
+            let needed_b = selection_target(total_amount, fee_pass_b)
+                .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
             selected = self
                 .output_selector
                 .select_outputs(candidates, needed_b)
@@ -537,14 +525,8 @@ where
         let fee = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
-        let required = total_amount.checked_add(fee).ok_or_else(|| {
-            fail_build_after_attempted(
-                self.sink.as_ref(),
-                SendError::InvalidRecipient {
-                    reason: "amount + final fee overflowed u64",
-                },
-            )
-        })?;
+        let required = selection_target(total_amount, fee)
+            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
         if selected.total_covered < required {
             let err = resolve_insufficiency(required.to_raw());
             emit_pending_tx_diagnostic(
@@ -989,11 +971,7 @@ where
                         reason: "recipient amount sum overflowed u64",
                     }))?;
             }
-            let required = total_amount.checked_add(fee).ok_or(ReanchorError::Failed(
-                SendError::InvalidRecipient {
-                    reason: "amount + fee overflowed u64",
-                },
-            ))?;
+            let required = selection_target(total_amount, fee).map_err(ReanchorError::Failed)?;
 
             // Re-read the selected inputs for `total_covered` and the assemble
             // inputs (public material only; the fold re-reads the secret pathway

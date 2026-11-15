@@ -505,8 +505,9 @@ info:
   # outgoing and unspendable beside it; liquid, unlocked and pending are
   # deleted (A17). build_pending_tx gains -29127 OUTPUTS_PARKED. The fee
   # tier is economy / standard / high, lowercase; the {custom} form and the
-  # Feerate schema are deleted, and get_default_fee_priority's fields are
-  # economy, standard, high (A18). The signer's faults keep their
+  # Feerate schema are deleted, get_default_fee_priority's fields are
+  # economy, standard, high, and its default_priority is deleted (no front
+  # end read it) (A18). The signer's faults keep their
   # identity: -29123 TOO_MANY_INPUTS, -29124 TOO_MANY_OUTPUTS (refused at
   # the request), -29125 INPUT_NOT_IN_TREE, -29126 INPUT_UNSPENDABLE, and
   # -29119 SIGNER_FAILED names its fault in data.fault (A16).
@@ -1126,9 +1127,9 @@ components:
           -29127 OUTPUTS_PARKED           build: the balance covers the send
                                           only with outputs the user parked,
                                           which coin selection does not use
-                                          (data: {"needed", "parked"},
-                                          amounts) — release the parked
-                                          outputs, or send less. Checked
+                                          — release the parked outputs, or
+                                          send less. No data: the parked
+                                          amount is get_balance.parked. Checked
                                           after the rebuild (-29111) and the
                                           incoming wait (-29112), which heal
                                           on their own (A17)
@@ -2991,7 +2992,7 @@ components:
 
     GetDefaultFeePriorityResult:
       type: object
-      required: [default_priority, economy, standard, high, tree_depth]
+      required: [economy, standard, high, tree_depth]
       description: >
         One daemon fee snapshot + the same converge fixpoint the build path
         runs, per named tier. The quote is gated by the same snapshot
@@ -3000,9 +3001,6 @@ components:
         -29102, and a snapshot that answered but was *refused* is
         -29109 (both the same codes the build path uses).
       properties:
-        default_priority:
-          $ref: "#/components/schemas/FeePriority"
-          description: The tier a send uses when it names none, `standard`.
         economy:
           $ref: "#/components/schemas/AtomicUnits"
           description: The converged fee at the economy rung for this shape.

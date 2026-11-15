@@ -61,9 +61,10 @@ pub(crate) fn show_fee(val: &Value) {
     let quotes = val.get("quotes").cloned().unwrap_or(json!({}));
     println!("Fee quotes for a {shape_in}-input, {shape_out}-output transaction:");
 
-    let default_tier = quotes.get("default_priority").and_then(Value::as_str);
+    // The tier `send` uses when `--priority` names none.
+    let default_tier = shekyl_economics::FeePriority::default().name();
     for name in shekyl_economics::FeePriority::NAMES {
-        let marker = if Some(name) == default_tier {
+        let marker = if name == default_tier {
             " (default)"
         } else {
             ""

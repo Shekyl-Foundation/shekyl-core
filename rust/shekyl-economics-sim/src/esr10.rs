@@ -67,7 +67,7 @@ const SWEPT_MULTIPLIERS: [StandardMultiplier; 5] = [
 ];
 
 /// The rung mixes the brief registers, each at the unit multiplier.
-const REGISTERED_MIXES: [RungMix; 2] = [RungMix::DEFAULTED, RungMix::ZERO_PRIORITY];
+const REGISTERED_MIXES: [RungMix; 2] = [RungMix::DEFAULTED, RungMix::ZERO_HIGH];
 
 /// The year a scenario's closed shards are sampled at beside the horizon
 /// (R5's operand).
@@ -587,9 +587,9 @@ fn write_header(
     writeln!(
         out,
         "CELLS: {}.\n\
-         \x20 {m_star} on the inherited arm's year 1. Mixes are Economy/Standard/Priority\n\
+         \x20 {m_star} on the inherited arm's year 1. Mixes are Economy/Standard/High\n\
          \x20 percent; demand splits by largest remainder on the cumulative target, and one block's arrivals are\n\
-         \x20 admitted Priority, Standard, Economy: a declared order, which can move the pool (§5.29).",
+         \x20 admitted High, Standard, Economy: a declared order, which can move the pool (§5.29).",
         cells.iter().map(|c| c.label()).collect::<Vec<_>>().join(", "),
     )?;
     writeln!(
@@ -695,9 +695,9 @@ fn write_cells(
     let sample_years = BLOCK_SPACE_YEARS.map(|y| y.to_string()).join("/");
     writeln!(
         out,
-        "\nPER CELL, at y{sample_years}. Per block, Economy/Standard/Priority: carried; dropped as refused, evicted\n\
+        "\nPER CELL, at y{sample_years}. Per block, Economy/Standard/High: carried; dropped as refused, evicted\n\
          (CEN-M10) and expired (reference out of CEN-I11's window); age at inclusion in blocks, median/p95 per\n\
-         rung ('-' when none listed); fees (SKL); Priority's share of the block's fees. Then the long-term median\n\
+         rung ('-' when none listed); fees (SKL); High's share of the block's fees. Then the long-term median\n\
          at year end (KB) and the paid block reward, miner and staker, per block (SKL)."
     )?;
     for cell in runs {

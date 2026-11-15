@@ -19,8 +19,11 @@ use std::collections::HashSet;
 use shekyl_engine_state::{OutputState, SpendHorizon, WalletLedger};
 use shekyl_types::BlockHeight;
 
+use shekyl_units::AtomicUnits;
+
 use super::super::error::SendError;
 use super::super::output_selector::OutputCandidate;
+use super::super::sign_bridge::MIN_CHANGE;
 use super::support::TreeSpendGate;
 use super::types::OutputId;
 
@@ -153,4 +156,21 @@ impl CandidatePartition {
         }
         SendError::InsufficientFunds { needed, available }
     }
+}
+
+/// What a selection must cover: the payments, the with-change fee and the
+/// least change ([`MIN_CHANGE`]). A leftover that is exactly the with-change
+/// fee would leave a change of zero, which the signer refuses
+/// (`sign_bridge::fee_and_change`): the fee would be sized for an output
+/// the transaction does not carry.
+pub(super) fn selection_target(
+    payments: AtomicUnits,
+    fee_with_change: AtomicUnits,
+) -> Result<AtomicUnits, SendError> {
+    payments
+        .checked_add(fee_with_change)
+        .and_then(|v| v.checked_add(AtomicUnits::from_raw(MIN_CHANGE.get())))
+        .ok_or(SendError::InvalidRecipient {
+            reason: "amount + fee overflowed u64",
+        })
 }

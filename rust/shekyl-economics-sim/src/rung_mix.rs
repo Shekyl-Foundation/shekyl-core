@@ -98,9 +98,9 @@ impl<T: AddAssign<U>, U> AddAssign<PerRung<U>> for PerRung<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RungMix {
     milli: PerRung<u64>,
-    /// Priority's share is a ceiling that falls as Priority's fee rises
-    /// ([`Self::priority_at`]): a declared behaviour arm (EI-6).
-    priority_elastic: bool,
+    /// High's share is a ceiling that falls as High's fee rises
+    /// ([`Self::high_at`]): a declared behaviour arm (EI-6).
+    high_elastic: bool,
 }
 
 impl RungMix {
@@ -109,67 +109,67 @@ impl RungMix {
     pub const ALL_STANDARD: Self = Self::of(0, MILLI, 0);
 
     /// The defaulted mix (`FEE_LADDER_DERIVATION.md` §5.5): 15 % Economy,
-    /// 80 % Standard, 5 % Priority.
+    /// 80 % Standard, 5 % High.
     pub const DEFAULTED: Self = Self::of(150, 800, 50);
 
-    /// The defaulted mix with its Priority share moved to Standard.
-    pub const ZERO_PRIORITY: Self = Self::of(150, 850, 0);
+    /// The defaulted mix with its High share moved to Standard.
+    pub const ZERO_HIGH: Self = Self::of(150, 850, 0);
 
-    /// A mix of `economy`, `standard` and `priority` thousandths. Refuses
+    /// A mix of `economy`, `standard` and `high` thousandths. Refuses
     /// shares that do not sum to [`MILLI`]: in a constant, at compile time.
-    const fn of(economy: u64, standard: u64, priority: u64) -> Self {
+    const fn of(economy: u64, standard: u64, high: u64) -> Self {
         assert!(
-            economy <= MILLI && standard <= MILLI && priority <= MILLI,
+            economy <= MILLI && standard <= MILLI && high <= MILLI,
             "a share is at most 1 000 thousandths"
         );
         assert!(
-            economy + standard + priority == MILLI,
+            economy + standard + high == MILLI,
             "a rung mix's shares sum to 1 000 thousandths"
         );
         Self {
-            milli: PerRung([economy, standard, priority]),
-            priority_elastic: false,
+            milli: PerRung([economy, standard, high]),
+            high_elastic: false,
         }
     }
 
-    /// The defaulted mix with Priority at `priority` thousandths, the share
-    /// it gives up moved to Standard (as [`Self::ZERO_PRIORITY`]).
+    /// The defaulted mix with High at `high` thousandths, the share
+    /// it gives up moved to Standard (as [`Self::ZERO_HIGH`]).
     #[must_use]
-    pub const fn defaulted_with_priority(priority: u64) -> Self {
+    pub const fn defaulted_with_high(high: u64) -> Self {
         assert!(
-            priority <= Self::DEFAULTED.milli.0[2],
-            "Priority sheds share; it never takes more"
+            high <= Self::DEFAULTED.milli.0[2],
+            "High sheds share; it never takes more"
         );
         Self::of(
             Self::DEFAULTED.milli.0[0],
-            Self::DEFAULTED.milli.0[1] + Self::DEFAULTED.milli.0[2] - priority,
-            priority,
+            Self::DEFAULTED.milli.0[1] + Self::DEFAULTED.milli.0[2] - high,
+            high,
         )
     }
 
-    /// This mix with Priority's demand at unit elasticity to its own fee
+    /// This mix with High's demand at unit elasticity to its own fee
     /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.32, EI-6): a declared
     /// behaviour, since demand in the sim is otherwise a schedule.
     #[must_use]
-    pub const fn priority_elastic(self) -> Self {
+    pub const fn high_elastic(self) -> Self {
         Self {
-            priority_elastic: true,
+            high_elastic: true,
             ..self
         }
     }
 
-    /// Whether Priority's share responds to its fee.
+    /// Whether High's share responds to its fee.
     #[must_use]
-    pub const fn is_priority_elastic(self) -> bool {
-        self.priority_elastic
+    pub const fn is_high_elastic(self) -> bool {
+        self.high_elastic
     }
 
-    /// The mix at a block whose Priority fee is `fee`, against `reference`,
-    /// Priority's fee at the fold's first block. At unit elasticity
-    /// Priority keeps `share · min(1, reference / fee)`, floored to a
+    /// The mix at a block whose High fee is `fee`, against `reference`,
+    /// High's fee at the fold's first block. At unit elasticity
+    /// High keeps `share · min(1, reference / fee)`, floored to a
     /// thousandth, and Standard takes what it sheds.
     #[must_use]
-    pub fn priority_at(self, reference: u64, fee: u64) -> Self {
+    pub fn high_at(self, reference: u64, fee: u64) -> Self {
         let share = self.milli[FeePriority::High];
         if fee <= reference {
             return self;
@@ -214,11 +214,7 @@ impl fmt::Display for RungMix {
             percent(self.milli[FeePriority::Economy]),
             percent(self.milli[FeePriority::Standard]),
             percent(self.milli[FeePriority::High]),
-            if self.priority_elastic {
-                " elastic"
-            } else {
-                ""
-            },
+            if self.high_elastic { " elastic" } else { "" },
         )
     }
 }
@@ -323,14 +319,14 @@ impl AddAssign<RungTraffic<u64>> for RungTraffic<u128> {
 mod tests {
     use super::*;
 
-    /// EI-6's cells (§5.32): Priority sheds share to Standard, and the
+    /// EI-6's cells (§5.32): High sheds share to Standard, and the
     /// elastic arm keeps `share · reference / fee`, floored, once its fee
     /// rises, and all of it while the fee is at or under the reference.
     #[test]
-    fn priority_sheds_its_share_to_standard() {
-        assert_eq!(RungMix::defaulted_with_priority(50), RungMix::DEFAULTED);
-        assert_eq!(RungMix::defaulted_with_priority(0), RungMix::ZERO_PRIORITY);
-        let half = RungMix::defaulted_with_priority(25);
+    fn high_sheds_its_share_to_standard() {
+        assert_eq!(RungMix::defaulted_with_high(50), RungMix::DEFAULTED);
+        assert_eq!(RungMix::defaulted_with_high(0), RungMix::ZERO_HIGH);
+        let half = RungMix::defaulted_with_high(25);
         assert_eq!(
             (
                 half.milli(FeePriority::Economy),
@@ -340,14 +336,10 @@ mod tests {
             (150, 825, 25)
         );
         assert_eq!(half.to_string(), "15/82.5/2.5");
-        let elastic = RungMix::DEFAULTED.priority_elastic();
+        let elastic = RungMix::DEFAULTED.high_elastic();
         assert_eq!(elastic.to_string(), "15/80/5 elastic");
-        assert_eq!(
-            elastic.priority_at(1_000, 900),
-            elastic,
-            "a fall sheds nothing"
-        );
-        let doubled = elastic.priority_at(1_000, 2_000);
+        assert_eq!(elastic.high_at(1_000, 900), elastic, "a fall sheds nothing");
+        let doubled = elastic.high_at(1_000, 2_000);
         assert_eq!(
             doubled.milli(FeePriority::High),
             25,
@@ -355,7 +347,7 @@ mod tests {
         );
         assert_eq!(doubled.milli(FeePriority::Standard), 825);
         assert_eq!(
-            elastic.priority_at(1_000, 3_000).milli(FeePriority::High),
+            elastic.high_at(1_000, 3_000).milli(FeePriority::High),
             16,
             "floored"
         );
@@ -364,7 +356,7 @@ mod tests {
     #[test]
     fn a_mix_prints_its_percentages() {
         assert_eq!(RungMix::DEFAULTED.to_string(), "15/80/5");
-        assert_eq!(RungMix::ZERO_PRIORITY.to_string(), "15/85/0");
+        assert_eq!(RungMix::ZERO_HIGH.to_string(), "15/85/0");
         assert_eq!(RungMix::ALL_STANDARD.to_string(), "0/100/0");
         assert_eq!(RungMix::of(125, 870, 5).to_string(), "12.5/87/0.5");
     }
@@ -418,7 +410,7 @@ mod tests {
     /// mixes. A demand that grows or wanders between blocks, or a mix that
     /// is not registered, is held to [`UNDER_TWO_TXS`]. Measured on the
     /// registered scenarios over 60 years, only sustained growth's 15/80/5
-    /// passes one, at 1.15 (Priority).
+    /// passes one, at 1.15 (High).
     fn demand_series() -> Vec<(&'static str, Vec<u64>, i64)> {
         let blocks = 0..SERIES_BLOCKS;
         vec![
@@ -469,7 +461,7 @@ mod tests {
         let mixes = [
             (RungMix::ALL_STANDARD, true),
             (RungMix::DEFAULTED, true),
-            (RungMix::ZERO_PRIORITY, true),
+            (RungMix::ZERO_HIGH, true),
             (RungMix::of(333, 333, 334), false),
             (RungMix::of(1, 998, 1), false),
         ];

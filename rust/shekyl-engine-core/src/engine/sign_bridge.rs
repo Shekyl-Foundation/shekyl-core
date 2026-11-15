@@ -7,6 +7,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::EdwardsPoint;
@@ -304,18 +305,28 @@ fn payment_outputs_of(
     Ok((total, payments))
 }
 
+/// The least change a with-change transaction carries: one atomic unit.
+/// A change of zero would drop the output while the fee stays sized for
+/// it (see [`fee_and_change`]); the build's selection covers the payments,
+/// the with-change fee and this unit.
+pub(crate) const MIN_CHANGE: NonZeroU64 = NonZeroU64::MIN;
+
 /// The fee and the change a signing pass carries for `leftover` (the
 /// inputs less the payments), from the build's two ladder fees.
 ///
 /// The fee is always one of the directive's two, never the leftover:
 /// the fee is cleartext on chain, and a wallet paying a ladder value hides
 /// in that rung's cohort where one paying its leftover marks itself
-/// (`FEE_LADDER_DERIVATION.md` W3). So every leftover at or above the
-/// with-change fee gets a change output, however small, and the no-change
-/// variant is taken only when the leftover is exactly its fee. A leftover
-/// between the two cannot balance at a ladder fee and is refused; the
-/// build's selection, which covers the payments plus the with-change fee,
-/// never produces one.
+/// (`FEE_LADDER_DERIVATION.md` W3). So every leftover above the
+/// with-change fee gets a change output of at least one atomic unit,
+/// however small, and the no-change variant is taken only when the
+/// leftover is exactly its fee. A leftover equal to the with-change fee
+/// would leave a change of zero: the output is not built, and the fee,
+/// sized for one more output than the transaction has, would be off the
+/// ladder for its real shape. It is refused, one unit short, as is any
+/// leftover between the two fees. The build's selection covers the
+/// payments plus the with-change fee plus one unit, so it never produces
+/// either.
 ///
 /// A leftover inside one dust threshold of the with-change fee used to take
 /// the no-change fee and leave the rest unaccounted, so the transaction did
@@ -324,21 +335,20 @@ fn payment_outputs_of(
 fn fee_and_change(
     leftover: u64,
     directive: &FeeDirective,
-) -> Result<(u64, Option<u64>), KeyEngineError> {
+) -> Result<(u64, Option<NonZeroU64>), KeyEngineError> {
     if leftover == directive.fee_no_change {
         return Ok((directive.fee_no_change, None));
     }
     // `u64::MAX` is the "no change output fits" sentinel; no leftover reaches it.
-    if directive.fee_with_change != u64::MAX && leftover >= directive.fee_with_change {
-        return Ok((
-            directive.fee_with_change,
-            Some(leftover - directive.fee_with_change),
-        ));
+    if directive.fee_with_change != u64::MAX {
+        if let Some(change) = NonZeroU64::new(leftover.saturating_sub(directive.fee_with_change)) {
+            return Ok((directive.fee_with_change, Some(change)));
+        }
     }
     let short_of = if leftover < directive.fee_no_change {
         directive.fee_no_change
     } else {
-        directive.fee_with_change
+        directive.fee_with_change.saturating_add(MIN_CHANGE.get())
     };
     Err(KeyEngineError::InsufficientFunds {
         shortfall: short_of.saturating_sub(leftover),
@@ -417,21 +427,21 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         output_index += 1;
     }
 
-    if let Some(change_amount) = change {
-        if change_amount > 0 {
-            let change_pk = derived.change_spend_pk();
-            let built = build_output(
-                &tx_key_secret,
-                &change_pk,
-                &keys.x25519_pk,
-                &keys.ml_kem_ek,
-                change_amount,
-                output_index,
-                &sentinel_plaintext(),
-            )?;
-            kem_blobs.push(built.kem_blob.clone());
-            built_outputs.push(built);
-        }
+    // A change is at least one unit (`fee_and_change`): when the fee is the
+    // with-change fee, the change output is always built.
+    if let Some(change_amount) = change.map(NonZeroU64::get) {
+        let change_pk = derived.change_spend_pk();
+        let built = build_output(
+            &tx_key_secret,
+            &change_pk,
+            &keys.x25519_pk,
+            &keys.ml_kem_ek,
+            change_amount,
+            output_index,
+            &sentinel_plaintext(),
+        )?;
+        kem_blobs.push(built.kem_blob.clone());
+        built_outputs.push(built);
     }
 
     if built_outputs.is_empty() {
@@ -1011,20 +1021,25 @@ mod tests {
     #[test]
     fn every_accepted_leftover_balances_at_a_ladder_fee() {
         let d = directive(700, 900);
-        for leftover in [900, 901, 950, 1_000, 5_000, u64::MAX / 2] {
+        for leftover in [901, 950, 1_000, 5_000, u64::MAX / 2] {
             let (fee, change) = fee_and_change(leftover, &d).expect("covered");
             assert_eq!(fee, 900, "leftover {leftover}");
-            assert_eq!(fee + change.expect("a change output"), leftover);
+            let change = change.expect("a change output").get();
+            assert!(change >= 1, "leftover {leftover}");
+            assert_eq!(fee + change, leftover);
         }
         assert_eq!(fee_and_change(700, &d).expect("exact"), (700, None));
     }
 
     /// A leftover that no ladder fee balances is refused, never paid as a
-    /// fee of its own (`FEE_LADDER_DERIVATION.md` W3).
+    /// fee of its own (`FEE_LADDER_DERIVATION.md` W3), and so is a leftover
+    /// equal to the with-change fee, one unit short of a change output.
     #[test]
     fn a_leftover_no_ladder_fee_balances_is_refused() {
         let d = directive(700, 900);
-        for leftover in [0, 699, 701, 899] {
+        // 900: the with-change fee with a change of zero, which would pay a
+        // fee sized for an output the transaction does not carry.
+        for leftover in [0, 699, 701, 899, 900] {
             assert!(
                 matches!(
                     fee_and_change(leftover, &d),

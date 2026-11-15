@@ -5,7 +5,6 @@ seed_language = "english"
 default_decimal_point = 12
 show_wallet_name_when_locked = false
 setup_background_mining = "prompt"
-default_priority = "standard"
 confirm_backlog = true
 confirm_backlog_threshold = 4096
 confirm_export_overwrite = true

@@ -4483,7 +4483,6 @@ dependencies = [
  "rustix",
  "serde",
  "sha2",
- "shekyl-economics",
  "shekyl-units",
  "tempfile",
  "thiserror",

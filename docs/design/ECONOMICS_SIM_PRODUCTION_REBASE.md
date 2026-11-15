@@ -3636,15 +3636,21 @@ further member: its net cost per archival byte it adds, over the floor.
   gains: the emission pays more than the bytes cost. It is 0 where it
   lists nothing (inherited).
 
-**EI-6. Priority elasticity** (`--priority-elasticity`). The 15/80/5 mix
-with Priority's demand share at 5 %, 2.5 %, 1 % and 0, the share removed
+**EI-6. High elasticity** (`--high-elasticity`). The 15/80/5 mix
+with High's demand share at 5 %, 2.5 %, 1 % and 0, the share removed
 moving to Standard (15/85/0's precedent). Beside them is an elastic arm,
-a declared behaviour: Priority's share is `5 % · min(1, P₀/P(t))^ε` with
-`ε = 1`, so Priority demand halves when its fee doubles. `P₀` is
-Priority's fee at the scenario's first block, and the share it sheds
+a declared behaviour: High's share is `5 % · min(1, P₀/P(t))^ε` with
+`ε = 1`, so High demand halves when its fee doubles. `P₀` is
+High's fee at the scenario's first block, and the share it sheds
 moves to Standard. It runs on both `w_ref` arms over every scenario, on
 demand. The nightly takes the baseline only. It reports A1's fee leg and
 onset (ESR-10's columns) and miner income by year (EI-1's reader).
+
+The top rung is `high` (IG-Q52; the fee tier set of 2026-11-15, wallet
+lane PR 2): the sim names it as the wallet does, and its narrations say
+High where they said Priority (EI-6's heading, the rung mixes and ESR-10's
+per-cell legend). The committed narration fixtures were renamed word for
+word, not regenerated; no number moved.
 
 - **Fees fall with Priority's share (blind, from §5.29.1 P3's
   composition).** At 5 %, Priority pays 87 % of the year-1 fees, 179.3

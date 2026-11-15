@@ -43,7 +43,7 @@ pub struct TxShapeEstimate {
     pub tree_depth: u8,
 }
 
-/// Per-tier converged fees for one tx shape, plus the default tier.
+/// Per-tier converged fees for one tx shape.
 ///
 /// Projected from one atomic daemon [`FeeEstimates`](super::traits::FeeEstimates)
 /// snapshot through the same [`converge_fee`](super::tx_fee_model::converge_fee)

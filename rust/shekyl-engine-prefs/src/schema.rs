@@ -25,12 +25,11 @@
 //!   impl on the parent fills them in); they cannot add sections that
 //!   don't exist (the `deny_unknown_fields` catch-all catches it).
 //!
-//! * Default priority, refresh type, and export format are modeled as
-//!   `enum`s so a typo in the TOML (`"Medium"` instead of `"medium"`)
+//! * Refresh type and export format are modeled as `enum`s so a typo in
+//!   the TOML (`"Full"` instead of `"full"`)
 //!   produces a clear parse error rather than a silent fallback.
 
 use serde::{Deserialize, Serialize};
-use shekyl_economics::FeePriority;
 use shekyl_units::AtomicUnits;
 
 /// Scanner strategy for refresh operations. Matches the legacy
@@ -100,12 +99,6 @@ pub struct CosmeticPrefs {
     #[serde(default)]
     pub setup_background_mining: BackgroundMiningSetup,
 
-    /// The fee tier a send uses when it names none: one of the three
-    /// tiers every wallet derives from chain state
-    /// ([`FeePriority`], spelled lowercase). There is no per-wallet rate.
-    #[serde(default)]
-    pub default_priority: FeePriority,
-
     /// Warn the user if the mempool backlog exceeds
     /// [`CosmeticPrefs::confirm_backlog_threshold`] outstanding txs.
     #[serde(default = "default_true")]
@@ -136,7 +129,6 @@ impl Default for CosmeticPrefs {
             default_decimal_point: default_decimal_point(),
             show_wallet_name_when_locked: false,
             setup_background_mining: BackgroundMiningSetup::default(),
-            default_priority: FeePriority::default(),
             confirm_backlog: true,
             confirm_backlog_threshold: default_confirm_backlog_threshold(),
             confirm_export_overwrite: true,
@@ -336,8 +328,8 @@ impl Default for WalletPrefs {
 /// are added or removed, or a persisted value's spelling changes
 /// (`subaddress_lookahead` deletion → `2`; RPC-payment `[rpc]` bucket
 /// removal → `3`; `device.tor_binary_path` addition → `4`;
-/// `cosmetic.default_priority` takes the one tier set, `economy`,
-/// `standard`, `high`, in place of `low`, `medium`, `high`, `rush` → `5`).
+/// `cosmetic.default_priority` deletion → `5`: no surface read it, and a
+/// send that names no tier takes the one tier set's default, `standard`).
 ///
 /// Load refuses on mismatch rather than migrating
 /// ([`crate::load_prefs`]) — pre-genesis, a prefs file from an older
@@ -425,25 +417,16 @@ mod tests {
         assert_eq!(text, include_str!("../snapshots/prefs_v5_default.toml"));
     }
 
-    /// The fee tier persists by its one spelling, lowercase, and the
-    /// three tiers are all that parse: an uppercase name, version 4's
-    /// `medium` and a rate are each refused.
+    /// The fee tier is not a preference: version 4's `default_priority`
+    /// had no reader and is deleted, so a file naming it is refused as an
+    /// unknown field, whatever its value.
     #[test]
-    fn default_priority_takes_the_three_tiers_only() {
-        for (word, tier) in [
-            ("economy", FeePriority::Economy),
-            ("standard", FeePriority::Standard),
-            ("high", FeePriority::High),
-        ] {
-            let src = format!("[cosmetic]\ndefault_priority = \"{word}\"\n");
-            let prefs: WalletPrefs = toml::from_str(&src).expect("a tier parses");
-            assert_eq!(prefs.cosmetic.default_priority, tier);
-        }
-        for refused in ["\"STANDARD\"", "\"medium\"", "\"rush\"", "{ custom = 42 }"] {
-            let src = format!("[cosmetic]\ndefault_priority = {refused}\n");
+    fn default_priority_is_no_longer_a_field() {
+        for value in ["\"standard\"", "\"high\"", "\"medium\""] {
+            let src = format!("[cosmetic]\ndefault_priority = {value}\n");
             assert!(
                 toml::from_str::<WalletPrefs>(&src).is_err(),
-                "{refused} parsed"
+                "{value} parsed"
             );
         }
     }
@@ -452,10 +435,14 @@ mod tests {
     #[test]
     fn enum_typo_rejected() {
         let src = r#"
-            [cosmetic]
-            default_priority = "Medium"
+            [operational]
+            refresh_type = "Full"
         "#;
         assert!(toml::from_str::<WalletPrefs>(src).is_err());
+        // The positive control: the right spelling parses, so the refusal
+        // above is the enum's, not an unknown field's.
+        let fixed = src.replace("\"Full\"", "\"full\"");
+        assert!(toml::from_str::<WalletPrefs>(&fixed).is_ok());
     }
 
     /// Values on the happy path survive unchanged.

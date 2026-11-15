@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{FeePriority, InputCount, OutputCount};
+use shekyl_engine_core::{InputCount, OutputCount};
 
 use shekyl_units::AtomicUnitsString;
 
@@ -83,7 +83,6 @@ pub(crate) async fn get_default_fee_priority(
         .map_err(WalletRpcError::from)?;
 
     let result = GetDefaultFeePriorityResult {
-        default_priority: FeePriority::default(),
         economy: quote.economy.into(),
         standard: quote.standard.into(),
         high: quote.high.into(),

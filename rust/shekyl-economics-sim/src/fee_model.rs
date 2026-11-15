@@ -193,7 +193,7 @@ impl FeeModel {
 
     /// The ordinary transaction on each rung at `at`, built at that rung's
     /// rate: Economy the ladder's `economy`, Standard its `standard` times
-    /// the multiplier, Priority its `priority`, each the wallet's lattice
+    /// the multiplier, High its `high`, each the wallet's lattice
     /// fixed point (ESR-15). Standard is always priced, because the growth
     /// gate reads it; another rung is priced only when the mix sends it
     /// demand. One ladder call serves every rung.
@@ -265,7 +265,7 @@ impl FeeModel {
                  the wallet's lattice fixed point of rate x weight."
             ),
             Self::Production { multiplier, mix } => format!(
-                "FEE ARM: production ladder — rung mix Economy/Standard/Priority {mix}, Standard \
+                "FEE ARM: production ladder — rung mix Economy/Standard/High {mix}, Standard \
                  {multiplier} (corrected_fee_ladder at each block's R, C and long-term median), \
                  ordinary 1in/2out weight at chain depth, the wallet's lattice fixed point of each \
                  rung's rate x weight."

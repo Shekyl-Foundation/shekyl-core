@@ -788,17 +788,14 @@ pub enum WalletRpcError {
         input: usize,
     },
     /// `-29127`: the balance covers the send only with the outputs the user
-    /// parked, which coin selection does not use (A17).
+    /// parked, which coin selection does not use (A17). No amounts ride the
+    /// refusal: the parked amount has one source, `get_balance.parked`, and
+    /// error data is logged like the message.
     #[error(
         "this send is covered only with money you parked — release the parked outputs to \
          spend them, or send less"
     )]
-    OutputsParked {
-        /// The amount plus fee the send needs, atomic units.
-        needed: u64,
-        /// The parked amount, atomic units.
-        parked: u64,
-    },
+    OutputsParked,
     /// `-29120`: the send's record (with its signed bytes and tx secret)
     /// could not be saved, so the wallet sent nothing (A19). The
     /// reservation is kept: fix the cause and submit it again, or discard
@@ -1302,7 +1299,7 @@ impl WalletRpcError {
             Self::TooManyOutputs { .. } => WalletRpcErrorCode::TooManyOutputs,
             Self::InputNotInTree { .. } => WalletRpcErrorCode::InputNotInTree,
             Self::InputUnspendable { .. } => WalletRpcErrorCode::InputUnspendable,
-            Self::OutputsParked { .. } => WalletRpcErrorCode::OutputsParked,
+            Self::OutputsParked => WalletRpcErrorCode::OutputsParked,
             Self::SendNotSaved => WalletRpcErrorCode::SendNotSaved,
             Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
             Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
@@ -1459,11 +1456,6 @@ impl WalletRpcError {
             Self::InputNotInTree { input } | Self::InputUnspendable { input } => {
                 Some(json!({ "input": input }))
             }
-            // Amounts as decimal strings, the contract's one encoding.
-            Self::OutputsParked { needed, parked } => Some(json!({
-                "needed": needed.to_string(),
-                "parked": parked.to_string(),
-            })),
             Self::ChainTooShortToSpend {
                 synced_height,
                 ref_anchor_age,
@@ -1740,7 +1732,7 @@ impl From<SendError> for WalletRpcError {
             SendError::InvalidRecipient { .. } => Self::InvalidRecipient,
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
-            SendError::OutputsParked { needed, parked } => Self::OutputsParked { needed, parked },
+            SendError::OutputsParked { .. } => Self::OutputsParked,
             SendError::Io(io) => from_io_error(io),
             SendError::Sign(fault) => from_sign_fault(fault),
             SendError::NotSynced => Self::WalletNotSynced,
@@ -3533,6 +3525,20 @@ mod tests {
 
     /// Each build refusal a user or operator can act on has its own code;
     /// `-32603` is left to construction failing and broken preconditions.
+    /// `-29127` names no amount: the parked amount has one source,
+    /// `get_balance.parked`, and error data is logged like the message.
+    #[test]
+    fn the_parked_refusal_carries_no_amount() {
+        let err: WalletRpcError = SendError::OutputsParked {
+            needed: 10,
+            parked: 4,
+        }
+        .into();
+        assert_eq!(err.code(), WalletRpcErrorCode::OutputsParked);
+        assert_eq!(err.data(), None);
+        assert!(!err.message().contains('4') && !err.message().contains("10"));
+    }
+
     #[test]
     fn every_build_refusal_names_its_remedy() {
         use shekyl_types::{BlockCount, BlockHeight};
