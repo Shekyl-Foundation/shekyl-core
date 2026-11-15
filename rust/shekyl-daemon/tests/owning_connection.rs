@@ -196,16 +196,19 @@ fn workdir() -> tempfile::TempDir {
     dir
 }
 
-/// Where the daemon's rendezvous goes: on Unix the private socket directory
-/// the harness names, on Windows the account's rendezvous directory under
-/// the root the daemon is given, the test's directory (`RPC_CHANNEL.md`
-/// §7.1; Windows refuses a socket directory).
+/// Where the daemon's rendezvous goes on Unix: the private socket
+/// directory the harness names.
+#[cfg(unix)]
 fn rendezvous_dir(dir: &Path) -> PathBuf {
-    if cfg!(unix) {
-        dir.join("s")
-    } else {
-        shekyl_rpc_rendezvous::account_dir(dir)
-    }
+    dir.join("s")
+}
+
+/// Where the daemon's rendezvous goes on Windows, which refuses a socket
+/// directory: the account's rendezvous directory under the root the daemon
+/// is given, the test's directory (`RPC_CHANNEL.md` §7.1).
+#[cfg(windows)]
+fn rendezvous_dir(dir: &Path) -> PathBuf {
+    shekyl_rpc_rendezvous::account_dir(dir)
 }
 
 /// Set `dir`'s mode to 0700 (Unix): every directory this test creates is

@@ -94,12 +94,15 @@ fn run_child_if_requested() {
 /// Where the child's rendezvous goes: on Unix the private socket directory
 /// the harness names, on Windows `Shekyl\rendezvous` under the account root
 /// the child is given, the test's directory (`RPC_CHANNEL.md` §7.1).
+#[cfg(unix)]
 fn rendezvous_dir(dir: &Path) -> PathBuf {
-    if cfg!(unix) {
-        dir.join("s")
-    } else {
-        shekyl_rpc_rendezvous::account_dir(dir)
-    }
+    dir.join("s")
+}
+
+/// Windows: see the Unix arm.
+#[cfg(windows)]
+fn rendezvous_dir(dir: &Path) -> PathBuf {
+    shekyl_rpc_rendezvous::account_dir(dir)
 }
 
 /// A daemon child and its directory.
