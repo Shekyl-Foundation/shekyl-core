@@ -1,0 +1,9 @@
+key	value
+t0_utc	2026-11-12T21:27:10.20Z
+horizon_utc	2026-11-14T21:48:04.86Z
+rows_to_horizon	1732454
+reset_rows	2971
+valid_usable_slots	1384736
+fallback_seen_intervals	0
+fallback_seen_slots	0
+unmatched_submit_exclusions	117

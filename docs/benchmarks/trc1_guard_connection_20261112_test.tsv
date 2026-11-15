@@ -1,0 +1,337 @@
+series	window_s	guard	shift	shift_s	comparison	send_windows	other_windows	share_above_other_p99	auc
+0	0.1	g0	shifted	0	own vs other	220	682428	0.477273	0.752099
+0	0.1	g0	shifted	0	any daemon send vs none	32133	650515	0.15495	0.767126
+1	0.1	g0	shifted	0	own vs other	23	68649	0.347826	0.657963
+1	0.1	g0	shifted	0	any daemon send vs none	3239	65433	0.169805	0.813099
+2	0.1	g0	shifted	0	own vs other	55	164554	0.690909	0.849663
+2	0.1	g0	shifted	0	any daemon send vs none	7825	156784	0.170735	0.811472
+3	0.1	g0	shifted	0	own vs other	36	113267	0.722222	0.885506
+3	0.1	g0	shifted	0	any daemon send vs none	5155	108148	0.182541	0.835033
+4	0.1	g0	shifted	0	own vs other	12	35796	0.666667	0.806937
+4	0.1	g0	shifted	0	any daemon send vs none	1696	34112	0.176887	0.858033
+5	0.1	g0	shifted	0	own vs other	107	318882	0.607477	0.817059
+5	0.1	g0	shifted	0	any daemon send vs none	14967	304022	0.166099	0.785071
+all	0.1	g0	shifted	0	own vs other	453	1383576	0.551876	0.78629
+all	0.1	g0	shifted	0	any daemon send vs none	65015	1319014	0.163854	0.786653
+0	0.1	g1	shifted	0	own vs other	220	682428	0.468182	0.737804
+0	0.1	g1	shifted	0	any daemon send vs none	32133	650515	0.13108	0.72482
+1	0.1	g1	shifted	0	own vs other	23	68649	0	0.449686
+1	0.1	g1	shifted	0	any daemon send vs none	3239	65433	0.0744057	0.591062
+2	0.1	g1	shifted	0	own vs other	55	164554	0.181818	0.567579
+2	0.1	g1	shifted	0	any daemon send vs none	7825	156784	0.0982748	0.638233
+3	0.1	g1	shifted	0	own vs other	36	113267	0.111111	0.572351
+3	0.1	g1	shifted	0	any daemon send vs none	5155	108148	0.0808923	0.612062
+4	0.1	g1	shifted	0	own vs other	12	35796	0	0.5216
+4	0.1	g1	shifted	0	any daemon send vs none	1696	34112	0.00589623	0.498977
+5	0.1	g1	shifted	0	own vs other	107	318882	0.28972	0.64557
+5	0.1	g1	shifted	0	any daemon send vs none	14967	304022	0.115053	0.688709
+all	0.1	g1	shifted	0	own vs other	453	1383576	0.328918	0.661448
+all	0.1	g1	shifted	0	any daemon send vs none	65015	1319014	0.11542	0.684506
+0	0.1	g2	shifted	0	own vs other	220	682428	0	0.494376
+0	0.1	g2	shifted	0	any daemon send vs none	32133	650515	0.00532163	0.500348
+1	0.1	g2	shifted	0	own vs other	23	68649	0	0.488412
+1	0.1	g2	shifted	0	any daemon send vs none	3239	65433	0.00679222	0.499017
+2	0.1	g2	shifted	0	own vs other	55	164554	0	0.487329
+2	0.1	g2	shifted	0	any daemon send vs none	7825	156784	0.00945687	0.501264
+3	0.1	g2	shifted	0	own vs other	36	113267	0	0.478763
+3	0.1	g2	shifted	0	any daemon send vs none	5155	108148	0.00834142	0.502364
+4	0.1	g2	shifted	0	own vs other	12	35796	0	0.453696
+4	0.1	g2	shifted	0	any daemon send vs none	1696	34112	0.0566038	0.573696
+5	0.1	g2	shifted	0	own vs other	107	318882	0.00934579	0.502552
+5	0.1	g2	shifted	0	any daemon send vs none	14967	304022	0.00995523	0.500938
+all	0.1	g2	shifted	0	own vs other	453	1383576	0.00441501	0.492885
+all	0.1	g2	shifted	0	any daemon send vs none	65015	1319014	0.00979774	0.502487
+0	0.1	sum	shifted	0	own vs other	220	682428	0.895455	0.962082
+0	0.1	sum	shifted	0	any daemon send vs none	32133	650515	0.192357	0.894692
+1	0.1	sum	shifted	0	own vs other	23	68649	0.347826	0.625289
+1	0.1	sum	shifted	0	any daemon send vs none	3239	65433	0.164557	0.838534
+2	0.1	sum	shifted	0	own vs other	55	164554	0.763636	0.918534
+2	0.1	sum	shifted	0	any daemon send vs none	7825	156784	0.179297	0.866404
+3	0.1	sum	shifted	0	own vs other	36	113267	0.833333	0.94211
+3	0.1	sum	shifted	0	any daemon send vs none	5155	108148	0.172842	0.847925
+4	0.1	sum	shifted	0	own vs other	12	35796	0.666667	0.790139
+4	0.1	sum	shifted	0	any daemon send vs none	1696	34112	0.176297	0.867293
+5	0.1	sum	shifted	0	own vs other	107	318882	0.616822	0.940727
+5	0.1	sum	shifted	0	any daemon send vs none	14967	304022	0.184138	0.869995
+all	0.1	sum	shifted	0	own vs other	453	1383576	0.825607	0.92843
+all	0.1	sum	shifted	0	any daemon send vs none	65015	1319014	0.181927	0.878113
+0	0.1	g0	unshifted	0	own vs other	220	682428	0.477273	0.752099
+0	0.1	g0	unshifted	0	any daemon send vs none	32133	650515	0.15495	0.767126
+1	0.1	g0	unshifted	0	own vs other	23	68649	0.347826	0.657963
+1	0.1	g0	unshifted	0	any daemon send vs none	3239	65433	0.169805	0.813099
+2	0.1	g0	unshifted	0	own vs other	55	164554	0.690909	0.849663
+2	0.1	g0	unshifted	0	any daemon send vs none	7825	156784	0.170735	0.811472
+3	0.1	g0	unshifted	0	own vs other	36	113267	0.722222	0.885506
+3	0.1	g0	unshifted	0	any daemon send vs none	5155	108148	0.182541	0.835033
+4	0.1	g0	unshifted	0	own vs other	12	35796	0.666667	0.806937
+4	0.1	g0	unshifted	0	any daemon send vs none	1696	34112	0.176887	0.858033
+5	0.1	g0	unshifted	0	own vs other	107	318882	0.607477	0.817059
+5	0.1	g0	unshifted	0	any daemon send vs none	14967	304022	0.166099	0.785071
+all	0.1	g0	unshifted	0	own vs other	453	1383576	0.551876	0.78629
+all	0.1	g0	unshifted	0	any daemon send vs none	65015	1319014	0.163854	0.786653
+0	0.1	g1	unshifted	0	own vs other	220	682428	0.468182	0.737804
+0	0.1	g1	unshifted	0	any daemon send vs none	32133	650515	0.13108	0.72482
+1	0.1	g1	unshifted	0	own vs other	23	68649	0	0.449686
+1	0.1	g1	unshifted	0	any daemon send vs none	3239	65433	0.0744057	0.591062
+2	0.1	g1	unshifted	0	own vs other	55	164554	0.181818	0.567579
+2	0.1	g1	unshifted	0	any daemon send vs none	7825	156784	0.0982748	0.638233
+3	0.1	g1	unshifted	0	own vs other	36	113267	0.111111	0.572351
+3	0.1	g1	unshifted	0	any daemon send vs none	5155	108148	0.0808923	0.612062
+4	0.1	g1	unshifted	0	own vs other	12	35796	0	0.5216
+4	0.1	g1	unshifted	0	any daemon send vs none	1696	34112	0.00589623	0.498977
+5	0.1	g1	unshifted	0	own vs other	107	318882	0.28972	0.64557
+5	0.1	g1	unshifted	0	any daemon send vs none	14967	304022	0.115053	0.688709
+all	0.1	g1	unshifted	0	own vs other	453	1383576	0.328918	0.661448
+all	0.1	g1	unshifted	0	any daemon send vs none	65015	1319014	0.11542	0.684506
+0	0.1	g2	unshifted	0	own vs other	220	682428	0	0.494376
+0	0.1	g2	unshifted	0	any daemon send vs none	32133	650515	0.00532163	0.500348
+1	0.1	g2	unshifted	0	own vs other	23	68649	0	0.488412
+1	0.1	g2	unshifted	0	any daemon send vs none	3239	65433	0.00679222	0.499017
+2	0.1	g2	unshifted	0	own vs other	55	164554	0	0.487329
+2	0.1	g2	unshifted	0	any daemon send vs none	7825	156784	0.00945687	0.501264
+3	0.1	g2	unshifted	0	own vs other	36	113267	0	0.478763
+3	0.1	g2	unshifted	0	any daemon send vs none	5155	108148	0.00834142	0.502364
+4	0.1	g2	unshifted	0	own vs other	12	35796	0	0.453696
+4	0.1	g2	unshifted	0	any daemon send vs none	1696	34112	0.0566038	0.573696
+5	0.1	g2	unshifted	0	own vs other	107	318882	0.00934579	0.502552
+5	0.1	g2	unshifted	0	any daemon send vs none	14967	304022	0.00995523	0.500938
+all	0.1	g2	unshifted	0	own vs other	453	1383576	0.00441501	0.492885
+all	0.1	g2	unshifted	0	any daemon send vs none	65015	1319014	0.00979774	0.502487
+0	0.1	sum	unshifted	0	own vs other	220	682428	0.895455	0.962082
+0	0.1	sum	unshifted	0	any daemon send vs none	32133	650515	0.192357	0.894692
+1	0.1	sum	unshifted	0	own vs other	23	68649	0.347826	0.625289
+1	0.1	sum	unshifted	0	any daemon send vs none	3239	65433	0.164557	0.838534
+2	0.1	sum	unshifted	0	own vs other	55	164554	0.763636	0.918534
+2	0.1	sum	unshifted	0	any daemon send vs none	7825	156784	0.179297	0.866404
+3	0.1	sum	unshifted	0	own vs other	36	113267	0.833333	0.94211
+3	0.1	sum	unshifted	0	any daemon send vs none	5155	108148	0.172842	0.847925
+4	0.1	sum	unshifted	0	own vs other	12	35796	0.666667	0.790139
+4	0.1	sum	unshifted	0	any daemon send vs none	1696	34112	0.176297	0.867293
+5	0.1	sum	unshifted	0	own vs other	107	318882	0.616822	0.940727
+5	0.1	sum	unshifted	0	any daemon send vs none	14967	304022	0.184138	0.869995
+all	0.1	sum	unshifted	0	own vs other	453	1383576	0.825607	0.92843
+all	0.1	sum	unshifted	0	any daemon send vs none	65015	1319014	0.181927	0.878113
+0	1	g0	shifted	0	own vs other	216	66808	0.0324074	0.74559
+0	1	g0	shifted	0	any daemon send vs none	20442	46582	0.16109	0.754066
+1	1	g0	shifted	0	own vs other	21	6703	0.047619	0.704386
+1	1	g0	shifted	0	any daemon send vs none	2215	4509	0.161625	0.761221
+2	1	g0	shifted	0	own vs other	54	16073	0	0.879048
+2	1	g0	shifted	0	any daemon send vs none	5086	11041	0.178923	0.763048
+3	1	g0	shifted	0	own vs other	33	11055	0	0.83648
+3	1	g0	shifted	0	any daemon send vs none	3339	7749	0.180892	0.776932
+4	1	g0	shifted	0	own vs other	11	3508	0	0.918446
+4	1	g0	shifted	0	any daemon send vs none	1078	2441	0.191095	0.786815
+5	1	g0	shifted	0	own vs other	107	31205	0.046729	0.804261
+5	1	g0	shifted	0	any daemon send vs none	9590	21722	0.183629	0.760627
+all	1	g0	shifted	0	own vs other	442	135352	0.0316742	0.783984
+all	1	g0	shifted	0	any daemon send vs none	41750	94044	0.170419	0.759596
+0	1	g1	shifted	0	own vs other	216	66808	0.00925926	0.731848
+0	1	g1	shifted	0	any daemon send vs none	20442	46582	0.147784	0.724774
+1	1	g1	shifted	0	own vs other	21	6703	0	0.523856
+1	1	g1	shifted	0	any daemon send vs none	2215	4509	0.0532731	0.599209
+2	1	g1	shifted	0	own vs other	54	16073	0.037037	0.604656
+2	1	g1	shifted	0	any daemon send vs none	5086	11041	0.084939	0.646635
+3	1	g1	shifted	0	own vs other	33	11055	0	0.537111
+3	1	g1	shifted	0	any daemon send vs none	3339	7749	0.0473196	0.610593
+4	1	g1	shifted	0	own vs other	11	3508	0	0.503758
+4	1	g1	shifted	0	any daemon send vs none	1078	2441	0.0111317	0.501976
+5	1	g1	shifted	0	own vs other	107	31205	0.0280374	0.64229
+5	1	g1	shifted	0	any daemon send vs none	9590	21722	0.0419187	0.685609
+all	1	g1	shifted	0	own vs other	442	135352	0.0158371	0.664363
+all	1	g1	shifted	0	any daemon send vs none	41750	94044	0.104479	0.684688
+0	1	g2	shifted	0	own vs other	216	66808	0.00462963	0.474237
+0	1	g2	shifted	0	any daemon send vs none	20442	46582	0.0117405	0.500249
+1	1	g2	shifted	0	own vs other	21	6703	0	0.518904
+1	1	g2	shifted	0	any daemon send vs none	2215	4509	0.00632054	0.492334
+2	1	g2	shifted	0	own vs other	54	16073	0	0.49015
+2	1	g2	shifted	0	any daemon send vs none	5086	11041	0.0110106	0.499342
+3	1	g2	shifted	0	own vs other	33	11055	0	0.461667
+3	1	g2	shifted	0	any daemon send vs none	3339	7749	0.00688829	0.503632
+4	1	g2	shifted	0	own vs other	11	3508	0	0.466648
+4	1	g2	shifted	0	any daemon send vs none	1078	2441	0.00927644	0.587424
+5	1	g2	shifted	0	own vs other	107	31205	0	0.495623
+5	1	g2	shifted	0	any daemon send vs none	9590	21722	0.00938478	0.499952
+all	1	g2	shifted	0	own vs other	442	135352	0.00452489	0.482429
+all	1	g2	shifted	0	any daemon send vs none	41750	94044	0.010012	0.501967
+0	1	sum	shifted	0	own vs other	216	66808	0.0324074	0.955648
+0	1	sum	shifted	0	any daemon send vs none	20442	46582	0.17919	0.775811
+1	1	sum	shifted	0	own vs other	21	6703	0.047619	0.688235
+1	1	sum	shifted	0	any daemon send vs none	2215	4509	0.0961625	0.718611
+2	1	sum	shifted	0	own vs other	54	16073	0.0185185	0.953923
+2	1	sum	shifted	0	any daemon send vs none	5086	11041	0.105781	0.739995
+3	1	sum	shifted	0	own vs other	33	11055	0	0.89399
+3	1	sum	shifted	0	any daemon send vs none	3339	7749	0.0877508	0.704633
+4	1	sum	shifted	0	own vs other	11	3508	0	0.891624
+4	1	sum	shifted	0	any daemon send vs none	1078	2441	0.0983302	0.734434
+5	1	sum	shifted	0	own vs other	107	31205	0.0280374	0.932444
+5	1	sum	shifted	0	any daemon send vs none	9590	21722	0.0729927	0.736287
+all	1	sum	shifted	0	own vs other	442	135352	0.0316742	0.930269
+all	1	sum	shifted	0	any daemon send vs none	41750	94044	0.0980599	0.751243
+0	1	g0	unshifted	0	own vs other	216	66808	0.0324074	0.74559
+0	1	g0	unshifted	0	any daemon send vs none	20442	46582	0.16109	0.754066
+1	1	g0	unshifted	0	own vs other	21	6703	0.047619	0.704386
+1	1	g0	unshifted	0	any daemon send vs none	2215	4509	0.161625	0.761221
+2	1	g0	unshifted	0	own vs other	54	16073	0	0.879048
+2	1	g0	unshifted	0	any daemon send vs none	5086	11041	0.178923	0.763048
+3	1	g0	unshifted	0	own vs other	33	11055	0	0.83648
+3	1	g0	unshifted	0	any daemon send vs none	3339	7749	0.180892	0.776932
+4	1	g0	unshifted	0	own vs other	11	3508	0	0.918446
+4	1	g0	unshifted	0	any daemon send vs none	1078	2441	0.191095	0.786815
+5	1	g0	unshifted	0	own vs other	107	31205	0.046729	0.804261
+5	1	g0	unshifted	0	any daemon send vs none	9590	21722	0.183629	0.760627
+all	1	g0	unshifted	0	own vs other	442	135352	0.0316742	0.783984
+all	1	g0	unshifted	0	any daemon send vs none	41750	94044	0.170419	0.759596
+0	1	g1	unshifted	0	own vs other	216	66808	0.00925926	0.731848
+0	1	g1	unshifted	0	any daemon send vs none	20442	46582	0.147784	0.724774
+1	1	g1	unshifted	0	own vs other	21	6703	0	0.523856
+1	1	g1	unshifted	0	any daemon send vs none	2215	4509	0.0532731	0.599209
+2	1	g1	unshifted	0	own vs other	54	16073	0.037037	0.604656
+2	1	g1	unshifted	0	any daemon send vs none	5086	11041	0.084939	0.646635
+3	1	g1	unshifted	0	own vs other	33	11055	0	0.537111
+3	1	g1	unshifted	0	any daemon send vs none	3339	7749	0.0473196	0.610593
+4	1	g1	unshifted	0	own vs other	11	3508	0	0.503758
+4	1	g1	unshifted	0	any daemon send vs none	1078	2441	0.0111317	0.501976
+5	1	g1	unshifted	0	own vs other	107	31205	0.0280374	0.64229
+5	1	g1	unshifted	0	any daemon send vs none	9590	21722	0.0419187	0.685609
+all	1	g1	unshifted	0	own vs other	442	135352	0.0158371	0.664363
+all	1	g1	unshifted	0	any daemon send vs none	41750	94044	0.104479	0.684688
+0	1	g2	unshifted	0	own vs other	216	66808	0.00462963	0.474237
+0	1	g2	unshifted	0	any daemon send vs none	20442	46582	0.0117405	0.500249
+1	1	g2	unshifted	0	own vs other	21	6703	0	0.518904
+1	1	g2	unshifted	0	any daemon send vs none	2215	4509	0.00632054	0.492334
+2	1	g2	unshifted	0	own vs other	54	16073	0	0.49015
+2	1	g2	unshifted	0	any daemon send vs none	5086	11041	0.0110106	0.499342
+3	1	g2	unshifted	0	own vs other	33	11055	0	0.461667
+3	1	g2	unshifted	0	any daemon send vs none	3339	7749	0.00688829	0.503632
+4	1	g2	unshifted	0	own vs other	11	3508	0	0.466648
+4	1	g2	unshifted	0	any daemon send vs none	1078	2441	0.00927644	0.587424
+5	1	g2	unshifted	0	own vs other	107	31205	0	0.495623
+5	1	g2	unshifted	0	any daemon send vs none	9590	21722	0.00938478	0.499952
+all	1	g2	unshifted	0	own vs other	442	135352	0.00452489	0.482429
+all	1	g2	unshifted	0	any daemon send vs none	41750	94044	0.010012	0.501967
+0	1	sum	unshifted	0	own vs other	216	66808	0.0324074	0.955648
+0	1	sum	unshifted	0	any daemon send vs none	20442	46582	0.17919	0.775811
+1	1	sum	unshifted	0	own vs other	21	6703	0.047619	0.688235
+1	1	sum	unshifted	0	any daemon send vs none	2215	4509	0.0961625	0.718611
+2	1	sum	unshifted	0	own vs other	54	16073	0.0185185	0.953923
+2	1	sum	unshifted	0	any daemon send vs none	5086	11041	0.105781	0.739995
+3	1	sum	unshifted	0	own vs other	33	11055	0	0.89399
+3	1	sum	unshifted	0	any daemon send vs none	3339	7749	0.0877508	0.704633
+4	1	sum	unshifted	0	own vs other	11	3508	0	0.891624
+4	1	sum	unshifted	0	any daemon send vs none	1078	2441	0.0983302	0.734434
+5	1	sum	unshifted	0	own vs other	107	31205	0.0280374	0.932444
+5	1	sum	unshifted	0	any daemon send vs none	9590	21722	0.0729927	0.736287
+all	1	sum	unshifted	0	own vs other	442	135352	0.0316742	0.930269
+all	1	sum	unshifted	0	any daemon send vs none	41750	94044	0.0980599	0.751243
+0	10	g0	shifted	0	own vs other	207	6505	0.0724638	0.778188
+0	10	g0	shifted	0	any daemon send vs none	6463	249	0.0943834	0.787863
+1	10	g0	shifted	0	own vs other	20	646	0.05	0.792376
+1	10	g0	shifted	0	any daemon send vs none	653	13	0.0398162	0.778066
+2	10	g0	shifted	0	own vs other	50	1542	0.1	0.892931
+2	10	g0	shifted	0	any daemon send vs none	1557	35	0.0944123	0.758693
+3	10	g0	shifted	0	own vs other	32	1063	0	0.765625
+3	10	g0	shifted	0	any daemon send vs none	1076	19	0.292751	0.709426
+4	10	g0	shifted	0	own vs other	11	337	0	0.816293
+4	10	g0	shifted	0	any daemon send vs none	328	20	0.246951	0.740015
+5	10	g0	shifted	0	own vs other	102	3044	0.0392157	0.847765
+5	10	g0	shifted	0	any daemon send vs none	3053	93	0.164101	0.740877
+all	10	g0	shifted	0	own vs other	422	13137	0.0758294	0.808322
+all	10	g0	shifted	0	any daemon send vs none	13130	429	0.0868241	0.769143
+0	10	g1	shifted	0	own vs other	207	6505	0.0628019	0.817454
+0	10	g1	shifted	0	any daemon send vs none	6463	249	0.0946929	0.772642
+1	10	g1	shifted	0	own vs other	20	646	0.15	0.555766
+1	10	g1	shifted	0	any daemon send vs none	653	13	0.150077	0.698374
+2	10	g1	shifted	0	own vs other	50	1542	0.04	0.758165
+2	10	g1	shifted	0	any daemon send vs none	1557	35	0.046885	0.693999
+3	10	g1	shifted	0	own vs other	32	1063	0.0625	0.577052
+3	10	g1	shifted	0	any daemon send vs none	1076	19	0.0343866	0.530473
+4	10	g1	shifted	0	own vs other	11	337	0	0.501753
+4	10	g1	shifted	0	any daemon send vs none	328	20	0.231707	0.612195
+5	10	g1	shifted	0	own vs other	102	3044	0.0196078	0.777793
+5	10	g1	shifted	0	any daemon send vs none	3053	93	0.0687848	0.674803
+all	10	g1	shifted	0	own vs other	422	13137	0.0663507	0.756063
+all	10	g1	shifted	0	any daemon send vs none	13130	429	0.051866	0.727587
+0	10	g2	shifted	0	own vs other	207	6505	0.00966184	0.479255
+0	10	g2	shifted	0	any daemon send vs none	6463	249	0.0165558	0.516546
+1	10	g2	shifted	0	own vs other	20	646	0	0.476277
+1	10	g2	shifted	0	any daemon send vs none	653	13	0.0459418	0.475262
+2	10	g2	shifted	0	own vs other	50	1542	0	0.543612
+2	10	g2	shifted	0	any daemon send vs none	1557	35	0.0205523	0.533251
+3	10	g2	shifted	0	own vs other	32	1063	0	0.468074
+3	10	g2	shifted	0	any daemon send vs none	1076	19	0.010223	0.407503
+4	10	g2	shifted	0	own vs other	11	337	0	0.634475
+4	10	g2	shifted	0	any daemon send vs none	328	20	0.0426829	0.446341
+5	10	g2	shifted	0	own vs other	102	3044	0.0196078	0.485537
+5	10	g2	shifted	0	any daemon send vs none	3053	93	0.00262037	0.487289
+all	10	g2	shifted	0	own vs other	422	13137	0.00473934	0.487532
+all	10	g2	shifted	0	any daemon send vs none	13130	429	0.00860625	0.51461
+0	10	sum	shifted	0	own vs other	207	6505	0.0821256	0.831135
+0	10	sum	shifted	0	any daemon send vs none	6463	249	0.121461	0.787215
+1	10	sum	shifted	0	own vs other	20	646	0.05	0.738893
+1	10	sum	shifted	0	any daemon send vs none	653	13	0.0474732	0.711862
+2	10	sum	shifted	0	own vs other	50	1542	0.06	0.865266
+2	10	sum	shifted	0	any daemon send vs none	1557	35	0.0867052	0.720268
+3	10	sum	shifted	0	own vs other	32	1063	0.03125	0.726496
+3	10	sum	shifted	0	any daemon send vs none	1076	19	0.0622677	0.501639
+4	10	sum	shifted	0	own vs other	11	337	0	0.74103
+4	10	sum	shifted	0	any daemon send vs none	328	20	0.246951	0.652973
+5	10	sum	shifted	0	own vs other	102	3044	0.0196078	0.82362
+5	10	sum	shifted	0	any daemon send vs none	3053	93	0.0461841	0.698995
+all	10	sum	shifted	0	own vs other	422	13137	0.0616114	0.817008
+all	10	sum	shifted	0	any daemon send vs none	13130	429	0.0614623	0.74104
+0	10	g0	unshifted	0	own vs other	207	6505	0.0724638	0.778188
+0	10	g0	unshifted	0	any daemon send vs none	6463	249	0.0943834	0.787863
+1	10	g0	unshifted	0	own vs other	20	646	0.05	0.792376
+1	10	g0	unshifted	0	any daemon send vs none	653	13	0.0398162	0.778066
+2	10	g0	unshifted	0	own vs other	50	1542	0.1	0.892931
+2	10	g0	unshifted	0	any daemon send vs none	1557	35	0.0944123	0.758693
+3	10	g0	unshifted	0	own vs other	32	1063	0	0.765625
+3	10	g0	unshifted	0	any daemon send vs none	1076	19	0.292751	0.709426
+4	10	g0	unshifted	0	own vs other	11	337	0	0.816293
+4	10	g0	unshifted	0	any daemon send vs none	328	20	0.246951	0.740015
+5	10	g0	unshifted	0	own vs other	102	3044	0.0392157	0.847765
+5	10	g0	unshifted	0	any daemon send vs none	3053	93	0.164101	0.740877
+all	10	g0	unshifted	0	own vs other	422	13137	0.0758294	0.808322
+all	10	g0	unshifted	0	any daemon send vs none	13130	429	0.0868241	0.769143
+0	10	g1	unshifted	0	own vs other	207	6505	0.0628019	0.817454
+0	10	g1	unshifted	0	any daemon send vs none	6463	249	0.0946929	0.772642
+1	10	g1	unshifted	0	own vs other	20	646	0.15	0.555766
+1	10	g1	unshifted	0	any daemon send vs none	653	13	0.150077	0.698374
+2	10	g1	unshifted	0	own vs other	50	1542	0.04	0.758165
+2	10	g1	unshifted	0	any daemon send vs none	1557	35	0.046885	0.693999
+3	10	g1	unshifted	0	own vs other	32	1063	0.0625	0.577052
+3	10	g1	unshifted	0	any daemon send vs none	1076	19	0.0343866	0.530473
+4	10	g1	unshifted	0	own vs other	11	337	0	0.501753
+4	10	g1	unshifted	0	any daemon send vs none	328	20	0.231707	0.612195
+5	10	g1	unshifted	0	own vs other	102	3044	0.0196078	0.777793
+5	10	g1	unshifted	0	any daemon send vs none	3053	93	0.0687848	0.674803
+all	10	g1	unshifted	0	own vs other	422	13137	0.0663507	0.756063
+all	10	g1	unshifted	0	any daemon send vs none	13130	429	0.051866	0.727587
+0	10	g2	unshifted	0	own vs other	207	6505	0.00966184	0.479255
+0	10	g2	unshifted	0	any daemon send vs none	6463	249	0.0165558	0.516546
+1	10	g2	unshifted	0	own vs other	20	646	0	0.476277
+1	10	g2	unshifted	0	any daemon send vs none	653	13	0.0459418	0.475262
+2	10	g2	unshifted	0	own vs other	50	1542	0	0.543612
+2	10	g2	unshifted	0	any daemon send vs none	1557	35	0.0205523	0.533251
+3	10	g2	unshifted	0	own vs other	32	1063	0	0.468074
+3	10	g2	unshifted	0	any daemon send vs none	1076	19	0.010223	0.407503
+4	10	g2	unshifted	0	own vs other	11	337	0	0.634475
+4	10	g2	unshifted	0	any daemon send vs none	328	20	0.0426829	0.446341
+5	10	g2	unshifted	0	own vs other	102	3044	0.0196078	0.485537
+5	10	g2	unshifted	0	any daemon send vs none	3053	93	0.00262037	0.487289
+all	10	g2	unshifted	0	own vs other	422	13137	0.00473934	0.487532
+all	10	g2	unshifted	0	any daemon send vs none	13130	429	0.00860625	0.51461
+0	10	sum	unshifted	0	own vs other	207	6505	0.0821256	0.831135
+0	10	sum	unshifted	0	any daemon send vs none	6463	249	0.121461	0.787215
+1	10	sum	unshifted	0	own vs other	20	646	0.05	0.738893
+1	10	sum	unshifted	0	any daemon send vs none	653	13	0.0474732	0.711862
+2	10	sum	unshifted	0	own vs other	50	1542	0.06	0.865266
+2	10	sum	unshifted	0	any daemon send vs none	1557	35	0.0867052	0.720268
+3	10	sum	unshifted	0	own vs other	32	1063	0.03125	0.726496
+3	10	sum	unshifted	0	any daemon send vs none	1076	19	0.0622677	0.501639
+4	10	sum	unshifted	0	own vs other	11	337	0	0.74103
+4	10	sum	unshifted	0	any daemon send vs none	328	20	0.246951	0.652973
+5	10	sum	unshifted	0	own vs other	102	3044	0.0196078	0.82362
+5	10	sum	unshifted	0	any daemon send vs none	3053	93	0.0461841	0.698995
+all	10	sum	unshifted	0	own vs other	422	13137	0.0616114	0.817008
+all	10	sum	unshifted	0	any daemon send vs none	13130	429	0.0614623	0.74104
