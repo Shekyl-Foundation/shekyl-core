@@ -145,19 +145,24 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
 }
 
 /// `tx_relay` on a running node with no network (clearnet and Tor off):
-/// the host's re-offer answers the held entry, and a caller without the
+/// the host's re-offer answers the held entry and enters the stem entry
+/// the node installed, which no longer holds it; a caller without the
 /// host's view is not shown it and its re-offer reaches nothing (IG-Q89).
 ///
-/// What the re-offer does to the entry is
-/// `a_reoffer_through_the_offline_stem_entry_shows_the_entry`'s. Here it
-/// cannot be read: showing the entry wakes the tip follower (Q9), whose
-/// reconcile judges the pool against the chain and drops this fixture,
-/// which the chain would refuse. A listing read after the re-offer races
+/// That the entry turns public is
+/// `a_reoffer_through_the_offline_stem_entry_shows_the_entry`'s claim. Here
+/// a listing cannot read it: showing the entry wakes the tip follower (Q9),
+/// whose reconcile judges the pool against the chain and drops this
+/// fixture, which the chain would refuse. A read after the re-offer races
 /// that removal, and on a loaded runner the removal won (run 43719108962,
-/// all three tries).
+/// all three tries). What holds either way is that the entry is no longer
+/// held: the pool's record is public, or gone by the reconcile its showing
+/// woke. This node does not mine and the follower has no timer, so nothing
+/// else wakes it, and an entry the stem left alone is still held.
 ///
-/// Red edits: `tx_relay` gives a caller without the host's view the
-/// held entry; `PoolBridge::relay` answers no id it offered.
+/// Red edits: `tx_relay` gives a caller without the host's view the held
+/// entry; `PoolBridge::relay` answers no id it offered; the node installs
+/// a stem entry that does not show what it is offered.
 #[test]
 fn a_reoffer_enters_the_stem_entry_a_submission_takes() {
     use shekyl_chain_store::pool::{PoolRecord, ReceivedHour};
@@ -199,6 +204,7 @@ fn a_reoffer_enters_the_stem_entry_a_submission_takes() {
         &RelayIds { id: vec![id] },
         PoolScope::WithUnbroadcast,
     );
+    let after_host = pool.lock().expect("the pool").relay_view().record(&held);
     node.stop();
     assert!(!before, "a held entry is not public");
     assert_eq!(
@@ -211,6 +217,10 @@ fn a_reoffer_enters_the_stem_entry_a_submission_takes() {
     assert_eq!(
         host.unwrap_or_else(|_| panic!("the host's re-offer answers")),
         vec![Slot::Item(id)]
+    );
+    assert!(
+        !matches!(after_host, Some(PoolRecord { public: false, .. })),
+        "the node's stem entry no longer holds the re-offered entry: {after_host:?}"
     );
 }
 
