@@ -140,6 +140,6 @@ scripts/ci/test_run_live_tor_tests.sh	grep-gates:grep-gates
 scripts/ci/test_tor_pin_gates.py	grep-gates:grep-gates
 scripts/ci/windows_probe.ps1	build:build-windows-msvc
 scripts/ci/with_small_disk.sh	none
-scripts/ci/check_fuzz_inventory.py	fuzz-harness:scope,nightly:fuzz-targets
+scripts/ci/check_fuzz_inventory.py	fuzz-harness:compile,fuzz-harness:scope,nightly:fuzz-targets
 scripts/ci/test_check_fuzz_inventory.py	fuzz-harness:scope,nightly:fuzz-targets
 scripts/ci/fuzz_run.py	nightly:fuzz,nightly:fuzz-summary,nightly:fuzz-targets,nightly:fuzz-weekly,nightly:report-red
