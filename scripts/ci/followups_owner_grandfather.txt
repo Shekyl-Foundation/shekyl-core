@@ -3,7 +3,7 @@
 # Owner: by leaving it; a row that is resolved must leave it (the gate goes red
 # when a listed heading is gone). Never add a row here except at a merge that
 # lands a row written before this gate existed.
-Thirteen crates meet the feature-governance trigger ungoverned
+Twelve crates meet the feature-governance trigger ungoverned
 `PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.
 CEN-A7's per-block transaction-count bound is `10^6` (`shekyl_wire::READ_LEN_CAP`), a parser length cap with no derivation.
 `PRINCIPAL_STAKE_LIFECYCLE.md` §4a PR-row table: the dated UPDATE / Corrected chains accrete instead of resolving; PR-P4's row is the extreme case.
