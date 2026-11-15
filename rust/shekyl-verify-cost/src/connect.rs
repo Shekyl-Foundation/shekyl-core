@@ -227,11 +227,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
     let inputs: Vec<Input> = adm
         .key_images
         .iter()
-        .map(|ki| Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: *ki.as_bytes(),
-        })
+        .map(|ki| Input::fcmp_spend(*ki))
         .collect();
     assert_eq!(inputs.len(), n_in, "admission fixture input arity");
 
@@ -287,9 +283,9 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
 
     let pqc_auths: Vec<PqcAuth> = (0..n_in)
         .map(|_| PqcAuth {
-            auth_version: 1,
+            auth_version: PqcAuth::VERSION,
             scheme_id: HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
-            flags: 0,
+            flags: PqcAuth::NO_FLAGS,
             hybrid_public_key: pqc.public_key.clone(),
             hybrid_signature: pqc.signature.clone(),
         })
@@ -299,7 +295,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
 
     let tx = Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs,
             outputs,
             extra,

@@ -523,7 +523,7 @@ fn build_fixture() -> SpendFixture {
         reference_block: signed.reference_block,
         fcmp_proof: signed.fcmp_proof.clone(),
         pqc_auths: vec![BuilderPqcAuth {
-            auth_version: 1,
+            auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
             signature: Vec::new(),
             public_key: su.pqc_pk.clone(),
         }],
@@ -741,12 +741,12 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         fcmp_proof: signed.fcmp_proof.clone(),
         pqc_auths: vec![
             BuilderPqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
                 signature: Vec::new(),
                 public_key: su.pqc_pk.clone(),
             },
             BuilderPqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
                 signature: Vec::new(),
                 public_key: p_pubkey.clone(),
             },
@@ -766,7 +766,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
-        auth_version: 1,
+        auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
         signature: bond_sig
             .to_canonical_bytes()
             .expect("encode bond auth signature"),
@@ -1635,12 +1635,12 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         fcmp_proof: signed.fcmp_proof.clone(),
         pqc_auths: vec![
             BuilderPqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
                 signature: Vec::new(),
                 public_key: su.pqc_pk.clone(),
             },
             BuilderPqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
                 signature: Vec::new(),
                 public_key: slot_pk.clone(),
             },
@@ -1671,7 +1671,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
-        auth_version: 1,
+        auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
         signature: bond_sig
             .to_canonical_bytes()
             .expect("encode bond auth signature"),

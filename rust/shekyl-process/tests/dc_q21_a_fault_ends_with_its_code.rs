@@ -100,8 +100,7 @@ fn run_child(mode: &str, test: &str, cwd: &Path) -> Ended {
         .stderr(Stdio::piped());
     // Under the spawn lock: this binary links the managed-Tor launch, so
     // every process it starts takes the lock (TOR_SUPERVISOR.md §4.7).
-    let child =
-        shekyl_tor_control_client::spawn_lock::spawn(&mut command).expect("spawn the child");
+    let child = shekyl_spawn::spawn_lock::spawn(&mut command).expect("spawn the child");
     let pid = child.id();
     let out = child.wait_with_output().expect("wait for the child");
     Ended { pid, out }

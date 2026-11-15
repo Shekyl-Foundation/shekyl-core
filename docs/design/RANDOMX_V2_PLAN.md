@@ -51,6 +51,8 @@ isProject: false
 **Status:** LIVING CONTRACT (as of 2026-09-16). Phases 0–5 landed; the release-time algorithm-review gate remains. YAML `trackb-gate-check` deleted (moot: Phase 3 landed; no discharge recorded).
 ## Sequencing rationale
 
+> **Superseded for the daemon's caches (2026-11-14).** Wherever this plan names `CacheStore`, in the phase list above, the diagram below and the decisions after it, that type is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The plan stands as the record of what was ruled and built.
+
 Three independent gates govern when phases land.
 
 **Wallet-migration gate (Track B).** Historical: the wallet rewrite churned `shekyl-ffi` while Phase 3 was scoped. Phase 3 landed (PR #235). The YAML `trackb-gate-check` quiet-window row is deleted (moot: Phase 3 landed; no discharge recorded). Not gated on a V3.2 wallet cutover (that train does not exist).

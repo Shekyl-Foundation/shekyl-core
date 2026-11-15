@@ -15,7 +15,7 @@
 //!
 //! The full genesis tx/block surface: [`BlockHeader`], [`Block`], [`Transaction`]
 //! (v3); inputs — `gen` ([`Input::Gen`]), the FCMP++ spend ([`Input::ToKey`]), and
-//! the archival arms ([`Input::ServeCredit`] / [`Input::BondPost`]); the
+//! the archival arms ([`Input::BondPost`] / [`Input::ArchivalRewardEmission`]); the
 //! `tagged_key` output ([`Output`]); both confidential sections (`Null` with its
 //! committed base [`CtBase`], and `Fcmp` with tx-level [`PqcAuth`]s + [`Prunable`]);
 //! the consensus hashing identities (tx/block hash + PoW blob); `tx_extra` parsing

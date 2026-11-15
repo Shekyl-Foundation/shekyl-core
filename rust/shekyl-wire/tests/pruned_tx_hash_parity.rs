@@ -128,12 +128,10 @@ fn kat_prunable() -> Prunable {
 fn build_tx(with_prunable: bool) -> Transaction {
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: vec![],
-                key_image: [0x42u8; 32],
-            }],
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
+            inputs: vec![Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+                [0x42u8; 32],
+            ))],
             outputs: vec![
                 Output {
                     amount: 0,
@@ -157,9 +155,9 @@ fn build_tx(with_prunable: bool) -> Transaction {
                 commitments: vec![BASEPOINT, BASEPOINT],
             },
             pqc_auths: vec![PqcAuth {
-                auth_version: 1,
-                scheme_id: 1,
-                flags: 0,
+                auth_version: PqcAuth::VERSION,
+                scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                flags: PqcAuth::NO_FLAGS,
                 hybrid_public_key: vec![0u8; PQC_HYBRID_SINGLE_KEY_LEN],
                 hybrid_signature: vec![0u8; PQC_HYBRID_SINGLE_SIG_LEN],
             }],

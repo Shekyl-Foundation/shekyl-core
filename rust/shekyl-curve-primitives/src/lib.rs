@@ -115,6 +115,15 @@ impl Commitment {
         Commitment { mask, amount }
     }
 
+    /// The opening of an output's commitment from its mask's protected
+    /// bytes: the mask is read here, in the crate that owns it, so a
+    /// caller holding a mask never interprets it (rule 36). `None` for a
+    /// mask that is not a canonical scalar.
+    pub fn from_canonical_mask(mask: &[u8; 32], amount: u64) -> Option<Commitment> {
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(*mask))
+            .map(|mask| Commitment { mask, amount })
+    }
+
     /// Calculate the Pedersen commitment, as a point, from this transparent structure.
     pub fn calculate(&self) -> EdwardsPoint {
         EdwardsPoint::multiscalar_mul(
@@ -149,5 +158,20 @@ impl Commitment {
     /// defined serialization.
     pub fn read<R: io::Read>(r: &mut R) -> io::Result<Commitment> {
         Ok(Commitment::new(read_scalar(r)?, read_u64(r)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A canonical mask opens the commitment `Commitment::new` makes from
+    /// the same scalar; bytes above the group order are not a mask.
+    #[test]
+    fn a_commitment_opens_only_from_a_canonical_mask() {
+        let mask = Scalar::from(7u64);
+        let opened = Commitment::from_canonical_mask(&mask.to_bytes(), 11).unwrap();
+        assert_eq!(opened, Commitment::new(mask, 11));
+        assert!(Commitment::from_canonical_mask(&[0xFF; 32], 11).is_none());
     }
 }

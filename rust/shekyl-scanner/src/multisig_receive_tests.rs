@@ -136,8 +136,7 @@ fn member_scanner(g: &Group, i: u8) -> Scanner {
             i,
             g.address.n_total(),
             g.address.m_required(),
-            Zeroizing::new(member.x25519),
-            Zeroizing::new(member.ml_kem.clone()),
+            member.clone(),
             NET,
         ),
     )

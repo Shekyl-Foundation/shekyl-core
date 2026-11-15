@@ -75,6 +75,9 @@ pub enum SpendIntentError {
     #[error("field '{0}' too long to serialize (length exceeds u32 wire prefix)")]
     FieldTooLong(&'static str),
 
+    #[error("the canonical bytes do not parse at '{0}'")]
+    Malformed(&'static str),
+
     #[error("address_fingerprint mismatch")]
     AddressFingerprintMismatch,
 
@@ -282,6 +285,100 @@ impl SpendIntent {
         buf.extend_from_slice(&self.kem_randomness_seed);
         buf.extend_from_slice(&self.chain_state_fingerprint);
         Ok(buf)
+    }
+
+    /// Parse [`Self::to_canonical_bytes`]' layout exactly. Every count and
+    /// length is bounded before it is read (signers by the participant cap,
+    /// recipients by [`MAX_RECIPIENTS`], addresses by [`MAX_ADDRESS_LEN`],
+    /// inputs by [`MAX_INPUTS`]), and the bytes must end with the intent.
+    /// Parsing is not validation: [`Self::validate_structural`] still runs.
+    ///
+    /// # Errors
+    ///
+    /// [`SpendIntentError::Malformed`] naming the field that does not parse.
+    pub fn from_canonical_bytes(mut bytes: &[u8]) -> Result<Self, SpendIntentError> {
+        fn take<'b>(
+            bytes: &mut &'b [u8],
+            n: usize,
+            field: &'static str,
+        ) -> Result<&'b [u8], SpendIntentError> {
+            if bytes.len() < n {
+                return Err(SpendIntentError::Malformed(field));
+            }
+            let (head, rest) = bytes.split_at(n);
+            *bytes = rest;
+            Ok(head)
+        }
+        fn arr<const N: usize>(
+            bytes: &mut &[u8],
+            field: &'static str,
+        ) -> Result<[u8; N], SpendIntentError> {
+            Ok(take(bytes, N, field)?.try_into().expect("N bytes"))
+        }
+        fn u64_of(bytes: &mut &[u8], field: &'static str) -> Result<u64, SpendIntentError> {
+            Ok(u64::from_le_bytes(arr(bytes, field)?))
+        }
+        fn count(
+            bytes: &mut &[u8],
+            max: usize,
+            field: &'static str,
+        ) -> Result<usize, SpendIntentError> {
+            let n = usize::try_from(u32::from_le_bytes(arr(bytes, field)?))
+                .map_err(|_| SpendIntentError::Malformed(field))?;
+            if n > max {
+                return Err(SpendIntentError::Malformed(field));
+            }
+            Ok(n)
+        }
+
+        let version = arr::<1>(&mut bytes, "version")?[0];
+        let intent_id = arr(&mut bytes, "intent_id")?;
+        let address_fingerprint = arr(&mut bytes, "address_fingerprint")?;
+        let proposer_index = arr::<1>(&mut bytes, "proposer_index")?[0];
+        let n_signers = count(
+            &mut bytes,
+            usize::from(shekyl_address::multisig_address::MAX_MULTISIG_PARTICIPANTS),
+            "signers",
+        )?;
+        let signers = take(&mut bytes, n_signers, "signers")?.to_vec();
+        let responder_index = arr::<1>(&mut bytes, "responder_index")?[0];
+        let created_at = u64_of(&mut bytes, "created_at")?;
+        let reference_block_height = u64_of(&mut bytes, "reference_block_height")?;
+        let reference_block_hash = arr(&mut bytes, "reference_block_hash")?;
+        let n_recipients = count(&mut bytes, MAX_RECIPIENTS as usize, "recipients")?;
+        let mut recipients = Vec::with_capacity(n_recipients);
+        for _ in 0..n_recipients {
+            let len = count(&mut bytes, MAX_ADDRESS_LEN as usize, "recipient address")?;
+            let address = take(&mut bytes, len, "recipient address")?.to_vec();
+            let amount = AtomicUnits::from_raw(u64_of(&mut bytes, "recipient amount")?);
+            recipients.push(IntentRecipient { address, amount });
+        }
+        let fee = AtomicUnits::from_raw(u64_of(&mut bytes, "fee")?);
+        let n_inputs = count(&mut bytes, MAX_INPUTS as usize, "input_global_indices")?;
+        let input_global_indices = (0..n_inputs)
+            .map(|_| u64_of(&mut bytes, "input_global_indices"))
+            .collect::<Result<_, _>>()?;
+        let kem_randomness_seed = arr(&mut bytes, "kem_randomness_seed")?;
+        let chain_state_fingerprint = arr(&mut bytes, "chain_state_fingerprint")?;
+        if !bytes.is_empty() {
+            return Err(SpendIntentError::Malformed("trailing bytes"));
+        }
+        Ok(Self {
+            version,
+            intent_id,
+            address_fingerprint,
+            proposer_index,
+            signers,
+            responder_index,
+            created_at,
+            reference_block_height,
+            reference_block_hash,
+            recipients,
+            fee,
+            input_global_indices,
+            kem_randomness_seed,
+            chain_state_fingerprint,
+        })
     }
 
     /// Validate the invariants that need no chain view (checks 1, 3, 5-6, 11
@@ -517,6 +614,38 @@ mod tests {
             edit(&mut intent);
             assert_ne!(intent.intent_hash().unwrap(), base);
         }
+    }
+
+    /// The decoder is the encoder's inverse, and refuses a truncation, a
+    /// trailing byte and a count past its bound by the field's name.
+    #[test]
+    fn canonical_bytes_round_trip_and_refuse_by_field() {
+        let intent = make_test_intent();
+        let bytes = intent.to_canonical_bytes().unwrap();
+        let back = SpendIntent::from_canonical_bytes(&bytes).unwrap();
+        assert_eq!(back.to_canonical_bytes().unwrap(), bytes);
+        assert_eq!(back.intent_hash().unwrap(), intent.intent_hash().unwrap());
+        for cut in [0, 1, 66, bytes.len() - 1] {
+            assert!(
+                matches!(
+                    SpendIntent::from_canonical_bytes(&bytes[..cut]),
+                    Err(SpendIntentError::Malformed(_))
+                ),
+                "cut at {cut}"
+            );
+        }
+        let mut long = bytes.clone();
+        long.push(0);
+        assert!(matches!(
+            SpendIntent::from_canonical_bytes(&long),
+            Err(SpendIntentError::Malformed("trailing bytes"))
+        ));
+        let mut many_signers = bytes;
+        many_signers[66..70].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            SpendIntent::from_canonical_bytes(&many_signers),
+            Err(SpendIntentError::Malformed("signers"))
+        ));
     }
 
     #[test]

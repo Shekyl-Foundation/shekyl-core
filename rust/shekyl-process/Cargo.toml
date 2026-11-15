@@ -16,6 +16,10 @@ publish = false
 [dependencies]
 # `platform::current` yields the configuration's `Platform` value.
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+# The account's session directory and effective user id, from the leaf with
+# no network stack that the client resolving "this computer" reads too
+# (RPC_CHANNEL.md RT-15).
+shekyl-os-account = { path = "../shekyl-os-account" }
 tracing = "0.1"
 
 [target.'cfg(unix)'.dependencies]
@@ -38,7 +42,7 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 # The acceptance tests re-exec this binary into a child that faults; the
 # spawn lock keeps a fork from inheriting another test's descriptors.
-shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+shekyl-spawn = { path = "../shekyl-spawn" }
 tempfile = "3"
 
 [target.'cfg(windows)'.dev-dependencies]

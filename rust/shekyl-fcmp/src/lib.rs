@@ -47,3 +47,33 @@ pub const MAX_INPUTS: usize = 8;
 /// even at Bitcoin-scale adoption. This bound prevents unreasonable
 /// resource consumption during proving and caps proof size.
 pub const MAX_TREE_DEPTH: u8 = 24;
+
+/// The fewest FCMP++ layers a spend proves under: the leaf layer and one
+/// branch above it.
+pub const MIN_SPEND_LAYERS: u8 = 2;
+
+/// The on-chain `curve_trees_tree_depth` a spend proving under `layers`
+/// FCMP++ layers writes: the layer count less the leaf layer. `None` for a
+/// layer count no spend can prove under (outside
+/// [`MIN_SPEND_LAYERS`]`..=`[`MAX_TREE_DEPTH`]).
+#[must_use]
+pub fn curve_trees_tree_depth(layers: u8) -> Option<u64> {
+    (MIN_SPEND_LAYERS..=MAX_TREE_DEPTH)
+        .contains(&layers)
+        .then(|| u64::from(layers) - 1)
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+
+    /// The on-chain depth is the layer count less the leaf layer, and only
+    /// a layer count a spend can prove under has one.
+    #[test]
+    fn the_on_chain_depth_is_the_layers_above_the_leaf() {
+        assert_eq!(curve_trees_tree_depth(MIN_SPEND_LAYERS), Some(1));
+        assert_eq!(curve_trees_tree_depth(MAX_TREE_DEPTH), Some(23));
+        assert_eq!(curve_trees_tree_depth(MIN_SPEND_LAYERS - 1), None);
+        assert_eq!(curve_trees_tree_depth(MAX_TREE_DEPTH + 1), None);
+    }
+}

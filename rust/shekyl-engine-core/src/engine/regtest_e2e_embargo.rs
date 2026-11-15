@@ -15,22 +15,15 @@
 
 use super::super::*;
 use super::*;
-/// The origin's shipped retry, spelled here for these walks only.
-///
-/// The relay crate owns the derivation. The submit watchdog does not
-/// read this duration: overdue is the daemon's judgment, and this
-/// harness waits out the same interval the origin's embargo fires on.
-const ORIGIN_RETRY: Duration = Duration::from_secs(1_148);
-
 /// RX-1 on two live daemons: the origin's only peer is the sink, so it has
 /// no alternate, and its first embargo fire, at the derived retry interval
-/// (1,148 s), fluffs as the last resort (W3b): the transaction is shown at
+/// (the relay's `origin_retry_secs`), fluffs as the last resort (W3b): the transaction is shown at
 /// the origin and the next block mines it. Red on the flip binary before
 /// the relay embargo landed: the origin's transaction stayed in its stem
 /// phase for 600 s and nothing would ever have published it (2026-10-29,
 /// the probe recorded in `DRS_X_STORE_FLIP.md`'s register).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): two live daemons and the origin's 1,148 s retry"]
+#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): two live daemons and the origin's retry"]
 async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
     use shekyl_units::AtomicUnits;
 
@@ -61,7 +54,7 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
         "fixture: the origin stems its own transaction to the sink"
     );
 
-    let shown_by = submitted + ORIGIN_RETRY + Duration::from_secs(120);
+    let shown_by = submitted + origin_retry() + Duration::from_secs(120);
     let mut state = pair.stem_held(txid).await;
     while state == StemHold::Stem && Instant::now() < shown_by {
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -75,8 +68,9 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
         "the first fire with no alternate fluffs and the origin shows it"
     );
     assert!(
-        waited + Duration::from_secs(5) >= ORIGIN_RETRY,
-        "it was published at the retry interval, not before: {waited:?} against {ORIGIN_RETRY:?}"
+        waited + Duration::from_secs(5) >= origin_retry(),
+        "it was published at the retry interval, not before: {waited:?} against {:?}",
+        origin_retry()
     );
 
     let height = assert_tx_confirmed(origin, txid).await;
@@ -99,7 +93,7 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
 /// Red under fluff on expiry (the C++ behaviour §14 rejected): the first
 /// fire reaches every peer as a fluff, and the re-stem assertion fails.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): a live daemon, three simulated peers and two 1,148 s origin intervals"]
+#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): a live daemon, three simulated peers and two origin-retry intervals"]
 async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs() {
     use super::super::peer::{Heard, TestPeer};
     use shekyl_units::AtomicUnits;
@@ -242,7 +236,7 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     let first_at = first[0].at;
 
     // The first fire: the re-stem to the alternate, at the retry interval.
-    let fired_by = first_at + ORIGIN_RETRY + SLACK;
+    let fired_by = first_at + origin_retry() + SLACK;
     while of(&droppers[alternate]).is_empty() && Instant::now() < fired_by {
         assert!(
             !fluffed(&everyone),
@@ -262,7 +256,7 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     let waited = restem[0].at.duration_since(first_at);
     eprintln!("re-stemmed to the alternate {waited:?} after the first stem");
     assert!(
-        waited + Duration::from_secs(5) >= ORIGIN_RETRY,
+        waited + Duration::from_secs(5) >= origin_retry(),
         "the re-stem came at the retry interval, not before: {waited:?}"
     );
     assert!(!fluffed(&everyone), "the first fire does not fluff");
@@ -293,7 +287,7 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     }
 
     // Disarmed: no second fire, so no fluff, through a full interval.
-    let quiet_until = first_at + 2 * ORIGIN_RETRY + SLACK;
+    let quiet_until = first_at + 2 * origin_retry() + SLACK;
     while Instant::now() < quiet_until {
         assert!(
             !fluffed(&everyone),

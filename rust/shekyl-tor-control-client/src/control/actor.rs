@@ -1854,7 +1854,7 @@ mod tests {
         ])
         .stdout(std::process::Stdio::piped())
         .kill_on_drop(true);
-        let mut child = crate::spawn_lock::with(|| cmd.spawn()).expect("spawn the child");
+        let mut child = shekyl_spawn::spawn_lock::with(|| cmd.spawn()).expect("spawn the child");
         // Only once the trap is in place does a graceful stop take the whole window.
         let mut said = String::new();
         tokio::io::BufReader::new(child.stdout.take().expect("the child's stdout"))
@@ -2287,7 +2287,7 @@ mod live_tests {
             .arg("warn stderr")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let child = crate::spawn_lock::spawn(&mut cmd).expect("spawn tor");
+        let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).expect("spawn tor");
         // Guard the wait: if wait_for_control_port times out (panics), the child is
         // killed on unwind rather than orphaned. Disarmed once the port is ready.
         let mut guard = KillOnDrop(Some(child));
@@ -2696,7 +2696,7 @@ mod live_tests {
     /// close-on-exec, as C++ in the daemon's process opens one, is not in tor's
     /// descriptor table. The handshake is the evidence tor holds its control end.
     /// Fails when the launch's `pre_exec` stops calling
-    /// [`crate::inherit::StdioOnly::apply`].
+    /// [`shekyl_spawn::inherit::StdioOnly::apply`].
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
@@ -2990,12 +2990,13 @@ mod live_tests {
         }
         #[cfg(windows)]
         {
-            let status = crate::spawn_lock::status(std::process::Command::new("taskkill").args([
-                "/F",
-                "/PID",
-                &pid.to_string(),
-            ]))
-            .expect("taskkill runs");
+            let status =
+                shekyl_spawn::spawn_lock::status(std::process::Command::new("taskkill").args([
+                    "/F",
+                    "/PID",
+                    &pid.to_string(),
+                ]))
+                .expect("taskkill runs");
             assert!(status.success(), "taskkill tor");
         }
     }

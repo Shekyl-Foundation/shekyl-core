@@ -1035,7 +1035,7 @@ Nothing is lost that the design claimed to have: service evidence is
 ruling was reaching for a forensic property the mechanism had already ruled out.
 
 **This also settles a question two rounds treated as open.**
-[`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §2's deletion surface —
+[`ARCHIVAL_CREDIT_WIRE.md`](../completed/ARCHIVAL_CREDIT_WIRE.md) §2's deletion surface —
 which lists `challenge_leaf_index`, `SegmentPathOpening` and `verify_segment_path`
 — is **correct as written**, not stale. §9.5.1's *"restores the per-challenge
 binding"* refers to pinning responses to their **assignment blocks**, not to a

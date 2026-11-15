@@ -506,6 +506,7 @@ mod fetch {
                         "output_index": 0,
                         "section": [],
                         "section_body": [],
+                        "draws": 1,
                     })
                 })
                 .collect(),
