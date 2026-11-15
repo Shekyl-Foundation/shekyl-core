@@ -36,12 +36,25 @@ construction in a listed function is reviewed like a new site.
 
 # What is production code
 
-Every workspace member's `src/` tree, less the items under a cfg that holds
-only in a test build: `test`, or a feature `check_test_only_features.py`
-registers as TEST_ONLY for that crate (its `TEST_ONLY` table, read here so
-the two never drift). The reading of cfgs, and of files declared as modules
-under one, is `check_network_uniformity.py`'s, imported. Test, bench and
-example targets live outside `src/` and are not read.
+The crates the shipped binaries build (`CF-R26`, Rick, 2026-11-15): the
+set `shipped_graph.py` computes, which `check_production_graph.py` reads
+too. It is this repository's release (`cmake/BuildRust.cmake`'s roots in
+one invocation, with the release's features, every platform's
+`[target.*]` tables) and the GUI wallet's release (its pinned shekyl-core
+edges). A crate enters when either build activates it, and its sites are
+checked from the commit it enters: there is no list of crates to update.
+`shekyl-harness-wallet` and `shekyl-randomx-differential` are outside by
+construction (the gate asserts both).
+
+Within a crate in the set, its whole `src/` tree is read, less the items
+under a cfg that holds only in a test build: `test`, or a feature
+`check_test_only_features.py` registers as TEST_ONLY for that crate (its
+`TEST_ONLY` table, read here so the two never drift). A feature the
+release leaves off but that is not test-only (`shekyl-fcmp`'s `multisig`)
+is read: it is production code a wallet turns on. The reading of cfgs, and
+of files declared as modules under one, is `check_network_uniformity.py`'s,
+imported. Test, bench and example targets live outside `src/` and are not
+read.
 
 # Test-only sites
 
@@ -62,9 +75,7 @@ it finds, the census the list is reviewed against.
 
 from __future__ import annotations
 
-import json
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -75,6 +86,13 @@ from check_network_uniformity import (  # noqa: E402
     strip,
     test_file_closure,
     test_only_features,
+)
+from shipped_graph import (  # noqa: E402
+    GraphError,
+    graphs,
+    live_graphs,
+    member_dirs,
+    shipped_crates,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -164,23 +182,20 @@ TEST_ONLY_SITES: dict[tuple[str, str], str] = {
 }
 
 
-def members() -> list[tuple[str, Path]]:
-    """(crate name, its `src/`) for every workspace member."""
-    out = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
-        cwd=RUST,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if out.returncode != 0:
-        sys.exit(f"cargo metadata failed ({out.returncode}):\n{out.stderr}")
-    found = []
-    for package in json.loads(out.stdout)["packages"]:
-        src = Path(package["manifest_path"]).parent / "src"
-        if src.is_dir():
-            found.append((package["name"], src))
-    return found
+# Members the ruling names as outside the shipped set, asserted so a change
+# that pulls one in is seen (CF-R26).
+OUTSIDE = ("shekyl-harness-wallet", "shekyl-randomx-differential")
+# A member every shipped wallet links: the set must hold it (rule 47).
+INSIDE = "shekyl-crypto-pq"
+
+
+def production_crates(dirs: dict[str, Path], shipped: set[str]) -> list[tuple[str, Path]]:
+    """(crate name, its `src/`) for every member in the shipped set."""
+    return [
+        (name, path / "src")
+        for name, path in sorted(dirs.items())
+        if name in shipped and (path / "src").is_dir()
+    ]
 
 
 def enclosing(code: str, at: int) -> str:
@@ -352,13 +367,82 @@ def selftest() -> int:
             failed = 1
         else:
             print(f"selftest ok: {name}")
+
+    # A crate entering the shipped graph is checked from that commit: the
+    # path main() runs (manifests -> the set -> scan -> check), with a
+    # seeded site planted in a crate outside the graph, then that crate
+    # added as a dependency of a shipped binary, or of the GUI wallet.
+    def manifest(name: str, deps: dict) -> dict:
+        return {"package": {"name": name}, "dependencies": deps, "features": {}}
+
+    def through_the_graph(members: dict[str, dict], pin: dict) -> list[str]:
+        sources = {"lib": prod, "outside": unlisted}
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            dirs = {}
+            for crate, text in sources.items():
+                src = root / crate / "src"
+                src.mkdir(parents=True)
+                (src / "lib.rs").write_text(text, encoding="utf-8")
+                dirs[crate] = root / crate
+            shipped = shipped_crates(graphs(members, {}, ["shekyld"], [], pin))
+            crates = production_crates(dirs, shipped)
+            sites, tested, _ = scan(root, crates, {}, set())
+        return check(sites, tested, {("lib/src/lib.rs", "keys"): ("G1", 1, "a KDF's output")}, {})
+
+    gui = {"package": {"name": "shekyl-gui-wallet"}, "dependencies": {}}
+    shipped_only = {
+        "shekyld": manifest("shekyld", {"lib": {"path": "../lib"}}),
+        "lib": manifest("lib", {}),
+        "outside": manifest("outside", {}),
+    }
+    entered = {**shipped_only, "shekyld": manifest(
+        "shekyld", {"lib": {"path": "../lib"}, "outside": {"path": "../outside"}})}
+    graph_cases = [
+        ("a seeded site in a crate outside the graph: green", shipped_only, gui, False),
+        ("that crate added as a shipped binary's dependency: red", entered, gui, True),
+        ("that crate added as the GUI wallet's dependency: red", shipped_only,
+         {**gui, "dependencies": {"outside": {}}}, True),
+    ]
+    for name, members, pin, want in graph_cases:
+        try:
+            errors = through_the_graph(members, pin)
+        except GraphError as e:
+            errors = [f"graph: {e}"]
+        if bool(errors) != want:
+            print(f"selftest FAIL: {name}: {errors}")
+            failed = 1
+        else:
+            print(f"selftest ok: {name}")
     return failed
 
 
 def main() -> int:
     if "--selftest" in sys.argv[1:]:
         return selftest()
-    crates = members()
+    try:
+        shipped = shipped_crates(live_graphs())
+    except GraphError as e:
+        print(f"FAIL: {e}")
+        return 1
+    dirs = member_dirs()
+    if "--outside" in sys.argv[1:]:
+        for name in sorted(set(dirs) - shipped):
+            print(name)
+        return 0
+    errors = [
+        f"{name} is in the shipped set; CF-R26 places it outside, so a manifest change "
+        "pulled it into a release build"
+        for name in OUTSIDE
+        if name in shipped
+    ]
+    if INSIDE not in shipped:
+        errors.append(f"{INSIDE} is not in the shipped set: the set has no subject (rule 47)")
+    if errors:
+        for e in errors:
+            print(f"FAIL: {e}")
+        return 1
+    crates = production_crates(dirs, shipped)
     features = test_only_features()
     sites, tested, files = scan(RUST, crates, features, {p for p, _ in TEST_ONLY_SITES})
     if "--list" in sys.argv[1:]:
@@ -377,7 +461,8 @@ def main() -> int:
         return 1
     print(f"PASS: {len(sites)} production site(s) building a seedable generator, each listed "
           f"with its group; {len(TEST_ONLY_SITES)} test-only site(s) held in test-only code; "
-          f"{files} file(s) read")
+          f"{files} file(s) read in the {len(crates)} shipped crate(s) "
+          f"({len(dirs) - len(crates)} member(s) outside the set or without src/)")
     return 0
 
 
