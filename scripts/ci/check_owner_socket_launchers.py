@@ -64,7 +64,7 @@ REQUIRED = (
 NOT_A_SPAWN = {
     "scripts/ci/check_armed_lever_launchers.py": "a gate; its fixtures are the patterns it matches",
     "scripts/bench/test_drs_bench.py": "tests drs_bench's argv and artifact logic; spawns nothing",
-    "rust/shekyl-daemon/src/run.rs": "runs the daemon in-process with a test platform whose session directory is private",
+    "rust/shekyl-daemon/src/run_tests.rs": "runs the daemon in-process with a test platform whose session directory is private",
     "rust/shekyl-daemon/src/verify.rs": "runs the walk in-process with a test platform whose session directory is private",
     "rust/shekyl-daemon-config/src/announce.rs": "builds a configuration in-process; starts nothing",
     "rust/shekyl-daemon-config/src/owner_socket.rs": "the plan's own tests; start nothing",
