@@ -488,12 +488,11 @@ impl Regtest {
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .stdin(Stdio::null());
-        let child =
-            shekyl_tor_control_client::spawn_lock::spawn(&mut cmd).unwrap_or_else(|error| {
-                drop(std::fs::remove_dir_all(&data_dir));
-                drop(std::fs::remove_dir_all(&config_dir));
-                panic!("spawn shekyld: {error}");
-            });
+        let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).unwrap_or_else(|error| {
+            drop(std::fs::remove_dir_all(&data_dir));
+            drop(std::fs::remove_dir_all(&config_dir));
+            panic!("spawn shekyld: {error}");
+        });
         Self {
             child,
             logs: vec![data_dir.join("shekyld.log"), data_dir.join("daemon.log")],

@@ -337,6 +337,26 @@ jobs:
           # No tor WE launched may survive the run (the reap/shutdown guarantee).
           ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
 
+      - name: the owning connection under a managed Tor (shekyl-daemon, Linux)
+        # GS-C3 test 4: with the managed Tor running, the daemon's owning
+        # connection is in none of Tor's descriptors (read from /proc, so
+        # Linux only), and closing the parent's end stops the daemon and its
+        # Tor. Named, so a rename cannot drop it silently.
+        if: runner.os == 'Linux'
+        run: |
+          set -o pipefail
+          cd rust
+          if ! SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+            cargo test --locked -p shekyl-daemon --test owning_connection -- \
+              --ignored --exact tor_does_not_hold_the_owning_connection \
+              > owning-tor.out 2>&1; then
+            cat owning-tor.out
+            exit 1
+          fi
+          cat owning-tor.out
+          ../scripts/ci/require_live_tests.sh owning-tor.out tor_does_not_hold_the_owning_connection
+          ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
+
       - name: live ephemeral-onion lifecycle (shekyl-tor-control-daemon)
         run: |
           set -o pipefail

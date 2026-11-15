@@ -19,8 +19,7 @@ pub fn account_home() -> Option<PathBuf> {
     use std::ffi::{CStr, OsStr};
     use std::os::unix::ffi::OsStrExt;
 
-    // SAFETY: no preconditions; returns the effective user id.
-    let uid = unsafe { libc::geteuid() };
+    let uid = shekyl_os_account::effective_uid();
     // SAFETY: `passwd` is plain data; a zeroed value is a valid out-struct
     // for `getpwuid_r` to fill.
     let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
@@ -82,76 +81,51 @@ pub fn program_data() -> Option<PathBuf> {
     }
 }
 
-/// The account's per-user session directory, from the platform's own
-/// interface, never `XDG_RUNTIME_DIR` (IG-Q14): `/run/user/<euid>` on Linux
-/// when it is a directory (the session, or linger, keeps it), and
-/// `confstr(_CS_DARWIN_USER_TEMP_DIR)` on macOS. `None` elsewhere and when
-/// absent. What is found is only a candidate: the owner's socket asserts
-/// its owner and mode before binding (`RPC_CHANNEL.md` §7.1).
-#[must_use]
-pub fn session_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "linux")]
-    {
-        // SAFETY: no preconditions; returns the effective user id.
-        let uid = unsafe { libc::geteuid() };
-        let dir = PathBuf::from(format!("/run/user/{uid}"));
-        std::fs::symlink_metadata(&dir)
-            .is_ok_and(|meta| meta.is_dir())
-            .then_some(dir)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        darwin_user_temp_dir()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        None
+/// Linux (`RuntimeDirectory=shekyl`). The launch-recipe gate does not
+/// read this one; the unit's `RuntimeDirectory` is that check.
+const LINUX_SERVICE_RENDEZVOUS: &str = "/run/shekyl";
+
+/// FreeBSD (`contrib/packaging/freebsd/shekyld`). `/var/run` is FreeBSD's;
+/// the base system has no `/run`. The launch-recipe gate reads this
+/// constant and requires the rc.d script to create it.
+const FREEBSD_SERVICE_RENDEZVOUS: &str = "/var/run/shekyl";
+
+/// macOS, created by the installer.
+const MACOS_SERVICE_RENDEZVOUS: &str = "/Library/Application Support/Shekyl";
+
+/// The directory under `%ProgramData%` on Windows. The service-manager
+/// dispatcher that checks it is RT-W14's and is not built yet; the leaf
+/// is named now so the row is not a special case added later.
+const WINDOWS_SERVICE_RENDEZVOUS_LEAF: &str = "shekyl";
+
+/// The fixed rendezvous directory for `os` (`std::env::consts::OS`), or
+/// `None` when that operating system has no fixed directory. Windows is
+/// `None` here: its directory is [`windows_service_rendezvous`].
+fn fixed_service_rendezvous(os: &str) -> Option<&'static str> {
+    match os {
+        "linux" => Some(LINUX_SERVICE_RENDEZVOUS),
+        "freebsd" => Some(FREEBSD_SERVICE_RENDEZVOUS),
+        "macos" => Some(MACOS_SERVICE_RENDEZVOUS),
+        _ => None,
     }
 }
 
-/// `confstr(_CS_DARWIN_USER_TEMP_DIR)`: the per-user, per-boot temporary
-/// directory macOS keeps for the account, with no environment read.
-#[cfg(target_os = "macos")]
-fn darwin_user_temp_dir() -> Option<PathBuf> {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
-
-    let mut buffer = vec![0u8; 1024];
-    // SAFETY: `buffer` is a live allocation of the length passed; `confstr`
-    // writes at most that many bytes, NUL included, and returns the length
-    // it needs.
-    let needed = unsafe {
-        libc::confstr(
-            libc::_CS_DARWIN_USER_TEMP_DIR,
-            buffer.as_mut_ptr().cast::<libc::c_char>(),
-            buffer.len(),
-        )
-    };
-    if needed == 0 || needed > buffer.len() {
-        return None;
-    }
-    // `needed` counts the terminating NUL.
-    buffer.truncate(needed - 1);
-    let dir = PathBuf::from(OsStr::from_bytes(&buffer));
-    // The interface's spelling ends in a separator; the directory is the
-    // same without it.
-    Some(dir.components().collect())
+/// `%ProgramData%\shekyl`. `program_data` is the known-folder root.
+fn windows_service_rendezvous(program_data: &std::path::Path) -> PathBuf {
+    program_data.join(WINDOWS_SERVICE_RENDEZVOUS_LEAF)
 }
 
 /// The service's rendezvous directory, fixed per platform (`RPC_CHANNEL.md`
 /// §7.1): what the installer or the service manager creates, never the
-/// daemon.
+/// daemon. The paths are data, so a test on any host pins every platform.
+/// A platform with no row has no directory, and a service start there is
+/// refused. Windows is the one derived row, in flight until RT-W14.
 #[must_use]
 pub fn service_rendezvous() -> Option<PathBuf> {
-    if cfg!(target_os = "linux") {
-        Some(PathBuf::from("/run/shekyl"))
-    } else if cfg!(target_os = "macos") {
-        Some(PathBuf::from("/Library/Application Support/Shekyl"))
-    } else if cfg!(windows) {
-        program_data().map(|pd| pd.join("shekyl"))
-    } else {
-        None
+    if let Some(directory) = fixed_service_rendezvous(std::env::consts::OS) {
+        return Some(PathBuf::from(directory));
     }
+    program_data().map(|dir| windows_service_rendezvous(&dir))
 }
 
 /// This account's and this machine's roots, as the daemon's configuration
@@ -162,7 +136,9 @@ pub fn current() -> shekyl_daemon_config::Platform {
     shekyl_daemon_config::Platform {
         home: account_home(),
         program_data: program_data(),
-        session_dir: session_dir(),
+        // The session directory is read where the client that resolves
+        // "this computer" reads it (`RPC_CHANNEL.md` RT-15): one reader.
+        session_dir: shekyl_os_account::session_dir(),
         service_rendezvous: service_rendezvous(),
     }
 }
@@ -173,29 +149,48 @@ mod tests {
 
     /// The passwd home is absolute and exists for the account the tests
     /// run under; it is read without consulting `HOME`.
-    /// On Linux the session directory is `/run/user/<euid>`, or none; it is
-    /// never what `XDG_RUNTIME_DIR` says. The test sets that variable to a
-    /// directory that exists and is not the session directory.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn the_linux_session_directory_is_the_uids_and_not_the_environments() {
-        let elsewhere = tempfile::tempdir().expect("a directory");
-        // SAFETY: test-only; no other thread in this test binary reads the
-        // environment while this test runs (the crate's tests read none).
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", elsewhere.path()) };
-        // SAFETY: no preconditions.
-        let uid = unsafe { libc::geteuid() };
-        let expected = PathBuf::from(format!("/run/user/{uid}"));
-        match session_dir() {
-            Some(found) => assert_eq!(found, expected),
-            None => assert!(!expected.is_dir(), "{} exists", expected.display()),
-        }
-    }
-
     #[test]
     fn the_passwd_home_is_an_absolute_existing_directory() {
         let home = account_home().expect("the test account has a passwd entry");
         assert!(home.is_absolute(), "{}", home.display());
         assert!(home.is_dir(), "{}", home.display());
+    }
+}
+
+/// The rendezvous rows, on every host. A `cfg!` ladder would leave
+/// FreeBSD's path unexecuted on the Linux runners, and a second copy of
+/// that ladder would stay green when both copies moved together.
+#[cfg(test)]
+mod service_rendezvous_directories {
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        fixed_service_rendezvous, program_data, service_rendezvous, windows_service_rendezvous,
+    };
+
+    /// Every platform's directory is the ruled one (`RPC_CHANNEL.md`
+    /// §7.1). Red edit: return another FreeBSD path from
+    /// `fixed_service_rendezvous` and this fails on a Linux runner.
+    /// Windows' leaf is joined here without a Windows host: the
+    /// dispatcher that checks the directory is RT-W14's, still unbuilt,
+    /// and the path is not dead.
+    #[test]
+    fn every_platforms_service_rendezvous_directory_is_the_ruled_one() {
+        assert_eq!(fixed_service_rendezvous("linux"), Some("/run/shekyl"));
+        assert_eq!(fixed_service_rendezvous("freebsd"), Some("/var/run/shekyl"));
+        assert_eq!(
+            fixed_service_rendezvous("macos"),
+            Some("/Library/Application Support/Shekyl")
+        );
+        assert_eq!(fixed_service_rendezvous("windows"), None);
+        assert_eq!(fixed_service_rendezvous("openbsd"), None);
+        assert_eq!(
+            windows_service_rendezvous(Path::new(r"C:\ProgramData")),
+            PathBuf::from(r"C:\ProgramData").join("shekyl")
+        );
+        let expected = fixed_service_rendezvous(std::env::consts::OS)
+            .map(PathBuf::from)
+            .or_else(|| program_data().map(|dir| windows_service_rendezvous(&dir)));
+        assert_eq!(service_rendezvous(), expected);
     }
 }

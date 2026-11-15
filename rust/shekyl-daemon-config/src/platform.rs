@@ -40,7 +40,8 @@ pub struct Platform {
     pub session_dir: Option<PathBuf>,
     /// The service's rendezvous directory, fixed per platform and separate
     /// from the data directory (`RPC_CHANNEL.md` §7.1): `/run/shekyl` on
-    /// Linux, `/Library/Application Support/Shekyl` on macOS and
+    /// Linux, `/var/run/shekyl` on FreeBSD,
+    /// `/Library/Application Support/Shekyl` on macOS and
     /// `%ProgramData%\shekyl` on Windows. `None` where the platform names
     /// none. A service daemon checks it and never creates it.
     pub service_rendezvous: Option<PathBuf>,

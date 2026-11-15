@@ -3,24 +3,27 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The spawn lock for a process that launches a managed tor (`TOR_SUPERVISOR.md` §4.7).
+//! The process's one spawn lock.
 //!
-//! On Windows the managed tor inherits its control socket. The launch marks the
-//! parent's copy of tor's end inheritable, spawns, and closes that copy, under this
-//! lock. `CreateProcess` hands every inheritable handle in the process to whatever
-//! child it starts, and std passes `bInheritHandles = TRUE` on every spawn, so a
-//! second spawn on another thread while that copy was still open and inheritable
-//! would inherit tor's end too. A leaked copy hides tor's death from the control
-//! connection for as long as the other child lives (`TSR-F16`).
+//! **One lock per process, and a holder only spawns under it.** On Windows a
+//! child of a pair inherits its end (the managed Tor its control connection,
+//! a GUI's daemon its owning connection). The launch marks the parent's copy
+//! of the child's end inheritable, spawns, and closes that copy, under this
+//! lock. `CreateProcess` hands every inheritable handle in the process to
+//! whatever child it starts, and std passes `bInheritHandles = TRUE` on every
+//! spawn, so a second spawn on another thread while that copy was still open
+//! and inheritable would inherit the end too. A leaked copy hides the child's
+//! death from the connection for as long as the other child lives
+//! (`TOR_SUPERVISOR.md` `TSR-F16`).
 //!
 //! Closing the parent's copy is what ends the window. Clearing the inherit bit and
 //! returning while the socket is still open does not: a failed clear leaves the bit
 //! set. The socket is closed before this lock is released, whether or not the clear
 //! succeeded.
 //!
-//! Only a process that itself launches a managed tor takes the lock. A process that
-//! never calls the launch has no control socket to leak. On Unix the launch does not
-//! need the lock either: tor's end is made inheritable in the child only, after
+//! Only a process that itself hands an end to a child takes the lock. A process
+//! that never does has no end to leak. On Unix the launch does not need the
+//! lock either: the child's end is made inheritable in the child only, after
 //! `fork`. It is taken there so a spawn site reads the same on every platform.
 //!
 //! **What does not remove the lock.** `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` names the

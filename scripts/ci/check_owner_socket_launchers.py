@@ -50,6 +50,7 @@ REQUIRED = (
     "rust/shekyl-levin/tests/socks_credentials.rs",
     "rust/shekyl-levin/tests/live_daemon/mod.rs",
     "rust/shekyl-daemon/tests/owner_socket.rs",
+    "rust/shekyl-daemon/tests/owning_connection.rs",
     "rust/shekyl-daemon/tests/interrupt_inherited_ignore.rs",
     "rust/shekyl-wire/tests/vectors/capture_coinbase.py",
     "rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py",

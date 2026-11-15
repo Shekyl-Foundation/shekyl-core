@@ -35,7 +35,7 @@ use crate::calibration::{
     tree_depth_for_leaves, PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB,
     RUCKNIUM_SPAM_FEES_XMR,
 };
-use crate::chain_cursor::{ChainCursor, ChainStep};
+use crate::chain_cursor::{ChainCursor, ChainStep, OwnFee, PricedBlock};
 use crate::engine::{emitted_at_start, ScenarioConfig, SimParams};
 use crate::escalation::{
     family, flat_25, floor_share, steepest, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND,
@@ -437,6 +437,43 @@ fn note_cap_crossing(first_at_cap: &mut Option<u64>, n_now: u64) {
 /// pass). Mirrors `budget.rs`'s per-block economics.
 #[must_use]
 pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAgg> {
+    a1_year_aggs_probed(params, config, &mut NoProbe)
+}
+
+/// One block a fold priced, as an instrument reads it
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.32).
+pub(crate) struct BlockSeen<'b, 'a> {
+    /// The block's index from the scenario's first block.
+    pub(crate) block: u64,
+    pub(crate) priced: &'b PricedBlock<'a>,
+    /// Coins generated through this block.
+    pub(crate) already_generated: u128,
+}
+
+/// What an instrument asks of a fold, block by block. Both default to
+/// nothing, so a fold probed by [`NoProbe`] is [`a1_year_aggs`].
+pub(crate) trait FoldProbe {
+    /// What the producer's own bodies pay at `block`, when it lists any
+    /// (`chain_cursor::ChainCursor::price_with_own`).
+    fn own_bodies(&mut self, _block: u64) -> Option<OwnFee> {
+        None
+    }
+
+    /// The block just priced.
+    fn seen(&mut self, _seen: &BlockSeen<'_, '_>) {}
+}
+
+/// The probe that asks nothing.
+pub(crate) struct NoProbe;
+
+impl FoldProbe for NoProbe {}
+
+/// [`a1_year_aggs`], with `probe` asked at every block.
+pub(crate) fn a1_year_aggs_probed(
+    params: &SimParams,
+    config: &ScenarioConfig,
+    probe: &mut impl FoldProbe,
+) -> Vec<A1YearAgg> {
     let economic = params.economic();
     let total_blocks = params.blocks_per_year() * config.sim_years;
     let mut already_generated = emitted_at_start(
@@ -463,7 +500,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let leaves_priced = fold.leaves();
         let closed_before = fold.closed_shard_count();
         let demand = (config.volume.get_volume)(block, params.blocks_per_year());
-        let priced = chain.price(
+        let own = probe.own_bodies(block);
+        let priced = chain.price_with_own(
             ChainStep {
                 chain_height: abs_height,
                 demand,
@@ -472,6 +510,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 total_burned,
                 closed_shards: ClosedShardCount::new(closed_before),
             },
+            own,
             params,
             economic,
         );
@@ -508,6 +547,11 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         year_rungs += priced.filled.rungs;
         let waiting = priced.filled.waiting;
         already_generated += u128::from(paid_reward);
+        probe.seen(&BlockSeen {
+            block,
+            priced: &priced,
+            already_generated,
+        });
         // The ledger advances by what production destroys at this block's
         // closed-shard count. At the shipped parameters that is the flat
         // split at every count (`the_shipped_split_is_flat_at_every_count`).

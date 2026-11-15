@@ -258,10 +258,9 @@ fn small_disk() -> PathBuf {
         "SHEKYL_SMALL_DISK not set. It names the mount point of a filesystem \
          of at most 2 MiB, for a hand run of this gate",
     ));
-    let output = shekyl_tor_control_client::spawn_lock::output(
-        std::process::Command::new("df").arg("-Pk").arg(&dir),
-    )
-    .expect("run df");
+    let output =
+        shekyl_spawn::spawn_lock::output(std::process::Command::new("df").arg("-Pk").arg(&dir))
+            .expect("run df");
     assert!(output.status.success(), "df {}: {output:?}", dir.display());
     let table = String::from_utf8(output.stdout).expect("df prints utf-8");
     let row: Vec<&str> = table

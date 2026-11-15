@@ -6,7 +6,7 @@
 #
 # Rust process spawns in a crate whose image can launch a managed tor take
 # the spawn lock (docs/design/TOR_SUPERVISOR.md section 4.7; the lock is
-# rust/shekyl-tor-control-client/src/spawn_lock.rs).
+# rust/shekyl-spawn/src/spawn_lock.rs, the process's one lock).
 #
 # WHY. On Windows the managed tor inherits its control socket. The launch
 # marks the parent's copy inheritable, spawns, and closes that copy, under
@@ -29,8 +29,10 @@
 #   command: one chained on `Command::new(...)` in the same statement, or
 #   one named by a binding or parameter that holds a command (`let cmd =
 #   Command::new(..)`, `cmd: &mut Command`). Inside a `spawn_lock::` call
-#   means within its parentheses. An unlocked spawn beside a locked one
-#   fails. A `build.rs` at the crate root is exempt: it runs in a process
+#   means within its parentheses. So does inside an `EndPair::spawn(` call:
+#   the pair's window (rust/shekyl-spawn/src/pair.rs) runs its closure
+#   under the lock, and a launch names it by that path so this check can
+#   read it. An unlocked spawn beside a locked one fails. A `build.rs` at the crate root is exempt: it runs in a process
 #   of its own, and the launch is not linked into it.
 #
 #   A crate outside WATCHED is not this gate's subject. Linking
@@ -59,6 +61,8 @@ import tempfile
 # shekyl-cli spawn that binary as a child; the bench's `git` never calls the
 # launch. Neither shares an address space with tor's socket.
 WATCHED = {
+    # The lock's own crate: its tests spawn children under it.
+    "shekyl-spawn",
     "shekyl-tor-control-client",
     "shekyl-tor-control-wallet",
     "shekyl-tor-control-daemon",
@@ -146,7 +150,9 @@ def code_of(text):
 START = re.compile(r"\.\s*(spawn|output|status)\s*\(\s*\)")
 BINDING = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?=\s*[^;]*?\b\w*Command::new\(")
 TYPED = re.compile(r"\b(\w+)\s*:\s*&?\s*(?:mut\s+)?(?:[\w:]+::)?\w*Command\b")
-LOCK_CALL = re.compile(r"\bspawn_lock::\w+\s*\(")
+# The lock's calls, and the pair's window, which takes the lock around its
+# closure (`EndPair::spawn`).
+LOCK_CALL = re.compile(r"\bspawn_lock::\w+\s*\(|\bEndPair::spawn\s*\(")
 
 
 def matching_paren(code, open_at):
@@ -287,6 +293,18 @@ def selftest():
         ),
         "a typed parameter started raw": (
             {launch: locked_text + "\nfn f(cmd: &mut Command) { cmd.spawn(); }"},
+            watched,
+            launch,
+            1,
+        ),
+        "a start inside the pair's window": (
+            {launch: locked_text + "\nfn f(cmd: &mut Command) { EndPair::spawn(p, |n| cmd.spawn()); }"},
+            watched,
+            launch,
+            0,
+        ),
+        "a window named only in a comment": (
+            {launch: locked_text + "\nfn f(cmd: &mut Command) { cmd.spawn(); } // EndPair::spawn(p, f)"},
             watched,
             launch,
             1,
