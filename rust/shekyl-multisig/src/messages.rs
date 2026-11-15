@@ -12,19 +12,18 @@
 //! Option D prover-output, veto, prover-receipt, heartbeat, counter-proof and
 //! rotation-intent types; `0x01` (`SpendIntent`) is replaced by `Proposal`,
 //! which carries the intent together with the proposer's first round; `0x08`
-//! (`GroupStateSummary`) had no producer or reader. The wire format's table
-//! records each as REJECTED.
+//! (`GroupStateSummary`), `0x09` (`InvariantViolation`) and `0x0B`
+//! (`EquivocationProof`) had no producer or reader: a member that refuses
+//! shows the refusal to its human, who tells the group, and an equivocating
+//! proposer gets no SAL and no reused nonce. The wire format's table records
+//! each as REJECTED.
 
 /// A ceremony message's type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MessageType {
-    /// A FROST signature share.
+    /// A holder's FROST signature shares.
     SignatureShare = 0x03,
-    /// Evidence that a member saw an invariant fail.
-    InvariantViolation = 0x09,
-    /// Two conflicting messages signed by one member.
-    EquivocationProof = 0x0B,
     /// The intent, and the proposer's preprocesses.
     Proposal = 0x0C,
     /// A holder's preprocesses.
@@ -41,10 +40,8 @@ pub enum MessageType {
 
 impl MessageType {
     /// Every type, in discriminant order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 7] = [
         Self::SignatureShare,
-        Self::InvariantViolation,
-        Self::EquivocationProof,
         Self::Proposal,
         Self::Commitment,
         Self::SigningSet,
@@ -71,7 +68,7 @@ mod tests {
             assert_eq!(MessageType::from_u8(t as u8), Some(t));
         }
         for retired in [
-            0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x12, 0xFF,
+            0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x12, 0xFF,
         ] {
             assert_eq!(MessageType::from_u8(retired), None, "{retired:#04x}");
         }

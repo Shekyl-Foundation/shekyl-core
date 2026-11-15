@@ -47,9 +47,9 @@ pub fn valid_key_images(n: usize) -> Vec<[u8; 32]> {
 
 fn pqc_auth() -> PqcAuth {
     PqcAuth {
-        auth_version: 1,
-        scheme_id: 1,
-        flags: 0,
+        auth_version: PqcAuth::VERSION,
+        scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+        flags: PqcAuth::NO_FLAGS,
         hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],
         hybrid_signature: vec![0xCD; 3385],
     }
@@ -97,14 +97,10 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
     let (outputs, base) = two_outputs_base();
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: key_images
                 .iter()
-                .map(|ki| Input::ToKey {
-                    amount: 0,
-                    key_offsets: vec![],
-                    key_image: *ki,
-                })
+                .map(|ki| Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(*ki)))
                 .collect(),
             outputs,
             // Two outputs, so the PQC scan fields must both be present and
@@ -188,13 +184,9 @@ pub fn emission_tx(fee: u64) -> Transaction {
     outputs[0].amount = 3_000_000;
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![
-                Input::ToKey {
-                    amount: 0,
-                    key_offsets: vec![],
-                    key_image: ki[0],
-                },
+                Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(ki[0])),
                 Input::ArchivalRewardEmission {
                     canonical_bytes: emission_vin_bytes(),
                 },

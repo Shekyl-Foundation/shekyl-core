@@ -58,9 +58,11 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 ///
 /// The cipher is one heap allocation. Moving this value copies the pointer,
 /// and drop wipes the cipher there. Used for seeded key generation and for
-/// pinning a test vector or a bench. Never a source of fresh randomness: the
-/// same seed is the same stream.
-pub(crate) struct SeededRng {
+/// pinning a test vector or a bench, and for a multisig spend's
+/// rerandomization, which every signer derives from the same seed
+/// (`shekyl_fcmp::frost_sal::SalSigningParams::new`). Never a source of fresh
+/// randomness: the same seed is the same stream.
+pub struct SeededRng {
     /// The cipher at one heap address. Moving [`SeededRng`] moves this
     /// pointer. Moving the cipher out of the box would put its key schedule
     /// back on a stack nobody wipes.
@@ -79,7 +81,8 @@ impl SeededRng {
     /// which the cipher wipes on drop. The value this returns is a pointer.
     /// `ChaCha20Legacy::new` returns the cipher by value, and that return is
     /// moved into the box: the slot it leaves is not wiped.
-    pub(crate) fn from_seed(seed: &[u8; 32]) -> Self {
+    #[must_use]
+    pub fn from_seed(seed: &[u8; 32]) -> Self {
         // A borrow reinterpreted as the cipher's key type, not a copy.
         let key: &Key = seed.into();
         Self {

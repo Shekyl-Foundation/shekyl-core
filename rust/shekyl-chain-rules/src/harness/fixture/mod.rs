@@ -32,7 +32,7 @@ pub use shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
-use shekyl_types::{ArchivalLength, SigningPayloadHash};
+use shekyl_types::{ArchivalLength, KeyImage, SigningPayloadHash};
 
 use crate::archival::BondArm;
 use crate::rules::tx_emission::J19;
@@ -373,12 +373,8 @@ pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
     });
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image,
-            }],
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
+            inputs: vec![Input::fcmp_spend(KeyImage::from_bytes(key_image))],
             outputs: (1..=n)
                 .map(|k| Output {
                     amount: 0,
@@ -838,9 +834,9 @@ pub fn chain_of(len: u64) -> MockChain {
 /// commit 2 landed I16.
 pub fn pqc_auth_filler() -> PqcAuth {
     PqcAuth {
-        auth_version: 1,
-        scheme_id: 1,
-        flags: 0,
+        auth_version: PqcAuth::VERSION,
+        scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+        flags: PqcAuth::NO_FLAGS,
         hybrid_public_key: vec![0x5A; PQC_HYBRID_SINGLE_KEY_LEN],
         hybrid_signature: Vec::new(),
     }

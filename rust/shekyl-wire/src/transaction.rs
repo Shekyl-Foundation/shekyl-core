@@ -45,7 +45,7 @@ use std::io::{self, BufRead, Read, Write};
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_types::{
-    ArchivalLength, BlockHash, CtBaseHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS,
+    ArchivalLength, BlockHash, CtBaseHash, KeyImage, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS,
 };
 
 use crate::bytes::{read_array, read_byte};
@@ -192,7 +192,7 @@ const COINBASE_OUTPUTS: usize = 1;
 ///
 /// The prefix with every free varint at its widest (`u64` amount, height
 /// and unlock time), one [`Input::Gen`], one [`Output`], [`Ct::Null`], and
-/// the extra at [`crate::tx_extra::coinbase_extra_len`] for [`COINBASE_OUTPUTS`].
+/// the extra at [`crate::tx_extra::coinbase_extra_len`] for `COINBASE_OUTPUTS`.
 /// Counts and the version are the grammar's, so their varints are the
 /// widths [`crate::varint::varint_len`] gives those values, not ten bytes. The Bp+
 /// clawback is zero on `Ct::Null`, so the weight is the serialized length.
@@ -436,6 +436,18 @@ fn check_emission_blob(canonical_bytes: &[u8]) -> io::Result<()> {
 }
 
 impl Input {
+    /// The FCMP++ spend of the output whose key image is `key_image`: a
+    /// key-imaged input with no amount and no ring offsets, since the
+    /// membership proof names no member.
+    #[must_use]
+    pub fn fcmp_spend(key_image: KeyImage) -> Self {
+        Input::ToKey {
+            amount: 0,
+            key_offsets: Vec::new(),
+            key_image: *key_image.as_bytes(),
+        }
+    }
+
     /// Key-imaged spend (`txin_to_key`). Twin of C++ `txin_to_key`.
     #[must_use]
     pub fn is_spend(&self) -> bool {
@@ -899,6 +911,25 @@ pub struct PqcAuth {
 }
 
 impl PqcAuth {
+    /// The authentication version consensus requires (CEN-I16).
+    pub const VERSION: u8 = 1;
+    /// The flags consensus requires: none (CEN-I16; an unknown bit is
+    /// refused).
+    pub const NO_FLAGS: u16 = 0;
+
+    /// An input's slot before it is signed: `scheme_id` and the key blob,
+    /// at [`Self::VERSION`] with [`Self::NO_FLAGS`], and no signature yet.
+    #[must_use]
+    pub fn unsigned(scheme_id: u8, hybrid_public_key: Vec<u8>) -> Self {
+        Self {
+            auth_version: Self::VERSION,
+            scheme_id,
+            flags: Self::NO_FLAGS,
+            hybrid_public_key,
+            hybrid_signature: Vec::new(),
+        }
+    }
+
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         w.write_all(&[self.auth_version, self.scheme_id])?;
         w.write_all(&self.flags.to_le_bytes())?;
@@ -1171,7 +1202,7 @@ impl Ct {
         }
     }
 
-    /// `H(base)`: `keccak256` of the base segment ([`Self::write_base`]),
+    /// `H(base)`: `keccak256` of the base segment (`write_base`),
     /// the txid's second component (GENESIS_TX_WIRE_FORMAT.md §11). The
     /// txid and [`TxSignableHash`](shekyl_types::TxSignableHash) both read
     /// it here.
@@ -1323,6 +1354,9 @@ pub struct TxPrefix {
 }
 
 impl TxPrefix {
+    /// The `unlock_time` of a transaction with no additional timelock.
+    pub const NO_UNLOCK_TIME: u64 = 0;
+
     /// The prefix hash of **this prefix** — `keccak256(varint(TX_VERSION) ‖
     /// write)`, the one derivation [`Transaction::prefix_hash`] delegates to.
     /// Taking the prefix rather than the transaction lets a consumer hash a
@@ -1691,7 +1725,7 @@ impl Transaction {
     }
 
     /// Parse the pruned segment exactly: version, prefix and the committed
-    /// base, the bytes [`Self::write_pruned`] emits, and nothing after them.
+    /// base, the bytes `write_pruned` emits, and nothing after them.
     ///
     /// [`Self::read`] treats bytes after the base as authentications and
     /// proof data. A skeleton's txid ignores both, so those bytes would
@@ -2231,7 +2265,7 @@ mod min_segment_tests {
     fn empty_null() -> Transaction {
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: Vec::new(),
                 outputs: Vec::new(),
                 extra: Vec::new(),

@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use shekyl_chain_rules::{
     effective_median_at, fee_ladder_at, mtp_median_at, target_claim, tx_volume_window, AtHeight,
-    Fault, RuleSet, ViewRead,
+    BlockDrawsFloor, Fault, RuleSet, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, KeyImage, TxHash};
@@ -238,6 +238,27 @@ fn claim_fault(fault: Fault<StoreError>) -> FactsFault {
             FactsFault::Internal
         }
     }
+}
+
+/// `count(h)` of the main-chain block at `height`, while this node holds
+/// its row: at or above the draw rows' floor in force for the next block
+/// (`BlockDrawsFloor::in_force`; a read below it is SI-34, and the row is
+/// gone), and written (a height the rule has not run for has none).
+fn held_draws(
+    snap: &ReadSnapshot<'_>,
+    tip: BlockHeight,
+    height: BlockHeight,
+    rules: &dyn RulesAt,
+) -> Result<Option<u32>, FactsFault> {
+    let next = connecting(tip);
+    let floor = BlockDrawsFloor::in_force(next, rules.in_force(next).settlement_schedule());
+    if floor.height().is_some_and(|first| height < first) {
+        return Ok(None);
+    }
+    Ok(snap
+        .block_draws(height, floor)
+        .map_err(store_fault)?
+        .map(|row| row.count))
 }
 
 /// The snapshot's tip: its height and identity. An empty store is a daemon
@@ -581,6 +602,13 @@ impl ChainFacts for StoreFacts {
             .iter()
             .map(|body| body.as_bytes().to_vec())
             .collect();
+        // An alternative block has no draws row: the count rule writes it
+        // when a block connects.
+        let draws = if header.orphan_status {
+            None
+        } else {
+            held_draws(&snap, tip, header.height, self.rules.as_ref())?
+        };
         let block = Some(BlockFacts {
             tx_hashes: block.transaction_hashes.clone(),
             blob: block.serialize(),
@@ -590,6 +618,7 @@ impl ChainFacts for StoreFacts {
                 .map(shekyl_types::archival::BundleReferences::into_inner)
                 .unwrap_or_default(),
             bundle_bodies,
+            draws,
         });
         Ok(BlockAt {
             block,

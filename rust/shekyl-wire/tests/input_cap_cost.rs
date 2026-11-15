@@ -129,14 +129,10 @@ fn assemble(
 ) -> Transaction {
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: key_images
                 .iter()
-                .map(|key_image| Input::ToKey {
-                    amount: 0,
-                    key_offsets: Vec::new(),
-                    key_image: *key_image,
-                })
+                .map(|key_image| Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(*key_image)))
                 .collect(),
             outputs: vec![
                 Output {
@@ -479,9 +475,9 @@ fn measure(
         hybrid_pks
             .iter()
             .map(|pk| shekyl_wire::PqcAuth {
-                auth_version: 1,
-                scheme_id: 1,
-                flags: 0,
+                auth_version: shekyl_wire::PqcAuth::VERSION,
+                scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                flags: shekyl_wire::PqcAuth::NO_FLAGS,
                 hybrid_public_key: pk.clone(),
                 hybrid_signature: Vec::new(),
             })

@@ -20,7 +20,7 @@ use crate::test_support::coinbase;
 fn listed(tag: u8) -> Transaction {
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(u64::from(tag))],
             outputs: vec![Output {
                 amount: 0,

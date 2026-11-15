@@ -1821,7 +1821,7 @@ stays until that code is deleted (§11.1), and is marked.
 | [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) | The SO-D8 round's standing rulings: R-B, `SO-D8a`–`d`, the drawable set's construction (Q3, §7.4), the dedicated witness key and its `0x0C` home (Q8, §7.5), fail-whole and resubmission (Q9, §7.6.2 (B), now the bundle's; `SCS-P16`), the memory-only ring (Q10, §7.7), the `0x0C` content rule (Q13, §7.8), Slice C's plan and evidence list (§8). `SO-D8e`'s urn and ring, Q8's derivation and Q12's bare hash are superseded and gone |
 | [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) | The challenge round's doctrine and forks, the read, the 2-of-3 argument (§3), parameter discipline (§9), and its record of the urn as landed code |
 | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) | The fetch client: `SF-D1`–`D13`, the delivery digest and its transcript (`SF-D8`), the client's outcome table (`SF-D6`). Its countersigning key and admission window describe live code |
-| [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) | The attestation path as it runs today, and the deletion surface of the round before it |
+| [`ARCHIVAL_CREDIT_WIRE.md`](../completed/ARCHIVAL_CREDIT_WIRE.md) | The attestation path as it runs today, and the deletion surface of the round before it |
 | [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) | The settlement writer's rulings (`SO-D1`–`D7`): enumeration, key and value, when it runs |
 
 ---

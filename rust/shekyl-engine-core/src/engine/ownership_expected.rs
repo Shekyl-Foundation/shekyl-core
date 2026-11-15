@@ -37,7 +37,7 @@ fn persona_tx(seed: u64, n: usize) -> shekyl_wire::Transaction {
         .collect();
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(seed)],
             outputs,
             extra: crate::engine::test_support::conforming_pqc_extra(n),

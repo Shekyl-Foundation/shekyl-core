@@ -618,12 +618,10 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // field carried here is real and consensus-validated by stages 1-9 above.
     let wire_tx = Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image: *ki.key_image.as_bytes(),
-            }],
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
+            inputs: vec![Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+                *ki.key_image.as_bytes(),
+            ))],
             outputs: vec![
                 Output {
                     amount: 0,
@@ -653,8 +651,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                 .iter()
                 .map(|auth| shekyl_wire::PqcAuth {
                     auth_version: auth.auth_version,
-                    scheme_id: 1, // HYBRID_SCHEME_ID_ED25519_ML_DSA_65
-                    flags: 0,
+                    scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                    flags: shekyl_wire::PqcAuth::NO_FLAGS,
                     hybrid_public_key: auth.public_key.clone(),
                     hybrid_signature: auth.signature.clone(),
                 })

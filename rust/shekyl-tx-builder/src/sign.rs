@@ -124,10 +124,11 @@ pub fn sign_transaction_with_terms(
     let commitments_for_bp: Vec<Commitment> = outputs
         .iter()
         .map(|out| {
-            let mask = Scalar::from_canonical_bytes(out.commitment_mask)
-                .expect("commitment_mask is not a valid scalar");
-            masks.push(mask);
-            Commitment::new(mask, out.amount.to_raw())
+            let opening =
+                Commitment::from_canonical_mask(&out.commitment_mask, out.amount.to_raw())
+                    .expect("commitment_mask is not a valid scalar");
+            masks.push(opening.mask);
+            opening
         })
         .collect();
 

@@ -275,7 +275,7 @@ default, the channel port to be ruled at RT-W12); admission by fingerprint, no
 message 4 for an unenrolled claim, the ceiling in message 4 and the request
 clamped to it, each request stamped with `Authority::channel`; the enrolled set
 in its own redb store with `INPUT_GRAMMAR.md` IG-Q87's five methods at
-`CORE_RPC_VERSION` 4.5 under RT-O9.1's bounds, removal and a lowered ceiling
+`CORE_RPC_VERSION` 4.6 under RT-O9.1's bounds, removal and a lowered ceiling
 closing live sessions (the named edit "revocation"); `tx_submit` over the channel
 refusing an unpadded body (the named edit "submission shape"); a service's
 console key and `--rpc-console-key-reset` under the lock, which amends RT-O35

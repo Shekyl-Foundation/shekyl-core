@@ -268,7 +268,7 @@ mod tests {
                 },
                 miner_transaction: Transaction {
                     prefix: TxPrefix {
-                        unlock_time: 0,
+                        unlock_time: TxPrefix::NO_UNLOCK_TIME,
                         inputs: vec![Input::Gen(7)],
                         outputs: Vec::new(),
                         extra: Vec::new(),
