@@ -165,6 +165,16 @@ impl Spender {
             #[cfg(feature = "seeded-rng")]
             Some(stream) => {
                 use rand_chacha::rand_core::RngCore;
+                // Fresh seeds for every spend, never one seed per spender
+                // (CF-1b ruling, 2026-11-15). Each spend proves and signs
+                // with Schnorr-style protocols: the membership proof, the
+                // range proof and the ML-DSA spend slots all derive their
+                // nonces from these bytes. Two spends from one seed would
+                // reuse those nonces over two different statements, and
+                // two Schnorr responses sharing a nonce over different
+                // challenges solve for the secret. Taking both seeds from
+                // the stream here, per spend and apart, keeps the chain
+                // reproducible from the spender's seed without that reuse.
                 let mut stream = stream
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
