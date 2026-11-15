@@ -29,14 +29,24 @@ use shekyl_options::{read_cli, Code};
 /// The configuration file's name in [`private_place`]'s directory.
 const CONFIG_FILE: &str = "shekyld-regtest.toml";
 
-/// A directory of this test's own, mode `0700`, in a place the permission
-/// walk accepts: every directory above it writable by root and this account
-/// alone. The candidates, nearest first: the target directory's own
-/// temporary directory, then the account's home. `/tmp` is never one: it
-/// is world-writable, and the walk refuses it. A host whose umask leaves
-/// the build tree group-writable refuses the first, so the home is tried.
-/// None qualifying fails the test, naming each refusal (rule 47).
-fn private_place() -> tempfile::TempDir {
+/// A directory of this test's own, in a place the permission walk accepts:
+/// every directory above it writable by root and this account alone. The
+/// candidates, nearest first: the target directory's own temporary
+/// directory, then the account's home. `/tmp` is never one: it is
+/// world-writable, and the walk refuses it. None qualifying fails the test,
+/// naming each refusal (rule 47).
+///
+/// On a host whose umask is `0002` (this lane's workstation, and any fleet
+/// box set up the same way) the build tree is group-writable, so the walk
+/// refuses the target directory and the home is tried. That refusal is the
+/// walk working as designed: a directory another principal can write is
+/// refused, wherever it is.
+///
+/// In either place the directory is a uniquely named subdirectory
+/// (`shekyl-config-file-` and a random suffix), mode `0700`, held by a
+/// [`Place`] from the moment it exists, so the test leaves nothing behind in
+/// the account's home, a panic included.
+fn private_place() -> Place {
     let candidates = std::iter::once(PathBuf::from(env!("CARGO_TARGET_TMPDIR")))
         .chain(shekyl_process::platform::current().home);
     let mut refusals = Vec::new();
@@ -45,7 +55,7 @@ fn private_place() -> tempfile::TempDir {
             .prefix("shekyl-config-file-")
             .tempdir_in(&root)
         {
-            Ok(dir) => dir,
+            Ok(dir) => Place(Some(dir)),
             Err(e) => {
                 refusals.push(format!("{}: {e}", root.display()));
                 continue;
@@ -68,6 +78,56 @@ fn private_place() -> tempfile::TempDir {
         "no directory this account alone can write: {}",
         refusals.join("; ")
     );
+}
+
+/// [`private_place`]'s directory, removed when the guard drops, during a
+/// panic's unwind too. The test may leave its mode at `0770` and its file at
+/// `0620`; the guard sets the directory back to `0700` and removes it with
+/// everything in it. A removal that fails is said, not swallowed (the
+/// `TempDir` it holds would drop the error): a panic when the test is not
+/// already panicking, a line on stderr when it is, since a second panic
+/// would abort the run.
+struct Place(Option<tempfile::TempDir>);
+
+impl Place {
+    fn path(&self) -> &Path {
+        self.0
+            .as_ref()
+            .expect("the directory is held until the guard drops")
+            .path()
+    }
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        let Some(dir) = self.0.take() else {
+            return;
+        };
+        let path = dir.path().to_path_buf();
+        let mode = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+        let removal = dir.close();
+        let failed: Vec<String> = [
+            mode.err()
+                .map(|e| format!("setting its mode back to 0700: {e}")),
+            removal.err().map(|e| format!("removing it: {e}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if failed.is_empty() {
+            return;
+        }
+        let says = format!(
+            "the test's directory {} was not cleaned up: {}",
+            path.display(),
+            failed.join("; ")
+        );
+        if std::thread::panicking() {
+            eprintln!("{says}");
+        } else {
+            panic!("{says}");
+        }
+    }
 }
 
 /// `text` at `path`, mode `0600`.
@@ -170,6 +230,4 @@ fn a_named_file_is_read_and_a_writable_file_or_directory_is_refused() {
             .is_some_and(|p| p.starts_with("its group")),
         "{d:?}"
     );
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-        .expect("the directory's mode");
 }
