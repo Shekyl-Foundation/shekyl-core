@@ -3821,7 +3821,11 @@ the baseline.
 
 ### 5.33 The volume signal crossed with the zone (J × G), predicted before it is built (2026-11-15)
 
-Written against `dev` at `c1a1e223e`, before any code. Rick's rulings of
+Written against `dev` at `c1a1e223e`, before any code. Corrected on
+2026-11-15, before any run, when the build's first unit test weighed the
+reference spend: 19 939 B at genesis depth, not #1365's 21 184 B (a
+deeper tree). The zone bytes, fees, fill costs and design-load figures
+below are recomputed on it. Rick's rulings of
 2026-11-15: J reopens to cover the volume signal's form; the sim tests
 three of its arms; block capacity must increase, to a number not yet
 derived, and that is factored in from the start
@@ -3847,14 +3851,17 @@ other's result: on today's signal the inherited arm is pinned at the
 - **Zone**, as N reference transactions times the reference weight, plus
   `COINBASE_RESERVE`. The reference transaction is the 2-in/2-out spend
   that Rick's target and the PB budgets count; its weight is
-  `predict_weight` at genesis depth and the genesis Standard fee, about
-  21 184 B. N runs 14, 20, 25, 30, 35, 45, 60, 75, 90, 105, 120 and 150,
-  beside the inherited 300 000 B (N ≈ 14.1) and the re-derived
-  1 259 500 B (N ≈ 59.4). Rick's target is N = 90.
+  `predict_weight` at genesis depth (1) and the genesis Standard fee,
+  19 939 B. It grows with the tree: 21 219 B at depth 2 and 26 083 B at
+  the consensus maximum (24); #1365's fixture, 21 184 B, is a spend on a
+  deeper tree than genesis. N runs 14, 20, 25, 30, 35, 45, 60, 75, 90, 105,
+  120 and 150, beside the inherited 300 000 B (N ≈ 15.0) and the
+  re-derived 1 259 500 B (N ≈ 63.1). Rick's target, N = 90, is
+  1 795 896 B at genesis depth (1.91 MB at #1365's weight).
 - **`w_ref`**, two levels, each held fixed across N: the shipped 3 000,
   and `w_ref′` = 12 595 B, the ordinary 1-in/2-out at genesis depth that
   ESR-10's re-derived arm declares. N counts 2-in/2-out spends and
-  `w_ref′` is a 1-in/2-out, so N spends are about 1.68 N `w_ref′`. This
+  `w_ref′` is a 1-in/2-out, so N spends are about 1.58 N `w_ref′`. This
   is the basis choice the zone brief asked for, made once: the fee goes
   as zone/`w_ref`, so both levels are run rather than tying `w_ref` to N.
 - **Stuffer**, at 10, 20, 33 and 51 % of the hashrate and every miner, from
@@ -3878,9 +3885,10 @@ other's result: on today's signal the inherited arm is pinned at the
   floor of one. The stuffer already lists that shape; the only weight
   left to it is the fee's varint, and the unenforced stuffer pays no fee.
   The rows at the lightest shape are the rows at the ordinary one.
-- **The design load is a count.** 30 spends are 635 520 B; the baseline's
-  50 ordinary transactions are about 629 750 B. "The year blocks carry
-  the design load" is EI-4's year to carry the baseline's 50.
+- **The design load is a count.** 30 spends at genesis depth are
+  598 170 B, ⌈30 × 19 939 / 12 595⌉ = 48 ordinary transactions. "The year
+  blocks carry the design load" is the first year whose blocks carry 48 of
+  the baseline's 50.
 - **Not re-derived, and stated.** `TX_WEIGHT_LIMIT` is built from the
   shipped zone, but the sim does not read it, and it caps one
   transaction's weight, not a count. `COINBASE_RESERVE` does not depend
@@ -3924,25 +3932,25 @@ design load.
 median at the zone, the Standard fee goes as `w_ref`·`M_r`/M². From the
 inherited cell (1.1888 SKL at M ≈ 315 KB, `M_r` 0.8, §5.29.1):
 `fee(N) ≈ 1.1888 × (315 000/M)² × (w_ref/3 000) × (M_r/0.8)`, with M the
-zone, and `M_r` 1.0 once the zone holds the baseline's demand (N ≥ 30).
+zone, and `M_r` 1.0 once the zone holds the baseline's 50 (N ≥ 32).
 Against the 0.4963 SKL ceiling:
 
 | N | Zone (B) | Fee at `w_ref` 3 000 | Fee at `w_ref′` |
 | --- | --- | --- | --- |
-| 14 | 297 962 | 1.19 (2.40×) | 4.99 |
-| 30 | 636 906 | 0.36 | 1.53 |
-| 60 | 1 272 426 | 0.091 | 0.38 |
-| 90 | 1 907 946 | 0.041 | 0.17 |
-| 150 | 3 178 986 | 0.015 | 0.061 |
+| 14 | 280 532 | 1.50 | 6.29 |
+| 30 | 599 556 | 0.33 | 1.38 |
+| 60 | 1 197 726 | 0.10 | 0.43 |
+| 90 | 1 795 896 | 0.046 | 0.19 |
+| 150 | 2 992 236 | 0.016 | 0.069 |
 
-At N = 14 the median is the recorded 315 KB, above the zone, so the row
-is the recorded fee. The fee crosses under the ceiling between N = 20
-and 25 (about 23) at `w_ref` 3 000, and near N = 48 at `w_ref′`.
+The inherited zone is the recorded 1.1888 SKL (2.40×). The fee crosses
+under the ceiling near N = 25 at `w_ref` 3 000, and near N = 57 at
+`w_ref′`.
 
 **JG-4. The cost of filling the zone for a day (blind, first order).**
 The floor is `F = R·C·w_ref/M²`, so a day's fill, `720 × zone × F`, goes
 as `w_ref·M_r`/zone. From the inherited cell (about 5 100 SKL a day):
-about 3 000 at N = 30, 1 000 at N = 90 and 600 at N = 150, at `w_ref`
+about 2 600 at N = 30, 1 100 at N = 90 and 640 at N = 150, at `w_ref`
 3 000; times 4.2 at `w_ref′`. A larger zone makes junk cheaper as 1/N,
 the fee as 1/N²: the fee bounds N below and the fill cost bounds it
 above.
@@ -3950,16 +3958,16 @@ above.
 **JG-5. The honest step and the design load (blind).**
 
 - **Step, SMA:** as §5.32.1 where blocks have room (`M_r` to its cap in
-  about 250 blocks); flat at the floor where they do not (N < 30).
+  about 250 blocks); flat at the floor where they do not (N < 32).
 - **Step, median:** a step to 200 moves the median only once over half
   the window carries it, so `M_r` jumps at about 360 blocks, in steps of
   1/50 of `M_r` per transaction. The median ignores a step shorter than
   half a window: a signal that resists stuffing also resists short real
   demand.
 - **Step, decoupled:** `M_r` does not move.
-- **Design load:** year 1 for every N ≥ 30, by arithmetic; below 30 the
-  year the ratchet comes (year 19 at 300 KB on the SMA), earlier as N
-  rises.
+- **Design load:** year 1 for every N ≥ 31, where the zone holds 48
+  ordinary transactions, by arithmetic; below that the year the ratchet
+  comes (year 19 at 300 KB on the SMA), earlier as N rises.
 
 **Cost (blind).** About 1 600 campaign folds of 5 or 30 years and 72
 honest folds of 60 years: about 32 000 fold-years, ten CPU-hours, two
