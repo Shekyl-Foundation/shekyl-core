@@ -23,6 +23,7 @@
 mod console;
 pub mod files;
 pub mod listener;
+mod message;
 pub mod rendezvous;
 pub mod sessions;
 mod stage;
@@ -95,8 +96,9 @@ pub struct ChannelCall {
     pub client: [u8; 32],
     /// The client is the console key.
     pub console: bool,
-    /// The shapes of the records the connection read: `tx_submit` reads
-    /// whether its body arrived as a padded submission (RT-O28).
+    /// The records this connection read, and whether the HTTP message just
+    /// finished is exactly one submission (RT-O28). `tx_submit` reads the
+    /// message's claim, not the last record on the connection.
     pub shape: shekyl_rpc_stream::InboundShape,
 }
 

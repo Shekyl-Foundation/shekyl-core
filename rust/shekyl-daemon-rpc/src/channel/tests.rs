@@ -171,12 +171,12 @@ enum NoSession {
     ClosedBeforeMessage4,
 }
 
-/// The client's side, as RT-W11's client will run it.
-async fn connect(
+/// The client's side of the handshake, as a record stream.
+async fn open_stream(
     served: &Served,
     client: &StaticKeypair,
     request: GrantSet,
-) -> Result<Session, NoSession> {
+) -> Result<(RecordStream<TcpStream>, GrantSet), NoSession> {
     let mut tcp = TcpStream::connect(served.addr).await.expect("connect");
     let daemon = served.bundle();
     let (c, message1) = Client::start(&NETWORK, client, &daemon).expect("message 1");
@@ -195,7 +195,16 @@ async fn connect(
     let (established, ceiling) = c.read_message4(&message4).expect("message 4");
     let ceiling = GrantSet::from_payload(&ceiling).expect("a ceiling");
     let (send, recv) = established.into_directions();
-    let stream = RecordStream::new(tcp, send, recv);
+    Ok((RecordStream::new(tcp, send, recv), ceiling))
+}
+
+/// The client's side, as RT-W11's client will run it.
+async fn connect(
+    served: &Served,
+    client: &StaticKeypair,
+    request: GrantSet,
+) -> Result<Session, NoSession> {
+    let (stream, ceiling) = open_stream(served, client, request).await?;
     let mark = stream.submission_mark();
     let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
@@ -359,6 +368,54 @@ async fn an_unpadded_submission_is_refused_over_the_channel() {
     session.mark.arm();
     let padded = session.call("tx_submit", body).await.expect("a reply");
     assert_ne!(code(&padded), Some("submit.unpadded"), "{padded}");
+}
+
+/// **Two `tx_submit` requests in one padded frame are not two submissions.**
+/// The frame's payload is one claim. Each request is refused. Red edit:
+/// have `tx_submit` read `ends_in_submission` again, and the second request
+/// is not `submit.unpadded`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_submissions_in_one_frame_are_both_refused() {
+    let served = Served::start(false).await;
+    let client = StaticKeypair::generate().unwrap();
+    served.enrol(&client, &[CeilingWord::Wallet]);
+    let (mut stream, _) = open_stream(&served, &client, Preset::Wallet.grants())
+        .await
+        .expect("a session");
+    let mark = stream.submission_mark();
+    let mut bytes = tx_submit_post("aa");
+    bytes.extend(tx_submit_post("bb"));
+    mark.arm();
+    stream.write_all(&bytes).await.expect("the frame");
+    stream.flush().await.expect("the frame is sealed");
+    let mut got = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while got
+        .windows(b"submit.unpadded".len())
+        .filter(|window| *window == b"submit.unpadded")
+        .count()
+        < 2
+    {
+        assert!(deadline > Instant::now(), "both refusals: {got:?}");
+        let mut buf = [0u8; 1024];
+        let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
+            .await
+            .expect("a response")
+            .expect("the read");
+        assert!(n > 0, "the daemon closed before both refusals: {got:?}");
+        got.extend_from_slice(&buf[..n]);
+    }
+}
+
+/// One `tx_submit` HTTP request, as the channel's client writes it.
+fn tx_submit_post(body: &str) -> Vec<u8> {
+    let json =
+        format!(r#"{{"jsonrpc":"2.0","id":1,"method":"tx_submit","params":{{"body":"{body}"}}}}"#);
+    format!(
+        "POST /json_rpc HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{json}",
+        json.len()
+    )
+    .into_bytes()
 }
 
 /// **The console key is the host's administrator and never an enrolment**
@@ -569,7 +626,8 @@ fn the_console_key_reset_replaces_the_console_and_nothing_else() {
             store.take_console_reset().unwrap().is_some(),
             "the note is left"
         );
-        store.note_console_reset(1).unwrap();
+        let fingerprint = store.console().unwrap().expect("the cell");
+        store.commit_console(&fingerprint, Some(1)).unwrap();
     }
 
     let channel = Channel::open(&setup).expect("the next start");

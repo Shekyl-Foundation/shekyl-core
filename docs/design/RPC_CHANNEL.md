@@ -1028,8 +1028,12 @@ drives it):
     daemon refuses it. Only a pipelining client sends that way. An empty
     padding record opens a frame. It does not end the message before it, so
     a later ordinary record cannot borrow that padding and look like a
-    shorter frame. RT-W10's `tx_submit` method refuses any body for
-    which the verdict is false when the body has been read.
+    shorter frame. The channel reads one HTTP message at a time and the
+    verdict `tx_submit` reads is that message's bytes: they are a
+    submission only when they are exactly the frame's payload. A second
+    request in the same frame is not one, and the claim is spent by the
+    first note. RT-W10's `tx_submit` method refuses any body for which
+    that verdict is false when the body has been read.
   - **Tested through hyper:** every `tx_submit` upload, for a
     transaction of 0, 1, 26,599, 97,585 and `TX_WEIGHT_LIMIT` bytes, is
     exactly `SUBMISSION_RECORDS` records, and the handler has them all open

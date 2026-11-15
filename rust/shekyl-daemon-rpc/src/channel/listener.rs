@@ -148,10 +148,14 @@ async fn connection<S>(
     else {
         return;
     };
+    // One HTTP message at a time. The submission claim is that message's
+    // bytes, not the last record hyper would otherwise read ahead into.
+    let shape = stream.inbound_shape();
+    let stream = super::message::OneMessage::new(stream, shape.clone());
     let call = ChannelCall {
         client: fingerprint,
         console,
-        shape: stream.inbound_shape(),
+        shape,
     };
     let app = router.layer(axum::middleware::from_fn(move |request, next| {
         crate::authority::stamp_channel(authority, call.clone(), request, next)

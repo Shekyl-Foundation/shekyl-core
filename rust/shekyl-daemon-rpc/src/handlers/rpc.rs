@@ -541,11 +541,12 @@ async fn dispatch(
             )
         }
         Id::TxSubmit => {
-            // Over the channel, a submission is padded to its fixed record
-            // count (RT-O28); a body that did not arrive that way is
-            // refused before it is read (pre-flight close-out F2).
+            // Over the channel, a submission is one HTTP message whose bytes
+            // are exactly one padded frame (RT-O28). A body that is not
+            // that message is refused before it is read (pre-flight
+            // close-out F2).
             if let Some(call) = call {
-                if !call.shape.ends_in_submission() {
+                if !call.shape.message_is_submission() {
                     return Err(crate::channel::unpadded_submission().into());
                 }
             }

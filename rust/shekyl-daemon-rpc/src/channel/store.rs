@@ -235,18 +235,14 @@ impl Store {
         Ok(table.get(CONSOLE).map_err(db_err)?.map(|v| *v.value()))
     }
 
-    /// Note that the console key was replaced now, for the next start to
-    /// log.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError`].
-    pub fn note_console_reset(&self, at: u64) -> Result<(), StoreError> {
-        self.write_singles(None, Some(at))
-    }
-
     /// Record `fingerprint` as the console key and, when `reset_at` is set,
     /// the reset note, in one transaction.
+    ///
+    /// This is the cell's only write. The private half is the journal
+    /// [`super::console::install`] renames after this commit; a fingerprint
+    /// with no key file is not a console key the next start will adopt.
+    /// `None` leaves a reset note already stored untouched, which is a
+    /// first key.
     ///
     /// # Errors
     ///
@@ -256,22 +252,10 @@ impl Store {
         fingerprint: &[u8; 32],
         reset_at: Option<u64>,
     ) -> Result<(), StoreError> {
-        self.write_singles(Some(fingerprint), reset_at)
-    }
-
-    /// One write of the single cells. `console` replaces the console
-    /// fingerprint; `reset_at` writes the reset note. Either may be absent.
-    fn write_singles(
-        &self,
-        console: Option<&[u8; 32]>,
-        reset_at: Option<u64>,
-    ) -> Result<(), StoreError> {
         let txn = self.db.begin_write().map_err(db_err)?;
         {
             let mut table = txn.open_table(SINGLES).map_err(db_err)?;
-            if let Some(fingerprint) = console {
-                table.insert(CONSOLE, fingerprint).map_err(db_err)?;
-            }
+            table.insert(CONSOLE, fingerprint).map_err(db_err)?;
             if let Some(at) = reset_at {
                 table
                     .insert(CONSOLE_RESET, &reset_note(at))
@@ -301,15 +285,6 @@ impl Store {
         };
         txn.commit().map_err(db_err)?;
         Ok(at)
-    }
-
-    /// Record `fingerprint` as the console key, replacing the old one.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError`].
-    pub fn set_console(&self, fingerprint: &[u8; 32]) -> Result<(), StoreError> {
-        self.write_singles(Some(fingerprint), None)
     }
 }
 
@@ -378,7 +353,7 @@ mod tests {
         {
             let store = Store::open(dir.path()).unwrap();
             store.put(&fp, enrolment).unwrap();
-            store.set_console(&[1u8; 32]).unwrap();
+            store.commit_console(&[1u8; 32], None).unwrap();
         }
         let store = Store::open(dir.path()).unwrap();
         assert_eq!(store.get(&fp).unwrap(), Some(enrolment));
