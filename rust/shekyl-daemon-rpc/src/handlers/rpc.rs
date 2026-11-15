@@ -23,6 +23,7 @@ use axum::Extension;
 use axum::Json;
 use serde_json::{Map, Value};
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError, METHOD_NOT_FOUND};
+use shekyl_rpc_types::kinds::Done;
 use shekyl_rpc_types::method::{admit_armed, RpcMethod};
 use shekyl_rpc_types::wire::{self, Id};
 
@@ -80,13 +81,25 @@ fn envelope_refusal(message: &str) -> RpcError {
 pub async fn handle(
     State(state): State<Arc<AppState>>,
     Extension(authority): Extension<Authority>,
+    call: Option<Extension<crate::channel::ChannelCall>>,
+    owner: Option<Extension<crate::authority::OwnerLeg>>,
     body: Bytes,
 ) -> (StatusCode, Json<JsonRpcResponse>) {
-    (StatusCode::OK, Json(answer(&state, authority, &body).await))
+    let call = call.map(|Extension(call)| call);
+    (
+        StatusCode::OK,
+        Json(answer(&state, authority, call.as_ref(), owner.is_some(), &body).await),
+    )
 }
 
 /// One call, from the body to its answer.
-async fn answer(state: &Arc<AppState>, authority: Authority, body: &[u8]) -> JsonRpcResponse {
+async fn answer(
+    state: &Arc<AppState>,
+    authority: Authority,
+    call: Option<&crate::channel::ChannelCall>,
+    owner: bool,
+    body: &[u8],
+) -> JsonRpcResponse {
     let refused = |id: Value, error: RpcError| refusal(id, &error);
     let envelope = match serde_json::from_slice::<Value>(body) {
         Ok(Value::Object(envelope)) => envelope,
@@ -128,7 +141,7 @@ async fn answer(state: &Arc<AppState>, authority: Authority, body: &[u8]) -> Jso
         return refused(id, error);
     }
     note_admitted(authority, row);
-    match dispatch(state, authority, called, params).await {
+    match dispatch(state, authority, call, owner, called, params).await {
         Ok(result) => JsonRpcResponse::success(id, result),
         Err(Failure::Error(error)) => {
             if matches!(error.class, ErrorClass::Internal | ErrorClass::StoreFault) {
@@ -219,11 +232,26 @@ where
     }
 }
 
+/// The channel's state, or not ready when none was composed.
+fn channel_of(state: &AppState) -> Result<&crate::channel::Channel, RpcError> {
+    state.channel.as_deref().ok_or_else(|| {
+        RpcError::new(
+            ErrorClass::NotReady,
+            Diagnostic::new(
+                crate::channel::codes::STORE,
+                "the RPC channel is not open on this node".to_owned(),
+            ),
+        )
+    })
+}
+
 /// The method's answer. Exhaustive over [`Id`] with no wildcard arm.
 #[allow(clippy::too_many_lines)]
 async fn dispatch(
     state: &Arc<AppState>,
     authority: Authority,
+    call: Option<&crate::channel::ChannelCall>,
+    owner: bool,
     called: Id,
     params: Value,
 ) -> Result<Value, Failure> {
@@ -419,6 +447,35 @@ async fn dispatch(
             let p2p = Arc::clone(&state.handles.p2p);
             framed(blocking(move || crate::methods::p2p_stats(p2p.as_ref())).await?)
         }
+        Id::RpcClientAdd => {
+            let req = request::<wire::RpcClientAdd>(params)?;
+            let by = crate::channel::enrolment_caller(call, owner)?;
+            let channel = channel_of(state)?;
+            channel.client_add(authority, by, req.fingerprint.to_bytes(), &req.ceiling)?;
+            framed(Done)
+        }
+        Id::RpcClientSet => {
+            let req = request::<wire::RpcClientSet>(params)?;
+            crate::channel::enrolment_caller(call, owner)?;
+            channel_of(state)?.client_set(authority, req.fingerprint.to_bytes(), &req.ceiling)?;
+            framed(Done)
+        }
+        Id::RpcClientRemove => {
+            let req = request::<wire::RpcClientRemove>(params)?;
+            crate::channel::enrolment_caller(call, owner)?;
+            channel_of(state)?.client_remove(authority, req.fingerprint.to_bytes())?;
+            framed(Done)
+        }
+        Id::RpcClientList => {
+            request::<wire::RpcClientList>(params)?;
+            crate::channel::enrolment_caller(call, owner)?;
+            framed(channel_of(state)?.client_list(authority)?)
+        }
+        Id::RpcBundleShow => {
+            request::<wire::RpcBundleShow>(params)?;
+            crate::channel::enrolment_caller(call, owner)?;
+            framed(channel_of(state)?.bundle_show())
+        }
         Id::RelayStats => {
             request::<wire::RelayStats>(params)?;
             let p2p = Arc::clone(&state.handles.p2p);
@@ -488,6 +545,15 @@ async fn dispatch(
             )
         }
         Id::TxSubmit => {
+            // Over the channel, a submission is one HTTP message whose bytes
+            // are exactly one padded frame (RT-O28). A body that is not
+            // that message is refused before it is read (pre-flight
+            // close-out F2).
+            if let Some(call) = call {
+                if !call.shape.message_is_submission() {
+                    return Err(crate::channel::unpadded_submission().into());
+                }
+            }
             let req = request::<wire::TxSubmit>(params)?;
             framed(crate::submit::tx_submit(state, host, req.body.into_vec()).await?)
         }

@@ -20,6 +20,8 @@
 //!   rule an operator's instance name follows.
 //! - [`file_name`], [`account_dir`], [`data_home`] and [`Record`]: the
 //!   rendezvous file in its directory, and what a Windows record says.
+//! - [`service_file_name`] and [`ServiceRecord`]: a service's machine-wide
+//!   record, and what it says.
 //!
 //! The derivation's bytes are pinned by the vectors in
 //! `docs/test_vectors/RPC_CHANNEL_NAMES_V1/`, which an independent generator
@@ -33,7 +35,10 @@ use shekyl_crypto_hash::cshake256_32;
 
 mod place;
 
-pub use place::{account_dir, data_home, file_name, Record, PIPE_PREFIX, RECORD_FORMAT};
+pub use place::{
+    account_dir, data_home, file_name, service_file_name, Record, ServiceRecord, PIPE_PREFIX,
+    RECORD_FORMAT, RENDEZVOUS_DIR, SERVICE_RECORD_FORMAT,
+};
 
 /// cSHAKE256 customization of [`rendezvous_name`].
 pub const RENDEZVOUS_NAME_DST: &[u8] = b"shekyl/rpc-rendezvous-name-v1";
