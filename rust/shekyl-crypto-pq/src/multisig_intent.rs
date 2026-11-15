@@ -226,7 +226,10 @@ mod tests {
         let bytes = [0x81; INTENT_SEED_LEN];
         let seed = IntentSeed::new(&bytes);
         let fingerprint = *seed.fingerprint().as_bytes();
-        assert_eq!(fingerprint, *IntentSeed::new(&bytes).fingerprint().as_bytes());
+        assert_eq!(
+            fingerprint,
+            *IntentSeed::new(&bytes).fingerprint().as_bytes()
+        );
         assert_ne!(fingerprint, bytes);
         assert_ne!(fingerprint, *seed.tx_key().secret);
         assert_ne!(fingerprint, *seed.rerandomization_seed(0));
@@ -241,7 +244,10 @@ mod tests {
     fn the_seed_never_prints() {
         let seed = IntentSeed::new(&[0xAB; INTENT_SEED_LEN]);
         let printed = format!("{seed:?}");
-        assert!(!printed.contains("ab") && !printed.contains("171"), "{printed}");
+        assert!(
+            !printed.contains("ab") && !printed.contains("171"),
+            "{printed}"
+        );
         let mut encoded = Vec::new();
         seed.clone().encode_into(&mut encoded);
         assert_eq!(encoded, [0xAB; INTENT_SEED_LEN]);
