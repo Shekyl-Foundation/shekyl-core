@@ -1132,13 +1132,13 @@ not a quiet reopen of MS-8.
 
 | ID | Status | Notes |
 | --- | --- | --- |
-| MS-1 | **DECIDED** | `shekyl-multisig` crate (MS-1(a), the "no transport" ban is the dep list); per-version family `MultisigSignerV2`; no const generics; F-3 lineage **CLOSED** (v31 only) |
+| MS-1 | **DECIDED** | `shekyl-multisig` crate (MS-1(a), the "no transport" ban is the dep list: `cargo tree -p shekyl-multisig -e normal` names no network, RPC or async crate); per-version family `MultisigSignerV2`; no const generics; F-3 lineage **CLOSED** (v31 only) |
 | MS-2 | **OPEN** | Lean holds; the FROST layer is `shekyl_fcmp::frost_sal` (crypto crate); `shekyl-multisig` calls the provers and verifiers and does no curve arithmetic of its own |
 | MS-3 | **OPEN** | Amended: positive CI (F-6); F-3 = delete fossil before flip |
 | MS-4 | **OPEN — restated E′** | No I7 / prover; local KI via `b`; KEM fan-out + `O` verify |
-| MS-5 | **Ceremony LANDED** | The signing ceremony (`PQC_MULTISIG.md` §11, §13): roles from the intent, every guard a type, held and ephemeral nonces; 2-of-3 and 3-of-5 spends verify from the wire. Open: the multisig builder (slice 4a) and the DoD gate |
+| MS-5 | **Ceremony LANDED; derivation 4a-1** | The signing ceremony (`PQC_MULTISIG.md` §11, §13): roles from the intent, every guard a type, held nonces in memory only (R-20); 2-of-3 and 3-of-5 spends verify from the wire. Slice 4a-1: every member derives the spend from the intent (`DerivedSpend`, §9.5) through the one output builder, re-deriving each input's secrets from its record under the group's key. Open: the wallet (4a-2), regtest (4a-3) and the DoD gate |
 | MS-6 | **OPEN** | Lean holds |
-| MS-7 | **OPEN** | R6 vs **v31** persist only; versioned discriminator (R1-F-11) |
+| MS-7 | **OPEN — 4a-2** | R6 vs **v31** persist only; versioned discriminator (R1-F-11). Fixed by 4a-1: the ledger's record of a group output (`GroupOutput`) holds public values and ciphertexts only; held nonces are never persisted (R-20); the replay set holds seed fingerprints, never seeds. The `.wallet.multisig` file and the ledger's version bump are 4a-2 |
 | MS-8 | **RETIRED** | redundancy; leaf change not required |
 
 **Round 1 closure checklist — ✅ all discharged; Round 1 CLOSED 2026-07-16:**
