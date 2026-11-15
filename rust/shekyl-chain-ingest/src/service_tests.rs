@@ -1629,13 +1629,28 @@ async fn the_tip_followers_death_fails_the_service_and_closes_the_door() {
     );
 }
 
+/// When an event a test waits for is a hang rather than a slow host.
+///
+/// These bounds detect a hang; none of them is the test's claim. They were
+/// sized for an idle machine (a wake within 30 s, a stop within 15 s), and
+/// on a fleet host running beside a miner at load ten, with the lib suite
+/// taking 8,323 s, two tests timed out while the code was doing what they
+/// assert: `a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job`
+/// ("a job posted in time: Elapsed") and
+/// `stop_answers_a_found_block_waiting_inside_the_door` ("stop deadlocked
+/// ..."). Five minutes is far past any loaded host's latency for one wake,
+/// one seat or one stop, and every bound built from it stays under
+/// nextest's 30-minute terminate (`rust/.config/nextest.toml`), so a real
+/// hang still fails here with its own message.
+const HANG: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// How long the follower may take to post once a matured chain is in the
-/// store. Offering that chain is the slow part; a later wake is
-/// [`WAKE_POSTED`].
-const CHAIN_POSTED: std::time::Duration = std::time::Duration::from_secs(180);
+/// store. Offering that chain is the slow part, real verification, so it
+/// gets two hang bounds; a later wake is [`WAKE_POSTED`].
+const CHAIN_POSTED: std::time::Duration = HANG.saturating_mul(2);
 
 /// How long one wake may take once the chain is up.
-const WAKE_POSTED: std::time::Duration = std::time::Duration::from_secs(30);
+const WAKE_POSTED: std::time::Duration = HANG;
 
 /// A service with a real pool and a job seat. The sync sender and the
 /// found-block sender stay alive for the service's life: dropping either
@@ -2157,17 +2172,19 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
     y.close().await;
 }
 
-/// How long the follower may take to act on its first tip.
-const FOLLOWER_START_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long the follower may take to act on its first tip ([`HANG`]).
+const FOLLOWER_START_WITHIN: std::time::Duration = HANG;
 
-/// How long the sink may take to hold a seat after a block is delivered.
-const SEAT_TAKEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long the sink may take to hold a seat after a block is delivered
+/// ([`HANG`]).
+const SEAT_TAKEN_WITHIN: std::time::Duration = HANG;
 
 /// How long a stop may take before the test calls it stuck. A stop that
 /// deadlocks the runtime worker cannot poll an async timeout, so the wait
 /// is this thread's, beside the runtime. It covers the follower starting,
-/// the sink taking its seat, and the stop itself.
-const STOP_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+/// the sink taking its seat, and the stop itself: three hang bounds, so
+/// the inner ones fire first and name their own step.
+const STOP_WITHIN: std::time::Duration = HANG.saturating_mul(3);
 
 fn current_thread_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
