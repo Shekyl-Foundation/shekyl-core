@@ -138,14 +138,39 @@ pub struct TreeContext {
 /// carries the same version as the signature that later replaces it.
 pub const PQC_AUTH_VERSION: u8 = shekyl_wire::PqcAuth::VERSION;
 
+/// The authorization scheme of an input's `pqc_auth`: the closed set the
+/// builder writes, each its crypto crate's id. A scheme the chain does not
+/// define cannot be written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PqcScheme {
+    /// One hybrid signer (Ed25519 + ML-DSA-65).
+    Single,
+    /// An M-of-N multisig container (Option E′).
+    Multisig,
+}
+
+impl PqcScheme {
+    /// The scheme's `scheme_id` on the wire.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            Self::Single => shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            Self::Multisig => shekyl_crypto_pq::multisig::HYBRID_SCHEME_ID_MULTISIG,
+        }
+    }
+}
+
 /// Per-input PQC authentication data (hybrid signature).
 ///
-/// Contains the serialized hybrid signature (Ed25519 + ML-DSA-65) and the
-/// serialized public key needed for verification.
+/// Contains the serialized hybrid signature and the serialized public key
+/// needed for verification, under its scheme: one signer's key and
+/// signature, or a multisig key blob and signature container.
 #[derive(Clone, Debug)]
 pub struct PqcAuth {
     /// Authentication version. Production slots use [`PQC_AUTH_VERSION`].
     pub auth_version: u8,
+    /// The authorization scheme.
+    pub scheme: PqcScheme,
     /// Serialized hybrid signature (Ed25519 + ML-DSA-65) in canonical encoding.
     pub signature: Vec<u8>,
     /// Serialized hybrid public key in canonical encoding.

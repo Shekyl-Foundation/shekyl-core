@@ -9,15 +9,16 @@ use curve25519_dalek::Scalar;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::derivation::{derive_output_secrets, derive_pqc_public_key};
 use shekyl_crypto_pq::kem::HybridCiphertext;
-use shekyl_crypto_pq::output::{construct_output, recover_combined_ss};
+use shekyl_crypto_pq::label::sentinel_plaintext;
+use shekyl_crypto_pq::output::recover_combined_ss;
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 
 use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
+use shekyl_tx_builder::outputs::{build_output, build_tx_extra, BuiltOutput, Payee};
 use shekyl_tx_builder::{LeafEntry, SpendInput};
 use shekyl_types::GlobalOutputIndex;
-use shekyl_units::AtomicUnits;
 use zeroize::Zeroizing;
 
 use super::types::*;
@@ -42,8 +43,8 @@ pub(crate) struct PreparedInput {
 /// One constructed vout batch to `P`'s base address — the shared
 /// output-construction loop of [`AssembleBond`] (two confidential change
 /// vouts) and [`AssembleEmissionClaim`] (loud reward + two change vouts):
-/// per output, `construct_output` → KEM blob layout → leaf-hash blob →
-/// `enc_amount_wire()` / `enc_label_wire()` → tx-builder `OutputInfo`. Both
+/// per output, the transfer path's `build_output`, then the transaction's
+/// `tx_extra` through its `build_tx_extra`. Both
 /// change vouts return to `P`'s base spend key (the pscan
 /// `GuaranteedScanner` claims against `spend_pk` directly), so change
 /// re-enters the funding set on the next sweep.
@@ -51,57 +52,54 @@ pub(crate) struct ConstructedVouts {
     pub(crate) output_infos: Vec<shekyl_tx_builder::OutputInfo>,
     pub(crate) output_keys: Vec<[u8; 32]>,
     pub(crate) view_tags: Vec<Option<u8>>,
-    pub(crate) kem_blobs: Vec<Vec<u8>>,
-    pub(crate) leaf_entry_blob: Vec<u8>,
+    /// The vouts' `tx_extra`: the tx pubkey, every KEM ciphertext and the
+    /// `0x07` leaf entries, through the transfer path's builder.
+    pub(crate) tx_extra: Vec<u8>,
 }
 
-/// Construct `amounts` as vouts to `P`'s base address. `capture` sees each
-/// constructed output `(index, &OutputData)` before its fields are packed,
-/// so the emission path lifts its reward commit without a second loop or a
+/// Construct `amounts` as vouts to `P`'s base address, under the
+/// transaction key `tx_key_secret` whose public key is `tx_pubkey`, through
+/// the builder every spend path uses (`shekyl_tx_builder::outputs`).
+/// `capture` sees each built output `(index, &BuiltOutput)`, so the
+/// emission path lifts its reward commit without a second loop or a
 /// parallel construction site.
 pub(crate) fn construct_vouts_to_base(
     keys: &ArchivalPKeys,
     tx_key_secret: &Zeroizing<[u8; 32]>,
+    tx_pubkey: &[u8; 32],
     amounts: &[u64],
     error_site: &'static str,
-    mut capture: impl FnMut(usize, &shekyl_crypto_pq::output::OutputData),
+    mut capture: impl FnMut(usize, &BuiltOutput),
 ) -> Result<ConstructedVouts, BondAssemblyError> {
-    let mut vouts = ConstructedVouts {
-        output_infos: Vec::with_capacity(amounts.len()),
-        output_keys: Vec::with_capacity(amounts.len()),
-        view_tags: Vec::with_capacity(amounts.len()),
-        kem_blobs: Vec::with_capacity(amounts.len()),
-        leaf_entry_blob: Vec::with_capacity(32 * amounts.len()),
-    };
-    for (idx, &amount) in amounts.iter().enumerate() {
-        let constructed = construct_output(
-            tx_key_secret,
-            &keys.x25519_pk,
-            &keys.ml_kem_ek,
-            keys.spend_pk.as_canonical_bytes(),
-            amount,
-            idx as u64,
-        )
-        .map_err(|e| BondAssemblyError::build(error_site, e))?;
-        capture(idx, &constructed);
-        let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
-        kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
-        kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
-        vouts.kem_blobs.push(kem_blob);
-        vouts
-            .leaf_entry_blob
-            .extend_from_slice(&constructed.pqc_leaf.entry_bytes());
-        vouts.output_keys.push(constructed.output_key);
-        vouts.view_tags.push(Some(constructed.view_tag_prefilter));
-        vouts.output_infos.push(shekyl_tx_builder::OutputInfo {
-            dest_key: constructed.output_key,
-            amount: AtomicUnits::from_raw(amount),
-            commitment_mask: constructed.z,
-            enc_amount: constructed.enc_amount_wire(),
-            enc_label: constructed.enc_label_wire(),
-        });
+    let label = sentinel_plaintext();
+    let built: Vec<BuiltOutput> = amounts
+        .iter()
+        .zip(0u64..)
+        .map(|(&amount, index)| {
+            build_output(
+                tx_key_secret,
+                Payee::Single {
+                    spend_key: keys.spend_pk.as_canonical_bytes(),
+                    view_x25519: &keys.x25519_pk,
+                    ml_kem_ek: &keys.ml_kem_ek,
+                    label_plaintext: &label,
+                },
+                amount,
+                index,
+            )
+            .map_err(|e| BondAssemblyError::build(error_site, e))
+        })
+        .collect::<Result<_, _>>()?;
+    for (idx, output) in built.iter().enumerate() {
+        capture(idx, output);
     }
-    Ok(vouts)
+    Ok(ConstructedVouts {
+        output_infos: built.iter().map(|b| b.info.clone()).collect(),
+        output_keys: built.iter().map(|b| b.output_key).collect(),
+        view_tags: built.iter().map(|b| Some(b.view_tag)).collect(),
+        tx_extra: build_tx_extra(tx_pubkey, &built)
+            .map_err(|e| BondAssemblyError::build(error_site, e))?,
+    })
 }
 
 /// One record's re-derived spend-side parts — the shared per-record body of

@@ -33,6 +33,8 @@ shekyl-curve-io = { path = "../shekyl-curve-io" }
 # adapter (`wire.rs`) maps onto this. (Bp+ crypto comes from `shekyl-bulletproofs`
 # above; the dissolved `shekyl-oxide` crate is no longer a dependency.)
 shekyl-wire = { path = "../shekyl-wire" }
+# The group recipient of a multisig output (`outputs::Payee::Group`).
+shekyl-address = { path = "../shekyl-address" }
 # The prefix hash the builder signs is the txid preimage's first component and
 # leaves `shekyl-wire` typed (`PrefixHash`, RTN-7); it stays typed through the
 # signer entry points and becomes bytes only at the proof-crate handoff.

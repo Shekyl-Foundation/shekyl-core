@@ -17,8 +17,7 @@ use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
-use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
-use shekyl_scanner::extra::Extra;
+use shekyl_tx_builder::outputs::{build_output, build_tx_extra, BuiltOutput, Payee};
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
     tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput,
@@ -56,68 +55,6 @@ impl DerivedScalars {
     fn change_spend_pk(&self) -> [u8; 32] {
         self.spend_public.compress().to_bytes()
     }
-}
-
-// `pub(super)`: the F-D2 drain assembly (`drain_assembly.rs`) constructs its
-// two outputs through this exact primitive so a drain vout is byte-identical to
-// an ordinary transfer vout (T-DS-6/T-DS-7 composite wire-shape arm — the
-// output-construction leg has one definition, shared with the transfer path).
-pub(super) struct BuiltOutput {
-    pub(super) info: OutputInfo,
-    pub(super) output_key: [u8; 32],
-    pub(super) view_tag: Option<u8>,
-    pub(super) kem_blob: Vec<u8>,
-    /// The output's 64-byte `0x07` entry `CM ‖ record` (`PL-D3` / `PL-D3a`):
-    /// the PQC leaf commitment whose x-coordinate becomes the leaf's 4th
-    /// scalar, and the post-quantum record. Consensus refuses a transaction
-    /// with outputs that omits the field (CEN-I19), and an entry that is not
-    /// the honest derivation leaves the recipient with an output it can see
-    /// but never open (received-but-unspendable), so every builder appends
-    /// exactly this value in vout order.
-    pub(super) pqc_leaf: [u8; 64],
-}
-
-/// `label_plaintext` is the 8-byte block this output encrypts
-/// (`outbound_label`): the payee's `rid` echo for a payment that answers a
-/// link, the sentinel for everything else. The wire is the same width
-/// either way.
-pub(super) fn build_output(
-    tx_key_secret: &[u8; 32],
-    recipient_spend_pk: &[u8; 32],
-    recipient_x25519: &[u8; 32],
-    recipient_ml_kem: &[u8],
-    amount: u64,
-    output_index: u64,
-    label_plaintext: &[u8; 8],
-) -> Result<BuiltOutput, KeyEngineError> {
-    let constructed = construct_output_with_label_plaintext(
-        tx_key_secret,
-        recipient_x25519,
-        recipient_ml_kem,
-        recipient_spend_pk,
-        amount,
-        output_index,
-        label_plaintext,
-    )
-    .map_err(KeyEngineError::SourceCiphertextDecapsulationFailed)?;
-
-    let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
-    kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
-    kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
-
-    Ok(BuiltOutput {
-        info: OutputInfo {
-            dest_key: constructed.output_key,
-            amount: AtomicUnits::from_raw(amount),
-            commitment_mask: constructed.z,
-            enc_amount: constructed.enc_amount_wire(),
-            enc_label: constructed.enc_label_wire(),
-        },
-        output_key: constructed.output_key,
-        view_tag: Some(constructed.view_tag_prefilter),
-        kem_blob,
-        pqc_leaf: constructed.pqc_leaf.entry_bytes(),
-    })
 }
 
 /// Assemble the transfer-shaped [`WireEncodeInput`] shared by the ordinary
@@ -198,6 +135,7 @@ pub(super) fn assemble_transfer_wire(
             .iter()
             .map(|pk| PqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: pk.clone(),
             })
@@ -352,7 +290,6 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
 
     let mut built_outputs: Vec<BuiltOutput> = Vec::new();
-    let mut kem_blobs: Vec<Vec<u8>> = Vec::new();
     let mut output_index: u64 = 0;
 
     for PaymentOutput {
@@ -374,17 +311,17 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                 detail: "recipient view key does not map to a valid X25519 point",
             }
         })?;
-        let built = build_output(
+        built_outputs.push(build_output(
             &tx_key_secret,
-            &recipient.spend_key,
-            &recipient_x25519,
-            &recipient.ml_kem_encap_key,
+            Payee::Single {
+                spend_key: &recipient.spend_key,
+                view_x25519: &recipient_x25519,
+                ml_kem_ek: &recipient.ml_kem_encap_key,
+                label_plaintext: &label_plaintext,
+            },
             amount,
             output_index,
-            &label_plaintext,
-        )?;
-        kem_blobs.push(built.kem_blob.clone());
-        built_outputs.push(built);
+        )?);
         output_index += 1;
     }
 
@@ -394,17 +331,17 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
             .ok_or(KeyEngineError::InsufficientFunds { shortfall: 1 })?;
         if change_amount > 0 {
             let change_pk = derived.change_spend_pk();
-            let built = build_output(
+            built_outputs.push(build_output(
                 &tx_key_secret,
-                &change_pk,
-                &keys.x25519_pk,
-                &keys.ml_kem_ek,
+                Payee::Single {
+                    spend_key: &change_pk,
+                    view_x25519: &keys.x25519_pk,
+                    ml_kem_ek: &keys.ml_kem_ek,
+                    label_plaintext: &sentinel_plaintext(),
+                },
                 change_amount,
                 output_index,
-                &sentinel_plaintext(),
-            )?;
-            kem_blobs.push(built.kem_blob.clone());
-            built_outputs.push(built);
+            )?);
         }
     }
 
@@ -414,15 +351,14 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         });
     }
 
-    // tx_extra: tx pubkey + per-output KEM blobs + the `0x07` PQC leaf
-    // entries (`CM ‖ record` per output, vout order; `PL-D3`). Consensus
-    // refuses a transaction with outputs that lacks the field (CEN-I19), and
-    // the bond/emission assembly paths (stake_engine.rs) append the same
-    // value through the same primitive.
-    let leaf_entry_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_entries(leaf_entry_blob);
-    let tx_extra = extra.serialize();
+    // tx_extra through the one builder every spend path uses: the tx pubkey,
+    // every output's KEM ciphertext, and the `0x07` leaf entries (CEN-I19).
+    let tx_extra =
+        build_tx_extra(&tx_pubkey.compress().to_bytes(), &built_outputs).map_err(|_| {
+            KeyEngineError::Primitive {
+                detail: "tx_extra does not encode",
+            }
+        })?;
 
     let mut bundles = HashMap::new();
     for input in &tx.inputs {
@@ -503,7 +439,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
 
     let output_infos: Vec<OutputInfo> = built_outputs.iter().map(|b| b.info.clone()).collect();
     let output_keys: Vec<[u8; 32]> = built_outputs.iter().map(|b| b.output_key).collect();
-    let view_tags: Vec<Option<u8>> = built_outputs.iter().map(|b| b.view_tag).collect();
+    let view_tags: Vec<Option<u8>> = built_outputs.iter().map(|b| Some(b.view_tag)).collect();
 
     let prefix_hash = tx_prefix_hash_from_parts(&key_images, &output_keys, &view_tags, &tx_extra);
 
@@ -650,7 +586,9 @@ mod tests {
 
     /// The bytes a transfer's outputs and `tx_extra` are made of, pinned for
     /// a fixed transaction key: a payment and a change output built by
-    /// `build_output`, and `tx_extra` assembled as `sign_tx` assembles it.
+    /// `build_output`, and `tx_extra` assembled as `sign_tx` assembles it
+    /// (recorded from the engine's own builder before it moved into
+    /// `shekyl_tx_builder::outputs`).
     /// Output construction is deterministic given the transaction key, so a
     /// move of the builder that changes any byte of a solo transfer fails
     /// here.
@@ -675,25 +613,23 @@ mod tests {
             .map(|(amount, index)| {
                 build_output(
                     &tx_key_secret,
-                    &decoded.spend_key,
-                    &recipient_x25519,
-                    &decoded.ml_kem_encap_key,
+                    Payee::Single {
+                        spend_key: &decoded.spend_key,
+                        view_x25519: &recipient_x25519,
+                        ml_kem_ek: &decoded.ml_kem_encap_key,
+                        label_plaintext: &sentinel_plaintext(),
+                    },
                     amount,
                     index,
-                    &sentinel_plaintext(),
                 )
                 .expect("build output")
             })
             .collect();
-        let kem_blobs: Vec<Vec<u8>> = outputs.iter().map(|b| b.kem_blob.clone()).collect();
-        let leaf_entry_blob: Vec<u8> = outputs.iter().flat_map(|b| b.pqc_leaf).collect();
-        let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-        extra.push_pqc_leaf_entries(leaf_entry_blob);
-
-        let mut transcript = extra.serialize();
+        let mut transcript =
+            build_tx_extra(&tx_pubkey.compress().to_bytes(), &outputs).expect("tx_extra encodes");
         for out in &outputs {
             transcript.extend_from_slice(&out.output_key);
-            transcript.push(out.view_tag.expect("a transfer output carries a view tag"));
+            transcript.push(out.view_tag);
             transcript.extend_from_slice(&out.info.commitment_mask);
             transcript.extend_from_slice(&out.info.enc_amount.to_bytes());
             transcript.extend_from_slice(&out.info.enc_label.to_bytes());
@@ -746,7 +682,7 @@ mod tests {
                 built.info.enc_amount.tag(),
                 built.info.enc_label.ciphertext(),
                 built.info.enc_label.tag(),
-                built.view_tag.expect("payment outputs carry a view tag"),
+                built.view_tag,
                 OUT_IDX,
             )
             .expect("recipient recovers the payment output")
@@ -762,12 +698,14 @@ mod tests {
             let label = label_plaintext_for_recipient(rid).expect("an encodable rid");
             let built = build_output(
                 &TX_KEY,
-                &decoded.spend_key,
-                &recipient_x25519,
-                &decoded.ml_kem_encap_key,
+                Payee::Single {
+                    spend_key: &decoded.spend_key,
+                    view_x25519: &recipient_x25519,
+                    ml_kem_ek: &decoded.ml_kem_encap_key,
+                    label_plaintext: &label,
+                },
                 AMOUNT,
                 OUT_IDX,
-                &label,
             )
             .expect("construct payment output");
             assert_eq!(
@@ -802,12 +740,14 @@ mod tests {
             ed25519_pk_to_x25519_pk(&resolved.view_key).expect("map view key to X25519");
         let built = build_output(
             &TX_KEY,
-            &resolved.spend_key,
-            &recipient_x25519,
-            &resolved.ml_kem_encap_key,
+            Payee::Single {
+                spend_key: &resolved.spend_key,
+                view_x25519: &recipient_x25519,
+                ml_kem_ek: &resolved.ml_kem_encap_key,
+                label_plaintext: &sentinel_plaintext(),
+            },
             AMOUNT,
             OUT_IDX,
-            &sentinel_plaintext(),
         )
         .expect("construct the persona's output");
         let (ct_x25519, ct_ml_kem) = built.kem_blob.split_at(32);
@@ -829,7 +769,7 @@ mod tests {
             built.info.enc_amount.tag(),
             built.info.enc_label.ciphertext(),
             built.info.enc_label.tag(),
-            built.view_tag.expect("payment outputs carry a view tag"),
+            built.view_tag,
             OUT_IDX,
         )
         .expect("the persona recovers the output");

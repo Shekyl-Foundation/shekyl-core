@@ -80,7 +80,6 @@
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::label::sentinel_plaintext;
-use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, OutputInfo,
     TreeContext,
@@ -89,8 +88,9 @@ use shekyl_types::GlobalOutputIndex;
 use shekyl_units::AtomicUnits;
 
 use super::bond_assembly::{finalize_bond_tx, FundingInputContext, PBoundBytes};
-use super::sign_bridge::{assemble_transfer_wire, build_output};
+use super::sign_bridge::assemble_transfer_wire;
 use super::stake_engine::{prepare_funding_inputs, PersonaHandle, StakeEngineError};
+use shekyl_tx_builder::outputs::{build_output, build_tx_extra, Payee};
 
 /// Why an [`assemble_drain_tx`] pipeline step refused or failed.
 ///
@@ -358,38 +358,37 @@ pub(super) async fn assemble_drain_tx(
 
     let vout0 = build_output(
         &tx_key_secret,
-        spec0.spend_pk,
-        spec0.x25519_pk,
-        spec0.ml_kem_ek,
+        Payee::Single {
+            spend_key: spec0.spend_pk,
+            view_x25519: spec0.x25519_pk,
+            ml_kem_ek: spec0.ml_kem_ek,
+            label_plaintext: &sentinel_plaintext(),
+        },
         spec0.amount,
         0,
-        &sentinel_plaintext(),
     )
     .map_err(|e| DrainAssemblyError::build("drain vout0 construction", e))?;
     let vout1 = build_output(
         &tx_key_secret,
-        spec1.spend_pk,
-        spec1.x25519_pk,
-        spec1.ml_kem_ek,
+        Payee::Single {
+            spend_key: spec1.spend_pk,
+            view_x25519: spec1.x25519_pk,
+            ml_kem_ek: spec1.ml_kem_ek,
+            label_plaintext: &sentinel_plaintext(),
+        },
         spec1.amount,
         1,
-        &sentinel_plaintext(),
     )
     .map_err(|e| DrainAssemblyError::build("drain vout1 construction", e))?;
 
     let built_outputs = [vout0, vout1];
     let output_infos: Vec<OutputInfo> = built_outputs.iter().map(|b| b.info.clone()).collect();
     let output_keys: Vec<[u8; 32]> = built_outputs.iter().map(|b| b.output_key).collect();
-    let view_tags: Vec<Option<u8>> = built_outputs.iter().map(|b| b.view_tag).collect();
-    let kem_blobs: Vec<Vec<u8>> = built_outputs.iter().map(|b| b.kem_blob.clone()).collect();
-    let leaf_entry_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
+    let view_tags: Vec<Option<u8>> = built_outputs.iter().map(|b| Some(b.view_tag)).collect();
 
-    // ── Step 3: tx_extra — tx pubkey + per-output KEM blobs + the `0x07` PQC
-    // leaf entries (identical layout + order to the transfer path; consensus
-    // refuses a transaction with outputs that lacks the field). ──
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_entries(leaf_entry_blob);
-    let tx_extra = extra.serialize();
+    // ── Step 3: tx_extra, through the transfer path's builder. ──
+    let tx_extra = build_tx_extra(&tx_pubkey.compress().to_bytes(), &built_outputs)
+        .map_err(|e| DrainAssemblyError::build("drain tx_extra", e))?;
 
     // ── Step 4: persona-keyed spend inputs — the shared bond/claim fee-sweep
     // leg (rule 36: secrets re-derived inside; strict-descending key-image

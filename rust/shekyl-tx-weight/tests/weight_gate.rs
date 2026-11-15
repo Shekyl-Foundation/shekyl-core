@@ -157,6 +157,7 @@ fn built(n_in: usize, n_out: usize, layers: u8, fee: u64, bp: &Bulletproof) -> B
         pqc_auths: (0..n_in)
             .map(|_| PqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: vec![0xDD; PQC_HYBRID_SINGLE_SIG_LEN],
                 public_key: vec![0xEE; PQC_HYBRID_SINGLE_KEY_LEN],
             })

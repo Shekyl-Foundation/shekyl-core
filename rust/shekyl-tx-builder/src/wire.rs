@@ -8,7 +8,6 @@
 
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
-use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_network::NetworkId;
 use shekyl_types::{BlockHash, KeyImage, PrefixHash, SigningPayloadHash};
 use shekyl_wire::{
@@ -191,7 +190,7 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
         .iter()
         .map(|a| WirePqcAuth {
             auth_version: a.auth_version,
-            scheme_id: HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            scheme_id: a.scheme.id(),
             flags: WirePqcAuth::NO_FLAGS,
             hybrid_public_key: a.public_key.clone(),
             hybrid_signature: a.signature.clone(),
@@ -413,6 +412,7 @@ mod tests {
             fcmp_proof: vec![0xCC; 64],
             pqc_auths: vec![PqcAuth {
                 auth_version: crate::types::PQC_AUTH_VERSION,
+                scheme: crate::types::PqcScheme::Single,
                 signature: vec![0xDD; 128],
                 public_key: vec![0xEE; 64],
             }],
@@ -429,6 +429,29 @@ mod tests {
         let b = encode_final_tx(&input).expect("encode");
         assert_eq!(a, b);
         assert!(!a.is_empty());
+    }
+
+    /// Each slot's scheme reaches the wire as its own `scheme_id`: a
+    /// multisig slot is written as the multisig scheme, not as one signer.
+    #[test]
+    fn each_auth_slot_is_written_under_its_own_scheme() {
+        for scheme in [
+            crate::types::PqcScheme::Single,
+            crate::types::PqcScheme::Multisig,
+        ] {
+            let mut input = minimal_input();
+            for auth in &mut input.pqc_auths {
+                auth.scheme = scheme;
+            }
+            let Ct::Fcmp { pqc_auths, .. } = build_wire_tx(&input).expect("build").ct else {
+                panic!("an FCMP++ spend");
+            };
+            assert!(pqc_auths.iter().all(|a| a.scheme_id == scheme.id()));
+        }
+        assert_ne!(
+            crate::types::PqcScheme::Single.id(),
+            crate::types::PqcScheme::Multisig.id()
+        );
     }
 
     #[test]
@@ -561,6 +584,7 @@ mod tests {
         // 1 spend + 1 extra ⇒ 2 pqc_auths, still 1 pseudo_out.
         input.pqc_auths.push(PqcAuth {
             auth_version: crate::types::PQC_AUTH_VERSION,
+            scheme: crate::types::PqcScheme::Single,
             signature: vec![0xDD; 128],
             public_key: vec![0xEE; 64],
         });
@@ -655,6 +679,7 @@ mod tests {
         input.extra_inputs = vec![Input::fcmp_spend(KeyImage::from_bytes([9u8; 32]))];
         input.pqc_auths.push(PqcAuth {
             auth_version: crate::types::PQC_AUTH_VERSION,
+            scheme: crate::types::PqcScheme::Single,
             signature: vec![0xDD; 128],
             public_key: vec![0xEE; 64],
         });

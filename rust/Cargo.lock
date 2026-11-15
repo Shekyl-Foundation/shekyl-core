@@ -5569,6 +5569,7 @@ dependencies = [
  "gungraun",
  "rand 0.8.6",
  "rand_core 0.6.4",
+ "shekyl-address",
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",

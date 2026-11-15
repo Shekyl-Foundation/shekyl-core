@@ -22,7 +22,6 @@
 use shekyl_archival_retention::bond_post::bond_post_funding_floor_met;
 use shekyl_archival_retention::bond_wire::ArchivalBondPostVin;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     open_spend, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, AuthSlots,
     InputTerm, OutputTerm, SpendLayout, TreeContext,
@@ -107,19 +106,15 @@ pub(crate) async fn assemble_signed_bond_post(
         output_infos,
         output_keys,
         view_tags,
-        kem_blobs,
-        leaf_entry_blob,
+        tx_extra,
     } = construct_vouts_to_base(
         args.keys,
         &tx_key_secret,
+        &tx_pubkey.compress().to_bytes(),
         &args.amounts,
         args.output_site,
         |_, _| {},
     )?;
-
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_entries(leaf_entry_blob);
-    let tx_extra = extra.serialize();
 
     let prepared = prepare_funding_inputs(args.keys, args.funding)?;
     let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();

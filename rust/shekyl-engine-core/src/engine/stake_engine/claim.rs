@@ -17,7 +17,6 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
-use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     open_spend, prove_backing_membership, sign_transaction_with_terms,
     tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, SpendLayout,
@@ -219,17 +218,17 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             output_infos,
             output_keys,
             view_tags,
-            kem_blobs,
-            leaf_entry_blob,
+            tx_extra,
         } = construct_vouts_to_base(
             keys,
             &tx_key_secret,
+            &tx_pubkey.compress().to_bytes(),
             &[total_reward, change_lo, change_hi],
             "claim-output construction",
             |idx, constructed| {
                 if idx == 0 {
                     // The auth digest must bind the commitment the daemon
-                    // reads from the tx's outPk. `construct_output`'s C =
+                    // reads from the tx's outPk. `build_output`'s C =
                     // z·G + amount·H is the same formula (and mask) the
                     // signer emits; the post-sign cross-check below fails
                     // loudly if they ever diverge.
@@ -246,12 +245,6 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // The reward vout is loud (plaintext amount on the wire); the change
         // vouts stay confidential (wire amount 0).
         let output_amounts: Vec<u64> = vec![total_reward, 0, 0];
-
-        // ── Step 7: tx_extra — tx pubkey + per-output KEM blobs + 0x07 PQC
-        // leaf hashes (same shape as the bond path).
-        let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-        extra.push_pqc_leaf_entries(leaf_entry_blob);
-        let tx_extra = extra.serialize();
 
         // ── Step 8: fee spend inputs — shared spend-side leg with the bond
         // path (descending key-image order).

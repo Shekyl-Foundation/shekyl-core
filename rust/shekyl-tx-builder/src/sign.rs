@@ -361,6 +361,7 @@ pub fn sign_pqc_auths(
 
         auths.push(PqcAuth {
             auth_version: PQC_AUTH_VERSION,
+            scheme: crate::types::PqcScheme::Single,
             signature: auth_sig.signature,
             public_key: auth_sig.hybrid_public_key,
         });

@@ -95,6 +95,7 @@ pub struct OpenSpend {
 fn placeholder_auth(public_key: Vec<u8>) -> PqcAuth {
     PqcAuth {
         auth_version: PQC_AUTH_VERSION,
+        scheme: crate::types::PqcScheme::Single,
         signature: Vec::new(),
         public_key,
     }
