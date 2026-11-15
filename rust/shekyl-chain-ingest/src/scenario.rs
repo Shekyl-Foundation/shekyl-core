@@ -209,7 +209,7 @@ impl<P: Pow> Scenario<P> {
     /// wake the ranker fails here. A free longhash has no hasher, and
     /// this does nothing.
     async fn quiet_holds_the_list(&self) {
-        let (Some(store), Some(mut resident)) = (&self.store, self.substrate.resident()) else {
+        let (Some(store), Some(resident)) = (&self.store, self.substrate.resident()) else {
             return;
         };
         let snap = store.begin_read().expect("the driver's store reads");
@@ -221,10 +221,9 @@ impl<P: Pow> Scenario<P> {
             .flat_map(shekyl_hasher::Ranked::seeds)
             .map(|seed| *seed.as_bytes())
             .collect();
-        let quiet = resident
-            .wait_for(|resident| resident.quiet)
-            .await
-            .expect("the driver's hasher runs for the driver's life");
+        // Bounded: a hasher that never rests fails here with what it
+        // holds and what the list names, and does not hang the test.
+        let quiet = crate::test_support::quiet_resident(resident, &list).await;
         let held: std::collections::BTreeSet<[u8; 32]> = quiet
             .caches
             .iter()

@@ -360,3 +360,57 @@ async fn a_connect_past_the_windows_end_frees_the_previous_epochs_cache() {
     service.stop().await.expect("stops");
     y.close().await;
 }
+
+/// A wait for quiet is bounded, and what it says when the bound passes is
+/// what the hasher holds and what the caller expected: a job that never
+/// returns its lease fails the test that waits, and does not hang it.
+///
+/// A job holds its lease on a seed until the test lets it go. The wait,
+/// under a bound of a quarter of a second, panics naming the leased place
+/// and the caller's words.
+///
+/// Red edit: in `test_support::quiet_resident_within`, wait without the
+/// timeout: this test hangs until the runner kills it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wait_for_quiet_is_bounded_and_says_what_is_held() {
+    use crate::test_support::quiet_resident_within;
+    use std::sync::atomic::AtomicBool;
+
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    let own = own_hasher();
+    let seed = shekyl_pow_randomx::Seedhash::from_bytes([0x5e; 32]);
+    let (leased_tx, leased) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let job = {
+        let hasher = own.hasher.clone();
+        std::thread::spawn(move || {
+            hasher.lend(shekyl_hasher::Class::Chain, seed, &RUNNING, |_loan| {
+                leased_tx.send(()).expect("the test waits for the lease");
+                let _let_go = released.recv();
+            })
+        })
+    };
+    leased
+        .recv_timeout(crate::test_support::QUIET_WITHIN)
+        .expect("the job is lent its cache");
+    let waited = tokio::spawn(quiet_resident_within(
+        std::time::Duration::from_millis(250),
+        own.hasher.resident(),
+        &"the words of the caller",
+    ))
+    .await;
+    let panic = waited.expect_err("the wait panics at its bound");
+    let said = panic
+        .into_panic()
+        .downcast::<String>()
+        .map_or_else(|_| String::new(), |said| *said);
+    assert!(said.contains("did not go quiet within 250ms"), "{said}");
+    assert!(said.contains("Leased"), "it prints what is held: {said}");
+    assert!(
+        said.contains("the words of the caller"),
+        "it prints what was expected: {said}"
+    );
+    drop(release);
+    assert!(job.join().expect("the job returns").is_some());
+    assert!(quiet_seeds(&own.hasher).await.is_empty());
+}
