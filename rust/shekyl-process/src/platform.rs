@@ -93,11 +93,6 @@ const FREEBSD_SERVICE_RENDEZVOUS: &str = "/var/run/shekyl";
 /// macOS, created by the installer.
 const MACOS_SERVICE_RENDEZVOUS: &str = "/Library/Application Support/Shekyl";
 
-/// The directory under `%ProgramData%` on Windows. The service-manager
-/// dispatcher that checks it is RT-W14's and is not built yet; the leaf
-/// is named now so the row is not a special case added later.
-const WINDOWS_SERVICE_RENDEZVOUS_LEAF: &str = "shekyl";
-
 /// The fixed rendezvous directory for `os` (`std::env::consts::OS`), or
 /// `None` when that operating system has no fixed directory. Windows is
 /// `None` here: its directory is [`windows_service_rendezvous`].
@@ -110,14 +105,24 @@ fn fixed_service_rendezvous(os: &str) -> Option<&'static str> {
     }
 }
 
-/// `%ProgramData%\shekyl`. `program_data` is the known-folder root.
+/// Windows: `%ProgramData%\shekyl\rendezvous`, the rendezvous directory
+/// inside the service's data home (Rick, 2026-11-14): users read it, the
+/// service account alone writes it, it carries the no-read-up label and
+/// holds rendezvous files only. Unlike the other rows, the daemon creates
+/// it, with its owner, its DACL and its label set in the creating call, and
+/// refuses an existing one that differs in any of the three; that dispatcher
+/// is RT-W14's, still unbuilt, and the path is named now so the row is not
+/// a special case added later. `program_data` is the known-folder root.
 fn windows_service_rendezvous(program_data: &std::path::Path) -> PathBuf {
-    program_data.join(WINDOWS_SERVICE_RENDEZVOUS_LEAF)
+    program_data
+        .join(shekyl_daemon_config::paths::SERVICE_DATA_HOME)
+        .join(shekyl_rpc_rendezvous::RENDEZVOUS_DIR)
 }
 
 /// The service's rendezvous directory, fixed per platform (`RPC_CHANNEL.md`
-/// §7.1): what the installer or the service manager creates, never the
-/// daemon. The paths are data, so a test on any host pins every platform.
+/// §7.1): what the installer or the service manager creates on Unix, and
+/// what the daemon creates on Windows ([`windows_service_rendezvous`]). The
+/// paths are data, so a test on any host pins every platform.
 /// A platform with no row has no directory, and a service start there is
 /// refused. Windows is the one derived row, in flight until RT-W14.
 #[must_use]
@@ -210,9 +215,9 @@ mod service_directories {
     /// Every platform's directory is the ruled one (`RPC_CHANNEL.md`
     /// §7.1). Red edit: return another FreeBSD path from
     /// `fixed_service_rendezvous` and this fails on a Linux runner.
-    /// Windows' leaf is joined here without a Windows host: the
-    /// dispatcher that checks the directory is RT-W14's, still unbuilt,
-    /// and the path is not dead.
+    /// Windows' row, `%ProgramData%\shekyl\rendezvous` (Rick, 2026-11-14),
+    /// is joined here without a Windows host: the dispatcher that creates
+    /// the directory is RT-W14's, still unbuilt, and the path is not dead.
     #[test]
     fn every_platforms_service_rendezvous_directory_is_the_ruled_one() {
         assert_eq!(fixed_service_rendezvous("linux"), Some("/run/shekyl"));
@@ -225,7 +230,9 @@ mod service_directories {
         assert_eq!(fixed_service_rendezvous("openbsd"), None);
         assert_eq!(
             windows_service_rendezvous(Path::new(r"C:\ProgramData")),
-            PathBuf::from(r"C:\ProgramData").join("shekyl")
+            PathBuf::from(r"C:\ProgramData")
+                .join("shekyl")
+                .join("rendezvous")
         );
         let expected = fixed_service_rendezvous(std::env::consts::OS)
             .map(PathBuf::from)

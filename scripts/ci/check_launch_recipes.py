@@ -233,8 +233,8 @@ def made_dirs(body: str) -> dict[str, str]:
 
 
 def string_constant(text: str, name: str) -> str | None:
-    """The value of `const NAME: &str = "…";`, or None when the constant is absent."""
-    m = re.search(rf'^const {re.escape(name)}: &str = "([^"]+)";', text, flags=re.M)
+    """The value of `[pub] const NAME: &str = "…";`, or None when the constant is absent."""
+    m = re.search(rf'^(?:pub(?:\([a-z]+\))? )?const {re.escape(name)}: &str = "([^"]+)";', text, flags=re.M)
     return m.group(1) if m else None
 
 

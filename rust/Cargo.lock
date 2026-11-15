@@ -5107,6 +5107,7 @@ dependencies = [
  "libc",
  "shekyl-daemon-config",
  "shekyl-os-account",
+ "shekyl-rpc-rendezvous",
  "shekyl-spawn",
  "shekyl-win-sec",
  "tempfile",

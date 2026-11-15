@@ -113,8 +113,7 @@ impl Service {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr));
-        let child = shekyl_spawn::spawn_lock::with(|| command.spawn())
-            .expect("the daemon child");
+        let child = shekyl_spawn::spawn_lock::with(|| command.spawn()).expect("the daemon child");
         Self {
             child,
             dir: dir.to_path_buf(),

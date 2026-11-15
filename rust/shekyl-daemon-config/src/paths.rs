@@ -26,11 +26,12 @@ use crate::platform::{Platform, RunMode};
 
 /// The service's data home under the platform's service parent
 /// ([`Platform::service_parent`]): `/var/lib/shekyl`, `/var/db/shekyl`,
-/// `%ProgramData%\shekyl`. The launch-recipe gate
+/// `%ProgramData%\shekyl`; on Windows the service's rendezvous directory is
+/// inside it. The launch-recipe gate
 /// (`scripts/ci/check_launch_recipes.py`) reads this constant, so the
 /// packaged unit's `StateDirectory` and the FreeBSD script's prestart name
 /// the directory the daemon checks.
-const SERVICE_DATA_HOME: &str = "shekyl";
+pub const SERVICE_DATA_HOME: &str = "shekyl";
 
 /// The daemon's root for this run mode, or the refusal when the account
 /// has no home (`config.path.no-home`) or the service root is absent
