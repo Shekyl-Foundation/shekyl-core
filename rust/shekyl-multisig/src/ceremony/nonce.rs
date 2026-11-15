@@ -3,29 +3,34 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Nonces, and the durable writes the ceremony needs but does not own
-//! (`PQC_MULTISIG.md` §11.3, §11.4).
+//! Nonces, held in memory only (`PQC_MULTISIG.md` §11.3, §11.4; R-20).
 //!
 //! - A proposer or holder **holds** its round-1 state across the wait for
 //!   the other members: a [`HeldNonce`], one `frost_sal::HeldSession` per
 //!   input, each owning the cached seed together with the parameters and
-//!   keys it was made under. The ceremony puts it into a [`HeldNonceStore`]
-//!   the caller injects and keeps no copy.
-//! - To sign, the ceremony moves the nonce **out** of the store
-//!   ([`HeldNonceStore::take`]), then durably advances the member's nonce
-//!   counter ([`NonceCounterSink`]). Only a successful persist wraps the
-//!   nonce in a [`ConsumedNonce`], and only a `ConsumedNonce` signs; signing
-//!   consumes it. If the persist fails, the nonce is dropped (wiped) and the
-//!   ceremony is forfeit: a new intent is needed.
+//!   keys it was made under. The ceremony puts it into the member's
+//!   [`HeldNonceStore`] and keeps no copy.
+//! - To sign, the ceremony moves the nonce **out** of the store; only a
+//!   nonce taken out is a [`ConsumedNonce`], and only a `ConsumedNonce`
+//!   signs. Signing consumes it.
 //! - The responder never holds: it preprocesses and signs inside one call.
 //! - A member commits to at most one live intent per input
 //!   ([`LiveCeremonies`]).
 //!
-//! What types cannot do: a disk restored from a backup can hand a consumed
-//! `HeldNonce` back, or a store whose `take` returned before its delete was
-//! durable can. Both are the store's contract (slice 4a: held nonces are
-//! excluded from backups, a restore cancels every open ceremony, and
-//! `take` deletes durably before it returns).
+//! **A held nonce never leaves the process (R-20).** The store is an
+//! in-memory map the ceremony alone puts into and takes from, and no
+//! encoding of a [`HeldNonce`] or a `HeldSession` exists. A nonce on disk
+//! would come back on any restore, together with every record of what it
+//! had signed, and no type or on-disk counter can detect a rollback of its
+//! own disk: a responder that withheld its post-quantum signature could
+//! then draw a second share under the same nonce, and a few such replays
+//! solve for the member's `y_group` share. Closing the wallet between a
+//! member's commit and its share drops (wipes) its nonce, and its part of
+//! the ceremony is forfeit: a new intent completes the spend, and no funds
+//! are at stake.
+
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 
 use shekyl_fcmp::frost_sal::HeldSession;
 
@@ -99,87 +104,82 @@ impl HeldNonce {
     }
 }
 
-/// Why the store refused.
-#[derive(Debug, thiserror::Error)]
-pub enum StoreError {
-    /// A nonce for this intent is already held.
-    #[error("a nonce for this intent is already held")]
-    AlreadyHeld,
-    /// The durable write or delete failed.
-    #[error("the held-nonce store failed: {0}")]
-    Durable(String),
-}
+/// A nonce for this intent is already held: a second round 1 for one
+/// intent is refused, never overwritten.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("a nonce for this intent is already held")]
+pub struct AlreadyHeld;
 
-/// Where held nonces live between a member's two visits. Slice 4a puts it
-/// in the same protected container as the member's `y_group` share.
-pub trait HeldNonceStore {
-    /// Store `nonce`, keyed by its intent hash.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::AlreadyHeld`] when a nonce for that intent is held:
-    /// a second round 1 for one intent is refused, never overwritten.
-    fn put(&mut self, nonce: HeldNonce) -> Result<(), StoreError>;
+/// No nonce is held for this intent: it was never committed, it was
+/// already used, or the wallet closed in between (R-20).
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("no nonce is held for this intent")]
+pub struct NotHeld;
 
-    /// Move the nonce for `intent_hash` out of the store. The store's
-    /// copy is deleted durably before this returns.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::Durable`] when the delete is not durable.
-    fn take(&mut self, intent_hash: &[u8; 32]) -> Result<Option<HeldNonce>, StoreError>;
-}
-
-/// The member's durable, monotonic nonce counter.
-pub trait NonceCounterSink {
-    /// The value the next persist must write: one past the last durable
-    /// value.
-    fn next_nonce_counter(&self) -> u64;
-
-    /// Durably record that the nonce for `intent_hash` is used, at
-    /// `counter`. Returns only once the write is durable.
-    ///
-    /// # Errors
-    ///
-    /// [`NonceCounterError`] when the write is not durable.
-    fn persist_nonce_counter(
-        &mut self,
-        intent_hash: &[u8; 32],
-        counter: u64,
-    ) -> Result<(), NonceCounterError>;
-}
-
-/// The nonce counter's durable write failed.
-#[derive(Debug, thiserror::Error)]
-#[error("the durable nonce-counter persist failed: {0}")]
-pub struct NonceCounterError(pub String);
-
-/// A held nonce whose use is durably recorded: the only thing that signs.
-/// Made only by [`consume`], after the store has given the nonce up and
-/// the counter persist has returned `Ok`.
+/// A member's held nonces, by intent hash, in memory (R-20). The engine
+/// owns one per open wallet; dropping it wipes every nonce it holds.
 ///
-/// A holder signs only through the store and the counter sink, which is
-/// how it gets its `ConsumedNonce`:
+/// Only the ceremony puts a nonce in and takes one out, so no caller can
+/// copy a nonce anywhere, a disk included:
 ///
-/// ```
-/// use rand_core::OsRng;
-/// use shekyl_multisig::ceremony::files::SigningSet;
-/// use shekyl_multisig::ceremony::roles::Committed;
-/// use shekyl_multisig::{Authenticated, HeldNonceStore, Holder, NonceCounterSink};
+/// ```compile_fail,E0624
+/// use shekyl_multisig::HeldNonceStore;
 ///
-/// fn sign(
-///     holder: Holder<'_, Committed>,
-///     set: &Authenticated<SigningSet>,
-///     store: &mut impl HeldNonceStore,
-///     sink: &mut impl NonceCounterSink,
-/// ) {
-///     let _ = holder.sign(set, store, sink, &mut OsRng);
+/// fn leak(store: &mut HeldNonceStore, intent_hash: &[u8; 32]) {
+///     let _ = store.take(intent_hash);
 /// }
 /// ```
+#[derive(Default)]
+pub struct HeldNonceStore {
+    held: HashMap<[u8; 32], HeldNonce>,
+}
+
+impl std::fmt::Debug for HeldNonceStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldNonceStore")
+            .field("held", &self.held.len())
+            .finish()
+    }
+}
+
+impl HeldNonceStore {
+    /// An empty store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether a nonce is held for `intent_hash`: the ceremony this wallet
+    /// would forfeit by closing.
+    #[must_use]
+    pub fn holds(&self, intent_hash: &[u8; 32]) -> bool {
+        self.held.contains_key(intent_hash)
+    }
+
+    /// Store `nonce`, keyed by its intent hash.
+    pub(crate) fn put(&mut self, nonce: HeldNonce) -> Result<(), AlreadyHeld> {
+        match self.held.entry(nonce.intent_hash) {
+            Entry::Occupied(_) => Err(AlreadyHeld),
+            Entry::Vacant(slot) => {
+                slot.insert(nonce);
+                Ok(())
+            }
+        }
+    }
+
+    /// Move the nonce for `intent_hash` out of the store.
+    fn take(&mut self, intent_hash: &[u8; 32]) -> Option<HeldNonce> {
+        self.held.remove(intent_hash)
+    }
+}
+
+/// A held nonce taken out of the store: the only thing that signs. Made
+/// only by [`consume`], so a nonce signs once.
 ///
-/// It cannot sign without the persist:
+/// A holder signs only through its store, which is how it gets its
+/// `ConsumedNonce`:
 ///
-/// ```compile_fail,E0061
+/// ```
 /// use rand_core::OsRng;
 /// use shekyl_multisig::ceremony::files::SigningSet;
 /// use shekyl_multisig::ceremony::roles::Committed;
@@ -188,73 +188,41 @@ pub struct NonceCounterError(pub String);
 /// fn sign(
 ///     holder: Holder<'_, Committed>,
 ///     set: &Authenticated<SigningSet>,
-///     store: &mut impl HeldNonceStore,
+///     store: &mut HeldNonceStore,
 /// ) {
 ///     let _ = holder.sign(set, store, &mut OsRng);
 /// }
 /// ```
 ///
-/// and a `ConsumedNonce` cannot be made from a nonce taken out of a store
-/// by hand:
+/// and a `ConsumedNonce` cannot be made from a nonce by hand:
 ///
-/// ```compile_fail,E0451
+/// ```compile_fail,E0423
 /// use shekyl_multisig::{ConsumedNonce, HeldNonce};
 ///
 /// fn forge(nonce: HeldNonce) -> ConsumedNonce {
-///     ConsumedNonce { nonce, counter: 0 }
+///     ConsumedNonce(nonce)
 /// }
 /// ```
-pub struct ConsumedNonce {
-    nonce: HeldNonce,
-    counter: u64,
-}
+pub struct ConsumedNonce(HeldNonce);
 
 impl ConsumedNonce {
-    /// The counter value its use was recorded at.
-    #[must_use]
-    pub fn counter(&self) -> u64 {
-        self.counter
-    }
-
     /// The intent it was made for.
     #[must_use]
     pub fn intent_hash(&self) -> &[u8; 32] {
-        &self.nonce.intent_hash
+        &self.0.intent_hash
     }
 
     pub(crate) fn into_sessions(self) -> Vec<HeldSession> {
-        self.nonce.sessions
+        self.0.sessions
     }
 }
 
-/// Why a held nonce could not be consumed.
-#[derive(Debug, thiserror::Error)]
-pub enum ConsumeError {
-    /// No nonce is held for this intent: it was never committed, or it
-    /// was already used.
-    #[error("no nonce is held for this intent")]
-    NotHeld,
-    /// The store refused.
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    /// The counter persist failed; the nonce is dropped and the ceremony
-    /// is forfeit.
-    #[error(transparent)]
-    Persist(#[from] NonceCounterError),
-}
-
-/// Take the nonce held for `intent_hash` out of `store`, persist its use,
-/// and wrap it. The order is the rule: out of the store, then the durable
-/// counter, then usable.
+/// Take the nonce held for `intent_hash` out of `store` and wrap it.
 pub(crate) fn consume(
     intent_hash: &[u8; 32],
-    store: &mut impl HeldNonceStore,
-    sink: &mut impl NonceCounterSink,
-) -> Result<ConsumedNonce, ConsumeError> {
-    let nonce = store.take(intent_hash)?.ok_or(ConsumeError::NotHeld)?;
-    let counter = sink.next_nonce_counter();
-    sink.persist_nonce_counter(intent_hash, counter)?;
-    Ok(ConsumedNonce { nonce, counter })
+    store: &mut HeldNonceStore,
+) -> Result<ConsumedNonce, NotHeld> {
+    store.take(intent_hash).map(ConsumedNonce).ok_or(NotHeld)
 }
 
 /// A member's live ceremonies, by the inputs they spend. Slice 4a keeps
@@ -275,4 +243,45 @@ pub trait LiveCeremonies {
 pub struct InputInUse {
     /// The input's global output index.
     pub input: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_fcmp::frost_sal::HeldSession;
+
+    use super::HeldNonce;
+
+    /// Whether `$ty` implements `$trait`, decided at compile time: the
+    /// inherent constant exists only when the bound holds, and shadows the
+    /// blanket trait's `false`.
+    macro_rules! implements {
+        ($ty:ty: $($trait:tt)+) => {{
+            #[allow(dead_code)]
+            trait Fallback {
+                const IMPLEMENTS: bool = false;
+            }
+            impl<T: ?Sized> Fallback for T {}
+            struct Probe<T: ?Sized>(core::marker::PhantomData<T>);
+            #[allow(dead_code)]
+            impl<T: ?Sized + $($trait)+> Probe<T> {
+                const IMPLEMENTS: bool = true;
+            }
+            <Probe<$ty>>::IMPLEMENTS
+        }};
+    }
+
+    /// A held nonce has no encoding (R-20): neither `HeldNonce` nor
+    /// `HeldSession` implements a serialization trait the workspace uses,
+    /// so a nonce cannot be written anywhere a restore could bring it
+    /// back. The probe is checked on a type that does implement each
+    /// trait, so its `false` means what it says (rule 47).
+    #[test]
+    fn a_held_nonce_has_no_encoding() {
+        assert!(implements!(String: serde::Serialize));
+        assert!(implements!(String: serde::de::DeserializeOwned));
+        assert!(!implements!(HeldNonce: serde::Serialize));
+        assert!(!implements!(HeldNonce: serde::de::DeserializeOwned));
+        assert!(!implements!(HeldSession: serde::Serialize));
+        assert!(!implements!(HeldSession: serde::de::DeserializeOwned));
+    }
 }

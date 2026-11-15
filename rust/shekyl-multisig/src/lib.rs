@@ -35,9 +35,9 @@ pub mod member_file;
 pub mod messages;
 
 pub use ceremony::{
-    import, Authenticated, CeremonyError, ConsumedNonce, Cosigner, DeriveError, DerivedSpend,
-    GroupOutput, HeldNonce, HeldNonceStore, Holder, ImportError, Incoming, InputContext, InputPath,
-    LiveCeremonies, NonceCounterError, NonceCounterSink, Proposer, ProposerInputs, Responder,
+    import, AlreadyHeld, Authenticated, CeremonyError, ConsumedNonce, Cosigner, DeriveError,
+    DerivedSpend, GroupOutput, HeldNonce, HeldNonceStore, Holder, ImportError, Incoming,
+    InputContext, InputPath, LiveCeremonies, NotHeld, Proposer, ProposerInputs, Responder,
     ResponderInput, Role, SigningContext, UnsignedSpend,
 };
 pub use envelope::{

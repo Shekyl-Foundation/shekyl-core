@@ -23,14 +23,13 @@ use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_multisig::ceremony::context::ContextError;
-use shekyl_multisig::ceremony::nonce::{InputInUse, StoreError};
+use shekyl_multisig::ceremony::nonce::InputInUse;
 use shekyl_multisig::intent::{
     ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
-    import, DerivedSpend, GroupOutput, HeldNonce, HeldNonceStore, Incoming, LedgerView,
-    LiveCeremonies, MemberFile, NonceCounterError, NonceCounterSink, ProposerInputs,
-    SigningContext, ValidatedIntent,
+    import, DerivedSpend, GroupOutput, HeldNonceStore, Incoming, LedgerView, LiveCeremonies,
+    MemberFile, ProposerInputs, SigningContext, ValidatedIntent,
 };
 use shekyl_tx_weight::{predict_group_weight, GroupSize, GroupSpendShape, InputCount, OutputCount};
 use shekyl_types::{BlockHash, KeyImage};
@@ -40,59 +39,6 @@ use shekyl_wire::{Ct, Input, Transaction};
 // ---------------------------------------------------------------------------
 // The capabilities a wallet injects, in memory
 // ---------------------------------------------------------------------------
-
-#[derive(Default)]
-pub struct Store(pub HashMap<[u8; 32], HeldNonce>);
-
-impl HeldNonceStore for Store {
-    fn put(&mut self, nonce: HeldNonce) -> Result<(), StoreError> {
-        if self.0.contains_key(nonce.intent_hash()) {
-            return Err(StoreError::AlreadyHeld);
-        }
-        self.0.insert(*nonce.intent_hash(), nonce);
-        Ok(())
-    }
-
-    fn take(&mut self, intent_hash: &[u8; 32]) -> Result<Option<HeldNonce>, StoreError> {
-        Ok(self.0.remove(intent_hash))
-    }
-}
-
-/// The durable nonce counter. A failing sink refuses every persist, as a
-/// full disk or a failed fsync does.
-#[derive(Default)]
-pub struct Sink {
-    pub persisted: Vec<([u8; 32], u64)>,
-    pub failing: bool,
-}
-
-impl Sink {
-    /// A sink whose every persist fails.
-    pub fn failing() -> Self {
-        Self {
-            failing: true,
-            ..Self::default()
-        }
-    }
-}
-
-impl NonceCounterSink for Sink {
-    fn next_nonce_counter(&self) -> u64 {
-        self.persisted.last().map_or(0, |(_, c)| c + 1)
-    }
-
-    fn persist_nonce_counter(
-        &mut self,
-        intent_hash: &[u8; 32],
-        counter: u64,
-    ) -> Result<(), NonceCounterError> {
-        if self.failing {
-            return Err(NonceCounterError("the counter write failed".into()));
-        }
-        self.persisted.push((*intent_hash, counter));
-        Ok(())
-    }
-}
 
 #[derive(Default)]
 pub struct Live(pub HashMap<u64, [u8; 32]>);
@@ -112,11 +58,11 @@ impl LiveCeremonies for Live {
     }
 }
 
-/// One member's wallet: its file and its injected capabilities.
+/// One member's wallet: its file, its held nonces (in memory, R-20) and
+/// its input reservations.
 pub struct Wallet {
     pub file: MemberFile,
-    pub store: Store,
-    pub sink: Sink,
+    pub store: HeldNonceStore,
     pub live: Live,
 }
 
@@ -409,8 +355,7 @@ impl Wallet {
     pub fn new(file: MemberFile) -> Self {
         Self {
             file,
-            store: Store::default(),
-            sink: Sink::default(),
+            store: HeldNonceStore::new(),
             live: Live::default(),
         }
     }

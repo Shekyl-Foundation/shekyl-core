@@ -1062,17 +1062,18 @@ the danger is scoped to one role:
    newtype, so `modular_frost`'s `from_cache` (which ignores its
    parameters) is not a method of it.
 
-A restart inside a session does not cost the round: the proposer is
-rebuilt from the last file it sent (its `Proposal`, then its `FinalTx`),
-a holder from its context and its store, and the second round is
-stateless. The session itself is bounded
-by the intent's reference block (`PROOF_VALIDITY_HORIZON` blocks, R-13).
+A restart before a member's share forfeits that member's part, since its
+held nonce lived in memory only (R-20); a proposer that has finished is
+rebuilt from its `FinalTx`, and the second round is stateless. The
+session itself is bounded by the intent's reference block
+(`PROOF_VALIDITY_HORIZON` blocks, R-13).
 
-**What remains: the multisig builder (slice 4a).** The unsigned spend's
-derivation from the intent (`PQC_MULTISIG.md` §9.5), the scheme-2 fee
-size, the builder seam in `shekyl-tx-builder`, and the wallet's
-`HeldNonceStore` and `NonceCounterSink`. The ceremony's tests build the
-unsigned spend directly.
+**Slice 4a.** 4a-1 derives every member's spend from the intent
+(`DerivedSpend`, `PQC_MULTISIG.md` §9.5) through the one output builder
+in `shekyl-tx-builder`, prices a group spend
+(`shekyl_tx_weight::predict_group_weight`), and keeps held nonces in
+memory only (R-20). The wallet's state (`.wallet.multisig`, the ledger's
+`GroupOutput`, `Engine<MultisigSignerV2>`) is 4a-2.
 
 **DoD gate (inherited from MSW-6, non-negotiable).** MSW-6 dropped the
 *consensus* rule that forbade co-spending a solo (scheme-1) and a multisig

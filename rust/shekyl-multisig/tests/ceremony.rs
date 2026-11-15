@@ -64,18 +64,21 @@ fn two_of_three_spends_two_group_outputs() {
         &mut OsRng,
     )
     .unwrap();
-    assert!(b.store.0.is_empty(), "the responder holds no nonce");
+    assert!(
+        !b.store.holds(&intent.intent_hash().unwrap()),
+        "the responder holds no nonce"
+    );
 
     // 7, 8: A completes, proves and sends the FinalTx.
     let proposer = proposer
         .responder_share(expect!(import_into(&a, &response), ResponderShare))
         .unwrap();
     assert!(proposer.holders_file(&mut OsRng).unwrap().is_none());
-    let (proposer, final_tx) = proposer
-        .finish(&mut a.store, &mut a.sink, &mut OsRng)
-        .unwrap();
-    assert!(a.store.0.is_empty(), "the proposer's nonce is consumed");
-    assert_eq!(a.sink.persisted.len(), 1);
+    let (proposer, final_tx) = proposer.finish(&mut a.store, &mut OsRng).unwrap();
+    assert!(
+        !a.store.holds(&intent.intent_hash().unwrap()),
+        "the proposer's nonce is consumed"
+    );
 
     // 9: B builds the transaction itself and signs it.
     let hybrid = Cosigner::sign_final_tx(
@@ -125,7 +128,10 @@ fn three_of_five_spends_two_group_outputs() {
     );
     let (holder, commitment) =
         Holder::commit(ctx_h, &at_h, &mut h.store, &mut h.live, &mut OsRng).unwrap();
-    assert_eq!(h.store.0.len(), 1, "the holder holds its nonce");
+    assert!(
+        h.store.holds(&intent.intent_hash().unwrap()),
+        "the holder holds its nonce"
+    );
 
     // 3: A forwards the proposal and the commitment to B.
     let proposer = proposer
@@ -160,17 +166,19 @@ fn three_of_five_spends_two_group_outputs() {
         .sign(
             &expect!(import_into(&h, &to_h), SigningSet),
             &mut h.store,
-            &mut h.sink,
             &mut OsRng,
         )
         .unwrap();
-    assert!(h.store.0.is_empty(), "the holder's nonce is consumed");
+    assert!(
+        !h.store.holds(&intent.intent_hash().unwrap()),
+        "the holder's nonce is consumed"
+    );
 
     // 7, 8: A completes and sends the FinalTx.
     let (proposer, final_tx) = proposer
         .holder_share(expect!(import_into(&a, &share), SignatureShare))
         .unwrap()
-        .finish(&mut a.store, &mut a.sink, &mut OsRng)
+        .finish(&mut a.store, &mut OsRng)
         .unwrap();
 
     // 9: B and the holder each build the transaction and sign.

@@ -1082,7 +1082,8 @@ cannot be reached with an unchecked value.
 | The intent is valid for this member | `ValidatedIntent`, made only by I1 and I2 against the member's ledger; `SigningContext` takes it |
 | A per-output key matches its committed hash | `CommittedMemberKey`; a key blob is assembled only from checked keys |
 | The preprocess set is exactly the other signers | `PreprocessSet`; signing takes one, never a map |
-| A held nonce is used once, after the durable persist | `HeldNonce` (not `Clone`, wiped on drop) is moved out of the store; `ConsumedNonce` exists only after `NonceCounterSink` returns `Ok`; signing consumes it |
+| A held nonce is used once | `HeldNonce` (not `Clone`, wiped on drop) lives in the in-memory `HeldNonceStore`, which only the ceremony puts into and takes from; `ConsumedNonce` exists only from a take; signing consumes it |
+| A held nonce never leaves the process (R-20) | No encoding of `HeldNonce` or `HeldSession` exists; a test asserts neither implements a serialization trait the workspace uses |
 | A held nonce is used only with the parameters it was made for | `HeldSession` owns its parameters and keys; `resume(self)` uses them, and no function pairs a seed with parameters given separately |
 | The responder never holds a nonce | `Responder::respond` takes no nonce store; it preprocesses and signs inside one call |
 | A file is refused out of phase | per-role typestates (`Proposer<Collecting>`, `<SharesPending>`, `<AwaitingSignatures>`; `Holder<Committed>`), each with only its legal transitions |
@@ -1091,25 +1092,31 @@ cannot be reached with an unchecked value.
 `compile_fail` doctests pin the transitions that must not exist
 (`ceremony::nonce`, `ceremony::roles`, `ceremony::proofs`).
 
-What types cannot do: a disk restored from a backup can hand a consumed
-`HeldNonce` back. The store's contract covers it: held nonces are
-excluded from backups, a restore cancels every open ceremony, and `take`
-deletes durably before it returns (the wallet's store, slice 4a).
+Why a held nonce never reaches a disk (R-20): a nonce on disk comes back
+on any restore, together with every record of what it already signed,
+and no type or on-disk counter can detect a rollback of its own disk. A
+responder that withholds its post-quantum signature, so the inputs stay
+unspent, and then sends a different responder file would draw a second
+share under the same nonce; a few such replays solve for the holder's
+`y_group` share, and the group's hybrid security falls to the
+post-quantum leg alone. So a held nonce lives only in memory, from
+commit to share, and a restore cancels every open ceremony by
+construction: no copy of a wallet contains one.
 
 ### 11.4 Nonces
 
 - **The proposer and holders hold.** Round 1's state for one input is a
   `HeldSession`: the cached preprocess together with the
   `SalSigningParams` and keys it was made under. A member's sessions for
-  one intent are one `HeldNonce`, put into the `HeldNonceStore` the
-  caller injects (the wallet keeps it in the same protected container as
-  the member's `y_group` share), keyed by intent hash. The ceremony keeps
-  no copy.
-- **Used once.** To sign, the ceremony takes the nonce out of the store,
-  then durably records its use (`NonceCounterSink`, the member's
-  monotonic nonce counter), and only then holds a `ConsumedNonce`. One
-  persist covers every input of the intent. If the persist fails, the
-  nonce is dropped and the ceremony is forfeit: a new intent is needed.
+  one intent are one `HeldNonce`, put into the member's `HeldNonceStore`,
+  keyed by intent hash. The store is an in-memory map the engine owns,
+  one per open wallet; the ceremony keeps no copy, and nothing else can
+  put a nonce in or take one out.
+- **In memory only (R-20).** Closing the wallet between a member's commit
+  and its share drops (wipes) its nonce, and its part of the ceremony is
+  forfeit: a new intent completes the spend, and no funds are at stake.
+- **Used once.** To sign, the ceremony takes the nonce out of the store;
+  only a taken nonce is a `ConsumedNonce`, and signing consumes it.
 - **Bound to its parameters.** `modular_frost`'s `from_cache` cannot fail
   and ignores its parameters: the nonces are a hash of the 32-byte seed
   and the member's share, and every SAL commitment is on `T`. The public
@@ -1162,25 +1169,18 @@ deletes durably before it returns (the wallet's store, slice 4a).
   named by the input's key image (for the membership proof). The
   ceremony combines no mask itself: the openings are the crypto crate's
   type (rule 36).
-- **`HeldNonceStore`**, **`NonceCounterSink`** and **`LiveCeremonies`**:
-  the durable writes the ceremony needs but does not own.
+- **`HeldNonceStore`**, the member's held nonces in memory (§11.4), and
+  **`LiveCeremonies`**, its durable input reservations (§9.2 item 6).
 
 
-### 11.6 Rate limiting (by signing pubkey, not index)
+### 11.6 Rate limiting — DEFERRED (R-19)
 
-To prevent intent-spam DoS:
-
-- Each proposer's **hybrid signing public key** (not proposer_index) may
-  have at most 1 live intent per group at a time (§13.1)
-- Rate limit is group-wide configurable at setup (default: 1 live
-  intent per signing pubkey; maximum 1 new proposal per 5 minutes per
-  signing pubkey)
-- Keying off signing pubkey prevents a malicious member with multiple
-  proposer_index slots from multi-indexing their way around the limit
-- New proposals from the same signing pubkey violating the limit are
-  refused
-
-This bounds verification work to ≤ N concurrent intents.
+A proposal limit is DEFERRED (rule 23): `docs/FOLLOWUPS.md` "Multisig: a
+rate limit on proposals". Under file transport (R-9) a proposal costs a
+member work only when a human imports it, a file's size is capped, and a
+member's inputs are reserved by one live intent at a time
+(`LiveCeremonies`, §9.2 item 6); a per-time limit would be a wall-clock
+rule, which §9.6 forbids.
 
 ---
 
@@ -1285,27 +1285,22 @@ it until the transaction is released or the reference block ages out
 - its reservation of the intent's inputs (`LiveCeremonies`, §9.2 item 6);
 - as proposer or holder, between the rounds, its `HeldNonce` (§11.4).
 
-Every member keeps its monotonic nonce counter, and a responder's
-wallet keeps the hashes of the intents it approved (no secret), so its
-second visit is a check, not a decision. Nothing else is durable: the
-ceremony's own state is its typestates (§11.3), rebuilt after a restart
-from the member's context, its store, and the files it sent and
-received:
+The reservation is durable, and a responder's wallet keeps the hashes
+of the intents it approved (no secret), so its second visit is a check,
+not a decision. A held nonce is not durable (R-20, §11.4): the
+ceremony's own state is its typestates (§11.3), in the open wallet, and
+a restart forfeits a proposer's or holder's part until its nonce is
+used:
 
-- the proposer is rebuilt from the last file it sent: from its
-  `Proposal` before step 7 (`Proposer::resume`), replaying the files it
-  received; from its `FinalTx` after (`Proposer::resume_after_finish`),
-  re-checking and re-signing that transaction as a cosigner would and
-  replaying the hybrid signatures it received. A crash inside step 7,
-  after the nonce is consumed and before the `FinalTx` is written,
-  forfeits the ceremony, as every consumed nonce does;
-- a holder is rebuilt as committed (`Holder::committed`) and signs from
-  its held nonce;
+- a proposer or holder that closes its wallet before its share is made
+  has no nonce to sign from; a new intent completes the spend;
+- a proposer that has finished holds no nonce, and is rebuilt from its
+  `FinalTx` (`Proposer::resume_after_finish`), re-checking and
+  re-signing that transaction as a cosigner would and replaying the
+  hybrid signatures it received;
 - the second round is stateless (`Cosigner`).
 
-A held nonce is used once: a holder that crashes after signing finds no
-nonce to sign from again, and a member whose counter write fails has
-already given its nonce up and cannot retry.
+A held nonce is used once: signing takes it out of the store.
 
 ### 13.2 Disagreement resolution
 
@@ -1647,8 +1642,8 @@ rust/shekyl-multisig/src/
 │   │                        UnsignedSpend (§9.5, §11.5)
 │   ├── files.rs           — the bodies, Authenticated<B>, import (§11.1,
 │   │                        wire format §3.1)
-│   ├── nonce.rs           — HeldNonce, HeldNonceStore, NonceCounterSink,
-│   │                        ConsumedNonce, LiveCeremonies (§11.4)
+│   ├── nonce.rs           — HeldNonce, HeldNonceStore, ConsumedNonce,
+│   │                        LiveCeremonies (§11.4)
 │   ├── proofs.rs          — CommittedMemberKey, the verified proofs,
 │   │                        SignableTransaction (§11.3)
 │   └── roles/             — the shared steps (mod.rs) and one module per
@@ -1834,15 +1829,20 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
 - A bad share (named by its signer)
 - A per-output key that does not match its hash (refused in round 1)
 - A replayed file, and a file of another intent
-- A holder signing twice from one held nonce (impossible)
+- A holder signing twice from one held nonce (impossible: signing takes
+  it out of the store)
 - A second intent on a live input (refused)
-- The durable nonce-counter write failing, at a holder and at the
-  proposer (no share; the nonce is gone; a retry finds nothing)
-- Every member restarting between files, and the proposer restarting
-  after step 7, straight after it and after one hybrid signature (the
-  spend completes); the proposer resumes only from its own `FinalTx`
-- Inputs supplied in any order (the context puts them in the
-  transaction's order)
+- A holder whose wallet closes between its commit and its share (its
+  part is forfeit; a new intent completes the spend), and a proposer
+  finishing from a store that does not hold its nonce (refused by name)
+- The proposer restarting after step 7, straight after it and after one
+  hybrid signature (the spend completes); it resumes only from its own
+  `FinalTx`
+- A ledger that lacks an input, records one twice or hands an output the
+  intent does not spend (refused by the derivation), and records handed
+  over in any order (the derivation puts them in the transaction's order)
+- A member whose ledger records an input under another key image (its
+  transaction is not the one the proofs are over)
 
 Every ceremony test checks the released transaction from the wire:
 the wire's structural rules, the intent's fee and reference block, every

@@ -135,7 +135,7 @@ fn check_rounds<'r>(
 /// and leaves the store unchanged.
 fn hold_all(
     ctx: &SigningContext<'_>,
-    store: &mut impl HeldNonceStore,
+    store: &mut HeldNonceStore,
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<CheckedRounds, CeremonyError> {
     let keys = own_keys(ctx)?;

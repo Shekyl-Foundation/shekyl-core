@@ -10,13 +10,10 @@
 //! Each state carries only what its steps need. The inputs' tree paths
 //! ([`ProposerInputs`]) live until the proofs are made and are dropped at
 //! [`Proposer::finish`]; the outputs' openings are the context's own,
-//! derived, and wiped with it. A restart is
-//! recovered from the last file the proposer sent: its `Proposal` until
-//! [`Proposer::finish`] ([`Proposer::resume`], then replay what it
-//! received), its `FinalTx` after ([`Proposer::resume_after_finish`]).
-//! Between the two its nonce is consumed and the proofs are not yet
-//! written; a crash there forfeits the ceremony, as every consumed nonce
-//! does.
+//! derived, and wiped with it. Until [`Proposer::finish`] the proposer's
+//! nonce is held in memory only (R-20): a restart forfeits its ceremony. A
+//! proposer that has finished holds no nonce and is rebuilt from the
+//! `FinalTx` it sent ([`Proposer::resume_after_finish`]).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -38,7 +35,7 @@ use super::super::files::{
     open_forwarded, Authenticated, Commitment, FinalTx, HybridSig, Incoming, Proposal,
     ResponderShare, SignatureShare, SigningSet,
 };
-use super::super::nonce::{consume, HeldNonceStore, LiveCeremonies, NonceCounterSink};
+use super::super::nonce::{consume, HeldNonceStore, LiveCeremonies};
 use super::super::proofs::{
     SignableTransaction, SignerKeys, VerifiedMembershipProof, VerifiedRangeProof,
 };
@@ -99,7 +96,7 @@ impl<'a> Proposer<'a, Collecting> {
     pub fn propose(
         ctx: SigningContext<'a>,
         inputs: ProposerInputs,
-        store: &mut impl HeldNonceStore,
+        store: &mut HeldNonceStore,
         live: &mut impl LiveCeremonies,
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<(Self, Vec<u8>), CeremonyError> {
@@ -116,37 +113,6 @@ impl<'a> Proposer<'a, Collecting> {
             rng,
         )?;
         Ok((Self::collecting(ctx, inputs, own, file.clone()), file))
-    }
-
-    /// Rebuild the proposer after a restart, before [`Proposer::finish`],
-    /// from its context and the `Proposal` file it sent; then replay the
-    /// files it received. Its held nonce stays in the store.
-    ///
-    /// # Errors
-    ///
-    /// [`CeremonyError`]: this member is not the proposer, the file is not
-    /// its own `Proposal` for this intent, or `inputs` does not open every
-    /// output or prove every input.
-    pub fn resume(
-        ctx: SigningContext<'a>,
-        inputs: ProposerInputs,
-        proposal_file: Vec<u8>,
-    ) -> Result<Self, CeremonyError> {
-        expect_role(&ctx, &[Role::Proposer])?;
-        let Incoming::Proposal(sent) = open_forwarded(
-            ctx.member,
-            &ctx.network_id,
-            ctx.intent.hash(),
-            &proposal_file,
-        )?
-        else {
-            return Err(CeremonyError::FileType);
-        };
-        from_role(&ctx, &sent, Role::Proposer)?;
-        let inputs = inputs.for_context(&ctx)?;
-        let sender = sent.sender();
-        let own = CheckedRounds::new(&ctx, sender, sent.into_body().rounds)?;
-        Ok(Self::collecting(ctx, inputs, own, proposal_file))
     }
 
     fn collecting(
@@ -305,12 +271,11 @@ impl<'a> Proposer<'a, SharesPending> {
     /// # Errors
     ///
     /// [`CeremonyError`]: a holder's share is missing, the nonce is not
-    /// held or its use cannot be persisted, or a FROST, prover, structure
-    /// or seal refusal.
+    /// held (the wallet closed since the proposal: R-20), or a FROST,
+    /// prover, structure or seal refusal.
     pub fn finish(
         self,
-        store: &mut impl HeldNonceStore,
-        sink: &mut impl NonceCounterSink,
+        store: &mut HeldNonceStore,
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<(Proposer<'a, AwaitingSignatures>, Vec<u8>), CeremonyError> {
         let ctx = &self.ctx;
@@ -347,7 +312,7 @@ impl<'a> Proposer<'a, SharesPending> {
             )?,
         ));
         let set = PreprocessSet::new(ctx, others)?;
-        let consumed = consume(ctx.intent.hash(), store, sink)?;
+        let consumed = consume(ctx.intent.hash(), store)?;
         let signed = sign_held(consumed, &own, &set)?;
         let sals = complete_sals(signed, &responder, &holder_shares)?;
 
