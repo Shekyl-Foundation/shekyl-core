@@ -267,7 +267,7 @@ mod tests {
         let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
         let platform = Platform {
             home: Some(PathBuf::from("/srv/op")),
-            program_data: None,
+            service_parent: None,
             session_dir: None,
             service_rendezvous: None,
         };

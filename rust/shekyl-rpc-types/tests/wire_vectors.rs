@@ -205,6 +205,11 @@ fn row_faults(id: Id) -> Vec<String> {
         Id::BanRemove => method::<wire::BanRemove>(),
         Id::BanList => method::<wire::BanList>(),
         Id::BanShow => method::<wire::BanShow>(),
+        Id::RpcClientAdd => method::<wire::RpcClientAdd>(),
+        Id::RpcClientSet => method::<wire::RpcClientSet>(),
+        Id::RpcClientRemove => method::<wire::RpcClientRemove>(),
+        Id::RpcClientList => method::<wire::RpcClientList>(),
+        Id::RpcBundleShow => method::<wire::RpcBundleShow>(),
         Id::RelayStats => method::<wire::RelayStats>(),
         Id::DevBlockGenerate => method::<wire::DevBlockGenerate>(),
         Id::DevChainPop => method::<wire::DevChainPop>(),
@@ -227,8 +232,8 @@ fn every_shape_has_its_two_vectors_and_nothing_else_is_there() {
         .collect();
     assert_eq!(
         expected.len(),
-        100,
-        "42 rows: 36 of one shape, five of two (pow or prune) and block_show's four"
+        110,
+        "47 rows: 41 of one shape, five of two (pow or prune) and block_show's four"
     );
     let present: BTreeSet<String> = std::fs::read_dir(directory())
         .expect("the wire vector directory")

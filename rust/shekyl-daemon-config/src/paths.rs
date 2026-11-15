@@ -6,18 +6,32 @@
 //! The default paths (`DAEMON_CONFIG_CUTOVER.md` §2.4, §2.5; IG-13).
 //!
 //! On Linux, FreeBSD and macOS the configuration file lives under
-//! `/etc/shekyl/` and the data and log defaults under the account's root,
-//! the passwd home plus `.shekyl`. On Windows the run mode selects one root
-//! and every default derives from it: the per-account `LocalAppData\Shekyl`
-//! for a run-as-user daemon, `%ProgramData%\shekyl\` with `service`, which
-//! only the installer creates.
+//! `/etc/shekyl/`. The run mode selects the root the data and log defaults
+//! derive from: the account's own for a run-as-user daemon (the passwd home
+//! plus `.shekyl`, or `LocalAppData\Shekyl` on Windows), and the service's
+//! data home with `service`, a fixed root per platform that the service
+//! manager or the installer creates and the daemon only checks
+//! ([`check_service_data_home`]; Rick, 2026-11-14): `/var/lib/shekyl` on
+//! Linux, `/var/db/shekyl` on FreeBSD and macOS, `%ProgramData%\shekyl` on
+//! Windows.
 
 use std::path::{Path, PathBuf};
 
 use shekyl_options::{Code, Diagnostic, Source};
 
+#[cfg(unix)]
+use crate::directory::{require_service_account, DirectoryAccount, ACCOUNT_ONLY_MODE};
 use crate::network::Network;
 use crate::platform::{Platform, RunMode};
+
+/// The service's data home under the platform's service parent
+/// ([`Platform::service_parent`]): `/var/lib/shekyl`, `/var/db/shekyl`,
+/// `%ProgramData%\shekyl`; on Windows the service's rendezvous directory is
+/// inside it. The launch-recipe gate
+/// (`scripts/ci/check_launch_recipes.py`) reads this constant, so the
+/// packaged unit's `StateDirectory` and the FreeBSD script's prestart name
+/// the directory the daemon checks.
+pub const SERVICE_DATA_HOME: &str = "shekyl";
 
 /// The daemon's root for this run mode, or the refusal when the account
 /// has no home (`config.path.no-home`) or the service root is absent
@@ -33,16 +47,93 @@ pub fn root(platform: &Platform, mode: RunMode, option: &str) -> Result<PathBuf,
             .map(|home| home.join(if cfg!(windows) { "Shekyl" } else { ".shekyl" }))
             .ok_or_else(|| Diagnostic::new(Code::PathNoHome, Source::Machine).option(option)),
         RunMode::Service => platform
-            .program_data
+            .service_parent
             .as_deref()
-            .map(|pd| pd.join("shekyl"))
+            .map(|parent| parent.join(SERVICE_DATA_HOME))
             .ok_or_else(|| {
                 Diagnostic::new(Code::ServiceRoot, Source::Machine)
                     .option(option)
-                    .param("path", "%ProgramData%")
+                    .param(
+                        "path",
+                        if cfg!(windows) {
+                            "%ProgramData%"
+                        } else {
+                            "(none)"
+                        },
+                    )
                     .param("found", "no machine-wide data root is reported")
             }),
     }
+}
+
+/// A service's data home, checked and never created (Rick, 2026-11-14): the
+/// data directory when `data-dir` is given, otherwise the service's root.
+/// It exists, it is not a link, it is owned by the daemon's account, its
+/// mode is 0700, and the daemon is not root; otherwise the start refuses,
+/// naming the condition (`config.service.root`). A run-as-user daemon is
+/// not checked here. On Windows `service` is refused before the walk until
+/// RT-W14 builds its dispatcher, and the installer's ACL is that slice's.
+///
+/// # Errors
+///
+/// `config.service.root`, naming the path and the condition that failed.
+pub fn check_service_data_home(
+    platform: &Platform,
+    mode: RunMode,
+    explicit_data_dir: Option<&Path>,
+) -> Result<(), Diagnostic> {
+    #[cfg(unix)]
+    {
+        check_service_data_home_as(
+            platform,
+            mode,
+            explicit_data_dir,
+            rustix::process::geteuid().as_raw(),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (platform, mode, explicit_data_dir);
+        Ok(())
+    }
+}
+
+/// [`check_service_data_home`] for the account `me`: the account is an
+/// input, so each case is tested as the account it is about.
+#[cfg(unix)]
+fn check_service_data_home_as(
+    platform: &Platform,
+    mode: RunMode,
+    explicit_data_dir: Option<&Path>,
+    me: u32,
+) -> Result<(), Diagnostic> {
+    if mode != RunMode::Service {
+        return Ok(());
+    }
+    let (home, option) = match explicit_data_dir {
+        Some(dir) => (dir.to_path_buf(), "data-dir"),
+        None => (root(platform, mode, "data-dir")?, "service"),
+    };
+    let shown = home.display().to_string();
+    let refuse = |found: String| {
+        Diagnostic::new(Code::ServiceRoot, Source::Machine)
+            .option(option)
+            .param("path", shown.clone())
+            .param("found", found)
+    };
+    require_service_account(me).map_err(refuse)?;
+    let account =
+        DirectoryAccount::inspect(&home).map_err(|fault| refuse(fault.clause(Some(&shown))))?;
+    let account = account
+        .require_owner(me)
+        .map_err(|fault| refuse(fault.clause(Some(&shown))))?;
+    let mode = account.mode();
+    if mode != ACCOUNT_ONLY_MODE {
+        return Err(refuse(format!(
+            "{shown} has mode {mode:04o}, not {ACCOUNT_ONLY_MODE:04o}"
+        )));
+    }
+    Ok(())
 }
 
 /// The configuration file's default path for a network.
@@ -80,12 +171,63 @@ pub fn log_file_default(root: &Path, network: Network) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// A service's data home is checked, never created, as its own account:
+    /// each condition refuses with `config.service.root` naming it, and a
+    /// run-as-user daemon is not checked. Red edit: drop the mode test, and
+    /// the 0750 home is accepted.
+    #[cfg(unix)]
+    #[test]
+    fn a_service_data_home_is_checked_and_never_created() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let parent = tempfile::tempdir().unwrap();
+        let platform = Platform {
+            service_parent: Some(parent.path().to_path_buf()),
+            ..Platform::default()
+        };
+        let home = parent.path().join("shekyl");
+        let found = |r: Result<(), Diagnostic>| {
+            let d = r.expect_err("refused");
+            assert_eq!(d.code, Code::ServiceRoot);
+            d.get("found").unwrap_or_default().to_owned()
+        };
+        let check = |explicit: Option<&Path>, uid| {
+            check_service_data_home_as(&platform, RunMode::Service, explicit, uid)
+        };
+
+        assert!(found(check(None, 4242)).contains("does not exist"));
+        assert!(!home.exists(), "the check created nothing");
+        std::fs::create_dir(&home).unwrap();
+        // An ordinary account's own home, whoever runs the tests: run as
+        // root, the home is given to an ordinary uid.
+        let me = std::fs::metadata(&home).unwrap().uid();
+        let me = if me == 0 {
+            std::os::unix::fs::chown(&home, Some(4242), None).unwrap();
+            4242
+        } else {
+            me
+        };
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o750)).unwrap();
+        assert!(found(check(None, me)).contains("not 0700"));
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        check(None, me).expect("the service's own 0700 home");
+        assert!(found(check(None, me + 1)).contains("owned by uid"));
+        assert!(found(check(None, 0)).contains("runs as root"));
+
+        let link = parent.path().join("link");
+        std::os::unix::fs::symlink(&home, &link).unwrap();
+        assert!(found(check(Some(&link), me)).contains("symbolic link"));
+        check(Some(&home), me).expect("an explicit data directory, checked the same way");
+
+        check_service_data_home_as(&platform, RunMode::User, None, me)
+            .expect("a run-as-user daemon is not checked here");
+    }
+
     use super::*;
 
     fn platform() -> Platform {
         Platform {
             home: Some(PathBuf::from("/srv/op")),
-            program_data: None,
+            service_parent: None,
             session_dir: None,
             service_rendezvous: None,
         }
@@ -101,12 +243,12 @@ mod tests {
     }
 
     #[test]
-    fn the_service_root_is_program_data_or_a_refusal() {
+    fn the_service_root_is_the_service_parent_or_a_refusal() {
         let d = root(&platform(), RunMode::Service, "log-file").unwrap_err();
         assert_eq!(d.code, Code::ServiceRoot);
         let p = Platform {
             home: None,
-            program_data: Some(PathBuf::from("C:/ProgramData")),
+            service_parent: Some(PathBuf::from("C:/ProgramData")),
             session_dir: None,
             service_rendezvous: None,
         };
