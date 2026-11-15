@@ -469,12 +469,10 @@ mod check_workflows {
 
         let tx = Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
-                inputs: vec![Input::ToKey {
-                    amount: 0,
-                    key_offsets: vec![],
-                    key_image: [0x42u8; 32],
-                }],
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
+                inputs: vec![Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+                    [0x42u8; 32],
+                ))],
                 outputs: outputs
                     .iter()
                     .map(|od| Output {

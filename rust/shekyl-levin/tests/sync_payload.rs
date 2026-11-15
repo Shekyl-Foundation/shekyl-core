@@ -851,7 +851,7 @@ fn a_budget_of_minimum_skeletons_decodes() {
     let segment = {
         let tx = shekyl_wire::Transaction {
             prefix: shekyl_wire::TxPrefix {
-                unlock_time: 0,
+                unlock_time: shekyl_wire::TxPrefix::NO_UNLOCK_TIME,
                 inputs: Vec::new(),
                 outputs: Vec::new(),
                 extra: Vec::new(),

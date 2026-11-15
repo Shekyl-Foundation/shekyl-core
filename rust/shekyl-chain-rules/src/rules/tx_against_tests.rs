@@ -162,11 +162,11 @@ fn i7_looks_up_an_archival_shapes_funding_spend_too() {
     // class does not matter to the lookup, and a plain spend keeps the
     // fixture out of H21's balance arithmetic.
     let mut tx = listed_on(&chain, KI);
-    tx.prefix.inputs.push(Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image: funding,
-    });
+    tx.prefix
+        .inputs
+        .push(Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+            funding,
+        )));
     // Descending images (I5) and one auth per input (I8) so `tx_form`
     // admits the shape and `tx_against` is what judges it.
     tx.prefix
@@ -945,11 +945,11 @@ fn i18_refuses_a_forged_signature_at_its_input() {
     // Two inputs, so the refusal's input index is a discrimination and not
     // the only value it could take.
     let mut two = spend(KI, 2);
-    two.prefix.inputs.push(Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image: [0x2b; 32],
-    });
+    two.prefix
+        .inputs
+        .push(Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+            [0x2b; 32],
+        )));
     if let Ct::Fcmp { pqc_auths, .. } = &mut two.ct {
         pqc_auths.push(crate::harness::fixture::pqc_auth_filler());
     }

@@ -1709,7 +1709,7 @@ fn transaction_paying_the_hybrid_wallet(amount: u64) -> shekyl_wire::Transaction
 
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(0)],
             outputs: vec![Output {
                 amount: 0,

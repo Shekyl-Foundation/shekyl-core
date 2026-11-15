@@ -22,7 +22,7 @@ use shekyl_wire::{
 fn fee_only_with(input: Input) -> Transaction {
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![input],
             outputs: vec![],
             extra: vec![],
@@ -50,11 +50,7 @@ fn out() -> Output {
 }
 
 fn ki(byte: u8) -> Input {
-    Input::ToKey {
-        amount: 0,
-        key_offsets: vec![],
-        key_image: [byte; 32],
-    }
+    Input::fcmp_spend(shekyl_types::KeyImage::from_bytes([byte; 32]))
 }
 
 /// A Bp+ whose `|L|`/`|R|` are consistent with `n_out` outputs
@@ -94,9 +90,9 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
             },
             pqc_auths: (0..n_in)
                 .map(|_| PqcAuth {
-                    auth_version: 1,
-                    scheme_id: 1,
-                    flags: 0,
+                    auth_version: PqcAuth::VERSION,
+                    scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                    flags: PqcAuth::NO_FLAGS,
                     hybrid_public_key: vec![],
                     hybrid_signature: vec![],
                 })

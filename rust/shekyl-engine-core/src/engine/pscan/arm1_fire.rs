@@ -127,11 +127,11 @@ fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
 fn spend_block(key_image: [u8; 32]) -> ScannableBlock {
     let mut block = build_typical_case_scannable_block(1);
     let mut tx = block.transactions.remove(0).into_tx();
-    tx.prefix.inputs.push(Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image,
-    });
+    tx.prefix
+        .inputs
+        .push(Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+            key_image,
+        )));
     // The body came out of a binding without its prunable region; it takes
     // one sized to its two spend inputs before it is bound again.
     if let Ct::Fcmp { prunable, .. } = &mut tx.ct {

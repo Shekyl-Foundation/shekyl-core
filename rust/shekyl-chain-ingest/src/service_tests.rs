@@ -2174,7 +2174,7 @@ fn coinbase_block() -> shekyl_wire::Block {
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(7)],
                 outputs: Vec::new(),
                 // The shape every built coinbase opens with: its pubkey, the

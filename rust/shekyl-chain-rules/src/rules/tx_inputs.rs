@@ -31,7 +31,7 @@ use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::transaction::{
     MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
-use shekyl_wire::{Ct, Input};
+use shekyl_wire::{Ct, Input, PqcAuth};
 
 // ---- census 4.I, the stateless rows (slice 6 commit 2) ------------------
 //
@@ -267,7 +267,8 @@ impl TxRule for I14 {
 }
 
 /// CEN-I16: every `pqc_auth`'s structure —
-/// `auth_version == 1`; `flags == 0`; `scheme_id` is the solo hybrid
+/// `auth_version` is [`PqcAuth::VERSION`]; `flags` is
+/// [`PqcAuth::NO_FLAGS`]; `scheme_id` is the solo hybrid
 /// ([`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`]) or the multisig container
 /// ([`HYBRID_SCHEME_ID_MULTISIG`]), with **no** cross-input agreement
 /// required (MSW-6 withdrawn); a solo key blob exactly
@@ -294,7 +295,7 @@ impl TxRule for I16 {
         };
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
         for auth in pqc_auths {
-            if auth.auth_version != 1 || auth.flags != 0 {
+            if auth.auth_version != PqcAuth::VERSION || auth.flags != PqcAuth::NO_FLAGS {
                 return refuse();
             }
             let key = auth.hybrid_public_key.len();
