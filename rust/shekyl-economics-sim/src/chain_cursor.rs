@@ -144,7 +144,7 @@ impl ChainCursor {
         params: &'a SimParams,
         economic: &'a EconomicParams,
     ) -> PricedBlock<'a> {
-        let volume = self.window.operand();
+        let volume = self.window.signal_operand(params.volume_signal);
         let medians = self.space.medians(economic);
         let supply = net_supply(step.already_generated, step.total_burned);
         let share = economic.emission_schedule().share_at(step.chain_height);

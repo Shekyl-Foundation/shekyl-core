@@ -890,7 +890,7 @@ What the measurement shows:
 - **`std/eco` is exactly 4.00 everywhere**, by construction (`standard = 4F`),
   so the bottom of the ladder is uniformly spaced by design rather than by
   accident.
-- **`pri/std` grows linearly with `M`** — 50× at the zone to 2523× at
+- **`high/std` grows linearly with `M`** — 50× at the zone to 2523× at
   `50·Zm` — because the two rungs have different exponents in `M` (`1/M`
   against `1/M²`). **This is the FL-C2/C3 tension, and it is structural, not a
   defect of calibration:** a floor that prices a transaction and a top rung
@@ -1472,7 +1472,7 @@ named as misfitting a two-family ladder.**
    right back.
 3. The scary C3 numbers are *inter-family* gaps: they compare an admission
    price to an expansion price, which diverge as 1/M² vs 1/M by
-   construction (§3.2). On the served ladder this is the `pri/std` column
+   construction (§3.2). On the served ladder this is the `high/std` column
    of §4.3 — 50× at the zone rising to 2523× at `50·Zm` — and on the
    inherited shape it was the `Fn→Fm` gap reaching 200×. Same seam, either
    shape. Uniform-geometric spacing across that
