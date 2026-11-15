@@ -876,7 +876,7 @@ fn settled(step: &Step) -> Vec<DirectoryReport> {
 /// **An upload Tor never confirmed counts missing unless its directory
 /// returns our copy** (SO-D12's run 4; Rick, 2026-11-15). C's round left four
 /// of its eight current-period uploads unfinished, and the check asked only
-/// the four that confirmed: Reachable, while a peer dialling C gave up
+/// the four that confirmed: Reachable, while peers dialling C gave up
 /// waiting for its descriptor. Every directory is now asked, and for an unconfirmed upload
 /// an answer that says nothing (`Other`, an unreadable counter, silence) is
 /// missing: four of eight, a miss. The same answers after confirmed uploads
@@ -1258,9 +1258,9 @@ fn relay(hex: &str) -> RelayFingerprint {
 /// uploaded `CURRENT` to eight directories and four never reported an end.
 /// Its probe went ahead at the round's wait (07:56:48Z, 60 s after the first
 /// `UPLOADED`), asked only the four that confirmed, found our copy at each,
-/// and C read Reachable at 07:57:44Z; at 07:59:40Z a peer dialling C gave
-/// up after 105 s waiting for its descriptor. Tor's own refetch asked one
-/// of the four, 602A20F9, which never answered. Replayed through the coalescer and the core: all eight are
+/// and C read Reachable at 07:57:44Z; from 07:59:40Z to 08:04:23Z peers
+/// dialling C gave up three times after 105 s waiting for its descriptor.
+/// Tor's own refetch asked one of the four, 602A20F9, which never answered. Replayed through the coalescer and the core: all eight are
 /// asked, the four silent ones are missing when their windows pass, and
 /// four of eight is a first miss. Fails if `UploadRounds` drops uploads
 /// still open, or `directories_drawn` leaves the round's hung uploads

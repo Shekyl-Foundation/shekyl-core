@@ -821,8 +821,9 @@ it.
   uploads again (`hs_service.c:3293`). In run 4, onion C's round left four of
   its eight current-period uploads unfinished. A check that asked only the
   confirmed four found our copy at each, and C read Reachable at 07:57:44Z;
-  at 07:59:40Z a peer dialling C gave up after 105 s waiting for its
-  descriptor. Tor's own refetch asked one of the four, which never answered.
+  from 07:59:40Z to 08:04:23Z peers dialling C gave up three times after
+  105 s waiting for its descriptor. Tor's own refetch asked one of the four,
+  which never answered.
   So the round
   keeps every upload with its end (`UploadRounds::directories`,
   `RoundUpload`, `UploadEnd`), and the check asks them all. An upload still
