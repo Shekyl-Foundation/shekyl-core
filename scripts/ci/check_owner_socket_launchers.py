@@ -68,6 +68,7 @@ NOT_A_SPAWN = {
     "rust/shekyl-daemon-config/src/announce.rs": "builds a configuration in-process; starts nothing",
     "rust/shekyl-daemon-config/src/owner_socket.rs": "the plan's own tests; start nothing",
     "rust/shekyl-daemon-config/src/sections/tests.rs": "builds configurations in-process; starts nothing",
+    "rust/shekyl-daemon/tests/config_file.rs": "calls the configuration loader in-process on a named file; starts nothing",
 }
 
 NAMED = ("--rpc-socket-dir", "owner_socket.argv(")
