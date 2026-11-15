@@ -1,8 +1,10 @@
 # `TRC-1` guard-connection reading: can the guard connection's byte counts show when the daemon sent? Registration, 2026-11-12
 
-**State of this record: REGISTERED 2026-11-12, collecting since
-2026-11-12 20:57Z. Amendment 1 (2026-11-12, below) changes the instrument
-and four definitions before any guard-connection byte figure was read.**
+**State of this record: COMPLETE 2026-11-15. Registered 2026-11-12;
+collected from 2026-11-12 20:57Z (sampler version 2 from 21:27Z) to the
+horizon, 2026-11-14 21:48Z. Amendment 1 (2026-11-12) changed the
+instrument and four definitions before any guard-connection byte figure
+was read. The results are at the end.**
 Everything under "Registered before the run" is fixed from the moment
 this record is pushed. A change after that is a dated amendment that says
 what had been read by then. Results are added below.
@@ -287,3 +289,227 @@ Prompted by review of this record (PR #1356).*
    - **Duration.** The 48 hours now count from the first accepted own send
      under sampler version 2. The run ends at 48 hours or at the alpha.12
      changeover, whichever comes first.
+
+
+## Results, to 2026-11-14 21:48Z
+
+**Read in full on 2026-11-15 to write this section.** Collection stopped
+at 07:57:58Z that day. Before this read, only row counts, send counts and
+the sampler's log had been looked at; no guard-connection byte figure.
+
+**What was read:**
+- every sampler version 2 row up to the horizon;
+- the path-bias counter file and the sampler's log;
+- the send log, with each accepted send's serialized size read from the
+  daemon by its hash;
+- step 2's continued 60-second collector over the same minutes.
+
+The reduction is `shekyl-dev` `scripts/trc1/analyze_guard.py`. The raw rows
+and the send log are in `shekyl-dev`. The reduced tables are beside this
+record, and they hold no address, guard identity or transaction hash.
+
+| File | What |
+| --- | --- |
+| [`_series.tsv`](trc1_guard_connection_20261112_series.tsv) | item 1: each series, its span, valid slots, and path-bias rises per guard |
+| [`_volume.tsv`](trc1_guard_connection_20261112_volume.tsv) | item 2: cells per second per guard over 1 s windows, per series and pooled |
+| [`_share.tsv`](trc1_guard_connection_20261112_share.tsv) | item 2: each guard's share of the relay's carried bytes |
+| [`_delay.tsv`](trc1_guard_connection_20261112_delay.tsv), [`_delay_peak.tsv`](trc1_guard_connection_20261112_delay_peak.tsv) | item 3: correlation of daemon bytes sent with guard bytes sent, by lag |
+| [`_send_groups.tsv`](trc1_guard_connection_20261112_send_groups.tsv) | Amendment 1 item 3: the send groups |
+| [`_sends.tsv`](trc1_guard_connection_20261112_sends.tsv), [`_sends_summary.tsv`](trc1_guard_connection_20261112_sends_summary.tsv) | item 4: each matched send against each guard and window, and the distributions |
+| [`_test.tsv`](trc1_guard_connection_20261112_test.tsv) | item 5: the observer's test, per series and pooled |
+| [`_meta.tsv`](trc1_guard_connection_20261112_meta.tsv) | the horizon, rows, excluded rows |
+
+### 1. Part 1, the guard state, and the series
+
+**Part 1's answer stands.** The relay's own circuits go through its entry
+guards. Tor's `state` file held 7 confirmed guards out of 31 sampled at
+the start (2026-11-12) and 7 out of 31 at the end (read 2026-11-15, after
+the run).
+
+**The horizon.** It is 48 hours from the first send accepted under sampler
+version 2, which was submitted at 2026-11-12 21:48:04Z. So the horizon is
+2026-11-14 21:48:04Z.
+
+**A third out-of-memory episode.** The relay process running since
+2026-11-11 14:58Z was killed by the kernel at 12:08Z on 2026-11-14.
+- **Length.** The episode lasted until 02:25Z on 2026-11-15. The kernel
+  killed `tor` about 170 times and the daemon once (12:16Z), and Tor
+  logged 5,134 low-memory notice lines.
+- **Effect on the data.** Every relay process in the episode lived a few
+  minutes, inside the 30-minute drop, so nothing from 12:08Z to the
+  horizon is usable.
+- **No extension.** That is 9.7 hours, 20 % of the 48, under the quarter
+  that would have extended the run.
+
+**Six series.** The usable data is the first relay process across six
+guard epochs:
+
+| Series | Guard epoch | From | To | Hours | Valid slots | Path-bias rises g0 / g1 / g2 / others |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 0 | 2026-11-12T21:27Z | 2026-11-13T16:32Z | 19.1 | 99.5 % | 1052 / 989 / 0 / 0 |
+| 1 | 1 | 2026-11-13T16:32Z | 2026-11-13T18:27Z | 1.9 | 99.5 % | 108 / 109 / 0 / 0 |
+| 2 | 2 | 2026-11-13T18:27Z | 2026-11-13T23:03Z | 4.6 | 99.5 % | 260 / 222 / 0 / 0 |
+| 3 | 3 | 2026-11-13T23:03Z | 2026-11-14T02:13Z | 3.2 | 99.5 % | 177 / 183 / 0 / 0 |
+| 4 | 4 | 2026-11-14T02:13Z | 2026-11-14T03:13Z | 1.0 | 99.5 % | 55 / 4 / 31 / 0 |
+| 5 | 5 | 2026-11-14T03:13Z | 2026-11-14T12:08Z | 8.9 | 99.5 % | 508 / 510 / 0 / 0 |
+
+- **Where the boundaries fall.** At the sampler's detection time, up to
+  60 s after Tor changed its primaries. All three tracked guards had a
+  consensus address throughout.
+- **Which guards carried counted circuits.** Path-bias counters rose on
+  `g0` and `g1` together in every series, which fits conflux running on
+  two guards. `g2` rose only in series 4. No other guard ever rose, so
+  "fallback seen" (Amendment 1 item 1) occurs in no interval.
+- **Rows excluded as resets.** The validity rule of Amendment 1 item 2
+  applies to every reset of the sampler's socket table. That covers the 7
+  epoch changes and also 22 changes of the fallback set, after which the
+  sampler clears its table too, so the next row carries whole counters.
+  2,971 rows were excluded as resets.
+
+### 2. Guard-connection volume
+
+Cells per second (514-byte cell equivalents) over all 135,871 non-void
+1 s windows. `gx` is the 22 to 25 other listed guards, summed.
+
+| Guard | Outbound p1 / p5 / p50 / p95 | Inbound p1 / p5 / p50 / p95 |
+| --- | --- | --- |
+| `g0` | 0.00 / 0.00 / 1.04 / 16.1 | 0.00 / 0.00 / 1.04 / 19.4 |
+| `g1` | 0.00 / 0.00 / 1.04 / 10.0 | 0.00 / 0.00 / 1.04 / 14.6 |
+| `g2` | 0.00 / 0.00 / 0.00 / 3.1 | 0.00 / 0.00 / 0.00 / 2.1 |
+| `gx` | 1.04 / 2.09 / 11.43 / 59.8 | 1.04 / 2.09 / 8.34 / 105.1 |
+
+Over 2,042 matched minutes, the three tracked guard connections carried
+0.47 % of the relay's carried bytes: `g0` 0.23 %, `g1` 0.19 %, `g2`
+0.04 %. All the other guards together carried 1.12 %. At the median, each
+of the two working guard connections moves about one cell a second each
+way.
+
+### 3. The delay from a daemon write to the guard connection
+
+| Guard | Peak lag | Correlation at the peak | At 5–10 s, mean / max |
+| --- | --- | --- | --- |
+| `g0` | 0 s | 0.738 | 0.015 / 0.050 |
+| `g1` | 0 s | 0.453 | 0.011 / 0.040 |
+| `g2` | 0 s | 0.007 | -0.001 / 0.001 |
+| `gx` | 0.5 s | 0.001 | -0.001 / 0.000 |
+| `sum` | 0 s | 0.746 | 0.016 / 0.055 |
+
+- **No measurable delay.** The daemon's loopback bytes sent line up with
+  `g0`'s and `g1`'s outbound bytes in the same 100 ms slot. So the
+  registered shift is 0, and each shifted figure below equals the
+  unshifted one, reported once.
+- **No uncovered sending.** `gx` shows no peak above its floor.
+
+### 4. The sends, and each send against the guard
+
+Sends from the start of sampler version 2 to the horizon fall into five
+groups:
+- **453 matched.**
+- **4 not seen.**
+- **3 rejected.** All between 21:32Z and 21:42Z on 2026-11-12, after the
+  sending wallet's server was restarted (Amendment 1 item 5).
+- **5 failed before submit.** Each was the wallet's construct-side
+  balance self-check (`BalanceSelfCheck`), on 2026-11-14.
+- **110 outside a usable series.** Accepted during the out-of-memory
+  episode.
+
+Every accepted send was 13,619 bytes serialized: at least 28 relay cells,
+or 14,392 bytes on the wire.
+
+**What the ratios measure.** Each ratio is a matched send's run, the
+daemon's loopback bytes over the run Amendment 1 item 3 matched, set
+against the guard connection's outbound bytes in the window holding it.
+The run's minimum wire bytes are set against the same. `inf` means that
+guard sent nothing in that window.
+- **A run is not the transaction alone.** It is the transaction plus the
+  daemon's message framing, and sometimes other daemon traffic written in
+  the same slots.
+- **How much bigger.** The run totals have a median of 13,690 bytes
+  against the transaction's 13,619. 436 of the 453 are within 10 % of the
+  transaction's size, and 14 are more than twice it.
+
+| Window | Guard | Sends | Matched run ÷ guard outbound, p5 / p50 / p95 | Run's minimum wire ÷ guard outbound, p5 / p50 / p95 |
+| --- | --- | --- | --- | --- |
+| 0.1 s | `g0` | 453 | 0.92 / 1.26 / inf | 0.96 / 1.31 / inf |
+| 0.1 s | `g1` | 453 | 0.96 / inf / inf | 1.01 / inf / inf |
+| 0.1 s | `g2` | 453 | inf / inf / inf | inf / inf / inf |
+| 0.1 s | `sum` | 453 | 0.88 / 0.95 / inf | 0.93 / 0.99 / inf |
+| 1 s | `g0` | 442 | 0.75 / 0.95 / inf | 0.79 / 0.99 / inf |
+| 1 s | `g1` | 442 | 0.82 / 12.77 / inf | 0.87 / 13.43 / inf |
+| 1 s | `g2` | 442 | 12.77 / inf / inf | 13.43 / inf / inf |
+| 1 s | `sum` | 442 | 0.61 / 0.88 / 0.96 | 0.64 / 0.92 / 1.01 |
+| 10 s | `g0` | 422 | 0.07 / 0.39 / 5.11 | 0.07 / 0.41 / 5.37 |
+| 10 s | `g1` | 422 | 0.10 / 0.52 / 8.51 | 0.11 / 0.54 / 8.95 |
+| 10 s | `g2` | 422 | 0.69 / 25.54 / inf | 0.73 / 26.85 / inf |
+| 10 s | `sum` | 422 | 0.04 / 0.21 / 0.70 | 0.04 / 0.22 / 0.73 |
+
+In the 100 ms slot holding the send, the three guard connections together
+send about the matched run's minimum wire bytes (median ratio 0.99). Over
+the whole second, the matched run is 88 % of their outbound bytes at the
+median.
+
+### 5. The observer's test
+
+The score is the guard connection's outbound bytes in the window. Each
+cell gives the share of send windows above the other windows' 99th
+percentile, then the area under the ROC curve. The figures are pooled
+over the six series, and the per-series figures are in the capture.
+
+**Own vs other.**
+
+| Window | Send windows / other windows | `g0` | `g1` | `g2` | Sum of the three |
+| --- | --- | --- | --- | --- | --- |
+| 0.1 s | 453 / 1,383,576 | 55.2 %, 0.786 | 32.9 %, 0.661 | 0.4 %, 0.493 | 82.6 %, 0.928 |
+| 1 s | 442 / 135,352 | 3.2 %, 0.784 | 1.6 %, 0.664 | 0.5 %, 0.482 | 3.2 %, 0.930 |
+| 10 s | 422 / 13,137 | 7.6 %, 0.808 | 6.6 %, 0.756 | 0.5 %, 0.488 | 6.2 %, 0.817 |
+
+**Any daemon send vs none.**
+
+| Window | Send windows / other windows | `g0` | `g1` | `g2` | Sum of the three |
+| --- | --- | --- | --- | --- | --- |
+| 0.1 s | 65,015 / 1,319,014 | 16.4 %, 0.787 | 11.5 %, 0.685 | 1.0 %, 0.502 | 18.2 %, 0.878 |
+| 1 s | 41,750 / 94,044 | 17.0 %, 0.760 | 10.4 %, 0.685 | 1.0 %, 0.502 | 9.8 %, 0.751 |
+| 10 s | 13,130 / 429 | 8.7 %, 0.769 | 5.2 %, 0.728 | 0.9 %, 0.515 | 6.1 %, 0.741 |
+
+Per series, sum of the three, 100 ms, own transaction against other windows: series 0: 220 sends, 89.5 %, AUC 0.962; series 1: 23 sends, 34.8 %, AUC 0.625; series 2: 55 sends, 76.4 %, AUC 0.919; series 3: 36 sends, 83.3 %, AUC 0.942; series 4: 12 sends, 66.7 %, AUC 0.790; series 5: 107 sends, 61.7 %, AUC 0.941.
+
+
+### 6. What these say, and what they do not
+
+- **The guard connections carry little.** Between them they carry about
+  half a percent of the relay's bytes. The relay's relayed volume is
+  mostly on other connections. In the slot holding one of the daemon's
+  sends, what crosses them is about the size of that send's matched run
+  (result 4).
+- **One send stands out at 100 ms.** Watching the two working guard
+  connections together, an observer ranks the window holding the daemon's
+  own transaction above a random other window 93 % of the time, and 79 %
+  on `g0` alone.
+  - 83 % of those sends are above the 99th percentile of the other
+    windows (55 % on `g0` alone).
+- **At 1 s and 10 s the ranking holds, but few sends top the 99th
+  percentile.** The area under the curve stays at 0.82 to 0.93 for the
+  sum. The sum's share above the 99th percentile falls to 3 % and 6 %, because the
+  daemon's other traffic fills the top of the comparison: some daemon send
+  falls in 97 % of 10 s windows.
+- **No pass mark.** This record does not apply step 3 of
+  `TOR_COVER_POSTURE.md` §8. The ruling on these figures is Rick's.
+- **Limits:**
+  - one relay and one daemon, on a quiet testnet;
+  - kernel counters read every 100 ms, so no delay below that is
+    resolved;
+  - guard-epoch boundaries known only to within a minute;
+  - windows aligned to each series' start;
+  - the daemon's own traffic other than these sends is unlabelled.
+
+### Conditions during the run
+
+- **Wallet signer failures.** The sending wallet's signer failed on
+  2026-11-12 (cause unnamed) and ten times on 2026-11-14. On 11-14 the
+  diagnostic build named the cause: `BalanceSelfCheck`, "input-side and
+  output-side commitment sums differ". These are a wallet finding, handed
+  to the wallet lane. Sends were accepted again after each burst.
+- **Collection ran past the horizon,** to 2026-11-15 07:57:58Z. Rows after
+  the horizon go into no figure above.
+- **Operational events after the horizon** are in the private run log
+  in `shekyl-dev`.
