@@ -21,6 +21,7 @@ mod fee_ladder;
 mod fee_model;
 mod fee_signal;
 mod growth_gate;
+mod jg_grid;
 mod median_window;
 mod miner_stuffer;
 mod mn_feasibility;
@@ -127,7 +128,8 @@ fn main() {
     let instrument = eup4::Instrument::ALL
         .into_iter()
         .find(|i| std::env::args().any(|a| a == i.flag()));
-    if !params.overrides().is_empty() && !stage2 && !esr10 && instrument.is_none() {
+    let jg = std::env::args().any(|a| a == "--jg-grid");
+    if !params.overrides().is_empty() && !stage2 && !esr10 && instrument.is_none() && !jg {
         refuse(
             "overrides are read by --stage2, --esr10 and each instrument's own mode only: each \
              prints a cell beside its baseline",
@@ -150,6 +152,28 @@ fn main() {
     };
     if let Err(e) = baseline::check_reach(params.overrides(), params.baseline(), mode, reads) {
         refuse(&e.to_string());
+    }
+
+    if jg {
+        // J x G (§5.33): the grid sets its own zone, w_ref and rails per
+        // cell, so it takes no override and names its own fee arms.
+        if !params.overrides().is_empty() || control {
+            refuse("--jg-grid sets its own cells: it takes no --set and no --control-flat-fee");
+        }
+        let started = std::time::Instant::now();
+        let mut narration = String::new();
+        let summary = jg_grid::run(&mut narration, &params, jg_grid::Scope::Full)
+            .expect("String sink is infallible");
+        eprint!("{narration}");
+        let json = serde_json::to_string_pretty(&summary).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
+        eprintln!(
+            "--jg-grid wall time: {:.0} s",
+            started.elapsed().as_secs_f64()
+        );
+        return;
     }
 
     if eup4 || instrument.is_some() {

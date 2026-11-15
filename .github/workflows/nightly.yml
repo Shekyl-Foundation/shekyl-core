@@ -222,7 +222,11 @@ jobs:
     # split the same way: the nightly scope here
     # (eup4_nightly_narration_matches_the_committed_fixture), the full
     # --eup4 narration on demand (eup4_narration_matches_the_committed_fixture,
-    # about 18 minutes on 16 threads). An instrument's mode reads the fold's
+    # about 18 minutes on 16 threads). The J x G grid (§5.33) is split the
+    # same way: its nightly slice here
+    # (jg_grid_nightly_narration_matches_the_committed_fixture), the full
+    # grid on demand on a fleet host (jg_grid_narration_matches_the_committed_fixture,
+    # about 28 000 fold-years). An instrument's mode reads the fold's
     # fields, and refuses a cell whose report equals its baseline's when it
     # runs. Before it none
     # did: on PR #1009 the sim's share calls moved onto a function that is
