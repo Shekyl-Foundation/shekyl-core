@@ -16,8 +16,7 @@ use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::label::sentinel_plaintext;
-use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
-use shekyl_tx_builder::outputs::{build_output, build_tx_extra, BuiltOutput, Payee};
+use shekyl_tx_builder::outputs::{build_output, build_tx_extra, BuiltOutput, Payee, RecipientKeys};
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
     tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput,
@@ -152,14 +151,6 @@ fn decode_recipient(address: &str, network: Network) -> Result<ShekylAddress, Ke
         })
 }
 
-/// The keys a payment output is built to.
-struct RecipientKeys<'a> {
-    spend_key: [u8; 32],
-    /// Edwards; the sign pass maps it to X25519 for the KEM.
-    view_key: [u8; 32],
-    ml_kem_encap_key: Cow<'a, [u8]>,
-}
-
 /// Resolve a payment's destination to the keys its output is built to. An
 /// address goes through [`shekyl_address::PaymentAddress`]; the request
 /// was already refused before selection if it cannot be paid
@@ -170,21 +161,26 @@ fn recipient_keys(
     destination: &TxDestination,
     network: Network,
 ) -> Result<RecipientKeys<'_>, KeyEngineError> {
-    match destination {
+    let (spend_key, view_key, ml_kem_ek): (_, _, Cow<'_, [u8]>) = match destination {
         TxDestination::Address(address) => {
             let decoded = decode_recipient(address, network)?;
-            Ok(RecipientKeys {
-                spend_key: decoded.spend_key,
-                view_key: decoded.view_key,
-                ml_kem_encap_key: Cow::Owned(decoded.ml_kem_encap_key),
-            })
+            (
+                decoded.spend_key,
+                decoded.view_key,
+                Cow::Owned(decoded.ml_kem_encap_key),
+            )
         }
-        TxDestination::OwnPersona(persona) => Ok(RecipientKeys {
-            spend_key: *persona.spend_pk().as_canonical_bytes(),
-            view_key: *persona.view_pk().as_canonical_bytes(),
-            ml_kem_encap_key: Cow::Borrowed(persona.ml_kem_ek()),
-        }),
-    }
+        TxDestination::OwnPersona(persona) => (
+            *persona.spend_pk().as_canonical_bytes(),
+            *persona.view_pk().as_canonical_bytes(),
+            Cow::Borrowed(persona.ml_kem_ek().as_slice()),
+        ),
+    };
+    RecipientKeys::from_edwards(spend_key, &view_key, ml_kem_ek).map_err(|_| {
+        KeyEngineError::Primitive {
+            detail: "recipient view key does not map to a valid X25519 point",
+        }
+    })
 }
 
 fn spend_input_from_context(
@@ -298,27 +294,11 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         label_plaintext,
     } in payment_outputs
     {
+        // The recipient's view key is mapped to X25519 by `RecipientKeys`.
         let recipient = recipient_keys(&destination, network)?;
-        // The destination carries the recipient's **Edwards** view key; the KEM's
-        // X25519 half encapsulates to `montgomery(view_pk)` (the parameter-free
-        // birational map — the same one the recipient's scanner inverts by using
-        // its view scalar as the Montgomery secret). Passing the Edwards bytes
-        // straight through would encapsulate to a wrong point: the daemon still
-        // accepts the tx (the sender's own proofs re-derive consistently), but
-        // the recipient's decap silently fails and the output is unrecoverable.
-        let recipient_x25519 = ed25519_pk_to_x25519_pk(&recipient.view_key).map_err(|_| {
-            KeyEngineError::Primitive {
-                detail: "recipient view key does not map to a valid X25519 point",
-            }
-        })?;
         built_outputs.push(build_output(
             &tx_key_secret,
-            Payee::Single {
-                spend_key: &recipient.spend_key,
-                view_x25519: &recipient_x25519,
-                ml_kem_ek: &recipient.ml_kem_encap_key,
-                label_plaintext: &label_plaintext,
-            },
+            recipient.payee(&label_plaintext),
             amount,
             output_index,
         )?);
@@ -531,6 +511,7 @@ mod tests {
     use curve25519_dalek::scalar::Scalar;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::label::{classify_label_plaintext, LabelPlaintextKind};
+    use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
     use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
     use shekyl_engine_state::PaymentRequestId;
 
@@ -606,19 +587,13 @@ mod tests {
             .encode()
             .expect("encode recipient address");
         let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
-        let recipient_x25519 =
-            ed25519_pk_to_x25519_pk(&decoded.view_key).expect("map view key to X25519");
+        let recipient = RecipientKeys::of_address(&decoded).expect("the address's keys");
         let outputs: Vec<BuiltOutput> = [(7_000_000u64, 0u64), (2_500_000, 1)]
             .into_iter()
             .map(|(amount, index)| {
                 build_output(
                     &tx_key_secret,
-                    Payee::Single {
-                        spend_key: &decoded.spend_key,
-                        view_x25519: &recipient_x25519,
-                        ml_kem_ek: &decoded.ml_kem_encap_key,
-                        label_plaintext: &sentinel_plaintext(),
-                    },
+                    recipient.payee(&sentinel_plaintext()),
                     amount,
                     index,
                 )
@@ -659,8 +634,7 @@ mod tests {
             .encode()
             .expect("encode recipient address");
         let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
-        let recipient_x25519 =
-            ed25519_pk_to_x25519_pk(&decoded.view_key).expect("map view key to X25519");
+        let recipient = RecipientKeys::of_address(&decoded).expect("the address's keys");
 
         let recover = |built: &BuiltOutput| {
             let (ct_x25519, ct_ml_kem) = built.kem_blob.split_at(32);
@@ -696,18 +670,8 @@ mod tests {
             ),
         ] {
             let label = label_plaintext_for_recipient(rid).expect("an encodable rid");
-            let built = build_output(
-                &TX_KEY,
-                Payee::Single {
-                    spend_key: &decoded.spend_key,
-                    view_x25519: &recipient_x25519,
-                    ml_kem_ek: &decoded.ml_kem_encap_key,
-                    label_plaintext: &label,
-                },
-                AMOUNT,
-                OUT_IDX,
-            )
-            .expect("construct payment output");
+            let built = build_output(&TX_KEY, recipient.payee(&label), AMOUNT, OUT_IDX)
+                .expect("construct payment output");
             assert_eq!(
                 classify_label_plaintext(&recover(&built).label_plaintext),
                 expected,
@@ -732,20 +696,16 @@ mod tests {
         let destination = TxDestination::OwnPersona(persona.payment_destination());
         // The network is the wallet's; a persona arm reads none of it.
         let resolved = recipient_keys(&destination, Network::Testnet).expect("resolve");
-        assert_eq!(&resolved.spend_key, persona.spend_pk.as_canonical_bytes());
-        assert_eq!(&resolved.view_key, persona.view_pk.as_canonical_bytes());
-        assert_eq!(&*resolved.ml_kem_encap_key, &persona.ml_kem_ek[..]);
+        assert_eq!(resolved.spend_key(), persona.spend_pk.as_canonical_bytes());
+        assert_eq!(
+            resolved.view_x25519(),
+            &ed25519_pk_to_x25519_pk(persona.view_pk.as_canonical_bytes()).unwrap()
+        );
+        assert_eq!(resolved.ml_kem_ek(), &persona.ml_kem_ek[..]);
 
-        let recipient_x25519 =
-            ed25519_pk_to_x25519_pk(&resolved.view_key).expect("map view key to X25519");
         let built = build_output(
             &TX_KEY,
-            Payee::Single {
-                spend_key: &resolved.spend_key,
-                view_x25519: &recipient_x25519,
-                ml_kem_ek: &resolved.ml_kem_encap_key,
-                label_plaintext: &sentinel_plaintext(),
-            },
+            resolved.payee(&sentinel_plaintext()),
             AMOUNT,
             OUT_IDX,
         )
@@ -895,8 +855,8 @@ mod tests {
         let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
 
         // Sender-side mapping, exactly as the `sign_tx` payment loop does it.
-        let recipient_x25519 =
-            ed25519_pk_to_x25519_pk(&decoded.view_key).expect("map view key to X25519");
+        let recipient = RecipientKeys::of_address(&decoded).expect("the address's keys");
+        let recipient_x25519 = *recipient.view_x25519();
         assert_eq!(
             recipient_x25519, recipient_keys.keys.x25519_pk,
             "the mapped key must equal the wallet's stored montgomery(view_pk)"

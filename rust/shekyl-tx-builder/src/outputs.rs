@@ -20,15 +20,21 @@
 //! and, when an output pays a group, the `0x0D` member entries (CEN-I19),
 //! written by the wire crate's own codec.
 
+use std::borrow::Cow;
+
 use shekyl_address::multisig_address::MultisigAddressPayload;
+use shekyl_address::ShekylAddress;
+use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
 use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
 use shekyl_crypto_pq::CryptoError;
 use shekyl_network::NetworkId;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{self, KemCiphertext, MultisigEntry, TxExtraField};
+use shekyl_wire::{CtBase, Output};
 
 use crate::types::OutputInfo;
+use crate::wire::committed_base;
 use crate::TxBuilderError;
 
 /// Who an output pays.
@@ -54,6 +60,86 @@ pub enum Payee<'a> {
         /// The chain's network id.
         network: &'a NetworkId,
     },
+}
+
+/// A single-signer recipient's keys as its output is built to them.
+///
+/// An address carries its **Edwards** view key; the KEM's X25519 half
+/// encapsulates to `montgomery(view_pk)`, the parameter-free birational
+/// map the recipient's scanner inverts by using its view scalar as the
+/// Montgomery secret. Passing the Edwards bytes straight through would
+/// encapsulate to a wrong point: the daemon still accepts the transaction
+/// (the sender's own proofs re-derive consistently), but the recipient's
+/// decapsulation fails silently and the output is lost. This type is the
+/// one place a spend maps the key, so no path can skip it.
+pub struct RecipientKeys<'a> {
+    spend_key: [u8; 32],
+    view_x25519: [u8; 32],
+    ml_kem_ek: Cow<'a, [u8]>,
+}
+
+impl<'a> RecipientKeys<'a> {
+    /// A recipient with spend key `spend_key`, Edwards view key `view_key`
+    /// and ML-KEM-768 encapsulation key `ml_kem_ek`.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::InvalidKeyMaterial`] for a view key that is not a
+    /// canonical point other than the identity.
+    pub fn from_edwards(
+        spend_key: [u8; 32],
+        view_key: &[u8; 32],
+        ml_kem_ek: Cow<'a, [u8]>,
+    ) -> Result<Self, CryptoError> {
+        Ok(Self {
+            spend_key,
+            view_x25519: ed25519_pk_to_x25519_pk(view_key)?,
+            ml_kem_ek,
+        })
+    }
+
+    /// The keys `address` names.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::from_edwards`].
+    pub fn of_address(address: &'a ShekylAddress) -> Result<Self, CryptoError> {
+        Self::from_edwards(
+            address.spend_key,
+            &address.view_key,
+            Cow::Borrowed(&address.ml_kem_encap_key),
+        )
+    }
+
+    /// The recipient's spend key.
+    #[must_use]
+    pub fn spend_key(&self) -> &[u8; 32] {
+        &self.spend_key
+    }
+
+    /// The recipient's view key, mapped to X25519.
+    #[must_use]
+    pub fn view_x25519(&self) -> &[u8; 32] {
+        &self.view_x25519
+    }
+
+    /// The recipient's ML-KEM-768 encapsulation key.
+    #[must_use]
+    pub fn ml_kem_ek(&self) -> &[u8] {
+        &self.ml_kem_ek
+    }
+
+    /// This recipient as the payee of an output whose label encrypts
+    /// `label_plaintext`.
+    #[must_use]
+    pub fn payee<'p>(&'p self, label_plaintext: &'p [u8; 8]) -> Payee<'p> {
+        Payee::Single {
+            spend_key: &self.spend_key,
+            view_x25519: &self.view_x25519,
+            ml_kem_ek: &self.ml_kem_ek,
+            label_plaintext,
+        }
+    }
 }
 
 /// One output, built: what the transaction's prefix, base and `tx_extra`
@@ -198,6 +284,46 @@ pub fn build_tx_extra(
     tx_extra::serialize(&fields).map_err(|e| TxBuilderError::WireError(e.to_string()))
 }
 
+/// A confidential spend's outputs as its transaction carries them: the
+/// prefix's outputs, `tx_extra`, and the committed base. A spend whose
+/// transaction is assembled in phases (a multisig spend's) takes its
+/// outputs from here; the one-shot encoder writes the same base through
+/// the same mapping.
+#[derive(Clone, Debug)]
+pub struct SpendOutputs {
+    /// The prefix's outputs, in output order.
+    pub outputs: Vec<Output>,
+    /// `tx_extra`: the transaction public key and every output's PQC fields.
+    pub extra: Vec<u8>,
+    /// The committed base: each output's commitment and encrypted fields.
+    pub base: CtBase,
+}
+
+impl SpendOutputs {
+    /// The outputs `built`, in output order, under the transaction public
+    /// key `tx_pubkey`.
+    ///
+    /// # Errors
+    ///
+    /// As [`build_tx_extra`].
+    pub fn of(tx_pubkey: &[u8; 32], built: &[BuiltOutput]) -> Result<Self, TxBuilderError> {
+        let enc_amounts: Vec<_> = built.iter().map(|b| b.info.enc_amount).collect();
+        let enc_labels: Vec<_> = built.iter().map(|b| b.info.enc_label).collect();
+        Ok(Self {
+            outputs: built
+                .iter()
+                .map(|b| Output::confidential(b.output_key, b.view_tag))
+                .collect(),
+            extra: build_tx_extra(tx_pubkey, built)?,
+            base: committed_base(
+                &enc_amounts,
+                &enc_labels,
+                built.iter().map(|b| b.commitment).collect(),
+            ),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +399,38 @@ mod tests {
         assert!(fields
             .iter()
             .any(|f| matches!(f, TxExtraField::PqcMultisig(entries) if entries.len() == 1)));
+    }
+
+    /// The outputs as the transaction carries them: each prefix output is
+    /// confidential under its built key and tag, the base holds each
+    /// output's commitment and encrypted fields in output order, and
+    /// `tx_extra` is the builder's.
+    #[test]
+    fn a_spends_outputs_are_its_built_outputs_in_order() {
+        let tx_key = Scalar::random(&mut OsRng);
+        let pubkey = (ED25519_BASEPOINT_POINT * tx_key).compress().to_bytes();
+        let address = group(3, 2);
+        let payee = Payee::Group {
+            address: &address,
+            network: &NET,
+        };
+        let built: Vec<BuiltOutput> = [400, 600]
+            .into_iter()
+            .zip(0u64..)
+            .map(|(amount, index)| build_output(&tx_key.to_bytes(), payee, amount, index).unwrap())
+            .collect();
+        let spend = SpendOutputs::of(&pubkey, &built).unwrap();
+        for ((output, built), i) in spend.outputs.iter().zip(&built).zip(0..) {
+            assert_eq!(
+                output,
+                &Output::confidential(built.output_key, built.view_tag)
+            );
+            assert_eq!(spend.base.commitments[i], built.commitment);
+            assert_eq!(spend.base.enc_amounts[i], built.info.enc_amount.to_bytes());
+            assert_eq!(spend.base.enc_labels[i], built.info.enc_label.to_bytes());
+        }
+        assert_eq!(spend.outputs.len(), built.len());
+        assert_eq!(spend.extra, build_tx_extra(&pubkey, &built).unwrap());
     }
 
     /// The same transaction key, payee and index build the same output:

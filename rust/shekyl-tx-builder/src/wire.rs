@@ -127,6 +127,29 @@ fn wire_outputs(
         .collect()
 }
 
+/// The committed base of a spend's outputs: each output's encrypted amount
+/// and label, and its commitment, in output order.
+///
+/// The provenance type ends here, deliberately. `CtBase` is `shekyl-wire`'s
+/// representation, shared with the *parse* direction, where the nine bytes
+/// came off the network and no one in this process vouches for them.
+/// Wrapping those in `EncryptedOutputField` would launder unverified data
+/// into a type whose whole meaning is "this crate computed these". So the
+/// send path stays typed right up to this assembly and unwraps only as it
+/// becomes wire. Every spend's base is written here, a multisig one
+/// included ([`crate::outputs::SpendOutputs`]).
+pub(crate) fn committed_base(
+    enc_amounts: &[EncryptedOutputField],
+    enc_labels: &[EncryptedOutputField],
+    commitments: Vec<[u8; 32]>,
+) -> CtBase {
+    CtBase {
+        enc_amounts: enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+        enc_labels: enc_labels.iter().map(|f| f.to_bytes()).collect(),
+        commitments,
+    }
+}
+
 /// Map the builder's spend material onto a canonical `shekyl_wire::Transaction`.
 ///
 /// This replaces the old shekyl-oxide assembly and fixes its four §3 divergences vs the
@@ -224,19 +247,11 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
         ct: Ct::Fcmp {
             fee: input.fee,
             reference_block: input.reference_block,
-            base: CtBase {
-                // The provenance type ends here, deliberately. `CtBase` is
-                // `shekyl-wire`'s representation, shared with the *parse*
-                // direction, where the nine bytes came off the network and no
-                // one in this process vouches for them. Wrapping those in
-                // `EncryptedOutputField` would launder unverified data into a
-                // type whose whole meaning is "this crate or the FFI boundary
-                // computed these". So the send path stays typed right up to
-                // this private assembly and unwraps only as it becomes wire.
-                enc_amounts: input.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
-                enc_labels: input.enc_labels.iter().map(|f| f.to_bytes()).collect(),
-                commitments: input.out_commitments.clone(),
-            },
+            base: committed_base(
+                &input.enc_amounts,
+                &input.enc_labels,
+                input.out_commitments.clone(),
+            ),
             pqc_auths,
             prunable: Some(Prunable {
                 bulletproofs: vec![bp_plus],
