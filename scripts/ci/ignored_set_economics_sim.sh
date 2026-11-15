@@ -78,9 +78,9 @@ branch="${BRANCH:-the checked-out ref}"
 narration_pins='stage2::tests::stage2_narration_matches_the_committed_fixture
 stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
 esr10::tests::esr10_nightly_narration_matches_the_committed_fixture
-eup4::tests::eup4_nightly_narration_matches_the_committed_fixture'
+eup4::tests::eup4_nightly_narration_matches_the_committed_fixture
+jg_grid::tests::jg_grid_nightly_narration_matches_the_committed_fixture'
 run_tests="$narration_pins
-jg_grid::tests::jg_grid_nightly_narration_matches_the_committed_fixture
 secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders
 baseline::tests::every_declared_reader_moves_its_report"
 helpers='record::tests::regen_baseline_fixture

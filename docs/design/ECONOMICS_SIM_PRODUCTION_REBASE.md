@@ -4037,7 +4037,10 @@ eight threads (at `nice 10`, beside its testnet node): about 1 300
 campaign folds, 84 honest folds of 60 years and 84 step folds. It is
 pinned on demand (`jg_grid_narration_matches_the_committed_fixture`);
 its nightly slice (the inherited zone and N = 90, the SMA and the
-median, 20 % and 51 %, year 5) is pinned nightly. NIGHTLY_SLICE_COST
+median, 20 % and 51 %, year 5) is pinned nightly. The slice took 115 s on the fleet host's
+eight threads, so it also joins the per-PR narrations job
+(`ignored_set_economics_sim.sh --narrations`): a change that moves the
+grid is caught on its pull request, not the next night.
 
 **Regenerated** on the fleet host. The `--jg-grid` narrations, their first
 generation, under `SHEKYL_PINNED_REGEN_DECISION="2026-11-15 J x G: the
