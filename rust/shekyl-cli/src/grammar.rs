@@ -562,14 +562,15 @@ fn parse_send(args: &[&str]) -> ResolvedCommand {
         Err(command) => return command,
     };
     let priority = match split.value("--priority") {
-        None | Some("standard") => FeePriority::Standard,
-        Some("economy") => FeePriority::Economy,
-        Some("high") => FeePriority::High,
-        Some(word) => {
-            return diag(format!(
-                "send: --priority expects economy, standard, or high, got {word:?}"
-            ));
-        }
+        None => FeePriority::default(),
+        Some(word) => match FeePriority::from_name(word) {
+            Some(tier) => tier,
+            None => {
+                return diag(format!(
+                    "send: --priority expects economy, standard, or high, got {word:?}"
+                ));
+            }
+        },
     };
     match split.positional.as_slice() {
         [amount, dest] => match crate::commands::parse_amount(amount) {

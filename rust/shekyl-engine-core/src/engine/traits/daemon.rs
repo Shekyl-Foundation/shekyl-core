@@ -47,16 +47,11 @@ use shekyl_scanner::ScannableBlock;
 use crate::engine::error::IoError;
 use crate::engine::pending::TxHash;
 
-/// Multi-priority fee snapshot returned by
-/// [`DaemonEngine::get_fee_estimates`].
-///
-/// Carries the daemon's fee-rate estimate at each of the three
-/// non-`Custom` [`FeePriority`](super::super::FeePriority) tiers
-/// captured atomically at the call instant. The wallet's
-/// [`FeePriority::Custom`](super::super::FeePriority::Custom) variant
-/// bypasses the daemon estimate entirely (per
-/// [`docs/V3_WALLET_DECISION_LOG.md`]'s cross-cutting lock 8) and
-/// therefore has no field on this struct.
+/// The daemon's fee snapshot returned by
+/// [`DaemonEngine::get_fee_estimates`]: its rate at each of the three
+/// [`FeePriority`](shekyl_economics::FeePriority) tiers, captured at one
+/// call instant. A payer's rate is always one of the three; there is no
+/// per-wallet rate (`FEE_LADDER_DERIVATION.md` W3).
 ///
 /// # `#[non_exhaustive]`
 ///
@@ -70,17 +65,14 @@ use crate::engine::pending::TxHash;
 ///
 /// `FeeRate` is the `shekyl_rpc_client::FeeRate` (a per-weight cost; the
 /// fee lattice it is rounded to is `shekyl_economics::FEE_QUANTIZATION_MASK`,
-/// a constant) returned by [`Rpc::get_fee_rate`]. The three tier fields on
-/// this struct correspond one-to-one with the three non-`Custom`
-/// `FeePriority` variants; resolving a `FeePriority` to a `FeeRate`
-/// is a structural projection rather than a fresh daemon call.
+/// a constant). Resolving a tier to its rate is a projection of this one
+/// snapshot, never a fresh daemon call.
 ///
 /// # Atomic single-RPC snapshot (§3.3)
 ///
 /// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
-/// **one** `fee` JSON-RPC call (not three per-tier
-/// `get_fee_rate` calls): the response's fee array maps to the three
-/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`). This
+/// **one** `fee` JSON-RPC call, not one call per tier: the reply's
+/// `economy`, `standard` and `high` fields are the three tiers. This
 /// guarantees the tier band derives from one daemon view, with no
 /// tier-vs-tier skew from interleaved calls.
 ///
@@ -89,21 +81,21 @@ use crate::engine::pending::TxHash;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeEstimates {
     /// Fee rate corresponding to
-    /// [`FeePriority::Economy`](super::super::FeePriority::Economy):
+    /// [`FeePriority::Economy`](shekyl_economics::FeePriority::Economy):
     /// the slowest, cheapest tier targeting confirmation within a
     /// few blocks.
     pub economy: FeeRate,
 
     /// Fee rate corresponding to
-    /// [`FeePriority::Standard`](super::super::FeePriority::Standard):
+    /// [`FeePriority::Standard`](shekyl_economics::FeePriority::Standard):
     /// the default tier balancing cost vs. confirmation time.
     pub standard: FeeRate,
 
     /// Fee rate corresponding to
-    /// [`FeePriority::Priority`](super::super::FeePriority::Priority):
-    /// the fastest tier short of fee-spiking, targeting next-block
-    /// inclusion under normal mempool conditions.
-    pub priority: FeeRate,
+    /// [`FeePriority::High`](shekyl_economics::FeePriority::High): the
+    /// top rung, targeting next-block inclusion under normal mempool
+    /// conditions.
+    pub high: FeeRate,
 }
 
 /// Outcome of a daemon transaction submission via
@@ -350,8 +342,8 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
         crate::engine::block_fetch::default_fetch_scannable_block(self, number)
     }
 
-    /// Atomically snapshot the daemon's fee-rate estimate at each
-    /// non-`Custom` priority tier.
+    /// Atomically snapshot the daemon's fee-rate estimate at each of the
+    /// three tiers.
     ///
     /// # Cancellation
     ///

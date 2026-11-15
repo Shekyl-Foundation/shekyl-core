@@ -988,8 +988,7 @@ components:
                                           trusting this daemon. The
                                           intra-snapshot 10×-economy lock is
                                           withdrawn (honest 2021-scaling
-                                          Fh/Fl exceeds 10×), as is the
-                                          custom-only 100×-economy ceiling.
+                                          Fh/Fl exceeds 10×).
                                           The historical median-multiple
                                           ceiling lands with the V3.x
                                           wallet-side estimator.
@@ -1613,18 +1612,6 @@ components:
         u64 amount in atomic units, decimal string. Mirrors
         `shekyl_units::AtomicUnits`.
 
-    Feerate:
-      type: string
-      pattern: "^[1-9][0-9]*$"
-      description: >
-        Nonzero feerate in atomic units per **weight** unit, decimal string.
-        Per weight, NOT per byte: the two diverge by the Bulletproofs+
-        clawback once a transaction has more than two outputs, so sizing a
-        rate against the serialized length pins the wrong number. Mirrors the
-        `NonZeroU64` inside `shekyl_engine_core::FeePriority::Custom` — a rate,
-        NOT an amount, so it is distinct from `AtomicUnits` and forbids "0"
-        (the pattern excludes zero and leading zeros).
-
     Hex32:
       type: string
       pattern: "^[0-9a-f]{64}$"
@@ -1645,28 +1632,20 @@ components:
         formality.
 
     FeePriority:
+      type: string
+      enum: [economy, standard, high]
       description: >
-        Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
-        feerate via the daemon fee estimate at build time — never hardcoded
-        multipliers — and the snapshot must be well-formed (monotonic
-        tiers, no named tier above the era-maximum absolute cap;
-        -29109 otherwise).
-        `custom` pins atomic units per weight unit (see `Feerate` — per
-        weight, not per byte), bypassing the named tiers
-        but not the policy they obey: it must sit at or above the
-        snapshot's economy floor and at or below the same absolute cap
-        (-32602 otherwise — a `custom` rate is the caller's parameter,
-        not a daemon defect). There is no `custom`-only relative
-        ceiling, so `custom` can always express the snapshot's own
-        `PRIORITY` rate, or a little more.
-      oneOf:
-        - type: string
-          enum: [ECONOMY, STANDARD, PRIORITY]
-        - type: object
-          required: [custom]
-          properties:
-            custom:
-              $ref: "#/components/schemas/Feerate"
+        The fee tier: one of the ladder's three rungs, lowercase (IG-Q52;
+        `shekyl_economics::FeePriority`, the one definition). Each resolves
+        to a feerate from the daemon's fee snapshot at build time — never a
+        hardcoded multiplier — and the snapshot must be well-formed
+        (monotonic tiers, no tier above the era-maximum absolute cap;
+        -29109 otherwise). Anything else is refused -32602, naming the
+        set: an uppercase name, and a rate of the caller's own. There is no
+        per-wallet rate: the fee is cleartext on chain, and a wallet paying
+        a rate of its own choosing marks itself, where one paying a tier
+        hides in that tier's cohort (`FEE_LADDER_DERIVATION.md` W3; Rick,
+        2026-11-15).
 
     HybridSignature:
       type: object
@@ -2901,8 +2880,7 @@ components:
 
     GetDefaultFeePriorityResult:
       type: object
-      required:
-        [default_priority, economy_fee, standard_fee, priority_fee, tree_depth]
+      required: [default_priority, economy, standard, high, tree_depth]
       description: >
         One daemon fee snapshot + the same converge fixpoint the build path
         runs, per named tier. The quote is gated by the same snapshot
@@ -2912,14 +2890,17 @@ components:
         -29109 (both the same codes the build path uses).
       properties:
         default_priority:
-          type: string
-          enum: [STANDARD]
-        economy_fee:
+          $ref: "#/components/schemas/FeePriority"
+          description: The tier a send uses when it names none, `standard`.
+        economy:
           $ref: "#/components/schemas/AtomicUnits"
-        standard_fee:
+          description: The converged fee at the economy rung for this shape.
+        standard:
           $ref: "#/components/schemas/AtomicUnits"
-        priority_fee:
+          description: The converged fee at the standard rung.
+        high:
           $ref: "#/components/schemas/AtomicUnits"
+          description: The converged fee at the high rung.
         tree_depth:
           type: integer
 

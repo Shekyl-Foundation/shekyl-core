@@ -25,7 +25,7 @@ use shekyl_economics::{
 use crate::block_space::{Arrival, BlockSpace, Filled, OwnBodies};
 use crate::engine::{net_supply, SimParams};
 use crate::fee_model::{FeePoint, OrdinaryTx};
-use crate::rung_mix::{PerRung, Rung, RungSplit};
+use crate::rung_mix::{FeePriority, PerRung, RungSplit, ADMISSION};
 use crate::volume_window::VolumeWindow;
 
 /// The chain state a fold carries from block to block: the volume window,
@@ -162,9 +162,9 @@ impl ChainCursor {
             relay: params.relay(),
         };
         let txs = params.fee.rung_txs(&fee_point);
-        let tx = txs[Rung::Standard].expect("every arm prices the Standard rung");
+        let tx = txs[FeePriority::Standard].expect("every arm prices the Standard rung");
         let mix = params.fee.mix();
-        let mix = match txs[Rung::Priority] {
+        let mix = match txs[FeePriority::High] {
             Some(priority) if mix.is_priority_elastic() => {
                 let reference = *self
                     .priority_reference_fee
@@ -174,7 +174,7 @@ impl ChainCursor {
             _ => mix,
         };
         let demand = self.split.split(mix, step.demand);
-        let arrivals: Vec<Arrival> = Rung::ADMISSION
+        let arrivals: Vec<Arrival> = ADMISSION
             .into_iter()
             .filter(|&rung| demand[rung] > 0)
             .map(|rung| Arrival {
@@ -188,7 +188,7 @@ impl ChainCursor {
         let own = own.map(|own| {
             let economy = params
                 .fee
-                .rung_tx(Rung::Economy, &fee_point)
+                .rung_tx(FeePriority::Economy, &fee_point)
                 .expect("a producer's own body is priced on the Economy rung");
             OwnBodies {
                 tx: match own {

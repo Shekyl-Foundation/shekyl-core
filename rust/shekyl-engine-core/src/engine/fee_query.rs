@@ -16,6 +16,7 @@ use shekyl_tx_builder::MAX_TREE_DEPTH;
 use shekyl_units::AtomicUnits;
 
 use super::error::FeeEstimatorError;
+use super::fee_estimator::FeePriority;
 use super::fee_policy::ValidatedFeeEstimates;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::traits::{
@@ -50,12 +51,12 @@ pub struct TxShapeEstimate {
 /// same snapshot/shape/depth would charge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeTierQuote {
-    /// Converged fee at the daemon's economy rate.
-    pub economy_fee: AtomicUnits,
-    /// Converged fee at the daemon's standard rate (the default tier).
-    pub standard_fee: AtomicUnits,
-    /// Converged fee at the daemon's priority rate.
-    pub priority_fee: AtomicUnits,
+    /// Converged fee at the economy rung.
+    pub economy: AtomicUnits,
+    /// Converged fee at the standard rung (the default tier).
+    pub standard: AtomicUnits,
+    /// Converged fee at the high rung.
+    pub high: AtomicUnits,
     /// The curve-tree depth the quotes were evaluated at.
     pub tree_depth: u8,
 }
@@ -120,7 +121,7 @@ impl<
     /// Read-only: one daemon `get_fee_estimates` RPC plus the same
     /// [`converge_fee`](super::tx_fee_model::converge_fee) fixpoint the build
     /// path runs. The default tier is **standard**
-    /// ([`FeePriority::Standard`](super::fee_estimator::FeePriority)).
+    /// ([`FeePriority::default`]).
     ///
     /// # Errors
     ///
@@ -153,9 +154,9 @@ impl<
             Ok(AtomicUnits::from_raw(fee))
         };
         Ok(FeeTierQuote {
-            economy_fee: quote_at(snapshot.economy())?,
-            standard_fee: quote_at(snapshot.standard())?,
-            priority_fee: quote_at(snapshot.priority())?,
+            economy: quote_at(snapshot.rate(FeePriority::Economy))?,
+            standard: quote_at(snapshot.rate(FeePriority::Standard))?,
+            high: quote_at(snapshot.rate(FeePriority::High))?,
             tree_depth,
         })
     }

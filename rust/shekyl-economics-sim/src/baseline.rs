@@ -383,7 +383,7 @@ pub const ESR10_READS: &[Reader] = &{
         }
         i += 1;
     }
-    all[j] = read("relay.priority_factor", 3);
+    all[j] = read("relay.high_factor", 3);
     assert!(j + 1 == all.len(), "the list is exactly the readers kept");
     all
 };
@@ -411,14 +411,14 @@ pub fn esr10_reach() -> (&'static str, &'static [Reader]) {
 }
 
 /// The instruments that run all Standard (§5.32): ESR-10's readers less
-/// the Priority factor, which prices no rung they send demand to.
+/// the High factor, which prices no rung they send demand to.
 pub const INSTRUMENT_READS: &[Reader] = &{
     let esr10 = ESR10_READS;
     let mut all = [read("", 0); 22];
     let mut i = 0;
     let mut j = 0;
     while i < esr10.len() {
-        if !const_str_eq(esr10[i].path, "relay.priority_factor") {
+        if !const_str_eq(esr10[i].path, "relay.high_factor") {
             all[j] = esr10[i];
             j += 1;
         }

@@ -36,7 +36,7 @@ use shekyl_economics::{
 
 use crate::burden::{ordinary_tx_fee, ordinary_tx_weight};
 use crate::calibration::PerByteRate;
-use crate::rung_mix::{PerRung, Rung, RungMix};
+use crate::rung_mix::{FeePriority, PerRung, RungMix};
 
 /// How a run prices an ordinary transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,16 +201,16 @@ impl FeeModel {
     pub fn rung_txs(self, at: &FeePoint<'_>) -> PerRung<Option<OrdinaryTx>> {
         match self {
             Self::FlatControl { per_tx_atomic, .. } => PerRung::from_fn(|rung| {
-                (rung == Rung::Standard).then(|| tx_paying(per_tx_atomic, at))
+                (rung == FeePriority::Standard).then(|| tx_paying(per_tx_atomic, at))
             }),
             Self::Production { multiplier, mix } => {
                 let ladder = ladder_at(at);
                 PerRung::from_fn(|rung| {
                     let fee = match rung {
-                        Rung::Standard => standard_fee(ladder, multiplier, at),
+                        FeePriority::Standard => standard_fee(ladder, multiplier, at),
                         _ if !mix.uses(rung) => return None,
-                        Rung::Economy => rung_fee(ladder.economy, at),
-                        Rung::Priority => rung_fee(ladder.priority, at),
+                        FeePriority::Economy => rung_fee(ladder.economy, at),
+                        FeePriority::High => rung_fee(ladder.high, at),
                     };
                     Some(tx_paying(fee, at))
                 })
@@ -223,15 +223,15 @@ impl FeeModel {
     /// `None` on the control arm for any rung but Standard: its one flat fee
     /// has no rungs.
     #[must_use]
-    pub fn rung_tx(self, rung: Rung, at: &FeePoint<'_>) -> Option<OrdinaryTx> {
+    pub fn rung_tx(self, rung: FeePriority, at: &FeePoint<'_>) -> Option<OrdinaryTx> {
         match self {
             Self::FlatControl { .. } => self.rung_txs(at)[rung],
             Self::Production { multiplier, .. } => {
                 let ladder = ladder_at(at);
                 let fee = match rung {
-                    Rung::Standard => standard_fee(ladder, multiplier, at),
-                    Rung::Economy => rung_fee(ladder.economy, at),
-                    Rung::Priority => rung_fee(ladder.priority, at),
+                    FeePriority::Standard => standard_fee(ladder, multiplier, at),
+                    FeePriority::Economy => rung_fee(ladder.economy, at),
+                    FeePriority::High => rung_fee(ladder.high, at),
                 };
                 Some(tx_paying(fee, at))
             }
@@ -428,7 +428,7 @@ mod tests {
 
     /// What one Standard transaction pays on `arm` at `at`.
     fn standard_fee_of(arm: FeeModel, at: &FeePoint<'_>) -> u64 {
-        arm.rung_txs(at)[Rung::Standard]
+        arm.rung_txs(at)[FeePriority::Standard]
             .expect("every arm prices Standard")
             .fee_atomic
     }

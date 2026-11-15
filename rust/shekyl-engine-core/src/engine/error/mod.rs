@@ -81,4 +81,4 @@ pub use submit::{
     SubmitError, TerminalErrorKind,
 };
 
-pub use super::fee_policy::{CeilingViolation, CustomFeeBand, FeeEstimatorError};
+pub use super::fee_policy::{CeilingViolation, FeeEstimatorError};

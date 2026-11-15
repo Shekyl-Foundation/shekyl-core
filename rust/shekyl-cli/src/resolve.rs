@@ -15,23 +15,8 @@
 
 use shekyl_types::Timestamp;
 
-/// Named send-fee tier. The wire spellings are the OpenAPI `FeePriority` values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeePriority {
-    Economy,
-    Standard,
-    High,
-}
-
-impl FeePriority {
-    pub(crate) fn wire(self) -> &'static str {
-        match self {
-            Self::Economy => "ECONOMY",
-            Self::Standard => "STANDARD",
-            Self::High => "PRIORITY",
-        }
-    }
-}
+/// The send-fee tier: the one tier set, defined beside the fee ladder.
+pub use shekyl_economics::FeePriority;
 
 /// Which payment requests `request list` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

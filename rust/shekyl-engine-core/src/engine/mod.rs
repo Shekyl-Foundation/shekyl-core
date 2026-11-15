@@ -75,9 +75,9 @@
 //!    payment requests for merchant attribution (FA-8). No subaddress surface.
 //! 7. **`RefreshHandle`** — cancel-on-drop RAII, single-flight via
 //!    `&mut self`. Lands with `Engine::refresh`.
-//! 8. **Fee priority** — `FeePriority { Economy | Standard | Priority |
-//!    Custom(NonZeroU64) }` over daemon `get_fee_estimates`. Lands with
-//!    `build_pending_tx`.
+//! 8. **Fee priority** — `FeePriority { Economy | Standard | High }`
+//!    (`shekyl-economics`, one definition) over daemon
+//!    `get_fee_estimates`. Lands with `build_pending_tx`.
 //! 9. **Logging** — `tracing` spans throughout, two-layer secret
 //!    redaction via [`shekyl_engine_state::LocalLabel`] (type layer) and
 //!    a redacting subscriber field formatter (subscriber layer). Lands

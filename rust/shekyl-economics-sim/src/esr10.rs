@@ -37,7 +37,7 @@ use crate::onset::{
     age_quantile, at_horizon, binding_onsets, fmt_onset, legs_at_flat_onset, BindingOnsets, Onset,
     BLOCK_SPACE_YEARS, ONSET_HORIZON_YEARS,
 };
-use crate::rung_mix::{Rung, RungMix};
+use crate::rung_mix::{FeePriority, RungMix};
 use crate::scenarios::{all_scenarios, BASELINE_STEADY_STATE};
 use crate::stage2::{a1_year_aggs, kilobytes, trunc, A1YearAgg};
 
@@ -428,7 +428,7 @@ fn ratio(fee: u64, ceiling: u64) -> f64 {
 /// The Standard fees carried in year 1 over the Standard transactions
 /// carried, atomic units.
 fn year_one_standard_fee(aggs: &[A1YearAgg]) -> Option<u64> {
-    let year = &aggs.first()?.rungs[Rung::Standard];
+    let year = &aggs.first()?.rungs[FeePriority::Standard];
     (year.carried_txs > 0)
         .then(|| u64::try_from(year.fees_atomic / year.carried_txs).expect("one fee fits"))
 }
@@ -436,7 +436,7 @@ fn year_one_standard_fee(aggs: &[A1YearAgg]) -> Option<u64> {
 /// Economy carried over Economy demanded, over every year.
 pub(crate) fn economy_served(aggs: &[A1YearAgg]) -> Option<f64> {
     let (carried, demand) = aggs.iter().fold((0u128, 0u128), |(c, d), a| {
-        let economy = &a.rungs[Rung::Economy];
+        let economy = &a.rungs[FeePriority::Economy];
         (c + economy.carried_txs, d + economy.demand_txs)
     });
     (demand > 0).then(|| carried as f64 / demand as f64)
@@ -453,8 +453,8 @@ fn option_year(year: Option<u64>) -> String {
 }
 
 /// `E/S/P` of `f`, each to `width` and `places`.
-fn per_rung(width: usize, places: usize, f: impl Fn(Rung) -> f64) -> String {
-    Rung::ALL
+fn per_rung(width: usize, places: usize, f: impl Fn(FeePriority) -> f64) -> String {
+    FeePriority::ALL
         .map(|rung| format!("{:>width$.places$}", f(rung)))
         .join("/")
 }
@@ -798,7 +798,7 @@ fn write_year(out: &mut impl fmt::Write, year: &A1YearAgg, blocks_per_year: u64)
         per_rung(5, 1, |r| per_block(rungs[r].refused_txs)),
         per_rung(5, 1, |r| per_block(rungs[r].evicted_txs)),
         per_rung(5, 1, |r| per_block(rungs[r].expired_txs)),
-        Rung::ALL
+        FeePriority::ALL
             .map(|r| format!(
                 "{:>2}/{:>2}",
                 age_quantile(&year.rung_ages[r], 50),
@@ -811,7 +811,7 @@ fn write_year(out: &mut impl fmt::Write, year: &A1YearAgg, blocks_per_year: u64)
         } else {
             format!(
                 "{:.1}%",
-                100.0 * rungs[Rung::Priority].fees_atomic as f64 / fees as f64
+                100.0 * rungs[FeePriority::High].fees_atomic as f64 / fees as f64
             )
         },
         kilobytes(year.long_term_median),

@@ -24,52 +24,43 @@ use serde::Serialize;
 
 use crate::fee_model::MILLI;
 
-/// A rung of the production fee ladder (`shekyl_economics::FeeLadder`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub enum Rung {
-    /// The relay floor `F`.
-    Economy,
-    /// `standard_over_economy × F`, times the run's multiplier.
-    Standard,
-    /// `max(priority_factor·R·C/M, standard)`.
-    Priority,
-}
+pub use shekyl_economics::FeePriority;
 
-impl Rung {
-    /// Every rung, cheapest first: the order a [`PerRung`] holds them in.
-    pub const ALL: [Self; 3] = [Self::Economy, Self::Standard, Self::Priority];
+/// The order one block's arrivals reach the pool: richest first. **A
+/// declared assumption** (§4 of the design document): the order users'
+/// transactions of different rungs reach a node within one block's
+/// interval is not knowable. Each arrival is admitted by CEN-M10's
+/// `make_room` in turn, so the order can change the pool when the rungs
+/// weigh differently, as they do by their fees' varints
+/// (`block_space_tests.rs` shows both cases). Its bias: a richer arrival
+/// is never refused for a cheaper one that reached the pool first in the
+/// same block.
+pub const ADMISSION: [FeePriority; 3] = [
+    FeePriority::High,
+    FeePriority::Standard,
+    FeePriority::Economy,
+];
 
-    /// The order one block's arrivals reach the pool: richest first. **A
-    /// declared assumption** (§4 of the design document): the order users'
-    /// transactions of different rungs reach a node within one block's
-    /// interval is not knowable. Each arrival is admitted by CEN-M10's
-    /// `make_room` in turn, so the order can change the pool when the rungs
-    /// weigh differently, as they do by their fees' varints
-    /// (`block_space_tests.rs` shows both cases). Its bias: a richer arrival
-    /// is never refused for a cheaper one that reached the pool first in the
-    /// same block.
-    pub const ADMISSION: [Self; 3] = [Self::Priority, Self::Standard, Self::Economy];
-
-    const fn index(self) -> usize {
-        match self {
-            Self::Economy => 0,
-            Self::Standard => 1,
-            Self::Priority => 2,
-        }
+/// A rung's slot in a [`PerRung`]: [`FeePriority::ALL`]'s order.
+const fn slot(rung: FeePriority) -> usize {
+    match rung {
+        FeePriority::Economy => 0,
+        FeePriority::Standard => 1,
+        FeePriority::High => 2,
     }
 }
 
-/// One value per rung, indexed by [`Rung`].
+/// One value per rung, indexed by [`FeePriority`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct PerRung<T>([T; 3]);
 
 impl<T> PerRung<T> {
-    /// `f` of every rung, in [`Rung::ALL`]'s order.
-    pub fn from_fn(mut f: impl FnMut(Rung) -> T) -> Self {
-        Self(Rung::ALL.map(&mut f))
+    /// `f` of every rung, in [`FeePriority::ALL`]'s order.
+    pub fn from_fn(mut f: impl FnMut(FeePriority) -> T) -> Self {
+        Self(FeePriority::ALL.map(&mut f))
     }
 
-    /// The values, in [`Rung::ALL`]'s order.
+    /// The values, in [`FeePriority::ALL`]'s order.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.0.iter()
     }
@@ -80,20 +71,20 @@ impl<T> PerRung<T> {
     }
 }
 
-impl<T> Index<Rung> for PerRung<T> {
+impl<T> Index<FeePriority> for PerRung<T> {
     type Output = T;
-    fn index(&self, rung: Rung) -> &T {
-        &self.0[rung.index()]
+    fn index(&self, rung: FeePriority) -> &T {
+        &self.0[slot(rung)]
     }
 }
 
-impl<T> IndexMut<Rung> for PerRung<T> {
-    fn index_mut(&mut self, rung: Rung) -> &mut T {
-        &mut self.0[rung.index()]
+impl<T> IndexMut<FeePriority> for PerRung<T> {
+    fn index_mut(&mut self, rung: FeePriority) -> &mut T {
+        &mut self.0[slot(rung)]
     }
 }
 
-/// Rung by rung: a year's traffic gathers its blocks'.
+/// FeePriority by rung: a year's traffic gathers its blocks'.
 impl<T: AddAssign<U>, U> AddAssign<PerRung<U>> for PerRung<T> {
     fn add_assign(&mut self, other: PerRung<U>) {
         for (total, part) in self.0.iter_mut().zip(other.0) {
@@ -179,27 +170,27 @@ impl RungMix {
     /// thousandth, and Standard takes what it sheds.
     #[must_use]
     pub fn priority_at(self, reference: u64, fee: u64) -> Self {
-        let share = self.milli[Rung::Priority];
+        let share = self.milli[FeePriority::High];
         if fee <= reference {
             return self;
         }
         let kept = u64::try_from(u128::from(share) * u128::from(reference) / u128::from(fee))
             .expect("at most the share");
         let mut milli = self.milli;
-        milli[Rung::Standard] += share - kept;
-        milli[Rung::Priority] = kept;
+        milli[FeePriority::Standard] += share - kept;
+        milli[FeePriority::High] = kept;
         Self { milli, ..self }
     }
 
     /// The rung's share, in thousandths.
     #[must_use]
-    pub fn milli(self, rung: Rung) -> u64 {
+    pub fn milli(self, rung: FeePriority) -> u64 {
         self.milli[rung]
     }
 
     /// Whether any demand pays `rung`.
     #[must_use]
-    pub fn uses(self, rung: Rung) -> bool {
+    pub fn uses(self, rung: FeePriority) -> bool {
         self.milli[rung] > 0
     }
 }
@@ -220,9 +211,9 @@ impl fmt::Display for RungMix {
         write!(
             f,
             "{}/{}/{}{}",
-            percent(self.milli[Rung::Economy]),
-            percent(self.milli[Rung::Standard]),
-            percent(self.milli[Rung::Priority]),
+            percent(self.milli[FeePriority::Economy]),
+            percent(self.milli[FeePriority::Standard]),
+            percent(self.milli[FeePriority::High]),
             if self.priority_elastic {
                 " elastic"
             } else {
@@ -270,8 +261,9 @@ impl RungSplit {
             floors <= demand,
             "the floors {floors} passed the block's demand {demand}"
         );
-        let remainder = |rung: Rung| owed[rung] - i64::try_from(shares[rung]).expect("small") * one;
-        let mut order = Rung::ALL;
+        let remainder =
+            |rung: FeePriority| owed[rung] - i64::try_from(shares[rung]).expect("small") * one;
+        let mut order = FeePriority::ALL;
         order.sort_by(|&a, &b| remainder(b).cmp(&remainder(a)).then(a.cmp(&b)));
         let leftover = usize::try_from(demand - floors).expect("fewer than the rungs");
         for &rung in order.iter().take(leftover) {
@@ -341,9 +333,9 @@ mod tests {
         let half = RungMix::defaulted_with_priority(25);
         assert_eq!(
             (
-                half.milli(Rung::Economy),
-                half.milli(Rung::Standard),
-                half.milli(Rung::Priority)
+                half.milli(FeePriority::Economy),
+                half.milli(FeePriority::Standard),
+                half.milli(FeePriority::High)
             ),
             (150, 825, 25)
         );
@@ -357,13 +349,13 @@ mod tests {
         );
         let doubled = elastic.priority_at(1_000, 2_000);
         assert_eq!(
-            doubled.milli(Rung::Priority),
+            doubled.milli(FeePriority::High),
             25,
             "half the demand at twice the fee"
         );
-        assert_eq!(doubled.milli(Rung::Standard), 825);
+        assert_eq!(doubled.milli(FeePriority::Standard), 825);
         assert_eq!(
-            elastic.priority_at(1_000, 3_000).milli(Rung::Priority),
+            elastic.priority_at(1_000, 3_000).milli(FeePriority::High),
             16,
             "floored"
         );
@@ -497,7 +489,7 @@ mod tests {
                         "{mix} {name}: block {block} shares {shares:?} do not sum to {demand}"
                     );
                     demand_so_far += u128::from(demand);
-                    for rung in Rung::ALL {
+                    for rung in FeePriority::ALL {
                         given[rung] += u128::from(shares[rung]);
                     }
                     lead.push(PerRung::from_fn(|rung| {
@@ -506,7 +498,7 @@ mod tests {
                                 .expect("fits")
                     }));
                 }
-                for rung in Rung::ALL {
+                for rung in FeePriority::ALL {
                     for (at, now) in lead.iter().enumerate() {
                         assert!(
                             now[rung].abs() < i128::from(ONE_TX),
@@ -539,16 +531,16 @@ mod tests {
         };
         let mut year = PerRung::<RungTraffic<u128>>::default();
         year += PerRung::from_fn(|rung| {
-            if rung == Rung::Standard {
+            if rung == FeePriority::Standard {
                 block
             } else {
                 RungTraffic::default()
             }
         });
         year += PerRung::from_fn(|_| block);
-        assert_eq!(year[Rung::Standard].carried_txs, 10);
-        assert_eq!(year[Rung::Economy].fees_atomic, 700);
-        assert_eq!(year[Rung::Standard].dropped_txs(), 8);
+        assert_eq!(year[FeePriority::Standard].carried_txs, 10);
+        assert_eq!(year[FeePriority::Economy].fees_atomic, 700);
+        assert_eq!(year[FeePriority::Standard].dropped_txs(), 8);
         assert_eq!(year.sum(|rung| rung.demand_txs), 36);
     }
 }

@@ -40,7 +40,7 @@ use super::super::traits::LedgerEngine;
 use super::super::transaction_submitter::{canonical_tx_id, wire_fee};
 use super::super::transaction_submitter::{SubmitSuccess, SubmitterError, TransactionSubmitter};
 use super::super::tx_counts::{InputCount, OutputCount};
-use super::super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
+use super::super::tx_fee_model::build_fee_directive;
 
 use super::dispatch::DispatchFacts;
 use super::support::{
@@ -610,9 +610,7 @@ where
 
         let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
         let payment_count = request.recipients.len();
-        let rate = fee_rate_for_priority(request.priority, &fee_snapshot).map_err(|err| {
-            fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
-        })?;
+        let rate = fee_snapshot.rate(request.priority);
 
         let estimate = |input_count: usize, output_count: usize| {
             self.fee_estimator
@@ -1112,8 +1110,7 @@ where
             // a fee the current inputs cannot cover escalates to reselection.
             let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
             let payment_count = request.recipients.len();
-            let rate = fee_rate_for_priority(request.priority, &fee_snapshot)
-                .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err)))?;
+            let rate = fee_snapshot.rate(request.priority);
             let fee = self
                 .fee_estimator
                 .estimate_fee(

@@ -113,7 +113,7 @@ fn test_fee_estimates() -> FeeEstimates {
     FeeEstimates {
         economy: tiny,
         standard: tiny,
-        priority: tiny,
+        high: tiny,
     }
 }
 
@@ -3609,7 +3609,7 @@ fn daemon_fee_estimates_distinct() -> FeeEstimates {
     FeeEstimates {
         economy: FeeRate::new(5).expect("economy rate"),
         standard: FeeRate::new(10).expect("standard rate"),
-        priority: FeeRate::new(40).expect("priority rate"),
+        high: FeeRate::new(40).expect("high rate"),
     }
 }
 
@@ -3728,9 +3728,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
 #[tokio::test]
 async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
-    use crate::engine::tx_fee_model::{
-        converge_fee, fee_from_weight, fee_rate_for_priority, predict_weight,
-    };
+    use crate::engine::tx_fee_model::{converge_fee, fee_from_weight, predict_weight};
 
     let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
     let (ledger, _tree_dir, tree) =
@@ -3750,7 +3748,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     let snapshot =
         crate::engine::fee_policy::ValidatedFeeEstimates::try_new(daemon_fee_estimates_distinct())
             .expect("test daemon tiers are well-formed");
-    let rate = fee_rate_for_priority(FeePriority::Standard, &snapshot).expect("standard rate");
+    let rate = snapshot.rate(FeePriority::Standard);
     // Real tree depth for the 2-leaf consistent fixture is 2.
     let seed = fee_from_weight(
         &rate,

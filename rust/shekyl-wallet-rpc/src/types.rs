@@ -801,14 +801,14 @@ pub struct EstimateTxSizeAndWeightResult {
 /// `get_default_fee_priority` result (WI-RPC-1 fees).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetDefaultFeePriorityResult {
-    /// The default tier (`STANDARD`).
-    pub default_priority: String,
-    /// Converged fee at the daemon's economy rate for the given shape.
-    pub economy_fee: AtomicUnitsString,
-    /// Converged fee at the daemon's standard rate (the default tier).
-    pub standard_fee: AtomicUnitsString,
-    /// Converged fee at the daemon's priority rate.
-    pub priority_fee: AtomicUnitsString,
+    /// The tier a send uses when it names none (`standard`).
+    pub default_priority: shekyl_engine_core::FeePriority,
+    /// Converged fee at the economy rung for the given shape.
+    pub economy: AtomicUnitsString,
+    /// Converged fee at the standard rung.
+    pub standard: AtomicUnitsString,
+    /// Converged fee at the high rung.
+    pub high: AtomicUnitsString,
     /// Curve-tree depth the quotes were evaluated at.
     pub tree_depth: i64,
 }

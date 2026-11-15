@@ -11,8 +11,6 @@
 //! test harness is not a re-forming god-object; the split keeps that
 //! distinction structural instead of a judgement call in the conf.
 
-use std::num::NonZeroU64;
-
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
 use shekyl_address::Network;
 use shekyl_curve_primitives::Commitment;
@@ -450,33 +448,6 @@ fn discard_is_idempotent_on_unknown_handle() {
     assert!(!was_present);
     // No state change, no panic.
     assert!(reservations.is_empty());
-}
-
-#[test]
-fn priority_custom_is_accepted_and_preserved() {
-    let mut ledger = LedgerBlock::empty();
-    let mut indexes = LedgerIndexes::empty();
-    populate(
-        &mut ledger,
-        &mut indexes,
-        1,
-        vec![make_recovered_output(1, 100, 10_000)],
-        20,
-    );
-    let mut reservations = std::collections::BTreeMap::new();
-    let mut next_id = 0u64;
-    let req = TxRequest {
-        recipients: vec![TxRecipient {
-            destination: TxDestination::Address(test_address()),
-            amount_atomic_units: AtomicUnits::from_raw(1_000),
-            rid: None,
-        }],
-        priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
-    };
-    let pending =
-        build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap();
-    let r = reservations.get(&pending.id).unwrap();
-    assert!(matches!(r.priority, FeePriority::Custom(_)));
 }
 
 /// An empty list and a rid the label cannot echo are refused on the

@@ -17,11 +17,9 @@
 //!   default; V3.x adds `ExplicitFeeEstimator` and the
 //!   `LedgerEngine`-historical `WalletSideEstimator` per
 //!   segment-2d R16 (c)'s V3.x scope).
-//! - [`FeePriority`] — the caller-supplied fee preference
-//!   enum; migrated from `engine::pending` (the prior home;
-//!   `engine::pending` keeps a backward-compatibility
-//!   re-export for crate-internal callers per the
-//!   "trait-surface is the canonical citation" pin).
+//! - [`FeePriority`] — the caller's tier, defined once in
+//!   `shekyl-economics` beside the ladder whose rungs it names
+//!   and re-exported here.
 //! - [`FeeEstimationContext`] — the structural context the
 //!   estimator reasons against (recipient count, input
 //!   count, ledger snapshot for V3.x wallet-side analysis).
@@ -34,25 +32,11 @@
 //!
 //! The trait surface is **narrow** — single method, no
 //! algorithm-internal knobs in the trait signature. Estimation
-//! strategy details (daemon-recommendation queries, explicit
-//! caller-supplied feerates, wallet-side historical analysis,
-//! …) are the impl's responsibility, not the trait surface's.
+//! strategy details (daemon-recommendation queries, wallet-side
+//! historical analysis, …) are the impl's responsibility, not the trait surface's.
 //! R16's design pin: adding a new estimator to V3.x is a new
 //! [`FeeEstimator`] impl; the trait surface does not
 //! re-open.
-//!
-//! # FeePriority migration
-//!
-//! [`FeePriority`] was historically defined in
-//! `engine::pending`. PR 5 C4γ migrates the definition to
-//! this module (the trait surface that consumes it) per the
-//! `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X "trait-surface is
-//! the canonical citation" pin. `engine::pending` re-exports
-//! [`FeePriority`] for backward source-text compatibility
-//! within the crate; the `engine::mod` re-export surface is
-//! unchanged.
-
-use std::num::NonZeroU64;
 
 use shekyl_units::AtomicUnits;
 
@@ -60,58 +44,9 @@ use super::error::FeeEstimatorError;
 use super::fee_policy::ValidatedFeeEstimates;
 use super::refresh::LedgerSnapshot;
 use super::tx_counts::{InputCount, OutputCount};
-use super::tx_fee_model::{converge_fee, fee_rate_for_priority};
+use super::tx_fee_model::converge_fee;
 
-/// Caller-supplied fee preference for the
-/// `PendingTxEngine::build` pipeline.
-///
-/// Each variant is resolved against the daemon's
-/// `get_fee_estimates` snapshot (for [`DaemonFeeEstimator`]) or
-/// against the implementor's strategy (for the V3.x
-/// `ExplicitFeeEstimator` / `WalletSideEstimator`).
-///
-/// # Migration note (PR 5 C4γ)
-///
-/// This type was previously defined in `engine::pending`;
-/// the canonical home is now this module per the §7.X
-/// "trait-surface is the canonical citation" pin.
-/// `engine::pending` re-exports for backward source-text
-/// compatibility within the crate. No external API breakage:
-/// `engine::mod` re-exports [`FeePriority`] from the
-/// `engine::pending` re-export, so consumer code referencing
-/// `shekyl_engine_core::engine::FeePriority` is unaffected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FeePriority {
-    /// Slowest tier; cheapest. Targets confirmation within a
-    /// few blocks rather than the next block.
-    Economy,
-    /// Default tier; balanced cost vs. confirmation time.
-    Standard,
-    /// Fastest tier short of fee-spiking; targets next-block
-    /// inclusion under normal mempool conditions.
-    Priority,
-    /// Caller-pinned feerate in atomic units per **weight** unit —
-    /// `FeeRate`'s own contract, and not per *byte*: the two diverge
-    /// by the Bulletproofs+ clawback once a transaction has more than
-    /// two outputs, so a client that reads "per byte" and sizes its
-    /// number against the serialized length pins the wrong rate.
-    ///
-    /// The daemon's named tiers are bypassed, but not the Custom
-    /// band: the rate must sit at or above the snapshot's economy
-    /// floor and at or below the absolute per-weight cap — the same
-    /// cap every named tier obeys, and the only ceiling
-    /// ([`FeeEstimatorError::CustomFeeOutOfRange`](super::error::FeeEstimatorError)
-    /// otherwise). There is deliberately no `Custom`-only relative
-    /// ceiling; see
-    /// [`CustomFeeBand`](super::fee_policy::CustomFeeBand) for why an
-    /// economy-anchored one banned the snapshot's own Priority rate.
-    ///
-    /// Snapshot well-formedness (monotonicity, absolute cap on
-    /// *named* tiers) is already decided before this variant is
-    /// interpreted — an honest served Priority tier does not lock
-    /// Custom.
-    Custom(NonZeroU64),
-}
+pub use shekyl_economics::FeePriority;
 
 /// Structural context the estimator reasons against.
 ///
@@ -226,8 +161,7 @@ pub trait FeeEstimator: Send + Sync + 'static {
     /// returns [`FeeEstimatorError::Daemon`] when the query fails,
     /// [`FeeEstimatorError::DaemonResponseInvalid`] on an unusable
     /// snapshot, [`FeeEstimatorError::DaemonFeeUnreasonable`]
-    /// on a non-monotonic or over-cap snapshot, and
-    /// [`FeeEstimatorError::CustomFeeOutOfRange`] on a caller-band miss.
+    /// on a non-monotonic or over-cap snapshot.
     fn estimate_fee(
         &self,
         priority: FeePriority,
@@ -266,7 +200,7 @@ impl FeeEstimator for DaemonFeeEstimator {
         priority: FeePriority,
         context: &FeeEstimationContext<'_>,
     ) -> Result<AtomicUnits, FeeEstimatorError> {
-        let rate = fee_rate_for_priority(priority, &context.fee_snapshot)?;
+        let rate = context.fee_snapshot.rate(priority);
         // The counts are type-bounded (`>= 1`), so no `.max(1)` floor is needed.
         let n_in = context.input_count;
         let n_out = context.output_count;
@@ -294,8 +228,6 @@ mod tests {
     use crate::engine::fee_policy::ValidatedFeeEstimates;
     use crate::engine::traits::FeeEstimates;
     use shekyl_rpc_client::FeeRate;
-    use std::num::NonZeroU64;
-
     fn dummy_context() -> LedgerSnapshot {
         // `DaemonFeeEstimator` deliberately ignores the ledger field
         // (that hook is the V3.x `WalletSideEstimator`'s), so a
@@ -318,7 +250,7 @@ mod tests {
         ValidatedFeeEstimates::try_new(FeeEstimates {
             economy: FeeRate::new(5).expect("economy fee rate is non-zero"),
             standard: FeeRate::new(10).expect("standard fee rate is non-zero"),
-            priority: FeeRate::new(40).expect("priority fee rate is non-zero"),
+            high: FeeRate::new(40).expect("high fee rate is non-zero"),
         })
         .expect("test fixture is well-formed")
     }
@@ -338,8 +270,7 @@ mod tests {
         for priority in [
             FeePriority::Economy,
             FeePriority::Standard,
-            FeePriority::Priority,
-            FeePriority::Custom(NonZeroU64::new(42).unwrap()),
+            FeePriority::High,
         ] {
             let fee = DaemonFeeEstimator
                 .estimate_fee(priority, &context)
@@ -353,7 +284,7 @@ mod tests {
 
     /// PHASE_2A_SEND_PATH.md §8.1 — priority tiers map to distinct daemon rates.
     #[tokio::test]
-    async fn daemon_fee_estimator_maps_test_daemon_priority_tiers() {
+    async fn daemon_fee_estimator_maps_test_daemon_tiers() {
         use crate::engine::fee_snapshot::{DaemonFeeSnapshotSource, FeeSnapshotSource};
         use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
 
@@ -361,7 +292,7 @@ mod tests {
         daemon.set_fee_estimates(FeeEstimates {
             economy: FeeRate::new(5).expect("economy rate"),
             standard: FeeRate::new(10).expect("standard rate"),
-            priority: FeeRate::new(40).expect("priority rate"),
+            high: FeeRate::new(40).expect("high rate"),
         });
 
         let snapshot = DaemonFeeSnapshotSource::from_arc(std::sync::Arc::clone(&daemon))
@@ -384,12 +315,12 @@ mod tests {
         let standard = DaemonFeeEstimator
             .estimate_fee(FeePriority::Standard, &base)
             .expect("standard fee");
-        let priority = DaemonFeeEstimator
-            .estimate_fee(FeePriority::Priority, &base)
+        let high = DaemonFeeEstimator
+            .estimate_fee(FeePriority::High, &base)
             .expect("priority fee");
 
         assert!(economy > AtomicUnits::ZERO);
         assert!(standard > economy);
-        assert!(priority > standard);
+        assert!(high > standard);
     }
 }

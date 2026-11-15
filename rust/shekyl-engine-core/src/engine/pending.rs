@@ -214,11 +214,8 @@ impl ReservationId {
 /// the same event already carries.
 pub use shekyl_types::TxHash;
 
-// `FeePriority` migrated to `engine::fee_estimator` per PR 5
-// C4γ (`STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X "trait-surface
-// is the canonical citation" pin). Re-exported here for
-// backward source-text compatibility within the crate; the
-// `engine::mod` re-export surface is unchanged.
+// The fee tier a request names: defined once in `shekyl-economics`
+// beside the ladder, re-exported through the estimator that resolves it.
 pub use super::fee_estimator::FeePriority;
 
 /// Success surface of [`Engine::submit_pending_tx`] — the daemon's
@@ -548,7 +545,7 @@ pub(crate) struct Reservation {
     /// `dead_code` allow: the field is consumed only by the
     /// `Debug` derive until C5β's handler-body rewrite reads it
     /// for the staleness check. Pattern matches the surrounding
-    /// `fee_atomic_units` / `recipients` / `priority` fields
+    /// `fee_atomic_units` / `recipients` fields
     /// whose production readers also land in later commits.
     #[allow(dead_code)]
     pub snapshot_id: SnapshotId,
@@ -580,10 +577,6 @@ pub(crate) struct Reservation {
     /// the caller-facing path.
     #[allow(dead_code)]
     pub recipients: Vec<TxRecipientSummary>,
-    /// Caller-supplied fee tier. Stored for diagnostics; the rate it
-    /// resolved to is already charged in [`Self::fee_atomic_units`].
-    /// Read only via `Debug` and tests.
-    pub priority: FeePriority,
 }
 
 /// In-flight transaction handle.
@@ -885,7 +878,6 @@ pub(crate) fn build_pending_tx_in_state(
         extensions: Vec::new(),
         fee_atomic_units: fee,
         recipients: summary.clone(),
-        priority: request.priority,
     };
 
     let pending = PendingTx {

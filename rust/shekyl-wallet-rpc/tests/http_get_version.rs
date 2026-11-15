@@ -615,7 +615,7 @@ async fn queries_balance_address_transfers_after_create() {
             "method": "build_pending_tx",
             "params": {
                 "recipients": [{ "address": "not-an-address", "amount": "1" }],
-                "priority": "STANDARD"
+                "priority": "standard"
             }
         }),
     )

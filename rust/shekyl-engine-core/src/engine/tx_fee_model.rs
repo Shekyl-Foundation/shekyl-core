@@ -19,9 +19,6 @@
 use shekyl_rpc_client::{tx_fee, FeeRate};
 use shekyl_units::AtomicUnits;
 
-use super::fee_policy::{
-    absolute_fee_rate_cap, CustomFeeBand, FeeEstimatorError, ValidatedFeeEstimates,
-};
 use super::traits::key::FeeDirective;
 
 // Re-export the hoisted weight surface so `super::tx_fee_model::{predict_weight,
@@ -42,58 +39,6 @@ pub(crate) use shekyl_tx_weight::{
 #[must_use]
 pub(crate) fn dust_threshold_for_rate(rate: &FeeRate) -> u64 {
     tx_fee::dust_threshold(rate, shekyl_tx_weight::marginal_input_weight_at_d_ref())
-}
-
-/// Map [`super::fee_estimator::FeePriority`] to a [`FeeRate`] from an
-/// already-validated snapshot. Named tiers are a lookup; `Custom` is
-/// the caller's band — the snapshot's economy floor below, and above
-/// it exactly the [`absolute_fee_rate_cap()`] every named tier obeys.
-///
-/// There is deliberately no `Custom`-only relative ceiling. Economy is
-/// the market *floor*, and the honest priority / economy ratio is
-/// `2M/w_ref` — 200× at the zone (the pinned KAT row
-/// `(333, 1332, 66_666)`), growing with the median — so no economy
-/// multiple can separate "user typo" from "honest top tier": one would
-/// refuse `Custom(66_666)` as the caller's error while
-/// `FeePriority::Priority` succeeds at that identical rate.
-///
-/// Snapshot well-formedness lives in
-/// [`ValidatedFeeEstimates::try_new`] — this function must not
-/// re-litigate it, or Custom dies when the honest ratio is large.
-pub(crate) fn fee_rate_for_priority(
-    priority: super::fee_estimator::FeePriority,
-    snapshot: &ValidatedFeeEstimates,
-) -> Result<FeeRate, FeeEstimatorError> {
-    use super::fee_estimator::FeePriority;
-
-    match priority {
-        FeePriority::Economy => Ok(snapshot.economy()),
-        FeePriority::Standard => Ok(snapshot.standard()),
-        FeePriority::Priority => Ok(snapshot.priority()),
-        FeePriority::Custom(rate) => {
-            // Total: the caller's rate arrived as `NonZeroU64`.
-            let custom = FeeRate::from_nonzero(rate);
-
-            // Both bounds read the per-weight rate. Floor: "does this
-            // undercut the daemon's cheapest tier?" Ceiling: "is this
-            // above anything an honest daemon could quote?" — the same
-            // comparison `ValidatedFeeEstimates::try_new` makes on every
-            // named tier. The lattice a fee is rounded up to is a shared
-            // constant, not a daemon input, so there is no second
-            // quantity to read.
-            if custom.per_weight() < snapshot.economy().per_weight() {
-                return Err(FeeEstimatorError::CustomFeeOutOfRange(
-                    CustomFeeBand::BelowEconomyFloor,
-                ));
-            }
-            if custom.per_weight() > absolute_fee_rate_cap() {
-                return Err(FeeEstimatorError::CustomFeeOutOfRange(
-                    CustomFeeBand::AboveAbsoluteCap,
-                ));
-            }
-            Ok(custom)
-        }
-    }
 }
 
 /// Fee from structural weight on the lattice (non-panicking on daemon-derived rates).
@@ -393,104 +338,5 @@ mod tests {
         let least = converge_fee(&rate, n_in, n_out, 1, 0).unwrap();
         let refused = converge_fee(&rate, n_in, n_out, 1, least.saturating_mul(2));
         panic!("seed above {least} was accepted as {refused:?}");
-    }
-
-    /// Custom-rate refusals are the CALLER's error class
-    /// (`CustomFeeOutOfRange`), never blamed on the daemon — the
-    /// pre-2026-08-16 code misfiled them as `DaemonResponseInvalid`.
-    /// This bites against a Custom rate being blamed on the daemon; it
-    /// does NOT cover snapshot well-formedness (that is
-    /// `fee_policy::tests`).
-    #[test]
-    fn custom_fee_out_of_band_is_the_callers_error() {
-        use super::fee_rate_for_priority;
-        use crate::engine::error::FeeEstimatorError;
-        use crate::engine::fee_estimator::FeePriority;
-        use crate::engine::fee_policy::{CustomFeeBand, ValidatedFeeEstimates};
-        use crate::engine::traits::FeeEstimates;
-        use std::num::NonZeroU64;
-
-        let validated = |e: u64, s: u64, p: u64| {
-            ValidatedFeeEstimates::try_new(FeeEstimates {
-                economy: FeeRate::new(e).expect("economy"),
-                standard: FeeRate::new(s).expect("standard"),
-                priority: FeeRate::new(p).expect("priority"),
-            })
-            .expect("named tiers inside the snapshot ceiling")
-        };
-
-        let snapshot = validated(10, 20, 50);
-
-        let low = NonZeroU64::new(9).expect("nonzero");
-        match fee_rate_for_priority(FeePriority::Custom(low), &snapshot) {
-            Err(FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::BelowEconomyFloor)) => {}
-            other => panic!("unexpected: {other:?}"),
-        }
-
-        // Exactly the floor is IN band — the negative control that
-        // stops the comparison drifting to `<=`.
-        let at_floor = NonZeroU64::new(10).expect("nonzero");
-        fee_rate_for_priority(FeePriority::Custom(at_floor), &snapshot)
-            .expect("the economy floor itself is payable");
-
-        let wide = validated(2_000, 2_000, 2_000);
-        let cap = absolute_fee_rate_cap();
-        let over_abs = NonZeroU64::new(cap + 1).expect("nonzero");
-        match fee_rate_for_priority(FeePriority::Custom(over_abs), &wide) {
-            Err(FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::AboveAbsoluteCap)) => {}
-            other => panic!("unexpected: {other:?}"),
-        }
-        let at_abs = NonZeroU64::new(cap).expect("nonzero");
-        fee_rate_for_priority(FeePriority::Custom(at_abs), &wide)
-            .expect("exactly the absolute cap is payable");
-    }
-
-    /// A `Custom` rate that the snapshot's OWN `Priority` tier already
-    /// charges must resolve. An economy-anchored band would refuse it as
-    /// the *caller's* error (`-32602`) while `FeePriority::Priority`
-    /// returns the same rate — telling the user their parameter is
-    /// invalid for asking to pay what the daemon is quoting.
-    ///
-    /// This bites against an economy-anchored ceiling returning; it
-    /// does NOT cover the absolute cap (that is the test above).
-    #[test]
-    fn custom_can_reach_the_snapshots_own_priority_tier() {
-        use super::fee_rate_for_priority;
-        use crate::engine::fee_estimator::FeePriority;
-        use crate::engine::fee_policy::ValidatedFeeEstimates;
-        use crate::engine::traits::FeeEstimates;
-        use std::num::NonZeroU64;
-
-        let validated = |e: u64, s: u64, p: u64| {
-            ValidatedFeeEstimates::try_new(FeeEstimates {
-                economy: FeeRate::new(e).expect("economy"),
-                standard: FeeRate::new(s).expect("standard"),
-                priority: FeeRate::new(p).expect("priority"),
-            })
-            .expect("named tiers inside the snapshot ceiling")
-        };
-
-        // Served-ladder KAT rows, at their own Priority rate and just above
-        // it ("priority, plus a little" — the ask an economy-anchored band
-        // would make inexpressible).
-        for (e, s, p) in [(333, 1332, 66_666), (13, 52, 13_333)] {
-            let snapshot = validated(e, s, p);
-            let named = fee_rate_for_priority(FeePriority::Priority, &snapshot)
-                .expect("the named tier resolves");
-            assert_eq!(named.per_weight(), p, "the named tier IS this rate");
-
-            let same = NonZeroU64::new(p).expect("nonzero");
-            let custom = fee_rate_for_priority(FeePriority::Custom(same), &snapshot)
-                .unwrap_or_else(|err| panic!("Custom at the Priority rate {p} refused: {err:?}"));
-            assert_eq!(
-                custom.per_weight(),
-                named.per_weight(),
-                "Custom and Priority must agree at the same rate"
-            );
-
-            let bump = NonZeroU64::new(p + 1).expect("nonzero");
-            fee_rate_for_priority(FeePriority::Custom(bump), &snapshot)
-                .unwrap_or_else(|err| panic!("Custom just above Priority refused: {err:?}"));
-        }
     }
 }

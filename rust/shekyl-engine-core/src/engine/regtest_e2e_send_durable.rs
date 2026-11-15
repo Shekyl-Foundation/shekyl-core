@@ -281,7 +281,7 @@ async fn build(
             "build_pending_tx",
             json!({
                 "recipients": [{"address": address, "amount": amount.to_string()}],
-                "priority": "STANDARD",
+                "priority": "standard",
             }),
         ) {
             Ok(built) => {

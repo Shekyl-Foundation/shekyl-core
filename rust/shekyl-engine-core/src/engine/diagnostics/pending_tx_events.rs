@@ -52,7 +52,7 @@ pub enum BuildErrorKind {
     /// Recipient failed validation (zero amount, malformed address).
     InvalidRecipient,
 
-    /// Snapshot failed well-formedness, or Custom is out of band.
+    /// The daemon's fee snapshot failed well-formedness.
     FeeRefused,
 
     /// Output coverage cannot meet amount + fee.

@@ -1637,11 +1637,6 @@ impl From<FeeEstimatorError> for WalletRpcError {
                 rate: v.rate(),
                 bound: v.bound(),
             },
-            // The caller's Custom rate is out of band: a request error,
-            // -32602 — never blamed on the daemon (rule 82).
-            FeeEstimatorError::CustomFeeOutOfRange(band) => {
-                Self::InvalidParams(format!("custom fee rate out of range: {band}"))
-            }
             // `FeeEstimatorError` is `#[non_exhaustive]` (Phase 0a, semver for
             // consumers outside the workspace), so this arm is forced. Inside
             // one workspace build it is unreachable: every variant is named
