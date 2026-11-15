@@ -313,9 +313,9 @@ pub struct SendRecord {
     pub recipients: Vec<SendRecipient>,
     /// Change returned to this wallet, in atomic units
     /// (`Σ inputs − Σ recipients − fee`, computed at dispatch). Part of the
-    /// SJ-DQ-1 full row: replay cannot recover the split, so it is stored —
-    /// no live reader consumes it yet, awaiting the OUTGOING detail
-    /// projection (SA-4 keeps it for that reason, not a dead-field delete).
+    /// SJ-DQ-1 full row: replay cannot recover the split, so it is stored.
+    /// The balance reads it: an in-flight send's change is incoming until
+    /// the scan that spends the send's input receives it (A17).
     pub change_amount: u64,
     /// The dispatched input set — carried across a rescan wipe so the
     /// F14 locks re-derive (SJ-DQ-4 inversion).

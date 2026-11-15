@@ -762,6 +762,26 @@ The wallet RPC (`docs/api/wallet_rpc.yaml`) predates Part C's rename and keeps i
 
 `submit_pending_tx`'s reply, and so `tx_resend`'s, gains `verdict_saved` (switch): `false` when the send went out and stands but saving its verdict failed. `submit_pending_tx` gains the refusal `-29120 SEND_NOT_SAVED`: the send's record could not be saved, so nothing was sent.
 
+### 16.2 The wallet RPC's names changed for A16–A18
+
+The wallet lane's PR 2 (Rick, 2026-11-12; the balance legs and the fee tiers, 2026-11-15) changes these names on the wallet RPC, under the same rules as §16.1:
+
+| Method | Field or parameter | Change | Notes |
+|---|---|---|---|
+| `get_balance` | `balance` | new | an amount: `spendable + incoming + parked`; the reply's only sum |
+| `get_balance` | `spendable` | new; replaces `liquid` and `unlocked` (both deleted) | an amount: what a send could use at the synced tip |
+| `get_balance` | `incoming` | new | an amount: received, not yet spendable, plus in-flight sends' change |
+| `get_balance` | `incoming_wait` | new | a count of blocks until the soonest on-chain incoming output is spendable; absent, not 0, when none is on chain |
+| `get_balance` | `parked` | new | an amount: the user's parked outputs, in the balance and out of coin selection |
+| `get_balance` | `outgoing` | new; replaces `pending` (deleted) | an amount beside the balance: recipients plus fee of the in-flight sends |
+| `build_pending_tx` | `priority` | values renamed | one-of `economy`, `standard`, `high` (§11), lowercase; `ECONOMY`, `STANDARD`, `PRIORITY` and the `{custom}` form are deleted |
+| `get_default_fee_priority` | `default_priority` | value renamed | one-of, as `priority`: the tier a send uses when it names none, `standard` |
+| `get_default_fee_priority` | `economy`, `standard`, `high` | renamed from `economy_fee`, `standard_fee`, `priority_fee` | amounts: the converged fee at each rung, the names of the daemon's `fee` reply (§18) |
+
+The refusals added are `-29123 TOO_MANY_INPUTS` and `-29124 TOO_MANY_OUTPUTS` (`data`: `count`, `limit`), `-29125 INPUT_NOT_IN_TREE` and `-29126 INPUT_UNSPENDABLE` (`data`: `input`, a position), and `-29127 OUTPUTS_PARKED` (`data`: `needed`, `parked`, amounts). `-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set: `no-inputs`, `no-outputs`, `zero-input-amount`, `zero-output-amount`, `input-amount-overflow`, `output-amount-overflow`, `insufficient-funds`, `empty-leaf-chunk`, `pqc-leaf-derivation`, `leaf-chunk-too-large`, `zero-tree-depth`, `tree-too-shallow`, `tree-depth-too-large`, `branch-layer-mismatch`, `invalid-combined-ss-length`, `bulletproof`, `fcmp-prove`, `pqc-sign`, `wire`, `balance-self-check` (the builder's invariants), and `primitive`, `fee-variant-shortfall`, `handle-mismatch`, `missing-key-image`, `source-decapsulation`, `rid-not-encodable`, `proof`, `bulletproof-parse`, `wire-encode` (the wallet state signing reads).
+
+The balance's terms (§19 rows): `spendable`, `incoming`, `outgoing`, `parked` are new. `held` gains the parent `balance`, where it names `incoming + parked`; it is not on the wire (the reply carries no sum but `balance`). `parked` is the user-freeze leg's own word, because `frozen` already means frozen shards (`coverage`); the engine's `freeze` and `thaw` keep their names inside the wallet until a method of this contract reaches them.
+
 ## 17. The method census
 
 Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 REST paths, aliases counted) over 54 methods, which become 42. The grant is `RPC_CHANNEL.md` §6.1's. A parameter's kind is IG-6's or RW-Q4's.
@@ -943,6 +963,10 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | generate | block | *verb* — mine blocks; only under `dev` | block:verb |
 | pop | chain | *verb* — remove blocks from the tip; only under `dev` | chain:verb |
 | id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's | |
+| spendable | balance | what a send could use at the wallet's synced tip, an amount | |
+| incoming | balance | money received and not yet spendable, plus in-flight sends' change, an amount; with `wait`, the blocks until the soonest on-chain part is spendable | |
+| parked | balance | outputs the user took out of coin selection: in the balance, not spendable, an amount | |
+| outgoing | balance | the recipients and fee of this wallet's in-flight sends, beside the balance, an amount | |
 | key | spent, console | a key: under `spent`, only in `key image`; under `console`, the console key (IG-Q88) | |
 | image | key | a key image (a hash) | |
 | tip | block, curve | the chain's last block, as a selector; its value is `null` (IG-Q94) | |
@@ -1086,6 +1110,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 
 | Term | Gains parents | Meaning there | Kind |
 |---|---|---|---|
+| held | balance | `incoming` plus `parked`: the balance a send cannot use now; not on the wire (the reply carries no sum but `balance`) | |
 | pow | —, dev | proof of work (RandomX): bare, *view* — compute a block's proof-of-work hash; under `dev`, its seed schedule (IG-Q48). A header's `pow` field and the header reads' `pow` switch name it by reference (IG-Q42) | —:view |
 | coinbase | header, shard | the coinbase transaction: under `chain`, its outputs (§11); under `header`, its id | |
 | output | block, coinbase, shard, tx | the block's first output; `output index`, its global index | |

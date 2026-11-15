@@ -241,6 +241,14 @@ ARMED=(
   # hand-off when the dispatch save failed: the submit answered ACCEPTED
   # (verdict_saved false) where it must refuse -29120.
   engine::regtest_e2e::send_durable::a_send_that_cannot_be_saved_is_not_sent
+  # The wallet lane's PR 2 (A17, A16): the balance's legs and the signer's
+  # change through real shekyl-wallet-rpc processes, and parked money at
+  # engine level.
+  engine::regtest_e2e::balance::the_balance_says_spendable_exactly_when_a_build_can_spend
+  engine::regtest_e2e::balance::a_send_moves_its_input_to_outgoing_and_its_change_to_incoming
+  engine::regtest_e2e::balance::a_refused_send_returns_its_input_to_spendable
+  engine::regtest_e2e::balance::a_change_below_dust_balances
+  engine::regtest_e2e::balance::parked_money_stays_in_the_balance_and_out_of_a_send
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min

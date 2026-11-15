@@ -7189,6 +7189,12 @@ mod rt_p5;
 #[path = "regtest_e2e_send_durable.rs"]
 mod send_durable;
 
+#[path = "regtest_e2e_wallet_server.rs"]
+mod wallet_server;
+
+#[path = "regtest_e2e_balance.rs"]
+mod balance;
+
 #[path = "regtest_e2e_shard.rs"]
 mod shard;
 

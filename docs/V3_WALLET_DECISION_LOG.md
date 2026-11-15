@@ -7230,3 +7230,56 @@ back; a dated deletion with a gate behind it does not. A public seed is
 safe only while what it can spend is worthless, which regtest's prefixes
 make true and a test keeps true.
 
+
+## 2026-11-15 — The balance is spendable plus held; spendable has one definition
+
+**Decision** (Rick, the wallet lane's PR 2 brief; A17 of the alpha.11 bug
+hunt).
+
+- **balance = spendable + held**, and **held = incoming + parked**.
+- **Spendable** is what a send could use at the wallet's synced tip: not
+  spent, not parked by the user, not unspendable, not under an in-flight
+  send's lock, and in the tree of the reference block the wallet anchors to
+  (`in_tree_at_reference` on `select_reference_height(synced)`). One
+  classifier decides it, and the balance, the spendable views and the send
+  path all call it.
+- **Incoming** is the wallet's received outputs not yet spendable by that
+  rule, plus each in-flight send's change from dispatch until the change
+  output is scanned. It carries the wait, in blocks, until the soonest
+  on-chain incoming output is spendable; the wait is absent, not 0, when
+  no incoming output is on chain.
+- **Parked** is the outputs the user took out of coin selection; the word
+  is its own because the glossary's `frozen` means frozen shards.
+- Beside the balance, never in it: **outgoing** (recipients plus fee of
+  the in-flight sends), **unspendable**, and the staking legs.
+- The tree rebuild is the wallet's state, not the money's: an output
+  spendable by the rule stays spendable while the wallet's tree catches
+  up, and a send in that window keeps its own refusal.
+- The contract carries the balance and each leg once; no field but
+  `balance` holds a sum. `liquid`, `unlocked` and `pending` are deleted.
+- A send the parked money alone would cover is refused with its own
+  error, naming the parked amount and the remedy.
+
+**Why.** The balance said "unlocked" seven blocks before a build could
+spend the money, and two fields held the same number. A wallet that says
+spendable must mean what a send can use; one predicate at one tip makes
+the balance and the build agree by construction.
+
+## 2026-11-15 — The fee tier is economy, standard or high; there is no custom rate
+
+**Decision** (Rick, the wallet lane's PR 2 brief; A18; IG-Q52 for the
+names).
+
+- One fee tier set, `economy`, `standard`, `high`, lowercase on every
+  surface; one type (`shekyl_economics::FeePriority`) beside the ladder
+  whose rungs it names. The ladder's top rung is `high`.
+- **The custom rate is deleted.** The fee is in cleartext on chain.
+  Conforming wallets pay one of three values derived from chain state, so
+  a tier hides in its cohort, and a custom rate marks its wallet
+  (`FEE_LADDER_DERIVATION.md` W3, which had left it "out of scope").
+- **Reopens only** on a measured case where `high` misses its confirmation
+  target under congestion. The fix then goes in the derivation of the
+  ladder's top rung, so every wallet still pays the same top rate. It never
+  comes back as a per-wallet rate.
+
+**Why.** A per-wallet rate is a fingerprint the wallet pays for.

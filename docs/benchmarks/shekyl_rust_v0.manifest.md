@@ -183,14 +183,15 @@ source-of-truth for the synthetic transfer shape.
 **Operation list — every step exercised in the hot loop.**
 
 - Iterate `&[TransferDetails]`.
-- For each transfer, classify into exactly one of:
-  `unlocked` | `locked_by_timelock` | `spent` | `frozen` |
-  `staked_total` | `staked_matured` | `staked_locked`.
-- Predicate evaluation per transfer:
-  - `td.spent` short-circuit.
-  - `td.frozen` short-circuit.
-  - `td.eligible_height <= current_height` (timelock).
-  - `td.staked` branch + `td.stake_lock_until` comparison.
+- For each transfer, classify into exactly one state with the one
+  classifier (`TransferDetails::state`, A17): `spent` | `unspendable` |
+  `in flight` | `parked` | `incoming` | `spendable`.
+- Predicate evaluation per transfer, in that precedence:
+  - `td.spent`, `td.unspendable`, the in-flight lock lookup and
+    `td.frozen` short-circuit.
+  - the reference rule: `in_tree_at_reference(td.eligible_height,
+    reference)` at the horizon's one reference block, with the wait
+    computed for an incoming output.
 - Accumulate per-class running totals into `BalanceSummary` fields.
 - Return the summary.
 
@@ -225,7 +226,7 @@ iai-callgrind six-metric block.
 over the same logical transfer shape. **Documented asymmetries:**
 
 - The Rust path evaluates a richer classification (six-way;
-  `unlocked`/`locked`/`spent`/`frozen`/`staked_*`). The C++ path
+  `spendable`/`incoming`/`parked`/`in flight`/`unspendable`/`spent`). The C++ path
   evaluates a narrower spent/frozen/unlocked split. The Rust
   per-transfer cost is therefore expected to be modestly higher at
   equal `N`.

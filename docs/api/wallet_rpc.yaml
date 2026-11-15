@@ -497,7 +497,20 @@ info:
   # the user's decision; tx_resend resends one's saved bytes (-29121
   # TX_NOT_HELD, -29122 TX_BYTES_MISSING; refusals as submit's).
   # api_version stays 1.
-  version: 0.18.0
+  # 0.19.0: the wallet lane's PR 2 (Rick, 2026-11-12 and 2026-11-15). This
+  # tranche REMOVES fields, so a client of 0.18.0 must move with it; the
+  # wire-compat integer stays 1 pre-genesis (rule 16). get_balance carries
+  # balance = spendable + incoming + parked and each leg once
+  # (incoming_wait absent when no incoming output is on chain), with
+  # outgoing and unspendable beside it; liquid, unlocked and pending are
+  # deleted (A17). build_pending_tx gains -29127 OUTPUTS_PARKED. The fee
+  # tier is economy / standard / high, lowercase; the {custom} form and the
+  # Feerate schema are deleted, and get_default_fee_priority's fields are
+  # economy, standard, high (A18). The signer's faults keep their
+  # identity: -29123 TOO_MANY_INPUTS, -29124 TOO_MANY_OUTPUTS (refused at
+  # the request), -29125 INPUT_NOT_IN_TREE, -29126 INPUT_UNSPENDABLE, and
+  # -29119 SIGNER_FAILED names its fault in data.fault (A16).
+  version: 0.19.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
