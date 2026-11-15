@@ -1,0 +1,140 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Compile every fuzz harness (the CI lane's fuzz brief, Part A, ruled
+# 2026-11-12, amended 2026-11-15).
+#
+# Each `rust/<crate>/fuzz/` is its own workspace, outside the main one, so
+# `cargo clippy --all-targets` never sees it: an API change in the fuzzed
+# crate breaks the harness silently. This workflow type-checks each fuzz
+# crate on the pinned stable toolchain against its committed lockfile
+# (`--locked`), one job per crate, in parallel. Running the harnesses
+# needs nightly and is the nightly tier's (Part B).
+#
+# The matrix is not written here. `scripts/ci/check_fuzz_inventory.py
+# --matrix` derives it from the tree and the change: every fuzz crate the
+# change reaches, through the crates it depends on by path (the scope
+# classifier's reverse closure, `change_scope.py`'s `rust_tests`), or by
+# its own files; every fuzz crate when the change touches what all of them
+# build against (the workspace lockfile, the toolchain pin, the inventory
+# script, this workflow). A fuzz crate added to the tree is in the matrix
+# without an edit here, and the inventory check refuses this workflow if
+# it stops reading the script.
+#
+# `fuzz-harness-pass` is the workflow's one verdict: a job skipped by scope
+# is a pass, anything else must be green.
+
+name: ci/fuzz-harness
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  scope:
+    name: "Fuzz harnesses: scope and inventory"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # the classifier and the inventory read the tree; no build
+    outputs:
+      crates: ${{ steps.matrix.outputs.crates }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: the inventory, derived from the tree
+        run: |
+          python3 scripts/ci/check_fuzz_inventory.py --selftest
+          python3 scripts/ci/check_fuzz_inventory.py
+      - id: matrix
+        name: the fuzz crates this change reaches
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A push to dev and a manual dispatch compile every harness. A
+          # pull request compiles the ones its change reaches; a classifier
+          # that cannot answer fails closed to every one.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.sha }}"
+            out=$(mktemp)
+            if GITHUB_OUTPUT="$out" python3 scripts/ci/change_scope.py --base "$base" --head "$head"; then
+              rust_tests=$(sed -n 's/^rust_tests=//p' "$out")
+              changed=$(git diff --name-only "$base" "$head")
+            else
+              rust_tests=all
+              changed=
+            fi
+          else
+            rust_tests=all
+            changed=
+          fi
+          crates=$(RUST_TESTS="$rust_tests" CHANGED="$changed" python3 scripts/ci/check_fuzz_inventory.py --matrix)
+          echo "rust_tests=$rust_tests"
+          echo "crates=$crates"
+          echo "crates=$crates" >> "$GITHUB_OUTPUT"
+
+  compile:
+    name: "Fuzz harness: ${{ matrix.crate }}"
+    needs: scope
+    if: needs.scope.outputs.crates != '[]'
+    runs-on: ubuntu-latest
+    # The largest crate (shekyl-crypto-pq's eleven harnesses, its whole
+    # dependency tree from cold) type-checks in a few minutes on a
+    # workstation; a cold runner with no cache is several times that.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: ${{ fromJSON(needs.scope.outputs.crates) }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: install Rust toolchain
+        # The pinned stable toolchain (rust/rust-toolchain.toml):
+        # libfuzzer-sys 0.4 type-checks on stable.
+        uses: ./.github/actions/install-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Each fuzz crate is its own workspace with its own target/, so
+          # each caches its own. Saved by pushes to dev only.
+          workspaces: rust/${{ matrix.crate }}/fuzz -> target
+          key: fuzz-${{ matrix.crate }}
+          save-if: ${{ github.event_name == 'push' }}
+      - name: cargo check --locked
+        run: cargo check --locked --manifest-path rust/${{ matrix.crate }}/fuzz/Cargo.toml
+
+  fuzz-harness-pass:
+    name: "Fuzz harnesses: pass"
+    needs: [scope, compile]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # reads two job results
+    steps:
+      - name: every harness the change reaches compiled
+        shell: bash
+        run: |
+          scope="${{ needs.scope.result }}"
+          compile="${{ needs.compile.result }}"
+          echo "scope=$scope compile=$compile"
+          if [ "$scope" != "success" ]; then
+            echo "::error::the scope job did not succeed ($scope)"
+            exit 1
+          fi
+          case "$compile" in
+            success|skipped) ;;
+            *) echo "::error::a fuzz harness did not compile ($compile)"; exit 1 ;;
+          esac
