@@ -114,14 +114,24 @@ pub fn encode_blob(hrp: &str, data: &[u8]) -> Result<String, EncodingError> {
 ///
 /// # Errors
 ///
-/// [`EncodingError::NotLowercase`] for any uppercase letter,
-/// [`EncodingError::Decode`] if the string is not Bech32m, and
+/// [`EncodingError::Decode`] if the string is not Bech32m in any case,
 /// [`EncodingError::NotCanonical`] if it decodes to bytes that encode to
-/// a different string.
+/// a different string, and [`EncodingError::NotLowercase`] if it is the
+/// canonical string but for an uppercase letter.
 pub fn decode_blob(encoded: &str) -> Result<(String, Vec<u8>), EncodingError> {
-    if encoded.bytes().any(|b| b.is_ascii_uppercase()) {
+    // Read the lowercase spelling first, so a string that is no Bech32m in
+    // any case is named for that, and only a valid string written in
+    // another case is named for its case.
+    let lowercase = encoded.to_ascii_lowercase();
+    let decoded = decode_lowercase(&lowercase)?;
+    if lowercase != encoded {
         return Err(EncodingError::NotLowercase);
     }
+    Ok(decoded)
+}
+
+/// [`decode_blob`] on a string with no uppercase letter.
+fn decode_lowercase(encoded: &str) -> Result<(String, Vec<u8>), EncodingError> {
     let checked = CheckedHrpstring::new::<Bech32m>(encoded)?;
     let hrp = checked.hrp();
     let data: Vec<u8> = checked.byte_iter().collect();
@@ -204,6 +214,22 @@ mod tests {
         assert!(decode_blob("").is_err());
     }
 
+    /// A string that is no Bech32m in any case is named for that, not
+    /// for its capitals.
+    #[test]
+    fn garbage_with_capitals_is_not_a_case_refusal() {
+        for garbage in [
+            "NotAnAddress",
+            "Ci1QQQQQ",
+            "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+        ] {
+            assert!(
+                matches!(decode_blob(garbage), Err(EncodingError::Decode(_))),
+                "{garbage}"
+            );
+        }
+    }
+
     /// The blob the refusal tests below spell non-canonically. Three
     /// bytes are 24 bits in five 5-bit characters, so the last character
     /// carries one padding bit.
@@ -239,6 +265,28 @@ mod tests {
         assert!(matches!(
             decode_blob(&as_bech32),
             Err(EncodingError::Decode(CheckedHrpstringError::Checksum(_)))
+        ));
+    }
+
+    /// One more zero character after [`CASE_DATA`]'s last makes six
+    /// padding bits, still under a byte: the library reads back the same
+    /// bytes from a longer string.
+    #[test]
+    fn an_extra_padding_character_is_refused() {
+        let hrp = Hrp::parse(CASE_HRP).unwrap();
+        let longer: String = CASE_DATA
+            .iter()
+            .copied()
+            .bytes_to_fes()
+            .chain(std::iter::once(bech32::Fe32::Q))
+            .with_checksum::<Bech32m>(&hrp)
+            .chars()
+            .collect();
+        let checked = CheckedHrpstring::new::<Bech32m>(&longer).unwrap();
+        assert_eq!(checked.byte_iter().collect::<Vec<u8>>(), CASE_DATA);
+        assert!(matches!(
+            decode_blob(&longer),
+            Err(EncodingError::NotCanonical)
         ));
     }
 

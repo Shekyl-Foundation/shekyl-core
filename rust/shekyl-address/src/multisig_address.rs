@@ -1233,7 +1233,11 @@ mod tests {
         // refusal that names it.
         let canonical = make_test_payload(2, 2).fingerprint_bech32m().unwrap();
         for spelling in crate::respell::Spelling::ALL {
-            match MultisigAddressPayload::parse_fingerprint_bech32m(&spelling.of(&canonical)) {
+            // 32 bytes leave four padding bits: no room for an extra character.
+            let Some(respelled) = spelling.of(&canonical) else {
+                continue;
+            };
+            match MultisigAddressPayload::parse_fingerprint_bech32m(&respelled) {
                 Err(MultisigAddressError::Bech32m(e)) => {
                     assert!(spelling.refused_by(&e), "{spelling:?}: refused as {e:?}");
                 }

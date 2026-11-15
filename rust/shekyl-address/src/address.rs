@@ -716,14 +716,15 @@ mod tests {
         }
     }
 
-    /// `encoded` with its segment `at` spelled `spelling`.
-    fn respell_segment(encoded: &str, at: usize, spelling: Spelling) -> String {
+    /// `encoded` with its segment `at` spelled `spelling`, where that
+    /// segment's length admits the spelling.
+    fn respell_segment(encoded: &str, at: usize, spelling: Spelling) -> Option<String> {
         let mut segments: Vec<String> = encoded
             .split(SEGMENT_SEPARATOR)
             .map(str::to_owned)
             .collect();
-        segments[at] = spelling.of(&segments[at]);
-        segments.join(&SEGMENT_SEPARATOR.to_string())
+        segments[at] = spelling.of(&segments[at])?;
+        Some(segments.join(&SEGMENT_SEPARATOR.to_string()))
     }
 
     fn assert_refused(encoded: &str, spelling: Spelling, what: &str) {
@@ -740,28 +741,41 @@ mod tests {
 
     /// An address has one string. Each other spelling the `bech32` crate
     /// reads as the same address, on any one of the three segments, is
-    /// refused by the refusal that names it.
+    /// refused by the refusal that names it. No full-address segment
+    /// admits an extra character (their padding is three and four bits),
+    /// and that is pinned too, so a layout change brings it back here.
     #[test]
     fn a_full_address_has_one_string() {
         for net in Network::ALL {
             let full = make_test_address(net).encode().unwrap();
             for at in 0..3 {
                 for spelling in Spelling::ALL {
-                    let respelled = respell_segment(&full, at, spelling);
-                    assert_ne!(respelled, full);
-                    assert_refused(&respelled, spelling, &format!("{net} segment {at}"));
+                    match respell_segment(&full, at, spelling) {
+                        Some(respelled) => {
+                            assert_refused(&respelled, spelling, &format!("{net} segment {at}"));
+                        }
+                        None => assert!(
+                            matches!(spelling, Spelling::ExtraCharacter),
+                            "{net} segment {at} admits {spelling:?}"
+                        ),
+                    }
                 }
             }
         }
     }
 
-    /// The display form has one string too.
+    /// The display form has one string too. Its 113 bytes leave one
+    /// padding bit, so every spelling applies, the extra character
+    /// included.
     #[test]
     fn a_classical_only_address_has_one_string() {
         for net in Network::ALL {
             let display = make_test_address(net).encode_classical_display().unwrap();
             for spelling in Spelling::ALL {
-                assert_refused(&spelling.of(&display), spelling, &format!("{net} display"));
+                let respelled = spelling
+                    .of(&display)
+                    .unwrap_or_else(|| panic!("the display form admits {spelling:?}"));
+                assert_refused(&respelled, spelling, &format!("{net} display"));
             }
         }
     }
