@@ -9,8 +9,9 @@
 //! and holds its life by the connection.
 //!
 //! Each test re-executes this binary in a role: the daemon (which runs
-//! `shekyl_daemon::run::main` with a private `--rpc-socket-dir`, as every
-//! harness does), a parent that launches the daemon and is then killed, or
+//! `shekyl_daemon::run::main` with a private `--rpc-socket-dir` on Unix, as
+//! every harness does; Windows refuses one, and its rendezvous is under the
+//! account root the daemon is given), a parent that launches the daemon and is then killed, or
 //! a sleeper the parent leaves behind. The daemon is launched through the
 //! shared launcher (`shekyl_spawn::pair::EndPair::spawn`), the one a GUI
 //! uses.
@@ -71,7 +72,7 @@ fn daemon(dir: &Path) -> i32 {
     let data = std::env::var(DATA).expect("the data directory's name");
     let data_dir = dir.join(&data);
     let log_file = data_dir.join("shekyld.log");
-    let socket_dir = dir.join("s");
+    let socket_dir = rendezvous_dir(dir);
     let mut args: Vec<String> = [
         "shekyld",
         "--network",
@@ -80,8 +81,6 @@ fn daemon(dir: &Path) -> i32 {
         "off",
         "--rpc-admin-listen",
         "none",
-        "--rpc-socket-dir",
-        socket_dir.to_str().expect("a UTF-8 path"),
         "--data-dir",
         data_dir.to_str().expect("a UTF-8 path"),
         "--log-file",
@@ -90,6 +89,12 @@ fn daemon(dir: &Path) -> i32 {
     .iter()
     .map(|s| (*s).to_owned())
     .collect();
+    if cfg!(unix) {
+        args.extend([
+            "--rpc-socket-dir".to_owned(),
+            socket_dir.to_str().expect("a UTF-8 path").to_owned(),
+        ]);
+    }
     // A regular file's descriptor, held open for the daemon's life.
     let mut _file = None;
     match std::env::var(END).ok().as_deref() {
@@ -187,8 +192,20 @@ fn workdir() -> tempfile::TempDir {
     // mode 0700, local). On Windows the daemon creates the rendezvous
     // directory itself, with its owner, protections and label (IG-Q104).
     #[cfg(unix)]
-    private_dir(&dir.path().join("s"));
+    private_dir(&rendezvous_dir(dir.path()));
     dir
+}
+
+/// Where the daemon's rendezvous goes: on Unix the private socket directory
+/// the harness names, on Windows the account's rendezvous directory under
+/// the root the daemon is given, the test's directory (`RPC_CHANNEL.md`
+/// §7.1; Windows refuses a socket directory).
+fn rendezvous_dir(dir: &Path) -> PathBuf {
+    if cfg!(unix) {
+        dir.join("s")
+    } else {
+        shekyl_rpc_rendezvous::account_dir(dir)
+    }
 }
 
 /// Set `dir`'s mode to 0700 (Unix): every directory this test creates is
@@ -278,10 +295,14 @@ fn bound(end: &End) {
     }
 }
 
-/// "This computer"'s client, told the harness's directory.
+/// "This computer"'s client, told the daemon's rendezvous directory.
 fn target(dir: &Path) -> LocalTarget {
-    LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(&dir.join("s")))
-        .expect("a named directory")
+    LocalTarget::resolve(
+        Network::Regtest,
+        &Instance::Default,
+        Some(&rendezvous_dir(dir)),
+    )
+    .expect("a named directory")
 }
 
 fn log(dir: &Path, data: &str) -> String {

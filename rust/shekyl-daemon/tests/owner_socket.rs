@@ -98,7 +98,7 @@ fn rendezvous_dir(dir: &Path) -> PathBuf {
     if cfg!(unix) {
         dir.join("s")
     } else {
-        dir.join("Shekyl").join("rendezvous")
+        shekyl_rpc_rendezvous::account_dir(dir)
     }
 }
 
