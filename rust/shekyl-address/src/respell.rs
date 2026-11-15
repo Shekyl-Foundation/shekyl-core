@@ -85,14 +85,10 @@ impl Spelling {
 
     /// Whether `err` is the refusal this spelling meets.
     pub(crate) fn refused_by(self, err: &shekyl_encoding::EncodingError) -> bool {
-        use bech32::primitives::decode::CheckedHrpstringError;
         use shekyl_encoding::EncodingError;
         match self {
             Self::Uppercase | Self::MixedCase => matches!(err, EncodingError::NotLowercase),
-            Self::Bech32Checksum => matches!(
-                err,
-                EncodingError::Decode(CheckedHrpstringError::Checksum(_))
-            ),
+            Self::Bech32Checksum => matches!(err, EncodingError::Checksum),
             Self::NonZeroPadding | Self::ExtraCharacter => {
                 matches!(err, EncodingError::NotCanonical)
             }

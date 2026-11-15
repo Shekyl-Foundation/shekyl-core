@@ -38,6 +38,15 @@
 //! ```
 
 use bech32::primitives::decode::{CheckedHrpstring, CheckedHrpstringError};
+
+/// The library's refusal as this crate names it, so the `bech32` crate's
+/// error types stay out of this crate's public API.
+fn named(e: CheckedHrpstringError) -> EncodingError {
+    match e {
+        CheckedHrpstringError::Checksum(_) => EncodingError::Checksum,
+        other => EncodingError::Malformed(other.to_string()),
+    }
+}
 use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 
 /// HRP for spend proof encoding.
@@ -72,10 +81,15 @@ pub enum EncodingError {
     #[error("not lowercase: a Shekyl bech32m string is written in lowercase only")]
     NotLowercase,
 
-    /// Not a Bech32m string: malformed, or its checksum is not Bech32m's
-    /// (the older Bech32 checksum included).
-    #[error("bech32m decode failed: {0}")]
-    Decode(#[from] CheckedHrpstringError),
+    /// Not a Bech32m string in any case: no separator, a character outside
+    /// the Bech32 alphabet, a bad HRP, or too short for a checksum.
+    #[error("not a bech32m string: {0}")]
+    Malformed(String),
+
+    /// A Bech32 string whose checksum is not Bech32m's (the older Bech32
+    /// checksum included).
+    #[error("not a bech32m checksum")]
+    Checksum,
 
     /// A valid Bech32m string that is not the one its contents encode to
     /// (non-zero padding bits, for one).
@@ -114,7 +128,8 @@ pub fn encode_blob(hrp: &str, data: &[u8]) -> Result<String, EncodingError> {
 ///
 /// # Errors
 ///
-/// [`EncodingError::Decode`] if the string is not Bech32m in any case,
+/// [`EncodingError::Malformed`] or [`EncodingError::Checksum`] if the
+/// string is not Bech32m in any case,
 /// [`EncodingError::NotCanonical`] if it decodes to bytes that encode to
 /// a different string, and [`EncodingError::NotLowercase`] if it is the
 /// canonical string but for an uppercase letter.
@@ -132,7 +147,7 @@ pub fn decode_blob(encoded: &str) -> Result<(String, Vec<u8>), EncodingError> {
 
 /// [`decode_blob`] on a string with no uppercase letter.
 fn decode_lowercase(encoded: &str) -> Result<(String, Vec<u8>), EncodingError> {
-    let checked = CheckedHrpstring::new::<Bech32m>(encoded)?;
+    let checked = CheckedHrpstring::new::<Bech32m>(encoded).map_err(named)?;
     let hrp = checked.hrp();
     let data: Vec<u8> = checked.byte_iter().collect();
     if encode(&hrp, &data) != encoded {
@@ -224,7 +239,10 @@ mod tests {
             "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
         ] {
             assert!(
-                matches!(decode_blob(garbage), Err(EncodingError::Decode(_))),
+                matches!(
+                    decode_blob(garbage),
+                    Err(EncodingError::Malformed(_) | EncodingError::Checksum)
+                ),
                 "{garbage}"
             );
         }
@@ -248,10 +266,13 @@ mod tests {
     #[test]
     fn mixed_case_is_refused() {
         let encoded = encode_blob(CASE_HRP, CASE_DATA).unwrap();
-        let mut mixed = encoded.into_bytes();
-        let last = mixed.len() - 1;
-        mixed[last].make_ascii_uppercase();
-        let mixed = String::from_utf8(mixed).unwrap();
+        // A digit has no case: upper-case the last letter.
+        let at = encoded
+            .rfind(|c: char| c.is_ascii_lowercase())
+            .expect("a Bech32m string holds a letter");
+        let mut mixed = encoded.clone();
+        mixed[at..=at].make_ascii_uppercase();
+        assert_ne!(mixed, encoded);
         assert!(matches!(
             decode_blob(&mixed),
             Err(EncodingError::NotLowercase)
@@ -264,7 +285,7 @@ mod tests {
         let as_bech32 = bech32::encode::<bech32::Bech32>(hrp, CASE_DATA).unwrap();
         assert!(matches!(
             decode_blob(&as_bech32),
-            Err(EncodingError::Decode(CheckedHrpstringError::Checksum(_)))
+            Err(EncodingError::Checksum)
         ));
     }
 
