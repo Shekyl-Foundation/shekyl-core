@@ -7,7 +7,7 @@
 
 A testnet's identity on the wire is its genesis block: the network id every
 handshake carries is derived from the genesis hash, and the hash covers the
-genesis transaction and the header nonce. Two builds with the same genesis
+genesis transaction and the header (its mint time and nonce). Two builds with the same genesis
 find each other and connect.
 
 That is the hazard this gate is for. When a cut changes what a valid chain

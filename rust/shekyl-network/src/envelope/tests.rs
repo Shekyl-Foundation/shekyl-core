@@ -49,13 +49,13 @@ fn the_frames_are_the_oracles() {
     let fields: [&[u8]; 2] = [&counting, &[0xaa; 32]];
     assert_eq!(
         hex(ID_2.frame(&id, fields).as_bytes()),
-        "5724fbb1c11b14903a617a3c5c6d99497933a1499047f082167b6a87e13ba4f1"
+        "92f8ff42231aa1fbf7bfe3288cd23ae4b1b125d779583b45b8c89e3bb16f94b5"
     );
     let wide = ID_2_WIDE.frame(&id, fields);
     assert_eq!(
         hex(wide.as_bytes()),
-        "5724fbb1c11b14903a617a3c5c6d99497933a1499047f082167b6a87e13ba4f1\
-         82bab2206b28aced03a7d2e339bfbc74aa86ca76d574288c8b5d90e322353532"
+        "92f8ff42231aa1fbf7bfe3288cd23ae4b1b125d779583b45b8c89e3bb16f94b5\
+         cdb3f4cf727779ac2795ff5b8a8aca77d093467cc326f6dcc27401fbe7509a14"
     );
     assert_eq!(
         hex(NAME_2

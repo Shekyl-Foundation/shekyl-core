@@ -20,7 +20,9 @@ use clap::{Parser, Subcommand};
 use shekyl_address::Network;
 use shekyl_genesis_tool::builder::build_genesis_tx;
 use shekyl_genesis_tool::recipients::{load_and_validate, GENESIS_RECIPIENT_COUNT};
-use shekyl_genesis_tool::table::{verify, write_pins, write_regtest_recipients};
+use shekyl_genesis_tool::table::{
+    mint_time, recorded_timestamp, verify, write_pins, write_regtest_recipients, Rebuilt,
+};
 use shekyl_genesis_tool::wallets::{generate_wallets, write_custody_files};
 use shekyl_genesis_tool::GenesisToolError;
 
@@ -56,11 +58,23 @@ enum Cmd {
         #[arg(long)]
         recipients: Option<PathBuf>,
     },
-    /// Rebuild every network's genesis from its recipients file and write the
-    /// network table's pins (rust/shekyl-network/genesis/<net>.{tx.hex,hash}).
+    /// Mint the named networks' genesis now: stamp each with the clock's
+    /// current second and write its pins
+    /// (rust/shekyl-network/genesis/<net>.{tx.hex,timestamp,hash}). The
+    /// other networks keep theirs. A mint is a regenesis of that network.
+    Mint {
+        /// A network to mint: mainnet | testnet | stagenet | regtest; repeat
+        /// for each. There is no default: every network is named.
+        #[arg(long = "network", value_parser = parse_network, required = true)]
+        networks: Vec<Network>,
+    },
+    /// Rebuild every network's genesis from its recipients file at its
+    /// recorded mint time and write the network table's pins. Never reads
+    /// the clock: a network with no recorded mint time is refused.
     Pin,
-    /// Rebuild every network's genesis from its recipients file and compare it
-    /// with the network table this binary was compiled with.
+    /// Rebuild every network's genesis from its recipients file at its
+    /// recorded mint time and compare it with the network table this binary
+    /// was compiled with.
     Verify,
     /// Write regtest's recipients file from its committed test seeds.
     RegtestRecipients,
@@ -126,19 +140,24 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
             println!("{}", built.hex);
             Ok(())
         }
+        Cmd::Mint { networks } => {
+            let root = default_repo_root();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| GenesisToolError::Invalid("the clock is before 1970".into()))?
+                .as_secs();
+            let timestamp = mint_time(now)?;
+            for net in networks {
+                report_pinned(net, &write_pins(&root, net, timestamp)?);
+            }
+            eprintln!("rebuild to compile the new pins into the table");
+            Ok(())
+        }
         Cmd::Pin => {
             let root = default_repo_root();
             for net in Network::ALL {
-                let rebuilt = write_pins(&root, net)?;
-                println!(
-                    "{net}: block {hash}{provisional}",
-                    hash = hex::encode(rebuilt.block_hash),
-                    provisional = if net.genesis().provisional() {
-                        " (provisional: rebuilt from recipients that are not final)"
-                    } else {
-                        ""
-                    },
-                );
+                let timestamp = recorded_timestamp(&root, net)?;
+                report_pinned(net, &write_pins(&root, net, timestamp)?);
             }
             eprintln!("rebuild to compile the new pins into the table");
             Ok(())
@@ -148,17 +167,19 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
             let mut all_ok = true;
             for net in Network::ALL {
                 let check = verify(&root, net)?;
-                let ok = check.tx_matches && check.hash_matches;
+                let ok = check.tx_matches && check.timestamp_matches && check.hash_matches;
                 all_ok &= ok;
                 eprintln!(
                     "{net}: {verdict}",
                     net = check.network,
                     verdict = if ok {
                         "OK"
-                    } else if check.tx_matches {
-                        "MISMATCH (block hash)"
-                    } else {
+                    } else if !check.tx_matches {
                         "MISMATCH (transaction)"
+                    } else if !check.timestamp_matches {
+                        "MISMATCH (mint time: rebuild to compile the recorded one)"
+                    } else {
+                        "MISMATCH (block hash)"
                     },
                 );
             }
@@ -176,6 +197,20 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
             Ok(())
         }
     }
+}
+
+/// One network's freshly written pins, to stdout.
+fn report_pinned(net: Network, rebuilt: &Rebuilt) {
+    println!(
+        "{net}: minted at {ts}, block {hash}{provisional}",
+        ts = rebuilt.timestamp.get(),
+        hash = hex::encode(rebuilt.block_hash),
+        provisional = if net.genesis().provisional() {
+            " (provisional: rebuilt from recipients that are not final)"
+        } else {
+            ""
+        },
+    );
 }
 
 fn main() -> ExitCode {

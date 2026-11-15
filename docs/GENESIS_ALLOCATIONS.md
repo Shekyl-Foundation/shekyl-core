@@ -37,8 +37,9 @@ output; the transparency is scoped to the allocation itself.
 
 Every network's genesis is built the same way (`NETWORK_IDENTITY.md`
 NI-R4): five recipients, the transaction key derived from the network's
-name and its recipients, and the block header with nonce 0. The pins live
-in the network table, `rust/shekyl-network/genesis/<network>.tx.hex` and
+name and its recipients, and the block header with the network's mint time
+and nonce 0 (NI-R18). The pins live in the network table,
+`rust/shekyl-network/genesis/<network>.tx.hex`, `<network>.timestamp` and
 `<network>.hash`.
 
 ### mainnet
@@ -62,7 +63,8 @@ Genesis identity:
 
 ```text
 tx hash        027cd4eab42c68d4906a5106d6015de2c5b7e9c7fd9b1bbad6ab311ee3e5d7ab
-block id       f91dd5408ce12f0032ec3d48b367d8bf40f8c3498f3ea199153532d41c254279
+minted         1794760828 (2026-11-15 16:40:28 UTC)
+block id       bf807f3b00d566ac97390a36ebbf7b96bee35bdefb59d6ee5060dd68385595ed
 ```
 
 ### stagenet
@@ -81,7 +83,8 @@ Genesis identity:
 
 ```text
 tx hash        3396d303a926c50e8dc745915d91597ecdb7c20aebd8245cf2e8c1ad57b5688d
-block id       73bc5f22c340c37ff589f4f08ecd00113c55553f1c8ce539ce0abe3335c5833f
+minted         1794760828 (2026-11-15 16:40:28 UTC)
+block id       c0aade7f590c037f9c46c0b300731d56c5dd19df464ba8254d9e026d09d86ba9
 ```
 
 ### testnet
@@ -100,7 +103,8 @@ Genesis identity:
 
 ```text
 tx hash        a4ce0b6b0a434e77a5b31f58d2cc6516b5e224335bc397b371b3fa6715e82344
-block id       b76542286f60b2a21be1672c5494f66b8a80e5f89bea66e5a26aab977989ef39
+minted         1794760828 (2026-11-15 16:40:28 UTC)
+block id       90126a29bdfb48152b25fc60f9d65213fb3716977476b58b578bfb20559a78a8
 ```
 
 ### regtest
@@ -124,7 +128,8 @@ Genesis identity:
 
 ```text
 tx hash        3a96f09b3b1cabc7b4bf7e3b0d91dbd9410f3f7180ee0874ec26503be1753b6e
-block id       7662cdc11aa4e5df3da1231532d2b027714dc14e4f16a6d785be76f1bce4f2a3
+minted         1794760828 (2026-11-15 16:40:28 UTC)
+block id       5a6ab91ea03c27ccf27aef62a3a5b4552625a5a2def4bf2566f63f62fbd24fe9
 ```
 
 Addresses are truncated above for readability only — the full strings are
@@ -147,9 +152,9 @@ cargo run -p shekyl-genesis-tool --bin geblock -- verify
 cargo run -p shekyl-genesis-tool --bin geblock -- build --network mainnet > /dev/null
 ```
 
-`verify` rebuilds all four networks from the committed recipients files and
-byte-compares each transaction and block hash against the network table's
-pins; `build` prints the transaction hash to check against the tables
+`verify` rebuilds all four networks from the committed recipients files at
+each network's recorded mint time and byte-compares each transaction, mint
+time and block hash against the network table's pins; `build` prints the transaction hash to check against the tables
 above. CI runs the same comparison on every change
 (`rust/shekyl-genesis-tool/tests/genesis_table.rs`), which also recomputes
 each pinned coinbase's transaction key from the network's name, so the
@@ -208,9 +213,11 @@ purpose (§2).
 Genesis is frozen at launch: after the first block is mined on a network,
 its allocations cannot change. Before launch, any change to this table
 means regenerating the genesis transaction and re-pinning every derived
-artifact together: `geblock pin` writes the network table's pins, and
-the procedure is `shekyl-dev/docs/GENESIS_WALKTHROUGH.md`. The header nonce
-is 0 on every network. The network id is not a constant beside the chain:
+artifact together: `geblock mint --network <name>` stamps the network's
+mint time from the clock and writes the network table's pins (`geblock pin`
+rewrites them under the recorded times and never reads the clock), and the
+procedure is `shekyl-dev/docs/GENESIS_WALKTHROUGH.md`. The header carries
+the mint time, never zero, and nonce 0 on every network (NI-R18, NI-Q1). The network id is not a constant beside the chain:
 it is the first 16 bytes of
 `cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)`, so
 regenerating the genesis transaction rotates it. There is no id byte to
