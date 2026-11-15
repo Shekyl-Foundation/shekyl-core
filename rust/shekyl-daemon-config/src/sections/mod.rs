@@ -171,7 +171,7 @@ pub struct Rpc {
     pub connections_max: NonZeroU32,
     /// Which node this is on the machine (`RPC_CHANNEL.md` §7.1): the
     /// default instance, or one the operator named.
-    pub instance: shekyl_rpc_channel::Instance,
+    pub instance: shekyl_rpc_rendezvous::Instance,
     /// The operator-named directory for the owner's socket, for an account
     /// with no session directory. Never set in service mode, nor on Windows.
     pub socket_dir: Option<PathBuf>,
@@ -298,8 +298,9 @@ pub struct Dev {
     pub archival_reorg_depth: Option<u64>,
 }
 
-/// Whether this start checks the configuration and exits (`config-verify`,
-/// IG-Q58).
+/// This process start: whether it checks the configuration and exits
+/// (`config-verify`, IG-Q58), and the owning connection it was handed
+/// (`owning-connection`, IG-Q106).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Session {
     /// Check the configuration as a start would and exit without starting.
@@ -307,6 +308,10 @@ pub struct Session {
     /// Replace the service's console key and exit (`INPUT_GRAMMAR.md`
     /// IG-Q88).
     pub console_key_reset: bool,
+    /// The number of the inherited end the starting process holds this
+    /// daemon's life by. The daemon adopts it before it loads the
+    /// configuration; this is the value the checks and the report read.
+    pub owning_connection: Option<u64>,
 }
 
 /// The whole configuration, by section.
@@ -584,7 +589,7 @@ struct RpcRead {
     view_listen: Vec<SocketAddr>,
     cors_origins: Vec<String>,
     connections_max: Option<NonZeroU32>,
-    instance: shekyl_rpc_channel::Instance,
+    instance: shekyl_rpc_rendezvous::Instance,
     socket_dir: Option<PathBuf>,
     channel_listen: Vec<SocketAddr>,
 }
@@ -596,7 +601,7 @@ struct RpcRead {
 /// (IG-Q105) rather than ignored.
 fn rpc_section(r: &mut Reader<'_>, run_mode: RunMode) -> RpcRead {
     let instance = match r.name("instance") {
-        Read::Present(text) => match shekyl_rpc_channel::InstanceName::parse(&text) {
+        Read::Present(text) => match shekyl_rpc_rendezvous::InstanceName::parse(&text) {
             Ok(name) => {
                 if !r.given("data-dir") {
                     r.requires(
@@ -604,12 +609,12 @@ fn rpc_section(r: &mut Reader<'_>, run_mode: RunMode) -> RpcRead {
                         "an explicit `data-dir`: a named instance is a second node and keeps its own state",
                     );
                 }
-                shekyl_rpc_channel::Instance::Named(name)
+                shekyl_rpc_rendezvous::Instance::Named(name)
             }
             // The kind's rule already refused it at parse.
-            Err(_) => shekyl_rpc_channel::Instance::Default,
+            Err(_) => shekyl_rpc_rendezvous::Instance::Default,
         },
-        Read::Absent | Read::Unreadable => shekyl_rpc_channel::Instance::Default,
+        Read::Absent | Read::Unreadable => shekyl_rpc_rendezvous::Instance::Default,
     };
     let socket_dir = r.optional_path("rpc-socket-dir").present();
     if socket_dir.is_some() && cfg!(windows) {
@@ -711,21 +716,22 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
         }
     };
     Dev {
-        difficulty: r.dev_integer("dev-difficulty"),
+        difficulty: r.optional_integer("dev-difficulty"),
         sync,
         clearnet_encrypt: r.switch("dev-clearnet-encrypt"),
         relay_cover: r.switch("dev-relay-cover"),
         rpc: r.switch("dev-rpc"),
-        pow_seed_epoch_blocks: r.dev_integer("dev-pow-seed-epoch-blocks"),
-        pow_seed_epoch_lag: r.dev_integer("dev-pow-seed-epoch-lag"),
-        settlement_epoch_blocks: r.dev_integer("dev-settlement-epoch-blocks"),
-        archival_reorg_depth: r.dev_integer("dev-archival-reorg-depth"),
+        pow_seed_epoch_blocks: r.optional_integer("dev-pow-seed-epoch-blocks"),
+        pow_seed_epoch_lag: r.optional_integer("dev-pow-seed-epoch-lag"),
+        settlement_epoch_blocks: r.optional_integer("dev-settlement-epoch-blocks"),
+        archival_reorg_depth: r.optional_integer("dev-archival-reorg-depth"),
     }
 }
 
-/// The session rows, and the console key's reset's rule (IG-Q88): only a
-/// service has a console key, so the reset is refused in any other run
-/// mode.
+/// The session rows, and their rules with the run mode: only a service has
+/// a console key, so its reset is refused in any other run mode (IG-Q88);
+/// the service manager holds a service's life, so a service is handed no
+/// owning connection (IG-Q106).
 fn session_section(r: &mut Reader<'_>, run_mode: RunMode) -> Session {
     let console_key_reset = r.switch("rpc-console-key-reset");
     if console_key_reset && run_mode != RunMode::Service {
@@ -734,9 +740,17 @@ fn session_section(r: &mut Reader<'_>, run_mode: RunMode) -> Session {
             "`service`: only the machine's service instance has a console key",
         );
     }
+    let owning_connection = r.optional_integer("owning-connection");
+    if owning_connection.is_some() && run_mode == RunMode::Service {
+        r.conflict(
+            "owning-connection",
+            "`service` is set: the service manager holds a service's life",
+        );
+    }
     Session {
         verify: r.switch("config-verify"),
         console_key_reset,
+        owning_connection,
     }
 }
 

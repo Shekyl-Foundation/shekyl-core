@@ -82,7 +82,7 @@ pub struct ChannelSetup {
     pub service_rendezvous: Option<PathBuf>,
     /// The instance, whose name the record's file name hashes with the
     /// network id (RT-O10).
-    pub instance: shekyl_rpc_channel::Instance,
+    pub instance: shekyl_rpc_rendezvous::Instance,
 }
 
 /// A channel connection's caller, stamped on each of its requests beside

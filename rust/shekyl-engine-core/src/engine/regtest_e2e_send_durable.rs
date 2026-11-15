@@ -79,8 +79,7 @@ impl WalletServer {
             .arg(&log)
             .stdout(out.try_clone().expect("dup"))
             .stderr(out);
-        let child = shekyl_tor_control_client::spawn_lock::spawn(&mut cmd)
-            .expect("spawn shekyl-wallet-rpc");
+        let child = shekyl_spawn::spawn_lock::spawn(&mut cmd).expect("spawn shekyl-wallet-rpc");
         let mut server = Self {
             child: Some(child),
             port,
@@ -171,7 +170,7 @@ impl WalletServer {
     fn signal(&self, signal: &str) {
         let mut kill = Command::new("kill");
         kill.arg(format!("-{signal}")).arg(self.pid().to_string());
-        let status = shekyl_tor_control_client::spawn_lock::status(&mut kill).expect("run kill");
+        let status = shekyl_spawn::spawn_lock::status(&mut kill).expect("run kill");
         assert!(status.success(), "kill -{signal} failed: {status}");
     }
 

@@ -112,6 +112,10 @@ shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
 shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
 shekyl-rpc-stream = { path = "../shekyl-rpc-stream" }
 shekyl-noise = { path = "../shekyl-noise" }
+# The rendezvous names and records (the owner's Windows record, a service's
+# record), which the client that resolves "this computer" reads from the
+# same crate (RPC_CHANNEL.md RT-15, §7.1).
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 redb = { workspace = true }
 zeroize = { workspace = true }
 
@@ -126,7 +130,6 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 # The owner's pipe name is drawn at random on every start (RPC_CHANNEL.md
 # §7.1). The pin the channel crate already carries.
 rand_core = { version = "0.6", features = ["getrandom"] }
-
 [dev-dependencies]
 # The channel's tests drive the real handshake and HTTP over the record
 # stream from the client's side (src/channel/tests.rs).
@@ -150,7 +153,7 @@ rand_core = { version = "0.6", features = ["std"] }
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 # The owner's socket tests bind in a private directory of their own, and
-# build the plan the walk hands the RPC, whose instance is the channel's.
+# build the plan the walk hands the RPC, whose instance is the rendezvous's.
 tempfile = "3"
 # `start_paused` for the plaintext header-bound and write-stall tests.
 # Production tokio stays `full` without `test-util`.

@@ -112,6 +112,9 @@ pub enum Code {
     /// Something that is not this user's daemon holds the owner's socket
     /// path.
     SocketImpostor,
+    /// The number given as the owning connection is not an open, connected
+    /// stream socket (`INPUT_GRAMMAR.md` IG-Q106).
+    OwningConnectionUnusable,
 }
 
 impl Code {
@@ -160,6 +163,7 @@ impl Code {
             Self::SocketDirPlatform => "config.socket-dir.platform",
             Self::SocketRunning => "config.socket.running",
             Self::SocketImpostor => "config.socket.impostor",
+            Self::OwningConnectionUnusable => "config.owning-connection.unusable",
         }
     }
 }
@@ -430,6 +434,11 @@ impl Diagnostic {
                 p("path"),
                 p("found")
             ),
+            Code::OwningConnectionUnusable => format!(
+                "`{opt}` {} cannot be the owning connection: {}; the process that starts the daemon passes one end of a connected stream socket pair it created, inherited by the daemon",
+                p("value"),
+                p("found")
+            ),
         };
         format!("{what} [{} from {}]", self.code, self.source)
     }
@@ -533,6 +542,7 @@ mod tests {
             Code::SocketDirPlatform,
             Code::SocketRunning,
             Code::SocketImpostor,
+            Code::OwningConnectionUnusable,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for code in all {

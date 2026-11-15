@@ -68,7 +68,7 @@ impl Served {
             network_id: NETWORK,
             service,
             service_rendezvous: None,
-            instance: shekyl_rpc_channel::Instance::Default,
+            instance: shekyl_rpc_rendezvous::Instance::Default,
         })
         .expect("the channel opens");
         let state = app_state(&data_dir, Arc::clone(&channel));
@@ -476,7 +476,7 @@ fn the_console_key_reset_replaces_the_console_and_nothing_else() {
         network_id: NETWORK,
         service: true,
         service_rendezvous: None,
-        instance: shekyl_rpc_channel::Instance::Default,
+        instance: shekyl_rpc_rendezvous::Instance::Default,
     };
     let path = dir.path().join(super::files::CONSOLE_KEY_FILE);
     let client = StaticKeypair::generate().unwrap();

@@ -29,6 +29,7 @@ use shekyl_rpc_channel::handshake::{
     Client, StaticKeypair, StaticPublic, MESSAGE2_LEN, MESSAGE4_LEN,
 };
 use shekyl_rpc_grants::GrantSet;
+use shekyl_rpc_rendezvous::ServiceRecord;
 use shekyl_rpc_stream::RecordStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -112,7 +113,7 @@ impl Service {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr));
-        let child = shekyl_tor_control_client::spawn_lock::with(|| command.spawn())
+        let child = shekyl_spawn::spawn_lock::with(|| command.spawn())
             .expect("the daemon child");
         Self {
             child,
@@ -290,20 +291,12 @@ fn a_listening_service_publishes_its_rendezvous_and_a_client_reaches_it() {
         return;
     }
     let record = service.wait_for_record();
-    let text = std::fs::read_to_string(&record).expect("readable");
-    let mut lines = text.lines();
-    assert_eq!(lines.next(), Some("shekyl-service-rendezvous 1"), "{text}");
-    let addr: std::net::SocketAddr = lines
-        .next()
-        .and_then(|l| l.strip_prefix("channel "))
-        .and_then(|a| a.parse().ok())
-        .expect("a channel address");
+    let bytes = std::fs::read(&record).expect("readable");
+    let ServiceRecord {
+        channel: addr,
+        bundle,
+    } = ServiceRecord::parse(&bytes).expect("a service record, as a client reads it");
     assert!(addr.ip().is_loopback(), "{addr}");
-    let bundle = lines
-        .next()
-        .and_then(|l| l.strip_prefix("bundle "))
-        .and_then(|h| hex::decode(h).ok())
-        .expect("a bundle");
     let (x25519, mlkem) = bundle.split_at(32);
     let daemon = StaticPublic::from_parts(
         x25519.try_into().expect("32 bytes"),

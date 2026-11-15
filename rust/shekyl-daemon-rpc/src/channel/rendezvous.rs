@@ -18,32 +18,27 @@
 //!
 //! The record is published after the listener is bound, atomically (written
 //! to a fresh file beside it and renamed over it), and removed on a clean
-//! stop, only while it is still the one this daemon wrote.
-//!
-//! Its form: `shekyl-service-rendezvous 1`, then `channel <address:port>`,
-//! then `bundle <hex>`, one per line.
+//! stop, only while it is still the one this daemon wrote. Its name and form
+//! are `shekyl-rpc-rendezvous`'s ([`ServiceRecord`]), which the client that
+//! dials a service reads.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
+use shekyl_rpc_rendezvous::{rendezvous_name, service_file_name, Instance, ServiceRecord};
+
 use super::stage::{self, Access};
 
-/// The record's first line: its format and version.
-pub const RECORD_FORMAT: &str = "shekyl-service-rendezvous 1";
-
-/// Where a service's record goes: `shekyl-<name>` in its rendezvous
-/// directory, `<name>` the RT-O10 derivation over the network id and the
-/// instance, as the owner's leg names its own.
+/// Where a service's record goes: [`service_file_name`] in its rendezvous
+/// directory, the RT-O10 name over the network id and the instance, as the
+/// owner's leg names its own.
 #[must_use]
 pub fn record_path(
     dir: &Path,
     network_id: &shekyl_rpc_channel::NetworkId,
-    instance: &shekyl_rpc_channel::Instance,
+    instance: &Instance,
 ) -> PathBuf {
-    dir.join(format!(
-        "shekyl-{}",
-        shekyl_rpc_channel::rendezvous_name(network_id, instance)
-    ))
+    dir.join(service_file_name(&rendezvous_name(network_id, instance)))
 }
 
 /// The published record. Dropping it removes the file, if the file is
@@ -66,11 +61,11 @@ impl ServiceRendezvous {
         let channel = local_address(bound).ok_or_else(|| {
             std::io::Error::other("a service rendezvous needs a channel listener")
         })?;
-        let record = format!(
-            "{RECORD_FORMAT}\nchannel {channel}\nbundle {}\n",
-            hex::encode(bundle)
-        )
-        .into_bytes();
+        let record = ServiceRecord {
+            channel,
+            bundle: bundle.to_vec(),
+        }
+        .bytes();
         let journal = stage::StagedWrite::create(path, &record, Access::WorldReadable)?;
         journal.commit()?;
         Ok(Self {

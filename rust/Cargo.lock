@@ -4021,7 +4021,7 @@ dependencies = [
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-shard-visual",
- "shekyl-tor-control-client",
+ "shekyl-spawn",
  "shekyl-tor-status",
  "shekyl-types",
  "shekyl-units",
@@ -4175,7 +4175,6 @@ dependencies = [
 name = "shekyl-daemon"
 version = "3.1.0"
 dependencies = [
- "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -4188,16 +4187,22 @@ dependencies = [
  "shekyl-daemon-rpc",
  "shekyl-difficulty",
  "shekyl-logging",
+ "shekyl-network",
  "shekyl-node",
  "shekyl-onion-v3",
  "shekyl-options",
  "shekyl-p2p",
  "shekyl-process",
  "shekyl-rpc-channel",
+ "shekyl-rpc-client",
  "shekyl-rpc-grants",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-stream",
+ "shekyl-rpc-transport",
+ "shekyl-rpc-types",
  "shekyl-runtime",
  "shekyl-socks",
+ "shekyl-spawn",
  "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
@@ -4223,7 +4228,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-options",
- "shekyl-rpc-channel",
+ "shekyl-rpc-rendezvous",
  "shekyl-win-sec",
  "tempfile",
  "toml 0.8.23",
@@ -4270,6 +4275,7 @@ dependencies = [
  "shekyl-pow-randomx",
  "shekyl-rpc-channel",
  "shekyl-rpc-grants",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-stream",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
@@ -4428,9 +4434,9 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-runtime",
  "shekyl-scanner",
+ "shekyl-spawn",
  "shekyl-standoff",
  "shekyl-thread-priority",
- "shekyl-tor-control-client",
  "shekyl-tor-control-wallet",
  "shekyl-tx-builder",
  "shekyl-tx-weight",
@@ -4853,6 +4859,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-os-account"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "shekyl-win-sec",
+ "tempfile",
+]
+
+[[package]]
 name = "shekyl-p-fetch"
 version = "3.1.0"
 dependencies = [
@@ -5091,7 +5106,8 @@ version = "3.1.0"
 dependencies = [
  "libc",
  "shekyl-daemon-config",
- "shekyl-tor-control-client",
+ "shekyl-os-account",
+ "shekyl-spawn",
  "shekyl-win-sec",
  "tempfile",
  "tracing",
@@ -5219,6 +5235,16 @@ name = "shekyl-rpc-grants"
 version = "3.1.0"
 
 [[package]]
+name = "shekyl-rpc-rendezvous"
+version = "3.1.0"
+dependencies = [
+ "hex",
+ "serde_json",
+ "shekyl-crypto-hash",
+ "shekyl-network",
+]
+
+[[package]]
 name = "shekyl-rpc-stream"
 version = "3.1.0"
 dependencies = [
@@ -5248,11 +5274,17 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-address",
+ "shekyl-network",
+ "shekyl-os-account",
  "shekyl-rpc-client",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-types",
  "shekyl-socks",
+ "shekyl-win-sec",
+ "tempfile",
  "tokio",
  "tower-service",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
@@ -5370,6 +5402,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-spawn"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "shekyl-staking-sim"
 version = "3.1.0"
 dependencies = [
@@ -5459,6 +5499,7 @@ dependencies = [
  "sha2",
  "shekyl-onion-key",
  "shekyl-onion-v3",
+ "shekyl-spawn",
  "shekyl-timing-engine",
  "shekyl-tor-status",
  "shekyl-win-sec",
@@ -5490,6 +5531,7 @@ dependencies = [
  "kameo",
  "shekyl-onion-key",
  "shekyl-p-transport",
+ "shekyl-spawn",
  "shekyl-tor-control-client",
  "shekyl-types",
  "tempfile",
