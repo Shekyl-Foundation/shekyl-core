@@ -44,18 +44,19 @@
 ///
 /// | term | bytes |
 /// | --- | --- |
-/// | modal tx (1-in/2-out) at `MAX_TREE_DEPTH`, widest fee varint | 17,015 |
-/// | `NOTIFY_NEW_TRANSACTIONS` envelope | 77 |
-/// | **required** | **17,092** |
+/// | modal tx (1-in/2-out) at `MAX_TREE_DEPTH`, widest fee varint | 17,080 |
+/// | `NOTIFY_NEW_TRANSACTIONS` envelope | 73 |
+/// | **required** | **17,153** |
 /// | this window | 20,480 |
-/// | margin | 3,388 (19.8 %) |
+/// | margin | 3,327 (19.4 %) |
 ///
-/// The envelope is **not** a constant: it steps 74 → 75 → 77 B as the
-/// blob's length varint widens, and gains ~2 B per additional transaction
-/// in a batch. 77 is its value for one transaction anywhere above the
-/// 16 KiB varint boundary, which covers this whole range — but the test
-/// measures it rather than assuming it, because a single reading at one
-/// blob size would have embedded a shape into a shape-independent number.
+/// The envelope is **not** a constant: it steps 70 → 71 → 73 B as the
+/// blob's length varint widens (at 64 B and at 16 KiB), and gains 4 B per
+/// additional transaction in a batch. 73 is its value for one transaction
+/// anywhere above the 16 KiB varint boundary, which covers this whole
+/// range — but the test measures it rather than assuming it, because a
+/// single reading at one blob size would have embedded a shape into a
+/// shape-independent number.
 ///
 /// Sized at *max* depth rather than genesis depth so the fragment count
 /// cannot flip from 1 to 2 as the curve tree deepens: a hop that doubles on
@@ -65,7 +66,7 @@
 /// **Not sized to hold the largest admissible transaction.** That is the
 /// fragment cap's job ([`MAX_FRAGMENTS`]); conflating the two forces a
 /// ~98 KiB window, which breaches
-/// [`PER_NODE_CEILING_BYTES_PER_SEC`] — 39,218 B/s with Tor's two channels
+/// [`PER_NODE_CEILING_BYTES_PER_SEC`] — 39,063 B/s with Tor's two channels
 /// against the 16,384 B/s cap. `tests/carrier_window.rs` asserts that
 /// breach as the negative control, rather than leaving it as an assertion
 /// in prose.
@@ -91,12 +92,12 @@ pub const WINDOW_BYTES: usize = 20_480;
 /// A correctness bound: `ceil(S_max / WINDOW_BYTES)`, where `S_max` is the
 /// **structural** maximum message — the largest transaction the wire admits
 /// (8-in/16-out at `MAX_TREE_DEPTH`) plus its levin envelope, which is
-/// `ceil(98_046 / 20_480) = 5`.
+/// `ceil(97_658 / 20_480) = 5`.
 ///
-/// The transaction alone is **97,964 B at a realistic fee and 97,969 B at
-/// `u64::MAX`** — the fee is a varint, so its width moves with its value.
-/// Both figures appear in this round's notes and they are the same
-/// transaction. The bound is taken at the wider one, because a bound
+/// The transaction alone is **97,580 B at a five-byte fee varint and
+/// 97,585 B at `u64::MAX`** — the fee is a varint, so its width moves with
+/// its value. A note that gives two figures for it is giving this one
+/// transaction at two fees. The bound is taken at the wider one, because a bound
 /// evaluated at a plausible fee is one a large fee can cross.
 ///
 /// The structural max is the right basis *here*, where it is a correctness

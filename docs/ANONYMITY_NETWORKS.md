@@ -31,13 +31,15 @@ PQC note:
 transaction input (`pqc_auth_weight()`; see `docs/V3_ROLLOUT.md`).
 Practical consequences for anonymity relay:
 
-- The smallest transaction the wire admits is 13,042 bytes; a one-input,
-  two-output transaction at the deepest curve tree is 17,015 bytes
-  (`shekyl-relay-privacy` `params/carrier.rs`, derived from
-  `predict_size_and_weight`).
-- On Tor a relay cell carries 498 bytes, so one transaction is a burst of
-  about 27 to 35 cells. In TRC-1's guard-connection reading (#1388) every
-  send was 13,619 bytes, at least 28 cells.
+- A one-input, two-output transaction is 13,240 bytes at the genesis curve
+  tree depth (2) and 17,080 bytes at the deepest (24), with the fee varint at
+  its widest. Each further input adds about 8 to 9 KB, and the largest
+  admissible transaction (8 inputs, 16 outputs, depth 24) is 97,585 bytes
+  (`shekyl-tx-weight` `predict_size_and_weight`).
+- On Tor a relay cell carries 498 bytes, so a one-input, two-output
+  transaction is a burst of about 27 to 35 cells, and the largest about 196.
+  In TRC-1's guard-connection reading (#1388) every send was 13,619 bytes,
+  at least 28 cells.
 - Nothing pads or hides that burst on mainnet today. The cover carrier runs
   only under a testnet development flag and is being redesigned.
 
