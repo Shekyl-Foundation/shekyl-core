@@ -253,7 +253,7 @@ fn config_with(dir: &Path, network: &str, connectors: &[&str], extra: &[&str]) -
         cli,
         &Platform {
             home: Some(dir.to_path_buf()),
-            program_data: None,
+            service_parent: None,
             session_dir: None,
             service_rendezvous: None,
         },

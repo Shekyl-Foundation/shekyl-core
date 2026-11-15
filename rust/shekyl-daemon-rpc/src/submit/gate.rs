@@ -26,9 +26,11 @@
 //!   and every other RPC route starves). The permit is now a
 //!   [`tokio::sync::Semaphore`] acquired in the async handler *before*
 //!   `spawn_blocking`, so a queued submission is a cheap parked task. The
-//!   permit *hold* still spans the synchronous verification on the blocking
-//!   worker — that half was always correct; only the *wait* was at the wrong
-//!   layer.
+//!   permit then moves into the blocking closure ([`verify_under`]), so its
+//!   hold spans the synchronous verification on the blocking worker even
+//!   when the handler that took it is dropped: a closed connection or a
+//!   revoked channel session cancels the handler, never the verification
+//!   it started, and the cap must stay taken until that verification ends.
 //! - **One cap per daemon, not per listener.** The daemon runs one RPC
 //!   server per bind (unrestricted + restricted), each on its own runtime; an
 //!   in-engine gate constructed per listener made the F39 cap per-endpoint
@@ -39,7 +41,8 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::task::JoinHandle;
 
 /// The single process-wide Phase-C admission semaphore, sized to available
 /// cores. Shared across every daemon-RPC listener so the F39 verification cap
@@ -55,9 +58,54 @@ pub fn phase_c_semaphore() -> Arc<Semaphore> {
     }))
 }
 
+/// Run `work` on the blocking pool under `permit`. The permit moves into
+/// the blocking closure and is released when `work` returns, not when the
+/// returned handle is awaited or dropped: a handler cancelled while its
+/// verification runs leaves the cap taken until the verification ends.
+pub fn verify_under<T: Send + 'static>(
+    permit: OwnedSemaphorePermit,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> JoinHandle<T> {
+    tokio::task::spawn_blocking(move || {
+        let _held = permit;
+        work()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A handler dropped while its verification runs does not release the
+    /// cap: the permit is held until the work returns. Red edit: drop the
+    /// permit before `spawn_blocking` in `verify_under`, and the cap is free
+    /// while the work still runs.
+    #[tokio::test]
+    async fn the_permit_is_held_until_the_work_returns_not_the_handler() {
+        let gate = Arc::new(Semaphore::new(1));
+        let permit = Arc::clone(&gate).acquire_owned().await.expect("a permit");
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let (started, running) = std::sync::mpsc::channel::<()>();
+        let work = verify_under(permit, move || {
+            started.send(()).expect("the test waits");
+            wait.recv().expect("the test releases the work");
+        });
+        let handler = tokio::spawn(work);
+        tokio::task::spawn_blocking(move || running.recv().expect("the work starts"))
+            .await
+            .expect("the work started");
+        handler.abort();
+        assert!(handler.await.is_err(), "the handler was cancelled");
+        assert_eq!(gate.available_permits(), 0, "the work still runs");
+        release.send(()).expect("the work waits");
+        let returned = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Arc::clone(&gate).acquire_owned(),
+        )
+        .await
+        .expect("the permit returns when the work does");
+        drop(returned);
+    }
 
     #[test]
     fn semaphore_is_process_global_and_core_sized() {
