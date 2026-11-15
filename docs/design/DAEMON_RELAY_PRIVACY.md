@@ -17,7 +17,9 @@ gate**, which is therefore a reopening trigger for this document (§31.6).
 > connections picks out the node's own sends
 > ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md);
 > TRC banner). **A node on Tor has no wire-observer cover today, relay or
-> not.** The §42 architecture is retained, and its scope is open again for
+> not.** The reading measured a node with a relay; without one, a client's
+> guard connections carry only its own traffic, so the same follows by
+> reasoning, not by measurement. The §42 architecture is retained, and its scope is open again for
 > every encrypted link, Tor included; the redesign is the cover-traffic
 > lane's Round 0. Each Tor-zone SUPERSEDED note below is marked REOPENED
 > and no longer holds. This document's Round-3 / RP port status is

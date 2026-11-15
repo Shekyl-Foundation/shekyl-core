@@ -51,10 +51,11 @@
 /// | margin | 3,327 (19.4 %) |
 ///
 /// The envelope is **not** a constant: it steps 70 → 71 → 73 B as the
-/// blob's length varint widens (at 64 B and at 16 KiB), and gains 4 B per
-/// additional transaction in a batch. 73 is its value for one transaction
-/// anywhere above the 16 KiB varint boundary, which covers this whole
-/// range — but the test measures it rather than assuming it, because a
+/// blob's length varint widens (at 64 B and at 16 KiB), and each
+/// additional transaction in a batch adds 2 B below 16 KiB and 4 B at or
+/// above it. 73 is its value for one transaction anywhere above the 16 KiB
+/// varint boundary, which covers this whole range — but the test measures
+/// it rather than assuming it, because a
 /// single reading at one blob size would have embedded a shape into a
 /// shape-independent number.
 ///

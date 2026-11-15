@@ -33,9 +33,10 @@ Practical consequences for anonymity relay:
 
 - A one-input, two-output transaction is 13,240 bytes at the genesis curve
   tree depth (2) and 17,080 bytes at the deepest (24), with the fee varint at
-  its widest. Each further input adds about 8 to 9 KB, and the largest
-  admissible transaction (8 inputs, 16 outputs, depth 24) is 97,585 bytes
-  (`shekyl-tx-weight` `predict_size_and_weight`).
+  its widest. Two inputs and two outputs is 21,224 bytes at depth 2 and
+  26,088 at depth 24, and the largest admissible transaction (8 inputs,
+  16 outputs, depth 24) is 97,585 bytes (`shekyl-tx-weight`
+  `predict_size_and_weight`).
 - On Tor a relay cell carries 498 bytes, so a one-input, two-output
   transaction is a burst of about 27 to 35 cells, and the largest about 196.
   In TRC-1's guard-connection reading (#1388) every send was 13,619 bytes,
