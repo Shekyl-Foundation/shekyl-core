@@ -80,8 +80,7 @@ fn member_view<'a>(g: &'a Group, i: u8) -> MultisigMemberView<'a> {
         member_index: i,
         n_total: g.address.n_total(),
         m_required: g.address.m_required(),
-        member_x25519_sk: &g.member_sks[usize::from(i)].x25519,
-        member_ml_kem_dk: &g.member_sks[usize::from(i)].ml_kem,
+        member_kem_secret: &g.member_sks[usize::from(i)],
         network: &NET,
     }
 }

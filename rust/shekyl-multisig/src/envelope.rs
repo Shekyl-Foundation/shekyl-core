@@ -347,10 +347,11 @@ pub fn open_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::member_file::{MemberSecrets, HYBRID_KEM_SECRET_LEN};
+    use crate::member_file::MemberSecrets;
     use rand::rngs::OsRng;
     use shekyl_address::multisig_address::{MultisigAddressPayload, HYBRID_KEM_PUBKEY_LEN};
     use shekyl_address::Network;
+    use shekyl_crypto_pq::kem::{HybridKemSecretKey, HYBRID_KEM_SECRET_LEN};
     use shekyl_crypto_pq::multisig_blob::BLOB_VERSION_LEN;
     use shekyl_crypto_pq::multisig_envelope::{
         mint_multisig_envelope_keypair, MultisigEnvelopeSecret,
@@ -387,8 +388,14 @@ mod tests {
                     MemberSecrets {
                         b: Zeroizing::new([0x0B; 32]),
                         y_share: Zeroizing::new([0x0F; 32]),
-                        group_kem_secret: Zeroizing::new(vec![0x6A; HYBRID_KEM_SECRET_LEN]),
-                        member_kem_secret: Zeroizing::new(vec![0x6B; HYBRID_KEM_SECRET_LEN]),
+                        group_kem_secret: HybridKemSecretKey::from_canonical_bytes(
+                            &[0x6A; HYBRID_KEM_SECRET_LEN],
+                        )
+                        .unwrap(),
+                        member_kem_secret: HybridKemSecretKey::from_canonical_bytes(
+                            &[0x6B; HYBRID_KEM_SECRET_LEN],
+                        )
+                        .unwrap(),
                         transport_secret: Zeroizing::new([tag; 32]),
                         envelope_secret,
                     },

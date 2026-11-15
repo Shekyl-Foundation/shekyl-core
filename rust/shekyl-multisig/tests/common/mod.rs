@@ -84,9 +84,6 @@ pub fn found_group(n: u8, m: u8) -> (MultisigAddressPayload, Vec<MemberFile>) {
     let files = (0u8..)
         .zip(envelope_keys)
         .map(|(i, (_, envelope_secret))| {
-            let secret = |sk: &shekyl_crypto_pq::kem::HybridKemSecretKey| {
-                Zeroizing::new([sk.x25519.as_slice(), &sk.ml_kem].concat())
-            };
             let file = MemberFile::new(
                 address.clone(),
                 i,
@@ -95,8 +92,8 @@ pub fn found_group(n: u8, m: u8) -> (MultisigAddressPayload, Vec<MemberFile>) {
                 MemberSecrets {
                     b: Zeroizing::new(b.to_bytes()),
                     y_share: split.shares[usize::from(i)].clone(),
-                    group_kem_secret: secret(&group_sk),
-                    member_kem_secret: secret(&member_sks[usize::from(i)]),
+                    group_kem_secret: group_sk.clone(),
+                    member_kem_secret: member_sks[usize::from(i)].clone(),
                     transport_secret: transport.clone(),
                     envelope_secret,
                 },
@@ -137,10 +134,10 @@ pub struct Scanned {
 }
 
 pub fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned {
-    let (group_x25519, group_ml_kem) = file.group_kem_secret().split_at(32);
+    let group = file.group_kem_secret();
     let ss = recover_combined_ss(
-        group_x25519.try_into().unwrap(),
-        group_ml_kem,
+        &group.x25519,
+        &group.ml_kem,
         &out.kem_ciphertext_x25519,
         &out.kem_ciphertext_ml_kem,
     )
@@ -155,7 +152,6 @@ pub fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned 
             .unwrap();
 
     let address = file.address();
-    let (member_x25519, member_ml_kem) = file.member_kem_secret().split_at(32);
     let i = file.member_index();
     let (own_x25519, own_ml_kem) =
         out.member_kem_ciphertexts[usize::from(i)].split_at(X25519_KEM_CT_LEN);
@@ -166,8 +162,7 @@ pub fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned 
             member_index: i,
             n_total: address.n_total(),
             m_required: address.m_required(),
-            member_x25519_sk: member_x25519.try_into().unwrap(),
-            member_ml_kem_dk: member_ml_kem,
+            member_kem_secret: file.member_kem_secret(),
             network: &NET,
         },
         &MultisigEntryView {

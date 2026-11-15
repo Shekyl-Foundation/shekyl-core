@@ -46,6 +46,7 @@
 //! Version 1 had no envelope keys. Pre-genesis, it is refused, not migrated.
 
 use shekyl_address::multisig_address::{MultisigAddressError, MultisigAddressPayload};
+use shekyl_crypto_pq::kem::{HybridKemSecretKey, HYBRID_KEM_SECRET_LEN};
 use shekyl_crypto_pq::multisig_envelope::{MultisigEnvelopeSecret, ENVELOPE_SECRET_LEN};
 use shekyl_crypto_pq::multisig_output::MultisigMemberView;
 use shekyl_crypto_pq::signature::HybridPublicKey;
@@ -56,23 +57,8 @@ use zeroize::Zeroizing;
 pub const MEMBER_FILE_MAGIC: [u8; 4] = *b"SKMF";
 /// The layout version this module writes and reads.
 pub const MEMBER_FILE_VERSION: u8 = 2;
-/// X25519 secret scalar length. Pinned, in the test build, to the classical
-/// half of the hybrid KEM (`shekyl_crypto_pq::kem::X25519_KEM_CT_LEN`: an
-/// X25519 scalar and its Montgomery u-coordinate are the same width).
-const X25519_SECRET_LEN: usize = 32;
-/// ML-KEM-768 decapsulation key length (FIPS 203). Pinned to
-/// `shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN` in the test build.
-const ML_KEM_768_DK_LEN: usize = 2400;
-/// A hybrid KEM secret: the X25519 scalar, then the ML-KEM-768 decapsulation key.
-pub const HYBRID_KEM_SECRET_LEN: usize = X25519_SECRET_LEN + ML_KEM_768_DK_LEN;
 /// Bytes of a scalar, a point, or the transport secret.
 const FIELD_LEN: usize = 32;
-
-#[cfg(test)]
-const _: () = {
-    assert!(X25519_SECRET_LEN == shekyl_crypto_pq::kem::X25519_KEM_CT_LEN);
-    assert!(ML_KEM_768_DK_LEN == shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN);
-};
 
 /// Why a member file cannot be built or read.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -91,8 +77,8 @@ pub enum MemberFileError {
     MemberIndex { index: u8, n: u8 },
     #[error("expected {expected} verification shares, got {got}")]
     VerificationShareCount { expected: u8, got: usize },
-    #[error("a hybrid KEM secret must be {HYBRID_KEM_SECRET_LEN} bytes, got {0}")]
-    KemSecretLength(usize),
+    #[error("a hybrid KEM secret is not in its canonical form")]
+    KemSecret,
     #[error("expected {expected} envelope public keys, got {got}")]
     EnvelopeKeyCount { expected: u8, got: usize },
     #[error("member {member}'s envelope public key is malformed")]
@@ -118,8 +104,8 @@ pub struct MemberFile {
     b: Zeroizing<[u8; FIELD_LEN]>,
     y_share: Zeroizing<[u8; FIELD_LEN]>,
     verification_shares: Vec<[u8; FIELD_LEN]>,
-    group_kem_secret: Zeroizing<Vec<u8>>,
-    member_kem_secret: Zeroizing<Vec<u8>>,
+    group_kem_secret: HybridKemSecretKey,
+    member_kem_secret: HybridKemSecretKey,
     transport_secret: Zeroizing<[u8; FIELD_LEN]>,
     envelope_secret: MultisigEnvelopeSecret,
     envelope_public_keys: Vec<HybridPublicKey>,
@@ -143,9 +129,9 @@ pub struct MemberSecrets {
     /// This member's share of `y_group`.
     pub y_share: Zeroizing<[u8; FIELD_LEN]>,
     /// The group hybrid KEM secret.
-    pub group_kem_secret: Zeroizing<Vec<u8>>,
+    pub group_kem_secret: HybridKemSecretKey,
     /// This member's own hybrid KEM secret.
-    pub member_kem_secret: Zeroizing<Vec<u8>>,
+    pub member_kem_secret: HybridKemSecretKey,
     /// The group transport secret. The dealer derives it and passes the
     /// bytes in; this file stores them and does not derive them.
     pub transport_secret: Zeroizing<[u8; FIELD_LEN]>,
@@ -161,8 +147,8 @@ impl MemberFile {
     ///
     /// [`MemberFileError::MemberIndex`] unless `member_index < n`;
     /// [`MemberFileError::VerificationShareCount`] unless there are `n`
-    /// verification shares; [`MemberFileError::KemSecretLength`] for a KEM
-    /// secret of the wrong length; [`MemberFileError::EnvelopeKeyCount`]
+    /// verification shares; [`MemberFileError::KemSecret`] for a KEM secret
+    /// not in its canonical form; [`MemberFileError::EnvelopeKeyCount`]
     /// unless there are `n` envelope public keys;
     /// [`MemberFileError::DuplicateEnvelopeKeys`] if two are equal (a file
     /// could not then say which of them sent it); and
@@ -190,9 +176,9 @@ impl MemberFile {
             });
         }
         for secret in [&secrets.group_kem_secret, &secrets.member_kem_secret] {
-            if secret.len() != HYBRID_KEM_SECRET_LEN {
-                return Err(MemberFileError::KemSecretLength(secret.len()));
-            }
+            secret
+                .to_canonical_bytes()
+                .map_err(|_| MemberFileError::KemSecret)?;
         }
         if envelope_public_keys.len() != usize::from(n) {
             return Err(MemberFileError::EnvelopeKeyCount {
@@ -262,33 +248,27 @@ impl MemberFile {
         &self.verification_shares
     }
 
-    /// The group hybrid KEM secret (`X25519 ‖ ML-KEM-768 dk`).
+    /// The group hybrid KEM secret.
     #[must_use]
-    pub fn group_kem_secret(&self) -> &[u8] {
+    pub fn group_kem_secret(&self) -> &HybridKemSecretKey {
         &self.group_kem_secret
     }
 
-    /// This member's own hybrid KEM secret (`X25519 ‖ ML-KEM-768 dk`).
+    /// This member's own hybrid KEM secret.
     #[must_use]
-    pub fn member_kem_secret(&self) -> &[u8] {
+    pub fn member_kem_secret(&self) -> &HybridKemSecretKey {
         &self.member_kem_secret
     }
 
     /// This member as the multisig signer sees it on `network`: its index,
-    /// the group's size and threshold, and its own KEM secret split into
-    /// its X25519 and ML-KEM-768 halves. The split is this file's layout,
-    /// so it is made here and nowhere else.
+    /// the group's size and threshold, and its own KEM secret, typed.
     pub(crate) fn signing_view<'a>(&'a self, network: &'a NetworkId) -> MultisigMemberView<'a> {
-        let (x25519, ml_kem) = self.member_kem_secret.split_at(X25519_SECRET_LEN);
         let address = self.address();
         MultisigMemberView {
             member_index: self.member_index(),
             n_total: address.n_total(),
             m_required: address.m_required(),
-            member_x25519_sk: x25519
-                .try_into()
-                .expect("a member KEM secret is HYBRID_KEM_SECRET_LEN bytes, X25519 first"),
-            member_ml_kem_dk: ml_kem,
+            member_kem_secret: &self.member_kem_secret,
             network,
         }
     }
@@ -336,8 +316,13 @@ impl MemberFile {
         for share in &self.verification_shares {
             out.extend_from_slice(share);
         }
-        out.extend_from_slice(&self.group_kem_secret);
-        out.extend_from_slice(&self.member_kem_secret);
+        for secret in [&self.group_kem_secret, &self.member_kem_secret] {
+            out.extend_from_slice(
+                &secret
+                    .to_canonical_bytes()
+                    .expect("new() refused a KEM secret not in its canonical form"),
+            );
+        }
         out.extend_from_slice(self.transport_secret.as_ref());
         out.extend_from_slice(self.envelope_secret.as_bytes());
         for key in &self.envelope_public_keys {
@@ -375,8 +360,12 @@ impl MemberFile {
         let verification_shares = (0..address.n_total())
             .map(|_| r.field())
             .collect::<Result<Vec<_>, _>>()?;
-        let group_kem_secret = Zeroizing::new(r.take(HYBRID_KEM_SECRET_LEN)?.to_vec());
-        let member_kem_secret = Zeroizing::new(r.take(HYBRID_KEM_SECRET_LEN)?.to_vec());
+        let mut kem_secret = || {
+            HybridKemSecretKey::from_canonical_bytes(r.take(HYBRID_KEM_SECRET_LEN)?)
+                .map_err(|_| MemberFileError::KemSecret)
+        };
+        let group_kem_secret = kem_secret()?;
+        let member_kem_secret = kem_secret()?;
         let transport_secret = Zeroizing::new(r.field()?);
         let envelope_secret = MultisigEnvelopeSecret::from_bytes(Zeroizing::new(
             r.take(ENVELOPE_SECRET_LEN)?
@@ -462,8 +451,14 @@ mod tests {
         MemberSecrets {
             b: Zeroizing::new([0x0B; 32]),
             y_share: Zeroizing::new([0x0F; 32]),
-            group_kem_secret: Zeroizing::new(vec![0x6A; HYBRID_KEM_SECRET_LEN]),
-            member_kem_secret: Zeroizing::new(vec![0x6B; HYBRID_KEM_SECRET_LEN]),
+            group_kem_secret: HybridKemSecretKey::from_canonical_bytes(
+                &[0x6A; HYBRID_KEM_SECRET_LEN],
+            )
+            .unwrap(),
+            member_kem_secret: HybridKemSecretKey::from_canonical_bytes(
+                &[0x6B; HYBRID_KEM_SECRET_LEN],
+            )
+            .unwrap(),
             transport_secret: Zeroizing::new([0x5E; 32]),
             envelope_secret,
         }
@@ -501,8 +496,15 @@ mod tests {
             assert_eq!(read.b(), original.b());
             assert_eq!(read.y_share(), original.y_share());
             assert_eq!(read.verification_shares(), original.verification_shares());
-            assert_eq!(read.group_kem_secret(), original.group_kem_secret());
-            assert_eq!(read.member_kem_secret(), original.member_kem_secret());
+            for (read, original) in [
+                (read.group_kem_secret(), original.group_kem_secret()),
+                (read.member_kem_secret(), original.member_kem_secret()),
+            ] {
+                assert_eq!(
+                    *read.to_canonical_bytes().unwrap(),
+                    *original.to_canonical_bytes().unwrap()
+                );
+            }
             assert_eq!(read.transport_secret(), original.transport_secret());
             assert_eq!(
                 read.envelope_secret().as_bytes(),

@@ -42,7 +42,7 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 use crate::derivation::derive_multisig_key_hashes_key;
 use crate::encrypted_output_field::EncryptedOutputField;
 use crate::error::CryptoError;
-use crate::kem::X25519_KEM_CT_LEN;
+use crate::kem::{HybridKemSecretKey, X25519_KEM_CT_LEN};
 use crate::leaf_commitment::{pqc_leaf_commitment, PqcLeafCommitment, PQC_LEAF_ENTRY_LEN};
 use crate::multisig::{multisig_key_hash, MultisigCommittedForm, MULTISIG_KEY_HASH_LEN};
 use crate::output::{construct_output_core, encapsulate_deterministic, recover_combined_ss};
@@ -301,10 +301,8 @@ pub struct MultisigMemberView<'a> {
     pub n_total: u8,
     /// The group's threshold.
     pub m_required: u8,
-    /// This member's X25519 KEM secret.
-    pub member_x25519_sk: &'a [u8; 32],
-    /// This member's ML-KEM-768 decapsulation key.
-    pub member_ml_kem_dk: &'a [u8],
+    /// This member's own hybrid KEM secret.
+    pub member_kem_secret: &'a HybridKemSecretKey,
     /// The chain's network id (the key hashes bind it).
     pub network: &'a NetworkId,
 }
@@ -387,8 +385,8 @@ pub fn open_multisig_entry(
     }
 
     let member_ss = recover_combined_ss(
-        member.member_x25519_sk,
-        member.member_ml_kem_dk,
+        &member.member_kem_secret.x25519,
+        &member.member_kem_secret.ml_kem,
         entry.own_x25519_ct,
         entry.own_ml_kem_ct,
     )
@@ -472,8 +470,8 @@ pub fn multisig_member_public_key(
         return Err(MultisigSignError::GroupSize);
     }
     let member_ss = recover_combined_ss(
-        member.member_x25519_sk,
-        member.member_ml_kem_dk,
+        &member.member_kem_secret.x25519,
+        &member.member_kem_secret.ml_kem,
         ciphertext.own_x25519_ct,
         ciphertext.own_ml_kem_ct,
     )
@@ -503,8 +501,8 @@ pub fn sign_multisig_member_auth(
         return Err(MultisigSignError::GroupSize);
     }
     let member_ss = recover_combined_ss(
-        member.member_x25519_sk,
-        member.member_ml_kem_dk,
+        &member.member_kem_secret.x25519,
+        &member.member_kem_secret.ml_kem,
         ciphertext.own_x25519_ct,
         ciphertext.own_ml_kem_ct,
     )
