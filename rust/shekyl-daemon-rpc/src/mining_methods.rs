@@ -781,19 +781,30 @@ mod tests {
         }
     }
 
-    /// A chain of one block at the start's read, and `after` blocks at
-    /// every read after it: the stop's.
+    /// A chain of one block at the start's read, and [`Self::after`] blocks
+    /// at every read after it. `after` can move while the call runs: the
+    /// door's answer stores the connected count before the verdict's read.
     struct Grows {
         reads: std::sync::atomic::AtomicUsize,
-        after: u64,
+        after: std::sync::Arc<std::sync::atomic::AtomicU64>,
     }
 
     impl Grows {
         fn to(after: u64) -> Self {
             Self {
                 reads: std::sync::atomic::AtomicUsize::new(0),
-                after,
+                after: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(after)),
             }
+        }
+
+        /// The count every chain read after the first reports. The door's
+        /// answer stores into this before the verdict is read.
+        fn tip_after(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+            std::sync::Arc::clone(&self.after)
+        }
+
+        fn after(&self) -> u64 {
+            self.after.load(std::sync::atomic::Ordering::Acquire)
         }
     }
 
@@ -803,7 +814,11 @@ mod tests {
                 .reads
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(crate::chain_facts::ChainTip {
-                chain_height: ChainCount::from_raw(if read == 0 { 1 } else { self.after }),
+                chain_height: ChainCount::from_raw(if read == 0 {
+                    CHAIN_AT_THE_START
+                } else {
+                    self.after()
+                }),
                 top_hash: BlockHash::from_bytes([1; 32]),
                 target_height: None,
                 synchronized: true,
@@ -820,7 +835,7 @@ mod tests {
         ) -> Result<crate::chain_facts::BlockHashAt, FactsFault> {
             Ok(crate::chain_facts::BlockHashAt {
                 hash: Some(BlockHash::from_bytes([2; 32])),
-                chain_height: ChainCount::from_raw(self.after),
+                chain_height: ChainCount::from_raw(self.after()),
             })
         }
         fn block_header_at(
@@ -863,13 +878,21 @@ mod tests {
         assert_eq!(refused.class, ErrorClass::NotReady);
     }
 
+    /// One block already on the chain. The call mines one more.
+    const CHAIN_AT_THE_START: u64 = 1;
+    /// Chain count once that mined block has connected.
+    const CHAIN_ONCE_CONNECTED: u64 = 2;
+
     /// A node whose job is withdrawn the moment the call waits, and whose
     /// miner had delivered the target block before the stop: the door
     /// answers that block only when [`MiningFacts::found_answered`] is
-    /// waited, and the chain shows it from then on.
+    /// waited, and the chain's later reads show [`CHAIN_ONCE_CONNECTED`]
+    /// from then on.
     struct AnsweredAfterTheStop {
-        /// Set once the door has answered the delivered block.
-        answered: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        /// [`Grows::tip_after`]: the count stored when the door answers.
+        tip_after: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        /// Chain count the verdict should read once the door has answered.
+        connected: u64,
         /// Set by the stop: the wait must come after it.
         stopped: std::sync::atomic::AtomicBool,
     }
@@ -905,8 +928,8 @@ mod tests {
                 self.stopped.load(std::sync::atomic::Ordering::Acquire),
                 "the wait comes after the stop: a running miner delivers more"
             );
-            self.answered
-                .store(true, std::sync::atomic::Ordering::Release);
+            self.tip_after
+                .store(self.connected, std::sync::atomic::Ordering::Release);
             Ok(())
         }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
@@ -917,64 +940,6 @@ mod tests {
         }
         fn withdrawn(&self) -> crate::mining_facts::Pending<'_, Diagnostic> {
             Box::pin(async { Ok(Diagnostic::new(codes::SYNCING, "the node is not synced")) })
-        }
-    }
-
-    /// A chain of one block until the door has answered the miner's
-    /// delivered block, and two from then on.
-    struct GrowsWhenAnswered {
-        answered: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl GrowsWhenAnswered {
-        fn count(&self) -> u64 {
-            if self.answered.load(std::sync::atomic::Ordering::Acquire) {
-                2
-            } else {
-                1
-            }
-        }
-    }
-
-    impl ChainFacts for GrowsWhenAnswered {
-        fn chain_tip(&self) -> Result<crate::chain_facts::ChainTip, FactsFault> {
-            Ok(crate::chain_facts::ChainTip {
-                chain_height: ChainCount::from_raw(self.count()),
-                top_hash: BlockHash::from_bytes([1; 32]),
-                target_height: None,
-                synchronized: true,
-                release_build: false,
-                halt: None,
-            })
-        }
-        fn identity(&self) -> Result<crate::chain_facts::DaemonIdentity, FactsFault> {
-            unreachable!("dev_block_generate reads no identity")
-        }
-        fn block_hash_at(
-            &self,
-            _height: shekyl_types::BlockHeight,
-        ) -> Result<crate::chain_facts::BlockHashAt, FactsFault> {
-            Ok(crate::chain_facts::BlockHashAt {
-                hash: Some(BlockHash::from_bytes([2; 32])),
-                chain_height: ChainCount::from_raw(self.count()),
-            })
-        }
-        fn block_header_at(
-            &self,
-            _at: crate::chain_facts::BlockLookup,
-            _fill_pow_hash: bool,
-        ) -> Result<crate::chain_facts::BlockHeaderAt, FactsFault> {
-            unreachable!("dev_block_generate reads no header")
-        }
-        fn fee_estimate(&self) -> Result<crate::chain_facts::FeeEstimate, FactsFault> {
-            unreachable!("dev_block_generate reads no fee")
-        }
-        fn block_at(
-            &self,
-            _at: crate::chain_facts::BlockLookup,
-            _fill_pow_hash: bool,
-        ) -> Result<crate::chain_facts::BlockAt, FactsFault> {
-            unreachable!("dev_block_generate reads no block")
         }
     }
 
@@ -992,12 +957,12 @@ mod tests {
     /// after the stop: the chain reads one block, and the call is refused.
     #[tokio::test]
     async fn generateblocks_reads_the_chain_after_the_door_answers_what_the_miner_delivered() {
-        let answered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let chain = Grows::to(CHAIN_AT_THE_START);
         let mining: MiningHandle = std::sync::Arc::new(AnsweredAfterTheStop {
-            answered: std::sync::Arc::clone(&answered),
+            tip_after: chain.tip_after(),
+            connected: CHAIN_ONCE_CONNECTED,
             stopped: std::sync::atomic::AtomicBool::new(false),
         });
-        let chain = GrowsWhenAnswered { answered };
         let generated = dev_block_generate(&mining, &Unwoken, &chain, armed(), count(1))
             .await
             .expect("the delivered block connected before the verdict");

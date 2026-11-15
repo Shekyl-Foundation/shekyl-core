@@ -2105,7 +2105,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
     );
     let (sender, inbox) = shekyl_miner::found_blocks();
     let (done_tx, _done_rx) = tokio::sync::oneshot::channel();
-    let sink = crate::follower::spawn_sink(inbox, door.clone(), postings, done_tx);
+    let sink = crate::follower::sink::spawn_sink(inbox, door.clone(), postings, done_tx);
     assert!(sender.deliver(shekyl_miner::Found {
         block: blocks[2].template.block.clone(),
         height: blocks[2].height,
@@ -2118,20 +2118,38 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         (false, false),
         "waiting for a seat: not connected, not stored"
     );
+    // The block is inside the door. The verdict stays parked until the
+    // door returns, and the chain shows the block when the wait returns.
+    // Red edit: record the answer in `answer_with` before the closure
+    // returns. The park signal never arrives.
+    let (parked_tx, parked) = std::sync::mpsc::channel();
+    let (returned_tx, returned) = std::sync::mpsc::channel();
+    let verdict = std::thread::spawn(move || {
+        sender.answered_observing(|| {
+            parked_tx.send(()).expect("the test hears the park");
+        });
+        returned_tx.send(()).expect("the test hears the verdict");
+    });
+    parked
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the verdict parked while the block was still at the door");
+    assert!(
+        returned.try_recv().is_err(),
+        "the verdict was read before the door replied"
+    );
     substrate.open(blocks[1].hash);
     assert!(
         matches!(first.reply().await.reply, Reply::Connected { .. }),
         "block 1 connects and gives its seat back"
     );
-    let started = std::time::Instant::now();
-    while !homes(&service, blocks[2].hash).0 {
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(20),
-            "the mined block was dropped"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    drop(sender);
+    returned
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("the door's reply releases the verdict");
+    assert!(
+        homes(&service, blocks[2].hash).0,
+        "the chain shows the block the verdict waited for"
+    );
+    verdict.join().expect("the verdict returns");
     tokio::task::spawn_blocking(move || sink.join().expect("the sink ends"))
         .await
         .expect("joined");

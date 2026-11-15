@@ -36,10 +36,12 @@
 //! of them.
 //!
 //! **The found-block sink.** A found block enters through the service's
-//! one door as a local arrival. A full window waits for the reserved seat
-//! instead of dropping the block. A closed door drops it. The service
-//! closes the inbox on the way out, so the sink ends while a sender still
-//! lives, and the thread is joined only after it has left the door.
+//! one door as a local arrival ([`sink`]). A full window waits for the
+//! reserved seat instead of dropping the block. A closed door drops it.
+//! The service holds a [`FoundClose`], not a second receiver, and closes
+//! through that on the way out, so the sink ends while a sender still
+//! lives. The thread is joined only after it has left the door. The sink's
+//! own inbox is the receiver whose exit ends a wait for the door's answer.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -49,7 +51,7 @@ use shekyl_chain_rules::{Fault, HeaderView, InvalidBlock, StatelessPass, Tip, Vi
 use shekyl_chain_store::store::{SnapshotView, StoreError};
 use shekyl_chain_sync::SyncState;
 use shekyl_mempool::{stateless, Admission, PoolFault};
-use shekyl_miner::{FoundInbox, Generation, Job, JobBoard};
+use shekyl_miner::{FoundClose, FoundInbox, Generation, Job, JobBoard};
 use shekyl_types::TxHash;
 use shekyl_wire::Transaction;
 use tokio::sync::watch;
@@ -58,10 +60,10 @@ use crate::connector::{FactsStop, TipChanged};
 use crate::pow::Pow;
 use crate::router::ClaimStop;
 use crate::schedule::ChainRules;
-use crate::service::{
-    divide_pool_faults, with_pool, ArrivalTag, Door, PoolDivision, ServiceFault, Shared,
-};
+use crate::service::{divide_pool_faults, with_pool, Door, PoolDivision, ServiceFault, Shared};
 use crate::template::{produce, NoTemplate, Producer};
+
+pub(crate) mod sink;
 
 /// Why the board holds no job: what `mine_status` and
 /// `block_template` say while nothing is posted.
@@ -295,9 +297,6 @@ pub struct JobSeat {
 /// bound is how many posted jobs a reader of the record can still see.
 const KEPT_JOBS: usize = 8;
 
-/// The found-block sink's thread. Short enough for a platform thread name.
-const FOUND_SINK_THREAD: &str = "shekyl-found";
-
 /// One posting: the job the board minted `generation` for, and the bodies
 /// that job listed. The sink needs the bodies. A reader of what was posted
 /// needs the job. They are one record, written together.
@@ -356,12 +355,13 @@ impl Seated {
     }
 }
 
-/// The sink thread, the inbox that closes it, and the signal it sends
-/// when it leaves the loop. The await on `done` yields before the join,
-/// so a ticket the sink holds can be answered by the service task.
+/// The sink thread, the closer that ends it, and the signal it sends
+/// when it leaves the loop. The closer is not a receiver. The await on
+/// `done` yields before the join, so a ticket the sink holds can be
+/// answered by the service task.
 struct SinkJoin {
     thread: std::thread::JoinHandle<()>,
-    inbox: FoundInbox,
+    close: FoundClose,
     done: tokio::sync::oneshot::Receiver<()>,
 }
 
@@ -383,9 +383,9 @@ pub(crate) async fn follow<P>(
             posting,
             witness,
         }) => {
-            let inbox = found.clone();
+            let close = found.close_handle();
             let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-            let thread = spawn_sink(found, door.clone(), Arc::clone(&postings), done_tx);
+            let thread = sink::spawn_sink(found, door.clone(), Arc::clone(&postings), done_tx);
             posting.send_replace(Posting::Withdrawn(NoJob::Starting));
             (
                 Some(Seated {
@@ -397,7 +397,7 @@ pub(crate) async fn follow<P>(
                 }),
                 Some(SinkJoin {
                     thread,
-                    inbox,
+                    close,
                     done: done_rx,
                 }),
             )
@@ -513,16 +513,18 @@ pub(crate) async fn follow<P>(
     door.close();
     if let Some(SinkJoin {
         thread,
-        inbox,
+        close,
         done,
     }) = sink
     {
         // Close the inbox before waiting, so a sink blocked in `recv`
-        // wakes while a sender still lives. The wait yields this task:
-        // the service task can then answer a queued local arrival, which
-        // a sink waits on in `offer_local`. The join is after that answer,
-        // so it does not occupy the worker the reply needs.
-        inbox.close();
+        // wakes while a sender still lives. The closer is not a receiver:
+        // the sink's inbox is the one whose drop ends a wait for the door.
+        // The wait yields this task: the service task can then answer a
+        // queued local arrival, which a sink waits on in `offer_local`.
+        // The join is after that answer, so it does not occupy the worker
+        // the reply needs.
+        close.close();
         if done.await.is_err() {
             tracing::error!("the found-block sink ended without signalling");
         }
@@ -916,87 +918,4 @@ impl Unposted {
             }
         }
     }
-}
-
-/// What became of a block this node mined, when it did not join the chain.
-fn say_mined(reply: &crate::service::Reply) {
-    use crate::service::Reply;
-    match reply {
-        Reply::Connected { .. } | Reply::Switched { .. } | Reply::Stopped => {}
-        Reply::Refused(verdict) => {
-            tracing::error!("a block this node mined was refused: {verdict:?}");
-        }
-        other => tracing::warn!("a block this node mined did not connect: {other:?}"),
-    }
-}
-
-/// Sends when the sink leaves its loop, including by a panic.
-struct SignalDone(Option<tokio::sync::oneshot::Sender<()>>);
-
-impl Drop for SignalDone {
-    fn drop(&mut self) {
-        if let Some(done) = self.0.take() {
-            let _sent = done.send(());
-        }
-    }
-}
-
-/// The found-block sink. It ends when the inbox closes or the last sender
-/// drops, and the queue is empty. Each block enters through the door's
-/// local-arrival entry ([`Door::offer_local`]) on the runtime it was
-/// spawned from, and is marked answered once the door has replied
-/// ([`FoundInbox::answered`]). Called from inside that runtime.
-pub(crate) fn spawn_sink(
-    inbox: FoundInbox,
-    door: Door,
-    postings: Postings,
-    done: tokio::sync::oneshot::Sender<()>,
-) -> std::thread::JoinHandle<()> {
-    let runtime = tokio::runtime::Handle::current();
-    std::thread::Builder::new()
-        .name(FOUND_SINK_THREAD.to_owned())
-        .spawn(move || {
-            let _done = SignalDone(Some(done));
-            while let Some(found) = inbox.recv() {
-                let bodies = {
-                    let kept = postings.lock().unwrap_or_else(PoisonError::into_inner);
-                    match kept.get(&found.generation) {
-                        Some(kept) => {
-                            // Height and parent are this posting's tip. A
-                            // block that names another is logged; the door
-                            // judges the block, with this posting's bodies.
-                            if found.height != kept.job.height
-                                || found.block.header.previous != kept.job.block.header.previous
-                            {
-                                tracing::error!(
-                                    generation = found.generation.to_raw(),
-                                    "a block this node mined names a generation built for another tip"
-                                );
-                            }
-                            kept.bodies.clone()
-                        }
-                        None => Vec::new(),
-                    }
-                };
-                // The local-arrival entry waits out a full window. A closed
-                // door answers `Stopped`. Anything else is this node's own
-                // block not joining the chain, and it is said once.
-                let offered = runtime.block_on(door.offer_local(
-                    ArrivalTag(found.generation.to_raw()),
-                    found.block.serialize(),
-                    bodies.iter().map(Transaction::serialize).collect(),
-                ));
-                match offered {
-                    Ok(tagged) => say_mined(&tagged.reply),
-                    Err(refused) => tracing::error!(
-                        "a block this node mined was not accepted at the door: {refused:?}"
-                    ),
-                }
-                // The door has replied, whatever the reply: the chain now
-                // shows what this block came to, which is what a caller of
-                // `FoundBlocks::answered` waits to read.
-                inbox.answered();
-            }
-        })
-        .expect("the found-block sink starts")
 }

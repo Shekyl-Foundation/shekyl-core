@@ -6,18 +6,20 @@
 //! The found-block mailbox.
 //!
 //! The miner holds [`FoundBlocks`] and delivers what a worker finds. The
-//! ingest service holds [`FoundInbox`]: it receives from it, and it closes
-//! it when the service stops, so the sink ends while a sender still lives.
+//! sink holds [`FoundInbox`] and answers each block with
+//! [`FoundInbox::answer_with`]: the door runs inside that call, and the
+//! answer is recorded when the door returns. The service holds a
+//! [`FoundClose`] for shutdown. That handle ends the inbox and is not a
+//! receiver, so the sink's thread is the receiver whose exit ends a wait.
 //! The last sender dropping ends the receive too, which is a miner stopping
-//! on its own and disconnecting the sink. The last inbox dropping closes
+//! on its own and disconnecting the sink. The last receiver dropping closes
 //! the mailbox, so a later deliver refuses and nothing queued is kept.
 //!
-//! The mailbox counts what was delivered and what the receiver has
-//! answered ([`FoundInbox::answered`]): the service calls it once the door
-//! has replied to a block, connected or refused. [`FoundBlocks::answered`]
-//! waits for every block delivered so far to be answered. A caller that
-//! stopped the miner reads the chain after that wait, and not while a
-//! block the miner found is still on its way through the door.
+//! [`FoundBlocks::answered`] waits until every block delivered before the
+//! call has been through `answer_with`. It also returns when that last
+//! receiver drops. A closer that is still held does not keep the wait
+//! parked. A caller that stopped the miner reads the chain after that
+//! wait, and not while a block the miner found is still inside the door.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -54,11 +56,13 @@ struct Mail {
     senders: usize,
     /// Live [`FoundInbox`] clones. Zero closes the mailbox. Nothing can
     /// receive, so the queue is dropped and a later deliver refuses.
+    /// A [`FoundClose`] is not one of these: shutdown holds it and it
+    /// never receives.
     receivers: usize,
     /// Blocks [`FoundBlocks::deliver`] accepted.
     delivered: u64,
-    /// Blocks the receiver has answered ([`FoundInbox::answered`]). Never
-    /// above `delivered`.
+    /// Blocks [`FoundInbox::answer_with`] has recorded, after the door
+    /// returned. Never above `delivered`.
     answered: u64,
 }
 
@@ -128,17 +132,32 @@ impl FoundBlocks {
     }
 
     /// Wait until every block delivered before this call has its answer
-    /// from the receiver ([`FoundInbox::answered`]). Returns at once when
-    /// nothing is owed. Returns too when the last inbox has dropped:
-    /// nothing will answer what was queued, and nothing will connect it.
+    /// ([`FoundInbox::answer_with`]). Returns at once when nothing is owed.
+    /// Returns too when the last receiver has dropped: nothing will answer
+    /// what was queued. A [`FoundClose`] still held does not keep this
+    /// parked, because a closer does not receive.
     ///
     /// Blocking. A block delivered while this waits is not waited for: the
     /// caller that wants none stops the miner first, and a stopped miner
     /// delivers nothing ([`JobBoard`](crate::JobBoard)'s claim).
     pub fn answered(&self) {
+        self.answered_observing(|| {});
+    }
+
+    /// [`answered`](Self::answered). When a reply is still owed, `on_park`
+    /// runs once under the mailbox lock, immediately before this thread
+    /// waits. The door records its reply under that same lock, so a signal
+    /// sent from `on_park` is ordered before any reply that was not already
+    /// recorded. `on_park` must not take the mailbox lock.
+    pub fn answered_observing(&self, mut on_park: impl FnMut()) {
         let mut mail = lock(&self.shared);
         let owed = mail.delivered;
+        let mut parked = false;
         while mail.answered < owed && mail.receivers > 0 {
+            if !parked {
+                on_park();
+                parked = true;
+            }
             mail = self
                 .shared
                 .settled
@@ -146,6 +165,34 @@ impl FoundBlocks {
                 .unwrap_or_else(PoisonError::into_inner);
         }
     }
+}
+
+/// Ends the inbox without receiving. The service holds one so shutdown can
+/// [`close`](FoundClose::close) the sink while a sender still lives.
+/// Dropping it leaves the mailbox open: it is not a receiver, and it does
+/// not keep [`FoundBlocks::answered`] parked.
+pub struct FoundClose {
+    shared: Arc<Shared>,
+}
+
+impl fmt::Debug for FoundClose {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("FoundClose")
+    }
+}
+
+impl FoundClose {
+    /// End the inbox. Receivers drain what was already delivered and then
+    /// see [`FoundInbox::recv`] return `None`. A later deliver refuses.
+    pub fn close(&self) {
+        close_mail(&self.shared);
+    }
+}
+
+fn close_mail(shared: &Shared) {
+    let mut mail = lock(shared);
+    mail.closed = true;
+    shared.arrived.notify_all();
 }
 
 /// The receiving end. Cloning counts a receiver of the same inbox.
@@ -249,20 +296,41 @@ impl FoundInbox {
         }
     }
 
-    /// One received block has its answer: the door replied to it,
-    /// connected or refused. The receiver calls this once per block it
-    /// took, after the reply, so [`FoundBlocks::answered`] returns only
-    /// when the chain shows what that block came to.
+    /// A [`FoundClose`] for this inbox. Shutdown holds it and calls
+    /// [`FoundClose::close`]. The handle is not a receiver.
+    #[must_use]
+    pub fn close_handle(&self) -> FoundClose {
+        FoundClose {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
+    /// Take the next block, run `reply`, then record that the door has
+    /// answered. [`FoundBlocks::answered`] stays parked for this block
+    /// until `reply` returns. `None` when the inbox has ended and nothing
+    /// is queued: `reply` does not run, and nothing is recorded.
+    ///
+    /// A panic in `reply` records nothing. The receiver's drop ends the
+    /// wait then. A closer still held does not keep it parked.
     ///
     /// # Panics
     ///
-    /// When more blocks are answered than were delivered: a receiver
-    /// answered a block it did not take.
-    pub fn answered(&self) {
+    /// When more blocks are recorded than were delivered.
+    #[must_use]
+    pub fn answer_with<T>(&self, reply: impl FnOnce(Found) -> T) -> Option<T> {
+        let found = self.recv()?;
+        let answered = reply(found);
+        self.record_reply();
+        Some(answered)
+    }
+
+    /// The door has returned for one block [`recv`](Self::recv) already
+    /// took. One record per delivered block.
+    fn record_reply(&self) {
         let mut mail = lock(&self.shared);
         assert!(
             mail.answered < mail.delivered,
-            "a found block is answered once, after it is received"
+            "a found block is answered once, after the door returns"
         );
         mail.answered += 1;
         self.shared.settled.notify_all();
@@ -270,11 +338,10 @@ impl FoundInbox {
 
     /// End the inbox. Receivers drain the queue and then see [`recv`](Self::recv)
     /// return `None`, whether or not a sender still lives. A deliver after
-    /// this returns `false`.
+    /// this returns `false`. [`FoundClose::close`] is this same close, on
+    /// a handle that does not receive.
     pub fn close(&self) {
-        let mut mail = lock(&self.shared);
-        mail.closed = true;
-        self.shared.arrived.notify_all();
+        close_mail(&self.shared);
     }
 }
 
@@ -307,6 +374,9 @@ mod tests {
     use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, SectionRoot};
     use shekyl_wire::transaction::{Ct, CtBase, Input, TxPrefix};
     use shekyl_wire::{Block, BlockHeader, Transaction};
+
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use super::found_blocks;
     use crate::job::Generation;
@@ -374,69 +444,119 @@ mod tests {
         assert!(!sender.deliver(found_at(2)));
     }
 
-    /// [`FoundBlocks::answered`] returns only once every block delivered
-    /// before it has been answered: received is not answered. With nothing
-    /// delivered it returns at once.
+    /// [`FoundBlocks::answered`] returns at once when nothing has been
+    /// delivered, and otherwise only once [`FoundInbox::answer_with`]'s
+    /// closure has returned. Received is not answered.
     ///
-    /// Red edit: count a block as answered in `recv` instead of in
-    /// [`FoundInbox::answered`]: the wait returns while the receiver still
-    /// holds the block, before the flag below is set.
+    /// The park signal is sent under the mailbox lock, before the wait.
+    /// Red edit: record the answer in `recv`, before the closure returns.
+    /// The wait then never parks, and this times out on the park signal.
     #[test]
-    fn the_wait_ends_when_each_delivered_block_is_answered_not_when_it_is_received() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
+    fn the_wait_stays_parked_until_the_door_closure_returns() {
         let (sender, inbox) = found_blocks();
         sender.answered();
         assert!(sender.deliver(found_at(5)));
         assert!(sender.deliver(found_at(6)));
-        let replied = Arc::new(AtomicBool::new(false));
-        let (received_tx, received) = std::sync::mpsc::channel();
-        let (reply, reply_rx) = std::sync::mpsc::channel::<()>();
-        let receiver = {
-            let replied = Arc::clone(&replied);
-            std::thread::spawn(move || {
-                let first = inbox.recv().expect("the first block");
-                inbox.answered();
-                let second = inbox.recv().expect("the second block");
-                // Both are received. The second has no answer until the
-                // test says the door replied.
-                received_tx.send(()).expect("the test waits");
-                reply_rx.recv().expect("the test replies");
-                replied.store(true, Ordering::Release);
-                inbox.answered();
-                (first, second)
-            })
-        };
-        let waiter = {
-            let replied = Arc::clone(&replied);
-            std::thread::spawn(move || {
-                sender.answered();
-                replied.load(Ordering::Acquire)
-            })
-        };
-        received.recv().expect("both blocks are received");
-        reply.send(()).expect("the receiver waits for the reply");
+        let (received_tx, received) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let receiver = std::thread::spawn(move || {
+            assert!(inbox
+                .answer_with(|found| assert_eq!(found, found_at(5)))
+                .is_some());
+            assert!(inbox
+                .answer_with(|found| {
+                    assert_eq!(found, found_at(6));
+                    received_tx.send(()).expect("the test waits");
+                    release_rx.recv().expect("the test releases the door");
+                })
+                .is_some());
+        });
+        received
+            .recv()
+            .expect("the second block is in the door, and the door has not returned");
+        let (parked_tx, parked) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            sender.answered_observing(|| {
+                parked_tx.send(()).expect("the test hears the park");
+            });
+            done_tx.send(()).expect("the test hears the return");
+        });
+        parked
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the waiter parked; an answer recorded at receive never parks");
         assert!(
-            waiter.join().expect("the wait returns"),
-            "the wait returned before the second block was answered"
+            done.recv_timeout(Duration::from_millis(200)).is_err(),
+            "the wait returned before the door closure returned"
         );
-        let (first, second) = receiver.join().expect("the receiver returns");
-        assert_eq!((first, second), (found_at(5), found_at(6)));
+        release_tx.send(()).expect("the door returns");
+        done.recv_timeout(Duration::from_secs(5))
+            .expect("the wait returns once the door has replied");
+        waiter.join().expect("the waiter returns");
+        receiver.join().expect("the receiver returns");
     }
 
-    /// The last inbox dropping ends the wait: nothing will answer what was
-    /// delivered.
+    /// The receiving inbox dropping ends the wait while a [`FoundClose`]
+    /// still lives. Shutdown holds that closer for the whole service, and
+    /// it is not a receiver.
     ///
-    /// Red edit: drop the `settled` wake from `FoundInbox`'s `Drop`: the
-    /// wait never returns.
+    /// Red edit: count the closer as a receiver, or drop the `settled`
+    /// wake from [`FoundInbox`]'s `Drop`. The bounded wait then times out
+    /// instead of hanging the suite.
     #[test]
-    fn the_wait_ends_when_the_last_inbox_drops_with_a_block_unanswered() {
+    fn the_wait_ends_when_the_receiver_drops_while_a_closer_still_lives() {
         let (sender, inbox) = found_blocks();
+        let close = inbox.close_handle();
         assert!(sender.deliver(found_at(7)));
-        let waiter = std::thread::spawn(move || sender.answered());
+        let (parked_tx, parked) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            sender.answered_observing(|| {
+                parked_tx.send(()).expect("the test hears the park");
+            });
+            done_tx.send(()).expect("the test hears the return");
+        });
+        parked
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the waiter parked");
         drop(inbox);
-        waiter.join().expect("the wait returns");
+        done.recv_timeout(Duration::from_secs(5))
+            .expect("the last receiver dropping ends the wait");
+        waiter.join().expect("the waiter returns");
+        close.close();
+    }
+
+    /// Dropping the closer does not close the mailbox and does not refuse
+    /// a deliver. Red edit: close the mailbox from `FoundClose`'s `Drop`.
+    #[test]
+    fn dropping_the_closer_leaves_the_receiver_at_work() {
+        let (sender, inbox) = found_blocks();
+        let close = inbox.close_handle();
+        drop(close);
+        let found = found_at(8);
+        assert!(sender.deliver(found.clone()));
+        assert_eq!(inbox.recv(), Some(found));
+    }
+
+    /// [`FoundClose::close`] ends `recv` while a sender still lives.
+    /// [`FoundInbox::close`] is the same close.
+    #[test]
+    fn the_closer_ends_recv_while_a_sender_lives() {
+        let (_sender, inbox) = found_blocks();
+        let close = inbox.close_handle();
+        close.close();
+        assert!(inbox.recv().is_none());
+    }
+
+    /// An ended inbox does not run the door and does not record an answer.
+    /// Red edit: run the closure when `recv` returns `None`.
+    #[test]
+    fn answer_with_does_not_run_the_door_once_the_inbox_has_ended() {
+        let (_sender, inbox) = found_blocks();
+        inbox.close();
+        assert!(inbox
+            .answer_with(|_| panic!("the door ran for no block"))
+            .is_none());
     }
 
     #[test]
