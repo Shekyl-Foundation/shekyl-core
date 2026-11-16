@@ -29,7 +29,7 @@
 //! Axum HTTP server replacing epee's http_server_impl_base for daemon RPC.
 
 use crate::bind::BoundListener;
-use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
+use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener, Reserve};
 use crate::handlers::rpc;
 use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
@@ -373,8 +373,10 @@ pub(crate) async fn serve_bound(
         }
     };
     if let Some((app, listener)) = owner {
+        // The owner's reserve (RT-O37): a full shared pool does not lock
+        // the owner out of its own node.
         serves.spawn(crate::listener_http::serve_plaintext(
-            LimitedListener::new(listener, conn_tracker.clone()),
+            LimitedListener::reserved(listener, conn_tracker.clone(), Reserve::Owner),
             app,
             stop_on(shutdown.clone(), fail_rx.clone()),
         ));
