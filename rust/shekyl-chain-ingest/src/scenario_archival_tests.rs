@@ -116,7 +116,7 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     let mined = scenario
         .mine(ChainCount::from_next_height(connecting).to_raw())
         .await;
-    let spender = Spender::over(&mined);
+    let spender = Spender::on(scenario.network_id(), &mined);
     let persona = Persona::at(3);
     let at_post = Locus::Input {
         slot: TxSlot::Listed(0),
@@ -244,7 +244,7 @@ async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
     let mined = scenario
         .mine(ChainCount::from_next_height(connecting).to_raw())
         .await;
-    let spender = Spender::over(&mined);
+    let spender = Spender::on(scenario.network_id(), &mined);
     let persona = Persona::at(4);
     let second = Locus::Input {
         slot: TxSlot::Listed(1),
@@ -352,7 +352,7 @@ async fn a_join_markets_receipt_key_is_the_records_and_a_release_leaves_it() {
     let mined = scenario
         .mine(ChainCount::from_next_height(connecting).to_raw())
         .await;
-    let mut spender = Spender::over(&mined);
+    let mut spender = Spender::on(scenario.network_id(), &mined);
     let first = Persona::at(5);
     let second = Persona::at(6);
     let key = first.receipt_key();

@@ -39,7 +39,7 @@ shekyl-types = { path = "../shekyl-types" }
 # The SOCKS shim that test shares lives in `shekyl-p-loopback`, which does
 # not enable this feature. The name announces intent: a non-derived key
 # never reaches a wallet or a bonded persona.
-test-signer = ["shekyl-crypto-pq/test-utils"]
+test-signer = []
 # Exposes `serve_one_in_memory`, `prehead_in_memory` and
 # `read_and_fold_in_memory`: the endpoint's own steps composed on the
 # calling thread, for the `BA-T3` instruction-count gate. Not serve paths
@@ -48,6 +48,10 @@ test-signer = ["shekyl-crypto-pq/test-utils"]
 bench-internals = []
 
 [dev-dependencies]
+# `serve_response_iai` signs its receipts with `sign_with_rng_seed`, so the
+# instruction count does not move with the OS's randomness: `seeded-rng`
+# (TEST_ONLY), on this dev edge only.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 # `test-util`: the write-stall tests pause time. A drain is spaced across
 # the stall bound, and a late poll finds the socket writable after the
 # bound has already run out.

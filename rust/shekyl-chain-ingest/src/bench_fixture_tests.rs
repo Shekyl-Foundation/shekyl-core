@@ -237,7 +237,7 @@ async fn mine(shape: &Shape, size: Size) -> Vec<Mined> {
     let weight = {
         let mut probe = Scenario::open(&format!("bench-probe-{}", shape.name));
         let mined = probe.mine(probe_at).await;
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(probe.network_id(), &mined);
         let coinbases: Vec<BlockHeight> = (0..shape.inputs_per_tx).map(h).collect();
         (shape.build)(&spender, probe.wallet(), &coinbases, h(probe_at)).weight()
     };
@@ -260,7 +260,7 @@ async fn mine(shape: &Shape, size: Size) -> Vec<Mined> {
     let mut scenario = Scenario::open(&format!("bench-fixture-{name}"));
     let mut mined = scenario.mine(at).await;
     let listed: Vec<Transaction> = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (0..count)
             .map(|tx| {

@@ -30,7 +30,7 @@ async fn spend_differential(name: &str, rules: crate::schedule::ChainRules, dept
     let prefix = x.mine(AT).await;
     y.mine(AT).await;
     z.mine(AT).await;
-    let spend = shekyl_harness_spender::Spender::over(&prefix).spend_coinbase(
+    let spend = shekyl_harness_spender::Spender::on(x.network_id(), &prefix).spend_coinbase(
         x.wallet(),
         BlockHeight::from_raw(0),
         BlockHeight::from_raw(AT),

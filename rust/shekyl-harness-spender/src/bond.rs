@@ -12,12 +12,12 @@
 //! holdings — lives with the ingest's archival driver; what the spender
 //! needs is only the input, the term, and the signer, which is this type.
 
-use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridSecretKey, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
-};
+use shekyl_crypto_pq::signature::{HybridSecretKey, SCHEME_DOMAIN_PQC_AUTH_TX};
 use shekyl_tx_builder::{InputTerm, OutputTerm};
 use shekyl_types::SigningPayloadHash;
 use shekyl_wire::Input;
+
+use crate::draw::MlDsaDraw;
 
 /// A bond post riding a spend: the prefix input, the cleartext term on the
 /// side the kind fixes, and the key that signs the bond `pqc_auths` slot.
@@ -37,6 +37,9 @@ pub struct PostedBond<'a> {
     /// The key that signs the slot: the identity key for a credit,
     /// `bond_spend_sk` for a debit.
     slot_sk: &'a HybridSecretKey,
+    /// Where the slot signature's ML-DSA randomness comes from: the OS, or
+    /// the persona's signing seed (`seeded-rng`).
+    draw: MlDsaDraw,
 }
 
 impl<'a> PostedBond<'a> {
@@ -58,17 +61,22 @@ impl<'a> PostedBond<'a> {
             credit,
             slot_pk,
             slot_sk,
+            draw: MlDsaDraw::default(),
         }
     }
 
+    /// This post's slot signs with `draw`'s randomness (the persona's).
+    pub(crate) fn drawing(mut self, draw: &MlDsaDraw) -> Self {
+        self.draw = draw.clone();
+        self
+    }
+
     /// The bond slot's signature over its phase-1 payload hash — the
-    /// production assembler's `sign_bond_slot`, verbatim.
+    /// production assembler's `sign_bond_slot`, with ML-DSA's randomness
+    /// from the OS or, for a seeded persona, its signing seed.
     #[must_use]
     pub fn sign_slot(&self, payload: &SigningPayloadHash) -> Vec<u8> {
-        HybridEd25519MlDsa
+        self.draw
             .sign(self.slot_sk, SCHEME_DOMAIN_PQC_AUTH_TX, payload.as_bytes())
-            .expect("the persona's key signs")
-            .to_canonical_bytes()
-            .expect("a hybrid signature encodes")
     }
 }

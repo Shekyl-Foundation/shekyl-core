@@ -45,6 +45,9 @@ shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 test-fixtures = []
 
 [dev-dependencies]
+# `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
+# harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 # Test-only: load the captured oracle hash vectors so the JSON is the single source
 # of truth for the live-oracle hash KAT (no hand-copied hex). Not a runtime
 # dependency of the serializer.

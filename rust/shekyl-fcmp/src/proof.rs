@@ -314,7 +314,7 @@ struct InputPathData<'a> {
 /// blinds plus the `PL-D3` `KBlind` over `J`) and the [`Path`] (leaf chunk
 /// decompression, zero-padded branch layers).
 ///
-/// The single definition for all three provers ([`prove_with_rng`],
+/// The single definition for all three provers ([`prove`],
 /// [`prove_membership_only`], and the multisig `prove_with_sal`). The provers
 /// differ only in what happens *before* this point — how the rerandomization
 /// and the spend-auth leg are produced — never in how the membership leg is
@@ -509,22 +509,18 @@ fn prove_membership_circuit<R: RngCore + CryptoRng>(
         .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))
 }
 
-/// Construct an FCMP++ proof for a set of inputs, drawing all randomness from
-/// `rng`.
+/// [`prove`]'s body, drawing all randomness from `rng`: full rerandomization
+/// and SAL (spend-auth-and-linkability) proof generation, returning the proof
+/// blob and the per-input pseudo-outs (rerandomized commitments).
 ///
-/// Performs full rerandomization and SAL (spend-auth-and-linkability) proof
-/// generation. Returns the proof blob and the per-input pseudo-outs
-/// (rerandomized commitments).
-///
-/// Production uses [`prove`], which supplies a fresh [`OsRng`]. This
-/// RNG-parameterized form exists so instruction-count benches can pin a seeded
-/// RNG and get a byte-identical proof run-to-run (the drift gate depends on it);
-/// it matches the `R: RngCore + CryptoRng` shape every primitive below already
-/// takes (`Fcmp::prove`, `SpendAuthAndLinkability::prove`,
-/// `RerandomizedOutput::with_commitment_blind`). A caller passing a non-crypto
-/// RNG is rejected by the bound, so it cannot weaken production.
+/// Private (`CHAIN_FORGE.md` `CF-R9`, seam T1): the production entry point is
+/// [`prove`], over a fresh [`OsRng`], and no build that ships has a public
+/// prover that takes its caller's randomness. The seeded form exists only
+/// under the TEST_ONLY `seeded-rng` feature (`prove_with_rng`). The bound
+/// matches every primitive below (`Fcmp::prove`, `SpendAuthAndLinkability::prove`,
+/// `RerandomizedOutput::with_commitment_blind`).
 #[allow(non_snake_case)]
-pub fn prove_with_rng<R: RngCore + CryptoRng>(
+fn prove_inner<R: RngCore + CryptoRng>(
     rng: &mut R,
     inputs: &[ProveInput],
     _tree_root: &CurveTreeRoot,
@@ -623,9 +619,6 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
 
 /// Construct an FCMP++ proof for a set of inputs, drawing all randomness from a
 /// fresh [`OsRng`]. This is the production entry point (`shekyl-tx-builder`'s signing path).
-///
-/// A thin wrapper over [`prove_with_rng`]; see there for why the RNG is
-/// parameterized (deterministic instruction-count benches).
 #[allow(non_snake_case)]
 pub fn prove(
     inputs: &[ProveInput],
@@ -633,7 +626,30 @@ pub fn prove(
     tree_depth: u8,
     signable_tx_hash: TxSignableHash,
 ) -> Result<ProveResult, ProveError> {
-    prove_with_rng(&mut OsRng, inputs, tree_root, tree_depth, signable_tx_hash)
+    prove_inner(&mut OsRng, inputs, tree_root, tree_depth, signable_tx_hash)
+}
+
+/// [`prove`] with its randomness drawn from `rng`, so a seeded generator gives
+/// a byte-identical proof run to run: the instruction-count drift gate
+/// (`shekyl-verify-cost`) and the chain forge's reproducible chains
+/// (`CHAIN_FORGE.md` §5.3, seam T1). Only under the TEST_ONLY `seeded-rng`
+/// feature, which no build that ships enables
+/// (`scripts/ci/check_test_only_features.py`); a non-cryptographic RNG is
+/// refused by the bound.
+///
+/// # Errors
+///
+/// As [`prove`].
+#[cfg(feature = "seeded-rng")]
+#[allow(non_snake_case)]
+pub fn prove_with_rng<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    inputs: &[ProveInput],
+    tree_root: &CurveTreeRoot,
+    tree_depth: u8,
+    signable_tx_hash: TxSignableHash,
+) -> Result<ProveResult, ProveError> {
+    prove_inner(rng, inputs, tree_root, tree_depth, signable_tx_hash)
 }
 
 /// Prove a **membership-only** FCMP++ backing proof (reward-emission; **no key image**).
@@ -660,6 +676,55 @@ pub fn prove(
 /// shape end to end.
 #[allow(non_snake_case)]
 pub fn prove_membership_only(
+    inputs: &[ProveInput],
+    tree_root: &CurveTreeRoot,
+    tree_depth: u8,
+    signable_tx_hash: TxSignableHash,
+    context: &[u8],
+) -> Result<ProveResult, ProveError> {
+    prove_membership_only_inner(
+        &mut OsRng,
+        inputs,
+        tree_root,
+        tree_depth,
+        signable_tx_hash,
+        context,
+    )
+}
+
+/// [`prove_membership_only`] with its randomness drawn from `rng`: the
+/// rerandomization's and the spend-auth leg's fresh bytes (both hedged over
+/// the secret, so a degraded RNG still binds them) and the circuit's. Only
+/// under the TEST_ONLY `seeded-rng` feature, for the chain forge's
+/// reproducible emission claims (`CHAIN_FORGE.md` §5.3, seam T1).
+///
+/// # Errors
+///
+/// As [`prove_membership_only`].
+#[cfg(feature = "seeded-rng")]
+#[allow(non_snake_case)]
+pub fn prove_membership_only_with_rng<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    inputs: &[ProveInput],
+    tree_root: &CurveTreeRoot,
+    tree_depth: u8,
+    signable_tx_hash: TxSignableHash,
+    context: &[u8],
+) -> Result<ProveResult, ProveError> {
+    prove_membership_only_inner(
+        rng,
+        inputs,
+        tree_root,
+        tree_depth,
+        signable_tx_hash,
+        context,
+    )
+}
+
+/// [`prove_membership_only`]'s body over `rng`. Private, as [`prove_inner`].
+#[allow(non_snake_case)]
+fn prove_membership_only_inner<R: RngCore + CryptoRng>(
+    rng: &mut R,
     inputs: &[ProveInput],
     _tree_root: &CurveTreeRoot,
     tree_depth: u8,
@@ -708,7 +773,7 @@ pub fn prove_membership_only(
 
         // Membership-only rerandomization: synthesized blinds bound to (x, leaf, context).
         // No commitment-blind arithmetic (z/a) — those are full-path pseudo-out concerns.
-        let rerand = membership_only_rerandomize(&mut OsRng, output, &x, context).map_err(|e| {
+        let rerand = membership_only_rerandomize(&mut *rng, output, &x, context).map_err(|e| {
             ProveError::UpstreamError(format!("membership_only_rerandomize at input {idx}: {e:?}"))
         })?;
         let crate_input = rerand.input();
@@ -719,7 +784,7 @@ pub fn prove_membership_only(
             format!("OpenedInputTuple::open failed at input {idx}"),
         ))?;
         #[allow(clippy::cast_possible_truncation)]
-        let msa = MembershipSpendAuth::prove(&mut OsRng, signable_tx_hash, idx as u32, &opening);
+        let msa = MembershipSpendAuth::prove(&mut *rng, signable_tx_hash, idx as u32, &opening);
         msa_pairs.push((crate_input, msa));
 
         let (output_blind, path) = assemble_input_path(idx, output, &rerand, input.path_data())?;
@@ -727,7 +792,7 @@ pub fn prove_membership_only(
         paths.push(path);
     }
 
-    let fcmp = prove_membership_circuit(&mut OsRng, paths, output_blinds_list)?;
+    let fcmp = prove_membership_circuit(&mut *rng, paths, output_blinds_list)?;
 
     let fcmp_mo = FcmpMembershipOnly::new(msa_pairs, fcmp);
 
@@ -1289,6 +1354,201 @@ mod tests {
         }
     }
 
+    /// A depth-1 tree holding one output, and the values that spend it: the
+    /// fixture the round-trip and determinism tests share. `z` and `a` are the
+    /// full path's commitment mask and pseudo-out blind (the membership-only
+    /// prover ignores them).
+    #[allow(non_snake_case)]
+    struct Depth1 {
+        x: Scalar,
+        y: Scalar,
+        z: Scalar,
+        a: Scalar,
+        L: EdwardsPoint,
+        pqc: PqcLeaf,
+        h_pqc_bytes: [u8; 32],
+        tree_root: CurveTreeRoot,
+        o_bytes: [u8; 32],
+        i_bytes: [u8; 32],
+        c_bytes: [u8; 32],
+    }
+
+    impl Depth1 {
+        fn input(&self) -> ProveInput {
+            ProveInput {
+                output_key: self.o_bytes,
+                key_image_gen: self.i_bytes,
+                commitment: self.c_bytes,
+                pqc_leaf_commitment: self.pqc.cm.to_bytes(),
+                pqc_leaf_blind: self.pqc.blind.to_repr(),
+                spend_key_x: self.x.to_repr(),
+                spend_key_y: self.y.to_repr(),
+                commitment_mask: self.z.to_repr(),
+                pseudo_out_blind: self.a.to_repr(),
+                leaf_chunk_outputs: vec![(self.o_bytes, self.i_bytes, self.c_bytes)],
+                leaf_chunk_cm_x: vec![self.h_pqc_bytes],
+                c1_branch_layers: vec![],
+                c2_branch_layers: vec![],
+            }
+        }
+    }
+
+    #[allow(non_snake_case)]
+    fn depth1_fixture(rng: &mut (impl RngCore + CryptoRng)) -> Depth1 {
+        use ec_divisors::DivisorCurve;
+        use multiexp::multiexp_vartime;
+        use shekyl_curve_generators::SELENE_HASH_INIT;
+
+        let x = Scalar::random(&mut *rng);
+        let y = Scalar::random(&mut *rng);
+        let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
+        let I = EdwardsPoint::random(&mut *rng);
+        let C = EdwardsPoint::random(&mut *rng);
+        let L = I * x;
+
+        let pqc = random_pqc_leaf(&mut *rng);
+        let h_pqc_field = pqc.x;
+        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
+
+        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT
+            + multiexp_vartime(&[
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0,
+                    generators[0],
+                ),
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0,
+                    generators[1],
+                ),
+                (
+                    <EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0,
+                    generators[2],
+                ),
+                (h_pqc_field, generators[3]),
+            ]);
+        let tree_root = CurveTreeRoot::from_bytes(tree_root_point.to_bytes());
+        let z = Scalar::random(&mut *rng);
+        let a = Scalar::random(&mut *rng);
+        Depth1 {
+            x,
+            y,
+            z,
+            a,
+            L,
+            pqc,
+            h_pqc_bytes,
+            tree_root,
+            o_bytes: O.to_bytes(),
+            i_bytes: I.to_bytes(),
+            c_bytes: C.to_bytes(),
+        }
+    }
+
+    /// Seam T1 (`CHAIN_FORGE.md` §5.3): the same seed gives the same proof
+    /// and pseudo-outs byte for byte, another seed another proof, and both
+    /// verify. The seeded stream is what `prove_with_rng` exposes under
+    /// `seeded-rng`; production [`prove`] draws from the OS and matches no
+    /// seed's bytes.
+    #[test]
+    fn a_seeded_proof_is_byte_identical_per_seed_and_verifies() {
+        use rand_chacha::rand_core::SeedableRng;
+        let tree_depth: u8 = 1;
+        let hash = TxSignableHash::from_bytes([0xABu8; 32]);
+        let f = depth1_fixture(&mut OsRng);
+        let inputs = [f.input()];
+        let seeded = |seed: u64| {
+            prove_inner(
+                &mut rand_chacha::ChaCha20Rng::seed_from_u64(seed),
+                &inputs,
+                &f.tree_root,
+                tree_depth,
+                hash,
+            )
+            .expect("a seeded prove succeeds")
+        };
+        let one = seeded(7);
+        let again = seeded(7);
+        assert_eq!(one.proof.data, again.proof.data, "one seed, one proof");
+        assert_eq!(
+            one.pseudo_outs, again.pseudo_outs,
+            "one seed, one set of pseudo-outs"
+        );
+        assert_ne!(
+            one.proof.data,
+            seeded(8).proof.data,
+            "another seed, another proof"
+        );
+        let production = prove(&inputs, &f.tree_root, tree_depth, hash).expect("prove succeeds");
+        assert_ne!(
+            one.proof.data, production.proof.data,
+            "production draws from the OS"
+        );
+        let key_images = [KeyImage::from_canonical_bytes(f.L.to_bytes())];
+        let ok = verify(
+            &one.proof,
+            &key_images,
+            &one.pseudo_outs,
+            std::slice::from_ref(&f.pqc.key),
+            &f.tree_root,
+            tree_depth,
+            hash,
+        )
+        .expect("verify runs");
+        assert!(ok, "a seeded proof verifies like any other");
+    }
+
+    /// Seam T1 for the emission's backing proof: as above, for
+    /// `prove_membership_only_with_rng`'s stream.
+    #[test]
+    fn a_seeded_membership_only_proof_is_byte_identical_per_seed_and_verifies() {
+        use rand_chacha::rand_core::SeedableRng;
+        let tree_depth: u8 = 1;
+        let hash = TxSignableHash::from_bytes([0xABu8; 32]);
+        let context = b"shekyl-emission-membership-only-context";
+        let f = depth1_fixture(&mut OsRng);
+        let inputs = [f.input()];
+        let seeded = |seed: u64| {
+            prove_membership_only_inner(
+                &mut rand_chacha::ChaCha20Rng::seed_from_u64(seed),
+                &inputs,
+                &f.tree_root,
+                tree_depth,
+                hash,
+                context,
+            )
+            .expect("a seeded membership-only prove succeeds")
+        };
+        let one = seeded(7);
+        let again = seeded(7);
+        assert_eq!(one.proof.data, again.proof.data, "one seed, one proof");
+        assert_eq!(
+            one.pseudo_outs, again.pseudo_outs,
+            "one seed, one set of pseudo-outs"
+        );
+        assert_ne!(
+            one.proof.data,
+            seeded(8).proof.data,
+            "another seed, another proof"
+        );
+        let production = prove_membership_only(&inputs, &f.tree_root, tree_depth, hash, context)
+            .expect("prove_membership_only succeeds");
+        assert_ne!(
+            one.proof.data, production.proof.data,
+            "production draws from the OS"
+        );
+        let ok = verify_membership_only(
+            &one.proof,
+            &one.pseudo_outs,
+            std::slice::from_ref(&f.pqc.key),
+            &f.tree_root,
+            tree_depth,
+            hash,
+        )
+        .expect("verify runs");
+        assert!(ok, "a seeded membership-only proof verifies like any other");
+    }
+
     #[test]
     fn prove_rejects_too_many_inputs() {
         let inputs: Vec<ProveInput> = (0..9).map(|_| dummy_prove_input()).collect();
@@ -1417,50 +1677,22 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn prove_verify_roundtrip() {
-        use ec_divisors::DivisorCurve;
-        use multiexp::multiexp_vartime;
-        use shekyl_curve_generators::SELENE_HASH_INIT;
-
         let tree_depth: u8 = 1;
         let signable_tx_hash = TxSignableHash::from_bytes([0xABu8; 32]);
 
-        let x = Scalar::random(&mut OsRng);
-        let y = Scalar::random(&mut OsRng);
-        let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
-        let I = EdwardsPoint::random(&mut OsRng);
-        let C = EdwardsPoint::random(&mut OsRng);
-
-        let L = I * x;
-
-        let pqc = random_pqc_leaf(&mut OsRng);
-        let h_pqc_field = pqc.x;
-        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
-
-        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
-        let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT
-            + multiexp_vartime(&[
-                (
-                    <EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0,
-                    generators[0],
-                ),
-                (
-                    <EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0,
-                    generators[1],
-                ),
-                (
-                    <EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0,
-                    generators[2],
-                ),
-                (h_pqc_field, generators[3]),
-            ]);
-        let tree_root = CurveTreeRoot::from_bytes(tree_root_point.to_bytes());
-
-        let o_bytes = O.to_bytes();
-        let i_bytes = I.to_bytes();
-        let c_bytes = C.to_bytes();
-
-        let z = Scalar::random(&mut OsRng);
-        let a = Scalar::random(&mut OsRng);
+        let Depth1 {
+            x,
+            y,
+            z,
+            a,
+            L,
+            pqc,
+            h_pqc_bytes,
+            tree_root,
+            o_bytes,
+            i_bytes,
+            c_bytes,
+        } = depth1_fixture(&mut OsRng);
         let input = ProveInput {
             output_key: o_bytes,
             key_image_gen: i_bytes,
@@ -1640,46 +1872,22 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn membership_only_prove_verify_roundtrip_and_cross_type() {
-        use ec_divisors::DivisorCurve;
-        use multiexp::multiexp_vartime;
-        use shekyl_curve_generators::SELENE_HASH_INIT;
-
         let tree_depth: u8 = 1;
         let signable_tx_hash = TxSignableHash::from_bytes([0xABu8; 32]);
         let context = b"shekyl-emission-membership-only-context".to_vec();
 
-        let x = Scalar::random(&mut OsRng);
-        let y = Scalar::random(&mut OsRng);
-        let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
-        let I = EdwardsPoint::random(&mut OsRng);
-        let C = EdwardsPoint::random(&mut OsRng);
-
-        let pqc = random_pqc_leaf(&mut OsRng);
-        let h_pqc_field = pqc.x;
-        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
-
-        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
-        let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT
-            + multiexp_vartime(&[
-                (
-                    <EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0,
-                    generators[0],
-                ),
-                (
-                    <EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0,
-                    generators[1],
-                ),
-                (
-                    <EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0,
-                    generators[2],
-                ),
-                (h_pqc_field, generators[3]),
-            ]);
-        let tree_root = CurveTreeRoot::from_bytes(tree_root_point.to_bytes());
-
-        let o_bytes = O.to_bytes();
-        let i_bytes = I.to_bytes();
-        let c_bytes = C.to_bytes();
+        let Depth1 {
+            x,
+            y,
+            L,
+            pqc,
+            h_pqc_bytes,
+            tree_root,
+            o_bytes,
+            i_bytes,
+            c_bytes,
+            ..
+        } = depth1_fixture(&mut OsRng);
 
         // `commitment_mask` / `pseudo_out_blind` (z/a) are ignored by
         // `prove_membership_only` — it synthesizes its own blinds from (x, leaf,
@@ -1757,7 +1965,7 @@ mod tests {
 
         // Cross-type: the membership-only proof must NOT verify as a full proof. A dummy
         // key image is supplied only to satisfy the full ABI's arity.
-        let dummy_ki = [KeyImage::from_canonical_bytes((I * x).to_bytes())];
+        let dummy_ki = [KeyImage::from_canonical_bytes(L.to_bytes())];
         let as_full = verify(
             &mo.proof,
             &dummy_ki,

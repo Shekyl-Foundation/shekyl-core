@@ -35,7 +35,21 @@ helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 multiexp = "0.4"
 rand_core = { version = "0.6", features = ["std"] }
 
+[features]
+# The fixtures (`relay`, `door`, `connect`): every one builds its proof
+# through `shekyl-fcmp`'s seeded prover, so a run gives byte-identical
+# fixtures and stable instruction counts. TEST_ONLY
+# (`scripts/ci/check_test_only_features.py`, CHAIN_FORGE.md CF-R9): the seeded
+# prover exists only under `shekyl-fcmp/seeded-rng`, which this forwards, and
+# only this crate's own benches and tests turn it on (the self edge below).
+# Without it the library is empty; nothing in a shipped graph depends on
+# this crate.
+seeded-rng = ["shekyl-fcmp/seeded-rng"]
+
 [dev-dependencies]
+# This crate's benches and pins build the fixtures: `seeded-rng` on its own
+# dev edge, so it is on only for them.
+shekyl-verify-cost = { path = ".", features = ["seeded-rng"] }
 # Wall clock is criterion. The drift gate is gungraun. The connect bench's
 # one RandomX hash is the shipped verifier. All three are already in the
 # lockfile.
@@ -45,10 +59,9 @@ rand_chacha = { workspace = true }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 # The drift gate signs under a seeded ML-DSA nonce: a hedged signature
 # differs every run, and the count with it. `sign_pqc_auth_for_output_with_ml_dsa_seed`
-# is `test-utils` surface, so it rides this dev edge only, as
+# is `seeded-rng` surface (TEST_ONLY), so it rides this dev edge only, as
 # `shekyl-tx-builder`'s `transfer_e2e_iai` rides `sign_with_ml_dsa_seed`.
-# Already in the lockfile.
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 
 [[bench]]
 name = "relay_admission_verify"
