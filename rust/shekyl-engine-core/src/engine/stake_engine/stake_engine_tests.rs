@@ -955,7 +955,7 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
 // ---- SP-3/SP-5: the offloaded dual-extractor scan-step ----
 
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
-use shekyl_scanner::bench_fixtures::scannable_block_for_recipient;
+use shekyl_scanner::bench_fixtures::{fresh_tx_key, scannable_block_for_recipient};
 use shekyl_types::{BlockHeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPost, BondPostKind, Input};
@@ -973,7 +973,7 @@ fn block_funding(slot: u32) -> ScannableBlock {
         x25519: p.x25519_pk,
         ml_kem: p.ml_kem_ek.to_vec(),
     };
-    scannable_block_for_recipient(1, &kem, p.spend_pk.as_canonical_bytes())
+    scannable_block_for_recipient(1, &kem, p.spend_pk.as_canonical_bytes(), &fresh_tx_key())
 }
 
 /// Append a JoinMarket bond-post for persona `slot` to a block's first tx.

@@ -21,7 +21,9 @@ use shekyl_units::AtomicUnits;
 
 use crate::{
     balance::BalanceSummary,
-    bench_fixtures::{make_bench_wallet, scannable_block_for_recipient, BenchWalletKeys},
+    bench_fixtures::{
+        fresh_tx_key, make_bench_wallet, scannable_block_for_recipient, BenchWalletKeys,
+    },
     extra::{Extra, ExtraField},
     ledger_ext::LedgerIndexesExt,
     scan::{ScannableBlock, Timelocked},
@@ -32,7 +34,7 @@ use crate::{
 /// real `0x07` entry the production writer would publish.
 fn honest_block(wallet: &BenchWalletKeys) -> ScannableBlock {
     let spend_pub = wallet.view_pair.spend().compress().to_bytes();
-    scannable_block_for_recipient(1, &wallet.wallet_kem_pk, &spend_pub)
+    scannable_block_for_recipient(1, &wallet.wallet_kem_pk, &spend_pub, &fresh_tx_key())
 }
 
 /// Rewrite the transaction's `0x07` field through `f` (or drop it when `f`

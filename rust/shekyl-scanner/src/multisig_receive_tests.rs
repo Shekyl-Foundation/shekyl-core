@@ -100,7 +100,7 @@ fn group_block(g: &Group, edit: impl FnOnce(&mut Vec<MultisigEntry>)) -> Scannab
     // in its place.
     let other = make_bench_wallet();
     let spend = other.view_pair.spend().compress().to_bytes();
-    let mut block = scannable_block_for_recipient(1, &other.wallet_kem_pk, &spend);
+    let mut block = scannable_block_for_recipient(1, &other.wallet_kem_pk, &spend, &tx_key);
     let mut kem = out.kem_ciphertext_x25519.to_vec();
     kem.extend_from_slice(&out.kem_ciphertext_ml_kem);
     let mut extra = Extra::for_hybrid_transfer(tx_key.public(), [kem]);
