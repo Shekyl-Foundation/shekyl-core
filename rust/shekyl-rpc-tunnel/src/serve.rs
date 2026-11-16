@@ -80,6 +80,7 @@ pub async fn run(
     let (ended_tx, ended_rx) = watch::channel(None::<ChannelFault>);
     let result = match &config.listen {
         Listen::Tcp(addr) => {
+            listen_check(*addr)?;
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .map_err(|e| format!("the listener {addr} could not be bound: {e}"))?;
@@ -252,4 +253,40 @@ fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, Strin
         Err(e) => return Err(format!("{}: {e}", path.display())),
     }
     tokio::net::UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The one listen classifier every Shekyl listener passes (§8, RT-14),
+/// beside the table's own loopback rule: loopback, the IPv4-mapped
+/// spelling included, and nothing else.
+fn listen_check(addr: std::net::SocketAddr) -> Result<(), String> {
+    use shekyl_rpc_transport::listen::{classify_listen, ListenClass, WILDCARD_REASON};
+    match classify_listen(addr) {
+        ListenClass::Loopback => Ok(()),
+        ListenClass::Wildcard => Err(format!(
+            "the listener {addr} is a wildcard: {WILDCARD_REASON}"
+        )),
+        ListenClass::Addressed => Err(format!(
+            "the listener {addr} is not loopback: the tunnel serves its consumers in \
+             plaintext, on this host only"
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Loopback is served, the IPv4-mapped spelling included; a wildcard
+    /// and an addressed listener are refused. Red edit: accept
+    /// `ListenClass::Addressed` in `listen_check`, and the LAN address is
+    /// served.
+    #[test]
+    fn the_tunnel_listens_on_loopback_alone() {
+        for good in ["127.0.0.1:1", "[::1]:1", "[::ffff:127.0.0.1]:1"] {
+            assert!(listen_check(good.parse().unwrap()).is_ok(), "{good}");
+        }
+        for bad in ["0.0.0.0:1", "[::]:1", "192.0.2.7:1"] {
+            assert!(listen_check(bad.parse().unwrap()).is_err(), "{bad}");
+        }
+    }
 }

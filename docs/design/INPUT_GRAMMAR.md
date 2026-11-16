@@ -1,6 +1,6 @@
 # Shekyl input grammar — the rules and every binary's names
 
-**Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
+**Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B Part K (§32, IG-Q108…IG-Q111), the channel's clients and the tunnel, RULED 2026-11-15 (Rick), as recommended.
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
 IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments; Part F (§25–§26, IG-Q73…IG-Q93), the wire at the rename, RULED 2026-11-10 (Rick), as recommended; IG-Q94, the selector's wire form, RULED 2026-11-11 (Rick), as posed. Part G (§27–§28, IG-Q95…IG-Q101), the Tor supervisor's states added since Part E, RULED 2026-11-11 (Rick), as recommended with amendments to IG-Q95 and IG-Q96. Part H (§29, IG-Q103…IG-Q105), the owner's socket and the service mode, RULED 2026-11-12 (Rick), as posed. Part I (§30, IG-Q106), the owning connection, RULED 2026-11-12 (Rick) in the GS-C3 brief; the name is derived from the glossary. Part J (§31, IG-Q107), a block's draw count on the wire (RPC 4.5), RULED 2026-11-14 (Rick). Parts C and F are the daemon's wire at `CORE_RPC_VERSION` 4.0 (`RPC_WIRE.md` RW-Q8), its schema generated at `docs/generated/rpc_wire_schema.tsv`.
 Each question carries its ruling in
@@ -127,7 +127,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | instance | — | which node of one network on this machine: the default instance, or a second node the operator names (RPC_CHANNEL §7.1, IG-Q103) | |
 | owning | — | the process that started this daemon and holds its life: the daemon stops when that process closes its end or dies (IG-Q106) | |
 | log | — | the daemon's log sink | |
-| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants, tor | a file path (value term) | |
+| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants, tor, bundle, key | a file path (value term) | |
 | dir | data, wallet, create, recipients, socket | a directory path (value term); under `socket`, the directory that holds the owner's socket (IG-Q104) | |
 | level | log | a log severity: `error`, `warn`, `info`, `debug`, `trace` | |
 | category | log | a log category, owned by `shekyl-logging` | |
@@ -139,7 +139,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | username | socks, rpc | a credential's name (SOCKS5, RFC 1929; the wallet RPC's authentication) | |
 | password | socks, wallet, rpc | a secret credential; always a secret | |
 | onion | tor | this node's v3 onion service | |
-| listen | clearnet, onion, rpc, view, admin | a local endpoint a listener binds | |
+| listen | —, clearnet, onion, rpc, view, admin | a local endpoint a listener binds; a root in `shekyl-rpc-tunnel`, whose one listener it names (IG-Q110) | |
 | advertise | clearnet | the endpoint we tell peers is ours | |
 | local | p2p | endpoints not dialable on the public internet (private, loopback, link-local) | |
 | peer | p2p, closed, — | another Shekyl node | |
@@ -445,7 +445,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | debug | — | show the machine detail of a failure | |
 | option | — | a runtime-changeable row of the daemon's table (IG-12) | |
 | tx | — | a transaction | |
-| request | — | a payment request | |
+| request | —, rpc | a payment request; under `rpc`, the grant a client asks for (IG-Q108; see §32's note on the term) | |
 | uri | — | a `shekyl:` payment URI | |
 | stake | — | the staking balance and bond | |
 | shard | — | an archival shard | |
@@ -461,9 +461,9 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | status | wallet, stake, mine, sync, daemon | *view* — the current state | wallet:view, stake:view, mine:view, sync:view, daemon:view |
 | stop | mine, daemon | *verb* — stop | mine:verb, daemon:verb |
 | set | option, password, note | *verb* — assign a value | option:verb, password:verb, note:verb |
-| show | tx, shard, block, ban, option | *verb* — print one item | tx:verb, shard:verb, block:verb, ban:verb, option:verb |
+| show | tx, shard, block, ban, option, key | *verb* — print one item | tx:verb, shard:verb, block:verb, ban:verb, option:verb, key:verb |
 | endpoint | daemon, rpc | a peer-endpoint the binary dials (IG-Q31) | |
-| socket | daemon, rpc | the local socket of RPC_CHANNEL RT-15 | |
+| socket | daemon, rpc, listen | the local socket of RPC_CHANNEL RT-15; under `listen`, the tunnel's own (IG-Q110) | |
 | mnemonic | create, restore | the wallet's recovery words (IG-Q24) | |
 | direction | list | `in` or `out` | |
 | unmatched | list | receives matching no request | |
@@ -498,7 +498,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | white | list | the white peer list | |
 | gray | list | the gray peer list | |
 | spent | chain | *view* — whether a key image is spent | chain:view |
-| create | wallet, request, recipients | *verb* — create | wallet:verb, request:verb, recipients:verb |
+| create | wallet, request, recipients, key | *verb* — create | wallet:verb, request:verb, recipients:verb, key:verb |
 | open | wallet | *verb* — open | wallet:verb |
 | close | wallet | *verb* — close | wallet:verb |
 | restore | wallet | *verb* — restore from the recovery words | wallet:verb |
@@ -543,6 +543,8 @@ Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** rem
 | `wallet` (alias `engine-file`) | `wallet-file` | path | unset | both | | R (IG-3: a path ends in `file`); the alias goes |
 | `daemon-address` | `daemon-endpoint` | peer-endpoint | `127.0.0.1:<row rpc port>` | both | | R (IG-Q31): an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname or URL is refused |
 | (`daemon-address` `uds://`) | `daemon-socket-file` | path | unset | both | | N; RT-15's local leg; unconstructible together with `daemon-endpoint` |
+| — | `daemon-bundle-file` | path | unset | both | | N (IG-Q108): the node's bundle as `rpc bundle show` prints it; set, the enrolment words reach the node at `daemon-endpoint` over the channel; unconstructible together with `daemon-socket-file` |
+| — | `rpc-key-file` | path | the account root + `rpc-shekyl-cli-<network>.key` | both | | N (IG-Q108, IG-Q109): this client's channel key, readable by this account alone; a file anyone else can read is refused |
 | `rpc-url` | `wallet-rpc-endpoint` | peer-endpoint | unset | both | | R (IG-Q31); set means an external `shekyl-wallet-rpc`, not self-hosting |
 | (`rpc-url` `uds://`) | `wallet-rpc-socket-file` | path | unset | both | | N; unconstructible together with `wallet-rpc-endpoint` |
 | `proxy` | `daemon-socks` | endpoint | unset | both | | R; SOCKS5, names resolved by the proxy |
@@ -657,6 +659,7 @@ The catalog `shekyl-cli` serves (IG-Q25). The C++ console is deleted (R8, DC-N2,
 | `save`, `flush_cache [bad-txs] [bad-blocks]` | — | | –: LMDB and C++ cache internals |
 | `version` | `version` | | |
 | — | `rpc client add <fingerprint> --ceiling <grants>`, `rpc client set <fingerprint> --ceiling <grants>`, `rpc client remove <fingerprint>`, `rpc client list`, `rpc bundle show` | a hash; a list of grant and preset keywords | built by RT-W10 step 4 (IG-Q87): enrolment over the channel, under the `enrol` grant |
+| — | `rpc key create`, `rpc key show` | | IG-Q109: this client's channel key, made only when asked and refused if one is there; each prints the fingerprint as `rpc client list` does |
 
 ## 14. The utilities and the tools
 
@@ -947,7 +950,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | generate | block | *verb* — mine blocks; only under `dev` | block:verb |
 | pop | chain | *verb* — remove blocks from the tip; only under `dev` | chain:verb |
 | id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's | |
-| key | spent, console | a key: under `spent`, only in `key image`; under `console`, the console key (IG-Q88) | |
+| key | spent, console, rpc | a key: under `spent`, only in `key image`; under `console`, the console key (IG-Q88); under `rpc`, this client's channel key (IG-Q109) | |
 | image | key | a key image (a hash) | |
 | tip | block, curve | the chain's last block, as a selector; its value is `null` (IG-Q94) | |
 | prune | tx | a switch: carry the skeleton — the pruned segment with the txid's operands `prunable_hash`, `pqc_auth_hash` and `archival_size` (`DRS_SB_BELOW_HORIZON.md` SB-Q2) | |
@@ -1074,7 +1077,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | writer | chain, daemon | the chain store's writer: `live`, or `halted` on an invariant (IG-Q92) | |
 | invariant | writer | the `SI-` row of the store-invariant register that caught the halt, an integer | |
 | client | rpc | a client identity enrolled on this daemon: a fingerprint and its ceiling (IG-Q87) | |
-| bundle | rpc | this daemon's static public keys, given to a client that will be enrolled | |
+| bundle | rpc, daemon | this daemon's static public keys, given to a client that will be enrolled; under `daemon`, the node's, as a client holds it (IG-Q108) | |
 | fingerprint | client | the client's static-key fingerprint, a hash (`RPC_CHANNEL.md` RT-O14) | |
 | ceiling | client | the grants an enrolment may hold, stored expanded | |
 | console | rpc | the console key: the host administrator's credential in service mode (IG-Q88) | |
@@ -1614,3 +1617,76 @@ Each is ruled (Rick, 2026-11-11). Each states the problem, then the question, th
 **RULED 2026-11-14 (Rick), for the `SO-D12` 4b evidence (#1373).**
 
 **IG-Q107 — a block's draw count on the wire — RULED 2026-11-14 (Rick).** The emission walk paces its mining at the heights that drew, and reads them as any peer would, over the public RPC (`SO-D12` 4b evidence, #1373). A block's draw count `count(h)` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3) is consensus state every node writes at connect, and a filed bundle's reference carries the same count (`SCS-P39`); it names no pair, since the draw selection stays secret until the reveal. *Ruled:* `block_show` and `block_list` carry each block's `draws`, a count; `null` where this node holds no row: an alternative block, or a height below the draw rows' floor (SI-34). `draws` joins the glossary under `block`. 4.5.
+
+---
+
+## 32. Part K — the channel's clients and the tunnel
+
+**RULED 2026-11-15 (Rick), as recommended**, in RT-W11's pre-flight
+([`RPC_CHANNEL_RT_W11_PREFLIGHT.md`](RPC_CHANNEL_RT_W11_PREFLIGHT.md) §4).
+The tunnel ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §8) always speaks the
+channel; a CLI on another host speaks it when told to. One table serves
+both, so each name means the same thing in both, and existing names are
+reused where they fit.
+
+**IG-Q108 — the channel client's rows — RULED 2026-11-15, as recommended.**
+`daemon-endpoint` and `daemon-socks` are reused as they are (IG-Q31).
+`daemon-bundle-file`, a path: the node's bundle as `rpc bundle show`
+prints it (the `bytes` kind's base64); set, it selects the channel, and
+it is unconstructible with `daemon-socket-file`. `rpc-key-file`, a path:
+this client's channel key, readable by this account alone, refused if
+another can read it and never repaired; its default is the account root
+and `rpc-<binary>-<network>.key`. `rpc-request`, the tunnel's only: the
+grant its pool asks for, grant and preset words, the option repeated
+(IG-6), default `view` (`RPC_CHANNEL.md` §6.2). In RT-W11 the two new
+rows move only the five enrolment words onto the channel; the CLI's
+other words and the wallet session's daemon leg stay until RT-W12. An
+enrolment word asks for every grant, and the node clamps the request to
+the key's ceiling: RT-O9.1 bounds what a key may enrol, list or remove
+by its effective grant.
+
+**IG-Q109 — making a client's key and showing its fingerprint — RULED
+2026-11-15, as recommended.** A key is made only when asked, never as a
+side effect of a dial. `shekyl-cli` gains `rpc key create` (refused if a
+key is there) and `rpc key show`; `shekyl-rpc-tunnel`, which has no
+command words, the one-shot switches `rpc-key-create` and `rpc-key-show`,
+the shape `rpc-console-key-reset` has on `shekyld` (IG-Q88). Each prints
+the fingerprint as `rpc client list` prints one.
+
+**IG-Q110 — the tunnel's listener — RULED 2026-11-15, as recommended.**
+`listen`, an endpoint, loopback only (RT-14; the endpoint rule refuses
+any other address, a wildcard included), required unless
+`listen-socket-file` is set. `listen-socket-file`, a path, Unix only: a
+socket in a directory only the tunnel's account can enter; refused on
+Windows with `config.socket-dir.platform`. The two are unconstructible
+together (`config.value.conflict`). The tunnel's own name gives `listen`
+its parent, as `shekyld`'s `rpc-listen` gives it `rpc`.
+
+**IG-Q111 — the tunnel's table — RULED 2026-11-15, as recommended.**
+
+| Name | Kind | Default | Surface | Notes |
+|---|---|---|---|---|
+| `help`, `version` | switch | | CLI | K |
+| `rpc-key-create`, `rpc-key-show` | switch | | CLI | IG-Q109: each acts on `rpc-key-file` and exits |
+| `network` | one-of | `mainnet` | CLI | the daemon's row; chooses the file |
+| `config-file` | path | the account root + `shekyl-rpc-tunnel-<network>.toml` | CLI | IG-13 |
+| `daemon-endpoint` | peer-endpoint | unset; required | both | IG-Q108 |
+| `daemon-socks` | endpoint | unset | both | IG-Q108; required for an onion |
+| `daemon-bundle-file` | path | unset; required | both | IG-Q108 |
+| `rpc-key-file` | path | the account root + `rpc-shekyl-rpc-tunnel-<network>.key` | both | IG-Q108 |
+| `rpc-request` | list of grant and preset words | `view` | both | IG-Q108 |
+| `listen` | endpoint, loopback | unset; required without `listen-socket-file` | both | IG-Q110 |
+| `listen-socket-file` | path | unset | both | IG-Q110; Unix only |
+| `log-file` | path | the account root + `logs/shekyl-rpc-tunnel-<network>.log` | both | |
+| `log-level`, `log-category`, `log-size-max` | the daemon's kinds | `warn`, `none`, `1GiB` | both | read by the daemon's mapping (`shekyl_daemon_config::logging`) |
+
+No pool option: the pool's size is `SESSIONS_PER_CLIENT`, a constant the
+daemon enforces (RT-O37). The tunnel reports on start the grant it
+received ("Connected with GRANT; this client is enrolled for at most
+CEILING.", `RPC_CHANNEL.md` §4.5), and ends naming a revocation.
+
+**A note on `request`.** The glossary's `request` is a payment request
+(a root). `rpc-request` gives it a second meaning, the grant a client
+asks for, as `RPC_CHANNEL.md` §6.2 uses the word. A term has one meaning
+(§3), so this is posed to the maintainer with RT-W11's review; the row
+is built as ruled until it is answered.
