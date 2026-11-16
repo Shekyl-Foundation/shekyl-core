@@ -77,17 +77,23 @@ fn the_blocking_pool_exceeds_the_permits_and_the_window() {
 }
 /// Stop closes the store, withdraws the board, and a second stop is a
 /// no-op. A handle held past stop is not ready. Red edit: leave the
-/// facts slot filled, or skip the second stop.
+/// facts slot filled, or skip the second stop, or drop the follower's
+/// stop guard (the board is then never withdrawn as `Stopped`).
 #[test]
 fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     let (block, _) = pinned_genesis(Network::Regtest).expect("genesis");
-    // The follower's first word, so it does not withdraw the job below:
-    // no mine-address, no template.
+    // With no mine-address the follower withdraws the board on every
+    // wake, and open gives it up to three: its start, the genesis tip and
+    // the declaration's sync state. A job published after the first could
+    // be withdrawn before it is read (CI run 43750174844, 2026-11-15).
+    // Wait out the genesis tip's pass, then publish until the job holds:
+    // the sync state's pass, if it has not run, moves no tip to wait on.
     let mut posting = node.posting();
     wait_for_posting(&mut posting, &Posting::Withdrawn(NoJob::NoAddress));
-    node.mining.board.publish(Job {
+    wait_for_follower(&node);
+    let job = Job {
         offsets: block
             .blob_offsets()
             .expect("genesis reserves the extra nonce"),
@@ -100,12 +106,31 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
         height: BlockHeight::from_raw(1),
         seed: BlockHash::from_bytes([1; 32]),
         difficulty: Difficulty::ONE,
-    });
-    assert!(node.mining.board.posted().is_some(), "the job was posted");
+    };
+    let started = std::time::Instant::now();
+    loop {
+        node.mining.board.publish(job.clone());
+        if node.mining.board.posted().is_some() {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the follower kept withdrawing the job"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     node.stop();
     assert!(
         node.mining.board.posted().is_none(),
         "stop withdraws the board"
+    );
+    // A pass that ran between the publish and the stop also withdraws
+    // the board, so the stop is held to its own word: only the follower's
+    // stop guard posts `Stopped`, and it withdraws the board as it does.
+    assert_eq!(
+        *posting.borrow(),
+        Posting::Withdrawn(NoJob::Stopped),
+        "stop withdraws the board through the follower's guard"
     );
     node.stop();
     let rules = ChainRules::new(Network::Regtest, None, CappedEpoch::PRODUCTION).expect("rules");

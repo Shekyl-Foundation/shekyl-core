@@ -63,6 +63,27 @@ fn wait_for_posting(posting: &mut tokio::sync::watch::Receiver<Posting>, want: &
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+/// Wait until ingest's tip follower has acted on the latest tip
+/// publication (`Service::followed`): whatever that pass withdrew or
+/// posted is done.
+fn wait_for_follower(node: &Node) {
+    let seq = node.tips.borrow().seq;
+    let mut followed = node
+        .service
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .expect("the service runs")
+        .followed();
+    let started = std::time::Instant::now();
+    while *followed.borrow_and_update() < seq {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the follower stayed behind tip publication {seq}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
     std::fs::create_dir_all(dir).expect("dir");
     let config = config_at(dir);

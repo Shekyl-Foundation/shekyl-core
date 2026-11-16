@@ -539,31 +539,45 @@ mod tests {
             tip: tip(9, 0x09),
         });
         let driver = rt.spawn(drive_blocks(Arc::clone(&runner), rx));
-        let settle = |runner: &Runner| {
-            for _ in 0..200 {
-                if !runner.in_flight()[0] {
+        // Wait until the command has run for `events` tips and is not
+        // running. Both halves matter: a tip published before the driver
+        // reads the one before it replaces it in the watch, and a push
+        // while a command runs is dropped. A fixed pause read neither, and
+        // on a loaded host the first tip was replaced (2026-11-16, the
+        // file held only the second).
+        let ran = |runner: &Runner, events: usize| {
+            let started = std::time::Instant::now();
+            loop {
+                let written = std::fs::read_to_string(&out).map_or(0, |text| text.lines().count());
+                if written >= events && !runner.in_flight()[0] {
                     break;
                 }
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(60),
+                    "{written} of {events} events ran"
+                );
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         };
+        // Nothing to wait on for an event that must not happen: a pause,
+        // so a driver that pushed the tip found at start is seen to.
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(!out.exists(), "the tip found at start is not an event");
         tx.send_replace(TipChanged {
             seq: 1,
             tip: tip(10, 0xaa),
         });
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        settle(&runner);
+        ran(&runner, 1);
+        // The empty publication, then a tip. If the driver reads both at
+        // once the empty one is not seen on its own, and the file still
+        // holds no line for it.
         tx.send_replace(TipChanged { seq: 2, tip: None });
         std::thread::sleep(std::time::Duration::from_millis(50));
-        settle(&runner);
         tx.send_replace(TipChanged {
             seq: 3,
             tip: tip(11, 0xbb),
         });
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        settle(&runner);
+        ran(&runner, 2);
         let text = std::fs::read_to_string(&out).unwrap();
         assert_eq!(
             text,
