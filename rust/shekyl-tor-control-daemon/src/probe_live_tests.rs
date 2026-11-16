@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use shekyl_socks::Proxy;
 use shekyl_tor_control_client::control::{
-    Command, EventReceiver, EventSink, RoundMark, ServiceId, TorEvent, UploadRounds,
+    Command, DescriptorKey, EventReceiver, EventSink, RoundMark, ServiceId, TorEvent, UploadRounds,
 };
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
@@ -142,17 +142,25 @@ async fn subscribe(boot: &DaemonTorControl) {
     assert_eq!(reply.status(), 250);
 }
 
-/// Wait as the supervisor does for `service`'s next round (Rick,
-/// 2026-10-29): until it ends with an upload that succeeded, or
-/// [`round_wait`] after its first upload, whichever comes first. A round
-/// with no first upload in [`ROUND_HANG`] fails the test, naming the round.
+/// Wait as the supervisor does for `service`'s next rounds (Rick,
+/// 2026-10-29 and 2026-11-15): until every round that began has ended and
+/// one had an upload that succeeded, or [`round_wait`] after the first
+/// upload, and in either case not before every round still open is
+/// [`round_wait`] old. Each of the service's descriptors has its own rounds
+/// (`UploadRounds`), and the one that ends first may be the descriptor
+/// clients do not ask for: a probe sent then can miss. A round with no
+/// first upload in [`ROUND_HANG`] fails the test, naming the round.
 async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId, which: &str) {
     let mut rounds = UploadRounds::new(service.clone());
     let hang = Instant::now() + ROUND_HANG;
     let dropped_before = received.dropped();
     let mut wait_until: Option<Instant> = None;
+    let mut open: Vec<(DescriptorKey, Instant)> = Vec::new();
+    let mut succeeded = false;
     loop {
-        let until = wait_until.map_or(hang, |at| at.min(hang));
+        // Not before every round still open is `round_wait` old.
+        let settled = open.iter().map(|(_, at)| *at + round_wait()).max();
+        let until = wait_until.map_or(hang, |at| at.max(settled.unwrap_or(at)).min(hang));
         let Ok(reply) = tokio::time::timeout_at(until, received.recv()).await else {
             assert!(
                 wait_until.is_some(),
@@ -168,12 +176,26 @@ async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId, which
         };
         for mark in rounds.observe(&desc) {
             match mark {
+                RoundMark::Started { descriptor } => open.push((descriptor, Instant::now())),
                 RoundMark::FirstUploaded { .. } if wait_until.is_none() => {
                     wait_until = Some(Instant::now() + round_wait());
                 }
-                RoundMark::Ended { uploaded, .. } if uploaded > 0 => return,
-                _ => {}
+                RoundMark::Ended {
+                    descriptor,
+                    uploaded,
+                    ..
+                } => {
+                    open.retain(|(key, _)| *key != descriptor);
+                    succeeded |= uploaded > 0;
+                }
+                RoundMark::Forgotten { descriptor } => {
+                    open.retain(|(key, _)| *key != descriptor);
+                }
+                RoundMark::FirstUploaded { .. } => {}
             }
+        }
+        if succeeded && open.is_empty() {
+            return;
         }
     }
 }
