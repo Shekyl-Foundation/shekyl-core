@@ -136,6 +136,9 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 # §7.1). The pin the channel crate already carries.
 rand_core = { version = "0.6", features = ["getrandom"] }
 [dev-dependencies]
+# `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
+# harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 # The channel's tests drive the real handshake and HTTP over the record
 # stream from the client's side (src/channel/tests.rs).
 hyper = { version = "1", default-features = false, features = ["http1", "client"] }

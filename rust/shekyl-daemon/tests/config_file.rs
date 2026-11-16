@@ -23,7 +23,7 @@ use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
-use shekyl_daemon_config::{load, Platform, TABLE};
+use shekyl_daemon_config::{load, load_default_file_unread, Platform, TABLE};
 use shekyl_options::{read_cli, Code};
 
 /// The configuration file's name in [`private_place`]'s directory.
@@ -230,4 +230,53 @@ fn a_named_file_is_read_and_a_writable_file_or_directory_is_refused() {
             .is_some_and(|p| p.starts_with("its group")),
         "{d:?}"
     );
+}
+
+/// The load a test of the daemon's entry point uses leaves only the
+/// *default* file unread. A file the command line names is read as `load`
+/// reads it, so such a test can still be about a file. With none named,
+/// no file is read and the path announced is the default's.
+///
+/// Red edits: `load_default_file_unread` skips a named file too (the level
+/// stays the default). The other direction, reading the default file, shows
+/// only on a host that has one: there `file_read` is set.
+#[test]
+fn the_default_file_unread_load_still_reads_a_named_file() {
+    let place = private_place();
+    let dir = place.path();
+    let file = dir.join(CONFIG_FILE);
+    write_private(&file, "log-level = \"debug\"\n");
+    let platform = Platform {
+        home: Some(dir.to_path_buf()),
+        service_parent: None,
+        session_dir: None,
+        service_rendezvous: None,
+    };
+    let cli = |list: &[&str]| {
+        let args: Vec<OsString> = list.iter().map(OsString::from).collect();
+        read_cli(&TABLE, args).expect("the command line")
+    };
+
+    let named = load_default_file_unread(
+        cli(&[
+            "--network",
+            "regtest",
+            "--config-file",
+            file.to_str().expect("a UTF-8 path"),
+        ]),
+        &platform,
+    )
+    .expect("a private file is accepted");
+    assert_eq!(named.file_read.as_deref(), Some(file.as_path()));
+    assert_eq!(named.config.logging.level, "debug");
+
+    let unnamed = load_default_file_unread(cli(&["--network", "regtest"]), &platform)
+        .expect("no file is a configuration");
+    assert_eq!(unnamed.file_read, None);
+    assert_eq!(
+        unnamed.config_path,
+        Path::new("/etc/shekyl/shekyld-regtest.toml"),
+        "the path announced is the default's"
+    );
+    assert_ne!(unnamed.config.logging.level, "debug");
 }

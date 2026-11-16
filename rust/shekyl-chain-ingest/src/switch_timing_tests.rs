@@ -48,7 +48,7 @@ where
     let prefix = y.mine(prefix_len).await;
     let a = x.mine(depth).await;
     y.idle();
-    let mut spender = Spender::over(&prefix);
+    let mut spender = Spender::on(x.network_id(), &prefix);
     let mut b: Vec<Mined> = Vec::new();
     for i in 0..=depth {
         let connecting = prefix_len + i;

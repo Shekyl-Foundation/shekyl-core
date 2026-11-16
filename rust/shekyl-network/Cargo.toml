@@ -24,6 +24,12 @@ serde_json.workspace = true
 
 [features]
 serde = ["dep:serde"]
+# `HARNESS_NETWORK_ID`, the id a harness chain that mines its own genesis is
+# judged under (`Trust::UNPINNED`). TEST_ONLY
+# (`scripts/ci/check_test_only_features.py`; CHAIN_FORGE.md CF-R15): no build
+# that ships has the constant, so no release path can sign or judge under it.
+# Deleted with the id in the chain forge's CF-5.
+harness = []
 
 [lints]
 workspace = true

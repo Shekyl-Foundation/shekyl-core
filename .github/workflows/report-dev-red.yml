@@ -12,9 +12,10 @@
 # `nightly.yml`'s `report-red`: one open issue per workflow, found by its
 # exact title, so repeated reds thread instead of forking.
 #
-# Called by the last job of `build.yml` and `rust-audit-test.yml`, which
-# needs every other job of its workflow and runs on a push run on `dev` in
-# which one of them failed or was cancelled; a job past its
+# Called by the last job of `build.yml`, `rust-audit-test.yml` and
+# `benchmarks.yml`, which needs every other job of its workflow and runs on
+# a push run on `dev` in which one of them failed or was cancelled, and of
+# `gui-drift.yml` on its scheduled run (the GUI wallet's pin, nightly); a job past its
 # `timeout-minutes` is cancelled, not failed. scripts/ci/check_dev_red_reporter.py
 # holds the list and the condition to the file. A run cancelled as a whole,
 # because a newer merge superseded it, reports nothing.

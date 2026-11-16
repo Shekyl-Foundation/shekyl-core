@@ -71,6 +71,13 @@ rand_chacha = "0.3"
 default = ["std"]
 std = []
 multisig = ["shekyl-fcmp-proofs/multisig", "dep:transcript", "dep:modular-frost", "dep:dkg-dealer"]
+# The provers' seeded forms, `proof::prove_with_rng` and
+# `proof::prove_membership_only_with_rng`, which take their randomness from a
+# caller's generator: the instruction-count drift gate (`shekyl-verify-cost`)
+# and the chain forge's byte-identical chains (CHAIN_FORGE.md §5.3, seam T1).
+# TEST_ONLY (`scripts/ci/check_test_only_features.py`): no build that ships has
+# a prover that takes its caller's randomness (CF-R9).
+seeded-rng = []
 
 [lints]
 workspace = true

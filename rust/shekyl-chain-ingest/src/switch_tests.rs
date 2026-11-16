@@ -851,7 +851,7 @@ async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect()
     y.idle();
     // B's first block lists a spend referencing a block below the fork
     // point — inside the plan's header window.
-    let spend = shekyl_harness_spender::Spender::over(&prefix).spend_coinbase(
+    let spend = shekyl_harness_spender::Spender::on(x.network_id(), &prefix).spend_coinbase(
         y.wallet(),
         BlockHeight::from_raw(0),
         BlockHeight::from_raw(AT),
