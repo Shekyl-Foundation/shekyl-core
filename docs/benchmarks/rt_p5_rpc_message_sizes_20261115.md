@@ -205,8 +205,8 @@ registered rule, with the third amendment's script. **`K` and the
 classes are the maintainer's, and are not chosen here.** Captures, with
 checksums matched against the host's:
 [`rt_p5_rpc_message_sizes_20261115_captures/`](rt_p5_rpc_message_sizes_20261115_captures/)
-(the two registered runs, the second dry run, the run log and the host's
-state at each step).
+(the two registered runs, the second dry run, the run transcripts and the
+host's state; the transcripts are `.txt`, so `*.log` does not drop them).
 
 ### Conditions, recorded as registered
 
@@ -287,13 +287,16 @@ class with any other request at any `K` ≥ 2.
 
 ### A submission at greater tree depth
 
-The registered script fits a submission body as `a + f × length` with
-whole `f`, which base64's rounding is not; it reports that no projection
-is made. The table below is computed for this record from the encoding
-found in question 3 (`66 + 4 × ⌈n / 3⌉`) and the weight crate's size at
-each depth (`transactions.csv`); the head is the smallest submission's,
-less `content-length`'s digits (100 bytes), plus the body's. At the built
-depth (2) it reproduces every measured submission. Message bytes:
+The registered script's `derive` fits a submission body as `a + f × length`
+with whole `f`, which base64's rounding is not, and reports that no
+projection is made. The table below is `tx_submit_body` in that script,
+which `derive` does not call: the client's JSON-RPC envelope (66 bytes
+with an empty `bytes` string) plus the base64 of the transaction,
+`4 × ⌈n / 3⌉`, at the weight crate's size for each depth
+(`transactions.csv`). The head is the smallest submission's, less
+`content-length`'s digits (100 bytes), plus the body's. At the built
+depth (2) it reproduces every measured submission, which the script's
+test checks against this trace. Message bytes:
 
 | Shape (in × out) | d=1 | d=2 | d=3 | d=4 | d=5 | d=6 | d=7 | d=8 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|

@@ -1,0 +1,38 @@
+warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:35:38
+   |
+35 |         uniform.copy_from_slice(hash.as_slice());
+   |                                      ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:74:38
+   |
+74 |         uniform.copy_from_slice(hash.as_slice());
+   |                                      ^^^^^^^^
+
+warning: `helioselene` (lib) generated 2 warnings
+warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.62s
+     Running unittests src/lib.rs (target/debug/deps/shekyl_engine_core-b763ac0cd875b0bb)
+
+running 1 test
+test engine::regtest_e2e::rt_p5::rt_p5_registered_run has been running for over 60 seconds
+rt-p5: funder unlocked AtomicUnits(20889065684227 au) at height 91
+rt-p5: fan-out 0: 4 in, 16 out, 52395 bytes, at height 91
+rt-p5: fan-out 1: 4 in, 16 out, 52395 bytes, at height 91
+rt-p5: fan-out 2: 4 in, 16 out, 52395 bytes, at height 91
+rt-p5: fan-out 3: 4 in, 16 out, 52395 bytes, at height 91
+spend confirmed in the block that connected at height 110
+spend confirmed in the block that connected at height 111
+spend confirmed in the block that connected at height 112
+spend confirmed in the block that connected at height 113
+spend confirmed in the block that connected at height 114
+spend confirmed in the block that connected at height 115
+spend confirmed in the block that connected at height 116
+spend confirmed in the block that connected at height 117
+test engine::regtest_e2e::rt_p5::rt_p5_registered_run ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1129 filtered out; finished in 603.98s
+
