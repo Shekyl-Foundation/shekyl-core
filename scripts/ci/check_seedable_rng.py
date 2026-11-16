@@ -297,13 +297,15 @@ def enclosing(code: str, at: int) -> str:
 
 
 def scan_crate(
-    src: Path, features: set[str], root: Path, watched: set[str]
-) -> tuple[dict, dict, int]:
-    """(production sites, test-only functions, files read) for one crate's
-    `src/`: sites keyed `(path, function)` with their construction count,
-    and the functions found in test-only code keyed the same way. Only the
-    files that can hold a site, or a watched (test-only) path, are read in
-    full; `watched` is those paths."""
+    src: Path, features: set[str], root: Path, watched: set[str], hunt: set[str]
+) -> tuple[dict, set, set, int]:
+    """(production sites, test-only functions, production functions, files
+    read) for one crate's `src/`. Sites are keyed `(path, function)` with
+    their construction count. Test-only functions and production functions
+    are keyed the same way: a name present in the file and absent from its
+    production view is test-only, and a name in that view is production.
+    Only the files that can hold a site, or a watched (test-only) path, are
+    read in full; `watched` is those paths."""
     files = sorted(src.rglob("*.rs"))
     texts = {f: f.read_text(encoding="utf-8", errors="replace") for f in files}
     # Files that are test code whole: declared under a test-only cfg, or
@@ -311,24 +313,29 @@ def scan_crate(
     excluded = test_file_closure(files, features)
     sites: dict[tuple[str, str], int] = {}
     tested: set[tuple[str, str]] = set()
+    defined: set[tuple[str, str]] = set()
     for f, raw in texts.items():
         rel = f.relative_to(root).as_posix()
-        if rel not in watched and not RAW_CONSTRUCTION.search(raw):
+        hunted = any(re.search(rf"\bfn\s+{re.escape(name)}\b", raw) for name in hunt)
+        if rel not in watched and not RAW_CONSTRUCTION.search(raw) and not hunted:
             continue
         resolved = f.resolve()
         stripped = strip(raw)
         whole_file_test = resolved in excluded
         production = "" if whole_file_test else drop_test_items(stripped, raw, features)
         # Functions present in the file but absent from its production view
-        # are test-only.
+        # are test-only. Names that survive in the production view are the
+        # ones a test-only site must not become.
         prod_fns = {m.group(1) for m in FN.finditer(production)}
+        for name in prod_fns:
+            defined.add((rel, name))
         for m in FN.finditer(stripped):
             if m.group(1) not in prod_fns:
                 tested.add((rel, m.group(1)))
         for m in CONSTRUCTION.finditer(production):
             key = (rel, enclosing(production, m.start()))
             sites[key] = sites.get(key, 0) + 1
-    return sites, {k: True for k in tested}, len(files)
+    return sites, tested, defined, len(files)
 
 
 def scan(
@@ -336,22 +343,27 @@ def scan(
     crates: list[tuple[str, Path]],
     features: dict[str, set[str]],
     watched: set[str] | None = None,
+    hunt: set[str] | None = None,
 ):
     sites: dict[tuple[str, str], int] = {}
-    tested: dict[tuple[str, str], bool] = {}
+    tested: set[tuple[str, str]] = set()
+    defined: set[tuple[str, str]] = set()
     files = 0
     watched = watched or set()
+    hunt = hunt or set()
     for name, src in crates:
-        s, t, n = scan_crate(src, features.get(name, set()), root, watched)
+        s, t, d, n = scan_crate(src, features.get(name, set()), root, watched, hunt)
         sites.update(s)
         tested.update(t)
+        defined.update(d)
         files += n
-    return sites, tested, files
+    return sites, tested, defined, files
 
 
 def check(
     sites: dict[tuple[str, str], int],
-    tested: dict[tuple[str, str], bool],
+    tested: set[tuple[str, str]],
+    defined: set[tuple[str, str]],
     listed: dict[tuple[str, str], tuple[str, int, str]],
     test_only_sites: dict[tuple[str, str], str],
 ) -> list[str]:
@@ -387,21 +399,15 @@ def check(
         path, function = key
         if key in tested:
             continue
-        in_prod = any(p == path and f == function for (p, f) in sites) or _defined_in_production(
-            key
-        )
         errors.append(
             f"{path} `{function}` must stay in test-only code ({why}), and "
-            + ("is in production code" if in_prod else "is not found in test-only code")
+            + (
+                "is in production code"
+                if key in defined
+                else "is not found in test-only code"
+            )
         )
     return errors
-
-
-_PRODUCTION_FNS: set[tuple[str, str]] = set()
-
-
-def _defined_in_production(key: tuple[str, str]) -> bool:
-    return key in _PRODUCTION_FNS
 
 
 def selftest() -> int:
@@ -420,10 +426,11 @@ def selftest() -> int:
                 p = src / rel
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(text, encoding="utf-8")
-            sites, tested, _ = scan(
-                root, [("c", src)], {"c": features}, {p for p, _ in test_only_sites}
+            sites, tested, defined, _ = scan(
+                root, [("c", src)], {"c": features}, {p for p, _ in test_only_sites},
+                {name for _, name in test_only_sites},
             )
-        return check(sites, tested, listed, test_only_sites)
+        return check(sites, tested, defined, listed, test_only_sites)
 
     key = ("c/src/lib.rs", "keys")
     row = {key: ("G1", 1, "a KDF's output")}
@@ -460,6 +467,21 @@ def selftest() -> int:
         else:
             print(f"selftest ok: {name}")
 
+    moved = run(
+        {"lib.rs": prod + leaked}, row, {("c/src/lib.rs", "stand_in"): "why"}
+    )
+    if not any("is in production code" in e for e in moved):
+        print(f"selftest FAIL: a site moved into production did not say so: {moved}")
+        failed = 1
+    else:
+        print("selftest ok: a test-only site moved into production says so")
+    gone = run({"lib.rs": prod}, row, {("c/src/lib.rs", "stand_in"): "why"})
+    if not any("is not found in test-only code" in e for e in gone):
+        print(f"selftest FAIL: a deleted test-only site did not say so: {gone}")
+        failed = 1
+    else:
+        print("selftest ok: a deleted test-only site says it is not found")
+
     # A crate entering the shipped graph is checked from that commit: the
     # path main() runs (manifests -> the set -> scan -> check), with a
     # seeded site planted in a crate outside the graph, then that crate
@@ -480,9 +502,9 @@ def selftest() -> int:
             shipped = shipped_crates(graphs(members, {}, ["shekyld"], [], pin))
             errors = headed_errors(shipped, headed, set(members))
             crates = production_crates(dirs, shipped, headed)
-            sites, tested, _ = scan(root, crates, {}, set())
+            sites, tested, defined, _ = scan(root, crates, {}, set())
         return errors + check(
-            sites, tested, {("lib/src/lib.rs", "keys"): ("G1", 1, "a KDF's output")}, {}
+            sites, tested, defined, {("lib/src/lib.rs", "keys"): ("G1", 1, "a KDF's output")}, {}
         )
 
     gui = {"package": {"name": "shekyl-gui-wallet"}, "dependencies": {}}
@@ -568,7 +590,10 @@ def main() -> int:
         return 1
     crates = production_crates(dirs, shipped, HEADED_FOR_PRODUCTION)
     features = test_only_features()
-    sites, tested, files = scan(RUST, crates, features, {p for p, _ in TEST_ONLY_SITES})
+    sites, tested, defined, files = scan(
+        RUST, crates, features, {p for p, _ in TEST_ONLY_SITES},
+        {name for _, name in TEST_ONLY_SITES},
+    )
     if "--list" in sys.argv[1:]:
         for (path, function), count in sorted(sites.items()):
             print(f"{path}\t{function}\t{count}")
@@ -578,7 +603,7 @@ def main() -> int:
     if files == 0:
         print("FAIL: no Rust source read: the gate has no subject", file=sys.stderr)
         return 1
-    errors = check(sites, tested, SITES, TEST_ONLY_SITES)
+    errors = check(sites, tested, defined, SITES, TEST_ONLY_SITES)
     errors += provisional_errors(SITES, PROVISIONAL, labels)
     if errors:
         for e in errors:

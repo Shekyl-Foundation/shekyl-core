@@ -186,15 +186,30 @@ def release_features(text: str) -> list[str]:
     only under `if(NOT IOS)` (no release targets iOS, so every release takes
     that branch), is the release's. One under any other conditional is
     refused: this reading cannot say whether a release takes that branch.
+    A `set` in an `else()` or `elseif()` arm is refused the same way. Treating
+    that arm as the `if` it hangs off would drop the release's features and
+    report success with an empty list.
     """
     found: list[str] = []
     placed = 0
-    stack: list[str] = []
+    # (condition, whether this frame is the else/elseif arm). An else arm is
+    # not a condition this reader evaluates, so a set inside one is refused
+    # rather than dropped: dropping it would report a release with no features.
+    stack: list[tuple[str, bool]] = []
     for line in text.splitlines():
         code = line.split("#", 1)[0].strip()
         opener = re.match(r"(?i)if\s*\((.*)\)\s*$", code)
         if opener:
-            stack.append(opener.group(1))
+            stack.append((opener.group(1), False))
+            continue
+        if re.match(r"(?i)else(?:if)?\s*\(", code):
+            if not stack:
+                raise GraphError(
+                    f"BuildRust.cmake has `{code}` outside an if: the release's features "
+                    "cannot be placed"
+                )
+            cond, _ = stack[-1]
+            stack[-1] = (cond, True)
             continue
         if re.match(r"(?i)endif\s*\(", code):
             if stack:
@@ -204,9 +219,15 @@ def release_features(text: str) -> list[str]:
         if not setter:
             continue
         placed += 1
-        if any(MEASUREMENT_OPTION in cond for cond in stack):
+        if any(in_else for _, in_else in stack):
+            raise GraphError(
+                f"BuildRust.cmake sets {FEATURES_VAR} in an else or elseif branch: "
+                "whether a release takes that branch is not read here, so the release's "
+                "features cannot be known"
+            )
+        if any(MEASUREMENT_OPTION in cond for cond, _ in stack):
             continue
-        conditions = [c for c in stack if not re.fullmatch(r"\s*NOT\s+IOS\s*", c)]
+        conditions = [c for c, _ in stack if not re.fullmatch(r"\s*NOT\s+IOS\s*", c)]
         if conditions:
             raise GraphError(
                 f"BuildRust.cmake sets {FEATURES_VAR} under `if({conditions[-1]})`: "

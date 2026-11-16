@@ -268,6 +268,26 @@ def selftest() -> int:
         ("a features set under another conditional",
          "if(FOO)\n  set(_shekyl_rust_bin_features --features shekyld/extra)\nendif()\n"),
         ("no features set at all", "set(_other x)\n"),
+        ("a features set in the else of the measurement build",
+         "if(SHEKYL_MEASUREMENT_SPANS)\n"
+         "  set(_shekyl_rust_bin_features --features lib/measure)\n"
+         "else()\n"
+         "  set(_shekyl_rust_bin_features --features shekyld/extra)\n"
+         "endif()\n"),
+        ("a features set in an else nested under NOT IOS",
+         "if(NOT IOS)\n"
+         "  if(SHEKYL_MEASUREMENT_SPANS)\n"
+         "    set(_shekyl_rust_bin_features --features lib/measure)\n"
+         "  else()\n"
+         "    set(_shekyl_rust_bin_features --features shekyld/extra)\n"
+         "  endif()\n"
+         "endif()\n"),
+        ("a features set in an elseif",
+         "if(SHEKYL_MEASUREMENT_SPANS)\n"
+         "  set(_shekyl_rust_bin_features --features lib/measure)\n"
+         "elseif(NOT SHEKYL_MEASUREMENT_SPANS)\n"
+         "  set(_shekyl_rust_bin_features --features shekyld/extra)\n"
+         "endif()\n"),
     ]
     for name, text in refused:
         try:
