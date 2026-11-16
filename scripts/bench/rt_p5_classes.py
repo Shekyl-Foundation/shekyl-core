@@ -47,6 +47,11 @@ OCCUPANCY_LEN = 2
 RECORD_PAYLOAD_MAX = MAX_RECORD_PLAINTEXT - OCCUPANCY_LEN
 
 K_MAX = 8
+
+# The key run.json carries the curve tree's figures under, as the
+# instrument writes it (`regtest_e2e_rt_p5.rs`, `write_outputs`); the tests
+# hold the two equal.
+RUN_CURVE_KEY = "curve"
 # The 4.x wire carries every method on `/json_rpc` (RW-Q1), so a label is
 # `json_rpc:` and the method's name.
 SUBMIT = "json_rpc:tx_submit"
@@ -209,7 +214,7 @@ def derive(run_dir):
             record_owner.append((m["label"], m["direction"]))
 
     print(f"# RT-P5 classes: `{run['cell']}` cell\n")
-    print(f"Chain height {run['chain_height']}; curve tree {json.dumps(run['curve_tree_info'])}.\n")
+    print(f"Chain height {run['chain_height']}; curve tree {json.dumps(run[RUN_CURVE_KEY])}.\n")
     print(f"{len(messages)} messages, {len(records)} records.\n")
     print("## HTTP message sizes per method\n")
     print("| Method | Direction | Count | Min | Median | Max | Records |")

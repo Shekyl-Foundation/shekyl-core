@@ -48,6 +48,18 @@ class RecordConstants(unittest.TestCase):
         self.assertEqual(rc.MAX_RECORD_PLAINTEXT, 0xFFFF)
 
 
+class RunKeys(unittest.TestCase):
+    """run.json's curve key is the instrument's. Red edit: set
+    `RUN_CURVE_KEY = "curve_tree_info"` in the script."""
+
+    def test_the_curve_key_is_the_instruments(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        src = os.path.join(here, "..", "..", "rust", "shekyl-engine-core", "src", "engine",
+                           "regtest_e2e_rt_p5.rs")
+        with open(src, encoding="utf-8") as f:
+            self.assertIn('"%s": depth,' % rc.RUN_CURVE_KEY, f.read())
+
+
 class RecordSplit(unittest.TestCase):
     def test_a_small_message_is_one_record_with_its_occupancy(self):
         self.assertEqual(rc.records_of(10), [12])
@@ -133,8 +145,21 @@ class Compare(unittest.TestCase):
         with open(os.path.join(d, "transactions.csv"), "w") as f:
             f.write("cell,tx,wallet,inputs,outputs,tx_len,fee,built_depth,depth,predicted_tx_len\n")
         with open(os.path.join(d, "run.json"), "w") as f:
-            f.write('{"cell": "x", "chain_height": 1, "curve_tree_info": {}}')
+            f.write('{"cell": "x", "chain_height": 1, "%s": {}}' % rc.RUN_CURVE_KEY)
         return d
+
+    def test_derive_reads_a_run_the_instrument_wrote(self):
+        """`derive` runs over a whole run directory. Red edit: read
+        `run['curve_tree_info']` in `derive`, as the script did before the
+        4.0 rename's key reached it, and this fails."""
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as root:
+            d = self.write_run(root, "a", [1_000, 70_000])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc.derive(d)
+            self.assertIn("# RT-P5 classes: `x` cell", out.getvalue())
 
     def test_within_tolerance_passes_and_beyond_fails(self):
         with tempfile.TemporaryDirectory() as root:

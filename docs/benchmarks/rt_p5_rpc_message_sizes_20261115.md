@@ -38,7 +38,16 @@ rulings rest on:
 
 ## Registered before the run
 
-*Amended twice, 2026-11-15, before any registered run. Second, after
+*Amended three times, 2026-11-15/16, before any registered result was
+read. Third, while the registered runs were made and before either was
+read: the derivation script read `run.json`'s curve figures under
+`curve_tree_info`, a key the 4.0 rename's port of the instrument
+(`c346e38e55`) had renamed `curve`, so `derive` failed on the second dry
+run's files. The script reads the instrument's key (`RUN_CURVE_KEY`), a
+test holds the two equal, and another runs `derive` over a written run.
+The instrument, the traffic and the rule are unchanged; the registered
+runs are made from the second amendment's build, and derived with this
+commit's script. Second, after
 the dry run: the wallet's refresh reads each block with `block_show`,
 which carries the block's transactions, and never calls `block_list`
 (the chain-ingest fetch's method), so the dry run failed the subject gate
@@ -181,6 +190,9 @@ instrument, not data, and its sizes are not read here.
   gate.** Every traffic step passed (the fan-out, the eight shapes, each
   confirmed in its block); the gate found no `json_rpc:block_list` and
   named the labels the trace carries. Fixed by the second amendment.
+- **Second attempt, 2026-11-16 02:48Z, 662 s: passed every gate**, from a
+  fresh clone and build of `3e0e2be4ad`. `derive` over its files failed
+  on the curve key, fixed by the third amendment.
 
 ## Results
 
