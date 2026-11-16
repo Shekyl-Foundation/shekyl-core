@@ -72,9 +72,13 @@ use crate::trace::{Digest, Facts, Trace, TraceWriter};
 use shekyl_network::Network;
 
 mod growing;
+#[cfg(feature = "pipeline")]
+mod quiet;
 mod tree;
 
 pub use growing::Growing;
+#[cfg(feature = "pipeline")]
+pub use quiet::{held_seeds, named_seeds, quiet_resident, quiet_seeds};
 pub use tree::GrownTree;
 
 /// A settlement epoch for test stores.
@@ -766,32 +770,6 @@ pub struct OwnHasher {
     /// The hasher, for its `resident()` watch.
     pub hasher: shekyl_hasher::Hasher,
     _owner: shekyl_hasher::Owner,
-}
-
-/// The seeds `hasher` holds once it is quiet: [`shekyl_hasher::Resident::quiet`],
-/// the core's own fact. A job, a lease or a build in flight is waited out.
-#[cfg(feature = "pipeline")]
-pub async fn quiet_seeds(hasher: &shekyl_hasher::Hasher) -> std::collections::BTreeSet<[u8; 32]> {
-    let mut resident = hasher.resident();
-    let quiet = resident
-        .wait_for(|resident| resident.quiet)
-        .await
-        .expect("the hasher is running");
-    quiet
-        .caches
-        .iter()
-        .map(|(seed, _)| *seed.as_bytes())
-        .collect()
-}
-
-/// What `list` names, as [`quiet_seeds`] reports what is held: none when
-/// there is no list.
-#[cfg(feature = "pipeline")]
-pub fn named_seeds(list: Option<&shekyl_hasher::Ranked>) -> std::collections::BTreeSet<[u8; 32]> {
-    list.into_iter()
-        .flat_map(shekyl_hasher::Ranked::seeds)
-        .map(|seed| *seed.as_bytes())
-        .collect()
 }
 
 /// [`OwnHasher`] over a budget of this host's parallelism.

@@ -162,26 +162,31 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
+    replied(&mut core, 0);
     core.on(super::probe::uploaded(0), 0);
-    // The driver folds the directory list in that same turn. This round
-    // reached none, so the probe alone decides.
-    core.on(
-        Input::DirectoriesDrawn {
-            fetches: Vec::new(),
-            ours: None,
-            open_uploads: core.open_uploads(0),
-        },
-        0,
-    );
     let mut at = 0;
     while let Some(due) = core.deadline().filter(|due| *due <= secs(15)) {
         at = due;
-        let step = core.on_deadline(due);
-        if step.actions.contains(&Action::Probe) {
-            break;
-        }
-        if step.actions.contains(&Action::Sample) {
+        let mut actions = core.on_deadline(due).actions;
+        if actions.contains(&Action::Sample) {
             core.on(sample(100, 1_000), due);
+            actions.extend(replied(&mut core, due).actions);
+        }
+        if actions.contains(&Action::CheckDirectories) {
+            // The driver folds the list in the turn the probe asks for it.
+            // This round reached none, so the probe alone decides.
+            core.on(
+                Input::DirectoriesDrawn {
+                    fetches: Vec::new(),
+                    ours: None,
+                    open_uploads: core.open_uploads(due),
+                },
+                due,
+            );
+            replied(&mut core, due);
+        }
+        if actions.contains(&Action::Probe) {
+            break;
         }
     }
     core.on(Input::ProbeDialed { minted_at: at }, at);

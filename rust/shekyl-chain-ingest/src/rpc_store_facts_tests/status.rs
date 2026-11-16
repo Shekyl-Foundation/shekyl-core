@@ -119,7 +119,9 @@ async fn daemon_status_reports_the_hashers_live_caches_to_status_alone() {
     own.hasher
         .rank(shekyl_hasher::Ranked::new(seed(0xc1), Some(seed(0xc2)), None).expect("two seeds"));
     assert_eq!(
-        crate::test_support::quiet_seeds(&own.hasher).await.len(),
+        crate::test_support::quiet_seeds(&own.hasher, "the two ranked seeds")
+            .await
+            .len(),
         2,
         "the hasher holds the two ranked seeds' caches"
     );

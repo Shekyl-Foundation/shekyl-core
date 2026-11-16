@@ -2882,7 +2882,10 @@ mod live_tests {
                 TorEvent::HsDesc(desc) => {
                     if desc.address.as_ref() == Some(&service_id) {
                         upload |= desc.action == HsDescAction::Upload;
-                        triggered = rounds.observe(desc).contains(&RoundMark::FirstUploaded);
+                        triggered = rounds
+                            .observe(desc)
+                            .iter()
+                            .any(|mark| matches!(mark, RoundMark::FirstUploaded { .. }));
                     }
                 }
                 _ => {}
