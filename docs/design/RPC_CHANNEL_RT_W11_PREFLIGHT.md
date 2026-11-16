@@ -88,7 +88,7 @@ It is not:
 8. **A probe.** Measuring the pool size under load is registered as a
    probe (RT-P10, §6); it does not block this pull request.
 9. **RT-P5.** The 4.x size measurement is its own registration and pull
-   request ([`rt_p5_rpc_message_sizes_20261115.md`](../benchmarks/rt_p5_rpc_message_sizes_20261115.md)),
+   request (#1408, `docs/benchmarks/rt_p5_rpc_message_sizes_20261115.md`),
    not this one. RT-W11 pads to whatever RT-O6 rules.
 
 ---
