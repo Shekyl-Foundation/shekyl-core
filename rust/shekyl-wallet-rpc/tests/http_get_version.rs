@@ -485,7 +485,6 @@ async fn queries_balance_address_transfers_after_create() {
         "balance",
         "spendable",
         "incoming",
-        "parked",
         "outgoing",
         "unspendable",
     ] {
@@ -495,6 +494,7 @@ async fn queries_balance_address_transfers_after_create() {
         bal["result"].get("incoming_wait").is_none(),
         "nothing incoming: absent"
     );
+    assert!(bal["result"].get("parked").is_none(), "no parked leg");
     assert_eq!(bal["result"]["staked"], "0");
     assert_eq!(bal["result"]["claimable_rewards"], "0");
 

@@ -255,7 +255,7 @@ pub use shekyl_units::AtomicUnitsString;
 /// a placeholder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetBalanceResult {
-    /// The balance: `spendable + incoming + parked`. The only field that is
+    /// The balance: `spendable + incoming`. The only field that is
     /// a sum of others (A17).
     pub balance: AtomicUnitsString,
     /// What a send could use now.
@@ -266,8 +266,6 @@ pub struct GetBalanceResult {
     /// **Absent (not `0`)** when no incoming output is on chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incoming_wait: Option<u64>,
-    /// Parked by the user: in the balance, out of coin selection.
-    pub parked: AtomicUnitsString,
     /// Σ (recipients + fee) of the in-flight sends. Beside the balance.
     pub outgoing: AtomicUnitsString,
     /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;

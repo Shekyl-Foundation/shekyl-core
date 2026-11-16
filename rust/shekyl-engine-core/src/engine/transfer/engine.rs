@@ -431,7 +431,7 @@ where
 
         // CT-5 §3.2.1 D3 + C2: an insufficiency names what is in the way
         // (`CandidatePartition::refusal`), never a bare `InsufficientFunds`
-        // when waiting or the user's own parked money would cover it.
+        // when waiting would cover it.
         let resolve_insufficiency =
             |needed_raw: u64| -> SendError { partition.refusal(needed_raw, reference_height) };
         // Selector-error projection: an insufficiency (empty/short candidate

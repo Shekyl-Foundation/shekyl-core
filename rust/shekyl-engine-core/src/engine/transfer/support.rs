@@ -222,9 +222,7 @@ pub(super) fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } => BuildErrorKind::InvalidRecipient,
         SendError::Fee(FeeEstimatorError::DaemonFeeUnreasonable(_)) => BuildErrorKind::FeeRefused,
-        SendError::InsufficientFunds { .. } | SendError::OutputsParked { .. } => {
-            BuildErrorKind::InsufficientFunds
-        }
+        SendError::InsufficientFunds { .. } => BuildErrorKind::InsufficientFunds,
         SendError::SpendUnavailableRebuilding { .. } => BuildErrorKind::RebuildingMembershipData,
         SendError::OutputNotYetSpendable { .. } => BuildErrorKind::OutputNotYetSpendable,
         // No block ingested yet, or a chain too short to anchor a reference

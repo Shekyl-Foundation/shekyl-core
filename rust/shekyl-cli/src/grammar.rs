@@ -1219,6 +1219,22 @@ mod tests {
         }
     }
 
+    /// The user-freeze commands a Monero user would type are REJECTED: each
+    /// is refused with its reason and the decision (2026-11-15), never sent
+    /// to the server or read as an unknown command.
+    #[test]
+    fn the_user_freeze_commands_are_refused_with_their_reason() {
+        for line in ["freeze", "thaw 0", "frozen"] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("no user-set hold"), "{line}: {message}");
+                    assert!(message.contains("2026-11-15"), "{line}: {message}");
+                }
+                other => panic!("{line}: {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn sign_keeps_internal_spaces() {
         match parse("sign hello   world") {

@@ -51,8 +51,8 @@ pub(crate) fn show_balance(val: &Value) {
             .map(|v| format!("{} SKL", format_amount_str(v)))
             .unwrap_or_else(|| "unavailable (staking state could not be read)".to_owned())
     };
-    // The balance and each leg once (A17): balance = spendable + incoming
-    // + parked. Outgoing and unspendable are beside it, never in it.
+    // The balance and each leg once (A17): balance = spendable + incoming.
+    // Outgoing and unspendable are beside it, never in it.
     let wait = val
         .get("incoming_wait")
         .and_then(Value::as_u64)
@@ -64,7 +64,6 @@ pub(crate) fn show_balance(val: &Value) {
     println!("Balance:              {} SKL", field("balance"));
     println!("  Spendable:          {} SKL", field("spendable"));
     println!("  Incoming:           {} SKL{wait}", field("incoming"));
-    println!("  Parked:             {} SKL", field("parked"));
     println!(
         "Outgoing:             {} SKL  (sends in flight, not in the balance)",
         field("outgoing")

@@ -186,10 +186,10 @@ source-of-truth for the synthetic transfer shape.
 - Iterate `&[TransferDetails]`.
 - For each transfer, classify into exactly one state with the one
   classifier (`TransferDetails::state`, A17): `spent` | `unspendable` |
-  `in flight` | `parked` | `incoming` | `spendable`.
+  `in flight` | `incoming` | `spendable`.
 - Predicate evaluation per transfer, in that precedence:
-  - `td.spent`, `td.unspendable`, the in-flight lock lookup and
-    `td.frozen` short-circuit.
+  - `td.spent`, `td.unspendable` and the in-flight lock lookup
+    short-circuit.
   - the reference rule: `in_tree_at_reference(td.eligible_height,
     reference)` at the horizon's one reference block.
 - Accumulate per-class running totals in locals, and keep the least
@@ -205,10 +205,6 @@ source-of-truth for the synthetic transfer shape.
 
 - `spent = (seed & 0x7) == 0` — forces ~12.5% of entries through the
   spent short-circuit.
-- `frozen = (seed & 0xf) == 0` — forces ~6.25% through the frozen
-  short-circuit, and has overlap with `spent` (by design) so the
-  predicate ordering inside `compute` is exercised.
-- `staked = (seed & 0b11) == 0` — 25% staked.
 - `current_height = 1_000 + N/2` so roughly half of `eligible_height`
   comparisons fall on either side of the cutoff. This mirrors the
   "balanced classification spread" that `BM_balance_compute` in the
@@ -231,7 +227,7 @@ iai-callgrind six-metric block.
 over the same logical transfer shape. **Documented asymmetries:**
 
 - The Rust path evaluates a richer classification (six-way;
-  `spendable`/`incoming`/`parked`/`in flight`/`unspendable`/`spent`). The C++ path
+  `spendable`/`incoming`/`in flight`/`unspendable`/`spent`). The C++ path
   evaluates a narrower spent/frozen/unlocked split. The Rust
   per-transfer cost is therefore expected to be modestly higher at
   equal `N`.

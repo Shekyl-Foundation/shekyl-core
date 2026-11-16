@@ -105,7 +105,6 @@ impl TransferDetailsExt for TransferDetails {
             // pscan funding path as `spendable_height` (GF4b-6,
             // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6).
             eligible_height: eligible_height(block_height, output.additional_timelock()),
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),

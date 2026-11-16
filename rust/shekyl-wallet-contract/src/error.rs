@@ -243,8 +243,10 @@ wallet_rpc_error_codes! {
     InputNotInTree = -29125 => "INPUT_NOT_IN_TREE",
     /// Build: an input was received but can never be spent.
     InputUnspendable = -29126 => "INPUT_UNSPENDABLE",
-    /// Build: the wallet covers the send only with outputs the user parked.
-    OutputsParked = -29127 => "OUTPUTS_PARKED",
+    // -29127 OUTPUTS_PARKED is RETIRED (never reuse): the wallet has no
+    // user-set hold on outputs (V3_WALLET_DECISION_LOG.md, 2026-11-15).
+    // The number stays recorded in wallet_rpc.yaml so it is never
+    // reallocated with a new meaning.
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200 => "REFRESH_IN_PROGRESS",
     /// Refresh / rescan / proofs / build: the daemon did not answer.
@@ -474,6 +476,16 @@ pub enum WalletRpcError {
     /// Method name is unknown, RESERVED, or not yet implemented.
     #[error("method not found: {0}")]
     MethodNotFound(String),
+    /// Method name is REJECTED in the contract
+    /// ([`crate::rejected::REJECTED_METHODS`]): answered `-32601` like any
+    /// name the server does not serve, with the reason it is refused.
+    #[error("{method} is not offered: {reason}")]
+    MethodRejected {
+        /// The name the caller sent.
+        method: String,
+        /// Why the contract refuses it.
+        reason: &'static str,
+    },
     /// Params failed schema / type checks.
     #[error("invalid params: {0}")]
     InvalidParams(String),
@@ -531,7 +543,10 @@ pub enum WalletRpcError {
     WalletFileCorrupt,
     /// `-29012`: a wallet file was written by a version, or in a shape, this
     /// build cannot read.
-    #[error("the wallet's files were written by a version this build cannot read")]
+    #[error(
+        "the wallet's files were written by a version this build cannot read — open them \
+         with the build that wrote them, or restore the wallet from your seed"
+    )]
     WalletFileVersionUnsupported,
     /// `-29013`: a read or write of the wallet's files failed underneath —
     /// disk full, filesystem error. The cause stays in the server log.
@@ -787,15 +802,6 @@ pub enum WalletRpcError {
         /// The input's position in the transaction.
         input: usize,
     },
-    /// `-29127`: the balance covers the send only with the outputs the user
-    /// parked, which coin selection does not use (A17). No amounts ride the
-    /// refusal: the parked amount has one source, `get_balance.parked`, and
-    /// error data is logged like the message.
-    #[error(
-        "this send is covered only with money you parked — release the parked outputs to \
-         spend them, or send less"
-    )]
-    OutputsParked,
     /// `-29120`: the send's record (with its signed bytes and tx secret)
     /// could not be saved, so the wallet sent nothing (A19). The
     /// reservation is kept: fix the cause and submit it again, or discard
@@ -1249,7 +1255,9 @@ impl WalletRpcError {
         match self {
             Self::ParseError => WalletRpcErrorCode::ParseError,
             Self::InvalidRequest(_) | Self::Unauthorized => WalletRpcErrorCode::InvalidRequest,
-            Self::MethodNotFound(_) => WalletRpcErrorCode::MethodNotFound,
+            Self::MethodNotFound(_) | Self::MethodRejected { .. } => {
+                WalletRpcErrorCode::MethodNotFound
+            }
             Self::InvalidParams(_) => WalletRpcErrorCode::InvalidParams,
             Self::InternalError(_) => WalletRpcErrorCode::InternalError,
             Self::WalletAlreadyOpen => WalletRpcErrorCode::WalletAlreadyOpen,
@@ -1299,7 +1307,6 @@ impl WalletRpcError {
             Self::TooManyOutputs { .. } => WalletRpcErrorCode::TooManyOutputs,
             Self::InputNotInTree { .. } => WalletRpcErrorCode::InputNotInTree,
             Self::InputUnspendable { .. } => WalletRpcErrorCode::InputUnspendable,
-            Self::OutputsParked => WalletRpcErrorCode::OutputsParked,
             Self::SendNotSaved => WalletRpcErrorCode::SendNotSaved,
             Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
             Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
@@ -1732,7 +1739,6 @@ impl From<SendError> for WalletRpcError {
             SendError::InvalidRecipient { .. } => Self::InvalidRecipient,
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
-            SendError::OutputsParked { .. } => Self::OutputsParked,
             SendError::Io(io) => from_io_error(io),
             SendError::Sign(fault) => from_sign_fault(fault),
             SendError::NotSynced => Self::WalletNotSynced,
@@ -3456,6 +3462,26 @@ mod tests {
         }
     }
 
+    /// A wallet file whose ledger block an earlier build wrote (version 14,
+    /// before the user freeze was removed) is refused `-29012`, and the
+    /// message names the remedy: restore the wallet from its seed.
+    #[test]
+    fn an_earlier_ledger_version_is_refused_with_the_remedy() {
+        let err = file_err(WalletFileError::Ledger(
+            WalletLedgerError::UnsupportedBlockVersion {
+                block: "ledger",
+                file: 14,
+                binary: 15,
+            },
+        ));
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletFileVersionUnsupported);
+        assert!(
+            err.message().contains("restore the wallet from your seed"),
+            "{}",
+            err.message()
+        );
+    }
+
     /// The network mismatch names both networks (public), in `data` too.
     #[test]
     fn a_network_mismatch_names_both_networks() {
@@ -3525,20 +3551,6 @@ mod tests {
 
     /// Each build refusal a user or operator can act on has its own code;
     /// `-32603` is left to construction failing and broken preconditions.
-    /// `-29127` names no amount: the parked amount has one source,
-    /// `get_balance.parked`, and error data is logged like the message.
-    #[test]
-    fn the_parked_refusal_carries_no_amount() {
-        let err: WalletRpcError = SendError::OutputsParked {
-            needed: 10,
-            parked: 4,
-        }
-        .into();
-        assert_eq!(err.code(), WalletRpcErrorCode::OutputsParked);
-        assert_eq!(err.data(), None);
-        assert!(!err.message().contains('4') && !err.message().contains("10"));
-    }
-
     #[test]
     fn every_build_refusal_names_its_remedy() {
         use shekyl_types::{BlockCount, BlockHeight};
@@ -3553,13 +3565,6 @@ mod tests {
                     fault: "handle-mismatch",
                 },
                 WalletRpcErrorCode::SignerFailed,
-            ),
-            (
-                SendError::OutputsParked {
-                    needed: 10,
-                    parked: 4,
-                },
-                WalletRpcErrorCode::OutputsParked,
             ),
             (
                 SendError::Sign(SignFault::TooManyInputs { count: 9 }),

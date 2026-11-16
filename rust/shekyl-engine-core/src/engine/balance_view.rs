@@ -9,7 +9,7 @@
 //! view's [`StakedBalance`].
 //!
 //! The ledger's half is [`BalanceSummary`] whole: balance = spendable +
-//! held, held = incoming + parked, with outgoing and unspendable beside it
+//! incoming, with outgoing and unspendable beside it
 //! (A17; the legs are defined in `shekyl-scanner`'s `balance` module).
 //!
 //! Before this module the projection — how the two bonded legs sum, what an unreadable staking seal does to the staking

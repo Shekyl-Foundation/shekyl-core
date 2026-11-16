@@ -36,7 +36,6 @@ pub fn get_balance_result(view: &BalanceView) -> GetBalanceResult {
         spendable: legs.spendable.into(),
         incoming: legs.incoming.into(),
         incoming_wait: legs.incoming_wait.map(shekyl_types::BlockCount::to_raw),
-        parked: legs.parked.into(),
         outgoing: legs.outgoing.into(),
         unspendable: legs.unspendable.into(),
         staked: view.staking.map(|s| s.staked.into()),
@@ -645,7 +644,6 @@ mod tests {
                 spendable: AtomicUnits::from_raw(40),
                 incoming: AtomicUnits::from_raw(9),
                 incoming_wait: Some(shekyl_types::BlockCount::from_raw(3)),
-                parked: AtomicUnits::from_raw(2),
                 outgoing: AtomicUnits::from_raw(5),
                 unspendable: AtomicUnits::from_raw(7),
             },
@@ -655,11 +653,10 @@ mod tests {
             }),
         };
         let r = get_balance_result(&view);
-        assert_eq!(r.balance.to_string(), "51", "spendable + incoming + parked");
+        assert_eq!(r.balance.to_string(), "49", "spendable + incoming");
         assert_eq!(r.spendable.to_string(), "40");
         assert_eq!(r.incoming.to_string(), "9");
         assert_eq!(r.incoming_wait, Some(3));
-        assert_eq!(r.parked.to_string(), "2");
         assert_eq!(r.outgoing.to_string(), "5");
         assert_eq!(r.unspendable.to_string(), "7");
         assert_eq!(r.staked.map(|s| s.to_string()).as_deref(), Some("100000"));

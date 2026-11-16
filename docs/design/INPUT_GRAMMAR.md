@@ -610,6 +610,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | hash, address, text; amount, text | | K; views (IG-Q34) |
 | `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; views (IG-Q34) |
 | `sign <message...>`, `verify <address> <signature> <message...>` | same | text; address, text | | K |
+| `freeze`, `thaw`, `frozen` | — | | | X (Rick, 2026-11-15): the wallet has no user-set hold on outputs. FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection. The refusal states this and names the decision log entry; the wallet RPC's method registry rejects the same three names |
 | the `RETIRED` table (`transfer`, `transfers`, `show_transfer`, `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`, `drain`, `drain_balance`, `unstake`, `stake exit`, `collect_unstaked`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`, `start_mining`, `stop_mining`, `mining_status`, `chain_health`, …) | — | | | – (IG-Q30) |
 
 ### 12.4 `shekyl-wallet-rpc` — options
@@ -769,19 +770,18 @@ The wallet lane's PR 2 (Rick, 2026-11-12; the balance legs and the fee tiers, 20
 
 | Method | Field or parameter | Change | Notes |
 |---|---|---|---|
-| `get_balance` | `balance` | new | an amount: `spendable + incoming + parked`; the reply's only sum |
+| `get_balance` | `balance` | new | an amount: `spendable + incoming`; the reply's only sum |
 | `get_balance` | `spendable` | new; replaces `liquid` and `unlocked` (both deleted) | an amount: what a send could use at the synced tip |
 | `get_balance` | `incoming` | new | an amount: received, not yet spendable, plus in-flight sends' change |
 | `get_balance` | `incoming_wait` | new | a count of blocks until the soonest on-chain incoming output is spendable; absent, not 0, when none is on chain |
-| `get_balance` | `parked` | new | an amount: the user's parked outputs, in the balance and out of coin selection |
 | `get_balance` | `outgoing` | new; replaces `pending` (deleted) | an amount beside the balance: recipients plus fee of the in-flight sends |
 | `build_pending_tx` | `priority` | values renamed | one-of `economy`, `standard`, `high` (§11), lowercase; `ECONOMY`, `STANDARD`, `PRIORITY` and the `{custom}` form are deleted |
 | `get_default_fee_priority` | `default_priority` | deleted | no front end read it; a send that names no tier takes `standard`, the tier set's default |
 | `get_default_fee_priority` | `economy`, `standard`, `high` | renamed from `economy_fee`, `standard_fee`, `priority_fee` | amounts: the converged fee at each rung, the names of the daemon's `fee` reply (§18) |
 
-The refusals added are `-29123 TOO_MANY_INPUTS` and `-29124 TOO_MANY_OUTPUTS` (`data`: `count`, `limit`), `-29125 INPUT_NOT_IN_TREE` and `-29126 INPUT_UNSPENDABLE` (`data`: `input`, a position), and `-29127 OUTPUTS_PARKED` (no `data`: the parked amount is `get_balance.parked`). `-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set: `no-inputs`, `no-outputs`, `zero-input-amount`, `zero-output-amount`, `input-amount-overflow`, `output-amount-overflow`, `insufficient-funds`, `empty-leaf-chunk`, `pqc-leaf-derivation`, `leaf-chunk-too-large`, `zero-tree-depth`, `tree-too-shallow`, `tree-depth-too-large`, `branch-layer-mismatch`, `invalid-combined-ss-length`, `bulletproof`, `fcmp-prove`, `pqc-sign`, `wire`, `balance-self-check` (the builder's invariants), and `primitive`, `fee-variant-shortfall`, `handle-mismatch`, `missing-key-image`, `source-decapsulation`, `rid-not-encodable`, `proof`, `bulletproof-parse`, `wire-encode` (the wallet state signing reads).
+The refusals added are `-29123 TOO_MANY_INPUTS` and `-29124 TOO_MANY_OUTPUTS` (`data`: `count`, `limit`), and `-29125 INPUT_NOT_IN_TREE` and `-29126 INPUT_UNSPENDABLE` (`data`: `input`, a position). `-29127` is retired and never reused (the user freeze is removed; Rick, 2026-11-15). `-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set: `no-inputs`, `no-outputs`, `zero-input-amount`, `zero-output-amount`, `input-amount-overflow`, `output-amount-overflow`, `insufficient-funds`, `empty-leaf-chunk`, `pqc-leaf-derivation`, `leaf-chunk-too-large`, `zero-tree-depth`, `tree-too-shallow`, `tree-depth-too-large`, `branch-layer-mismatch`, `invalid-combined-ss-length`, `bulletproof`, `fcmp-prove`, `pqc-sign`, `wire`, `balance-self-check` (the builder's invariants), and `primitive`, `fee-variant-shortfall`, `handle-mismatch`, `missing-key-image`, `source-decapsulation`, `rid-not-encodable`, `proof`, `bulletproof-parse`, `wire-encode` (the wallet state signing reads).
 
-The balance's terms (§19 rows): `spendable`, `incoming`, `outgoing`, `parked` are new. `held` gains the parent `balance`, where it names `incoming + parked`; it is not on the wire (the reply carries no sum but `balance`). `parked` is the user-freeze leg's own word, because `frozen` already means frozen shards (`coverage`); the engine's `freeze` and `thaw` keep their names inside the wallet until a method of this contract reaches them.
+The balance's terms (§19 rows): `spendable`, `incoming` and `outgoing` are new. The wallet has no user-set hold on outputs (Rick, 2026-11-15), so the balance has no third leg and no name for the part a send cannot use now: that part is `incoming`. `held` keeps its one meaning, the shards a wallet holds (`shard list held`). The method registry rejects `freeze`, `thaw` and `frozen`, and so does the CLI's table (§12.3).
 
 ## 17. The method census
 
@@ -969,7 +969,6 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's | |
 | spendable | balance | what a send could use at the wallet's synced tip, an amount | |
 | incoming | balance | money received and not yet spendable, plus in-flight sends' change, an amount; with `wait`, the blocks until the soonest on-chain part is spendable | |
-| parked | balance | outputs the user took out of coin selection: in the balance, not spendable, an amount | |
 | outgoing | balance | the recipients and fee of this wallet's in-flight sends, beside the balance, an amount | |
 | key | spent, console | a key: under `spent`, only in `key image`; under `console`, the console key (IG-Q88) | |
 | image | key | a key image (a hash) | |
@@ -1114,7 +1113,6 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 
 | Term | Gains parents | Meaning there | Kind |
 |---|---|---|---|
-| held | balance | `incoming` plus `parked`: the balance a send cannot use now; not on the wire (the reply carries no sum but `balance`) | |
 | pow | —, dev | proof of work (RandomX): bare, *view* — compute a block's proof-of-work hash; under `dev`, its seed schedule (IG-Q48). A header's `pow` field and the header reads' `pow` switch name it by reference (IG-Q42) | —:view |
 | coinbase | header, shard | the coinbase transaction: under `chain`, its outputs (§11); under `header`, its id | |
 | output | block, coinbase, shard, tx | the block's first output; `output index`, its global index | |

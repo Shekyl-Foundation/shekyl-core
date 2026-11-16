@@ -153,7 +153,11 @@ use crate::{
 /// `25` (2026-11-12, A19): `SendRecord::tx_bytes` — the send journal saves
 /// each send's signed bytes at dispatch (`SEND_JOURNAL_BLOCK_VERSION` 6).
 /// A version-24 wallet file is refused; pre-genesis does not migrate it.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 25;
+///
+/// `26` (2026-11-15): `TransferDetails::frozen` is removed, with the user
+/// freeze (`LEDGER_BLOCK_VERSION` 15). A version-25 wallet file is refused;
+/// pre-genesis does not migrate it.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 26;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -316,7 +320,7 @@ impl WalletLedger {
         Ok(self.tx_meta.set_note(txid, note)?)
     }
 
-    /// Unspent, unfrozen transfers not under an F14 lock — journal and
+    /// Unspent transfers not under an F14 lock — journal and
     /// ledger consulted together (C7: locks live on the journal).
     #[must_use]
     pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
@@ -1098,7 +1102,6 @@ mod tests {
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(block_height)
                 + crate::transfer::SPENDABLE_AGE,
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),

@@ -38,7 +38,6 @@ fn td(gindex: u64, amount: u64, mined: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: BlockHeight::from_raw(mined) + SPENDABLE_AGE,
-        frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
@@ -130,22 +129,6 @@ fn a_scanned_send_counts_its_change_once() {
     assert!(summary.incoming_wait.is_some());
 }
 
-/// Parked money stays in the balance and leaves spendable.
-#[test]
-fn parking_holds_money_in_the_balance() {
-    let before = BalanceSummary::compute(
-        &[td(1, 1_000, 10), td(2, 300, 10)],
-        at_tip(),
-        &SendJournalBlock::empty(),
-    );
-    let mut a = td(1, 1_000, 10);
-    a.frozen = true;
-    let after = BalanceSummary::compute(&[a, td(2, 300, 10)], at_tip(), &SendJournalBlock::empty());
-    assert_eq!(after.balance(), before.balance());
-    assert_eq!(after.spendable, units(300));
-    assert_eq!(after.parked, units(1_000));
-}
-
 /// Unspendable money is beside the balance, never in it, for every reason.
 #[test]
 fn unspendable_money_is_beside_the_balance() {
@@ -186,7 +169,6 @@ struct GenOutput {
     amount: u64,
     mined: u64,
     spent: bool,
-    parked: bool,
     unspendable: bool,
 }
 
@@ -209,14 +191,12 @@ fn gen_output() -> impl Strategy<Value = GenOutput> {
         // waits, so the soonest wait is chosen among several.
         prop_oneof![0u64..TIP, TIP - 40..TIP],
         prop::bool::weighted(0.15),
-        prop::bool::weighted(0.15),
         prop::bool::weighted(0.1),
     )
-        .prop_map(|(amount, mined, spent, parked, unspendable)| GenOutput {
+        .prop_map(|(amount, mined, spent, unspendable)| GenOutput {
             amount,
             mined,
             spent,
-            parked,
             unspendable,
         })
 }
@@ -252,14 +232,13 @@ fn build(outputs: &[GenOutput], sends: &[GenSend]) -> (Vec<TransferDetails>, Sen
         .map(|(i, g)| {
             let mut row = td(i as u64, g.amount, g.mined);
             row.spent = g.spent;
-            row.frozen = g.parked;
             row.unspendable = g.unspendable.then_some(UnspendableReason::PqcLeafMismatch);
             row
         })
         .collect();
     let mut journal = SendJournalBlock::empty();
     let mut free: Vec<usize> = (0..rows.len())
-        .filter(|&i| !rows[i].spent && rows[i].unspendable.is_none() && !rows[i].frozen)
+        .filter(|&i| !rows[i].spent && rows[i].unspendable.is_none())
         .collect();
     for (n, gen) in sends.iter().enumerate() {
         let mut inputs = Vec::new();
@@ -333,7 +312,7 @@ proptest! {
     ///    value is exactly the unscanned in-flight sends' outgoing plus
     ///    change;
     /// 2. for every in-flight send, Σ inputs = Σ recipients + fee + change;
-    /// 3. balance = spendable + incoming + parked;
+    /// 3. balance = spendable + incoming;
     /// 4. `incoming_wait` is the least wait among the incoming outputs on
     ///    chain, absent when there are none.
     ///
@@ -354,7 +333,7 @@ proptest! {
         let locks = journal.spend_locks();
         let summary = BalanceSummary::compute(&rows, horizon, &journal);
 
-        let mut by_state = [0u64; 5]; // spendable, incoming, parked, in flight, unspendable
+        let mut by_state = [0u64; 4]; // spendable, incoming, in flight, unspendable
         let mut soonest: Option<BlockCount> = None;
         for row in &rows {
             let amount = row.amount().to_raw();
@@ -365,9 +344,8 @@ proptest! {
                     by_state[1] += amount;
                     soonest = Some(soonest.map_or(wait, |w| w.min(wait)));
                 }
-                OutputState::Parked => by_state[2] += amount,
-                OutputState::InFlight => by_state[3] += amount,
-                OutputState::Unspendable => by_state[4] += amount,
+                OutputState::InFlight => by_state[2] += amount,
+                OutputState::Unspendable => by_state[3] += amount,
             }
         }
         let unscanned: Vec<_> = journal
@@ -384,11 +362,10 @@ proptest! {
 
         prop_assert_eq!(summary.spendable.to_raw(), by_state[0]);
         prop_assert_eq!(summary.incoming.to_raw(), by_state[1] + change);
-        prop_assert_eq!(summary.parked.to_raw(), by_state[2]);
-        prop_assert_eq!(summary.unspendable.to_raw(), by_state[4]);
+        prop_assert_eq!(summary.unspendable.to_raw(), by_state[3]);
         prop_assert_eq!(summary.outgoing.to_raw(), outgoing);
         prop_assert_eq!(summary.incoming_wait, soonest);
-        prop_assert_eq!(by_state[3], outgoing + change, "in-flight inputs = outgoing + change");
+        prop_assert_eq!(by_state[2], outgoing + change, "in-flight inputs = outgoing + change");
 
         for (_, row) in journal.in_flight() {
             let inputs: u64 = row.inputs.iter().map(|i| i.amount).sum();
@@ -397,7 +374,7 @@ proptest! {
 
         prop_assert_eq!(
             summary.balance().to_raw(),
-            summary.spendable.to_raw() + summary.incoming.to_raw() + summary.parked.to_raw()
+            summary.spendable.to_raw() + summary.incoming.to_raw()
         );
     }
 }

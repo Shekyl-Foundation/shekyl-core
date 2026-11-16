@@ -98,9 +98,13 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   of the transparent
 ///   array are identical; the schema type-name change still bumps per
 ///   rule 42. Pre-genesis: refuse, don't migrate.
-/// - Version `14` (this version) adds the multisig receive refusals to
+/// - Version `14` adds the multisig receive refusals to
 ///   [`crate::transfer::UnspendableReason`]. Each refusal keeps its own
 ///   variant. A version-13 block is refused; pre-genesis does not migrate it.
+/// - Version `15` (this version) removes `TransferDetails::frozen`: the
+///   wallet has no user-set hold on outputs (`V3_WALLET_DECISION_LOG.md`,
+///   2026-11-15). A version-14 block is refused; pre-genesis does not
+///   migrate it.
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -108,7 +112,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 14;
+pub const LEDGER_BLOCK_VERSION: u32 = 15;
 
 /// Pointer to the most recently scanned block — "where the wallet is"
 /// on the chain.
@@ -368,7 +372,7 @@ impl LedgerBlock {
             .map(|(_, hash)| hash)
     }
 
-    /// Get unspent, unfrozen transfers whose spend is not already
+    /// Get unspent transfers whose spend is not already
     /// network-exposed.
     ///
     /// Outputs under an F14 awaiting-confirmation lock (§2.6) are excluded,
@@ -384,7 +388,7 @@ impl LedgerBlock {
     ) -> Vec<&TransferDetails> {
         self.transfers
             .iter()
-            .filter(|td| !td.spent && !td.frozen && !spend_locks.contains(td.global_output_index))
+            .filter(|td| !td.spent && !spend_locks.contains(td.global_output_index))
             .collect()
     }
 
@@ -424,25 +428,6 @@ impl LedgerBlock {
     /// (`key`, `key_image`).
     pub fn transfer_mut(&mut self, idx: usize) -> Option<&mut TransferDetails> {
         self.transfers.get_mut(idx)
-    }
-
-    /// Freeze an output by its [`Self::transfers`] index, preventing
-    /// it from being selected for spending.
-    pub fn freeze(&mut self, transfer_idx: usize) -> bool {
-        if let Some(td) = self.transfers.get_mut(transfer_idx) {
-            td.frozen = true;
-            return true;
-        }
-        false
-    }
-
-    /// Thaw a frozen output by its [`Self::transfers`] index.
-    pub fn thaw(&mut self, transfer_idx: usize) -> bool {
-        if let Some(td) = self.transfers.get_mut(transfer_idx) {
-            td.frozen = false;
-            return true;
-        }
-        false
     }
 }
 
@@ -556,7 +541,6 @@ mod tests {
                 internal_output_index,
             )),
             eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),
@@ -665,6 +649,38 @@ mod tests {
             );
             assert_eq!(t.output_handle, orig.6);
         }
+    }
+
+    /// A ledger block as version 14 wrote it (`fixtures/ledger_block_v14.hex`:
+    /// one transfer, carrying the `frozen` flag version 15 removed) is
+    /// refused for its version, and the refusal names the remedy. Bites if
+    /// the body were decoded before the version: the v14 transfer's extra
+    /// field would then fail as a decode error, which the wallet reports as
+    /// a damaged file rather than an old one.
+    #[test]
+    fn a_version_14_block_is_refused_for_its_version_with_the_remedy() {
+        let hex = include_str!("../fixtures/ledger_block_v14.hex").trim();
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("the fixture is hex"))
+            .collect();
+        assert_eq!(bytes[0], 14, "the fixture leads with version 14");
+        let err = LedgerBlock::from_postcard_bytes(&bytes).unwrap_err();
+        let message = err.to_string();
+        match err {
+            WalletLedgerError::UnsupportedBlockVersion {
+                block,
+                file,
+                binary,
+            } => {
+                assert_eq!((block, file, binary), ("ledger", 14, LEDGER_BLOCK_VERSION));
+            }
+            other => panic!("expected UnsupportedBlockVersion, got {other:?}"),
+        }
+        assert!(
+            message.contains("restore the wallet from its seed"),
+            "{message}"
+        );
     }
 
     #[test]

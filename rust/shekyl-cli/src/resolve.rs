@@ -524,6 +524,12 @@ pub(crate) fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String>
              (V3_WALLET_DECISION_LOG.md 2026-09-07). Cold storage is your \
              seed phrase.",
         ),
+        "freeze" | "thaw" | "frozen" => Some(
+            "the wallet has no user-set hold on outputs: FCMP++ hides which \
+             outputs a spend uses, and the wallet's own reservations keep \
+             built and staking-held outputs out of selection. Rejected \
+             (V3_WALLET_DECISION_LOG.md 2026-11-15).",
+        ),
         _ => None,
     };
     removed.map(|reason| format!("removed command {cmd}: {reason}"))

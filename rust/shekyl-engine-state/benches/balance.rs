@@ -6,9 +6,9 @@
 //! Hardening-pass commit 2 (§3.2): `BalanceSummary::compute` over N transfers.
 //!
 //! Direct counterpart to `tests/wallet_bench/bench_wallet2.cpp::BM_balance_compute`.
-//! Measures the linear-in-N walk that categorizes each `TransferDetails`
-//! as unlocked / locked-by-timelock / staked_total / staked_matured /
-//! staked_locked / frozen. This is the wallet UI's refresh cost after
+//! Measures the linear-in-N walk that classifies each `TransferDetails`
+//! once (spent / unspendable / in flight / incoming / spendable) and sums
+//! the balance's legs. This is the wallet UI's refresh cost after
 //! every block; a drift from O(n) to O(n log n) lands here first.
 //!
 //! The canonical balance implementation lives in `shekyl-scanner`; the
@@ -53,7 +53,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
-        frozen: (seed & 0xf) == 0,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),

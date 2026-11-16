@@ -385,12 +385,6 @@ pub(crate) mod ledger_ops {
             .check_invariants(&ledger)
             .expect("after unmark_spent");
 
-        ledger.freeze(0);
-        indexes.check_invariants(&ledger).expect("after freeze");
-
-        ledger.thaw(0);
-        indexes.check_invariants(&ledger).expect("after thaw");
-
         indexes.handle_reorg(&mut ledger, block(200));
         indexes
             .check_invariants(&ledger)
@@ -532,8 +526,6 @@ mod ledger_proptest {
         AddOutputs { count: usize, base_amount: u64 },
         MarkSpent { frac: f64 },
         UnmarkSpent { frac: f64 },
-        Freeze { frac: f64 },
-        Thaw { frac: f64 },
         Reorg { frac: f64 },
     }
 
@@ -542,8 +534,6 @@ mod ledger_proptest {
             10 => (1..4usize, 1..100_000u64).prop_map(|(c, a)| Op::AddOutputs { count: c, base_amount: a }),
             3 => (0.0..1.0f64).prop_map(|f| Op::MarkSpent { frac: f }),
             2 => (0.0..1.0f64).prop_map(|f| Op::UnmarkSpent { frac: f }),
-            1 => (0.0..1.0f64).prop_map(|f| Op::Freeze { frac: f }),
-            1 => (0.0..1.0f64).prop_map(|f| Op::Thaw { frac: f }),
             1 => (0.0..1.0f64).prop_map(|f| Op::Reorg { frac: f }),
         ]
     }
@@ -594,20 +584,6 @@ mod ledger_proptest {
                             if let Some(ki) = ledger.transfers()[idx].key_image {
                                 indexes.unmark_spent(&mut ledger, &[ki]);
                             }
-                        }
-                    }
-                    Op::Freeze { frac } => {
-                        let count = ledger.transfers().len();
-                        if count > 0 {
-                            let idx = ((*frac * count as f64) as usize).min(count - 1);
-                            ledger.freeze(idx);
-                        }
-                    }
-                    Op::Thaw { frac } => {
-                        let count = ledger.transfers().len();
-                        if count > 0 {
-                            let idx = ((*frac * count as f64) as usize).min(count - 1);
-                            ledger.thaw(idx);
                         }
                     }
                     Op::Reorg { frac } => {

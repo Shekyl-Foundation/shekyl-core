@@ -7231,12 +7231,14 @@ safe only while what it can spend is worthless, which regtest's prefixes
 make true and a test keeps true.
 
 
-## 2026-11-15 — The balance is spendable plus held; spendable has one definition
+## 2026-11-15 — The balance is spendable plus held (held SUPERSEDED the same day); spendable has one definition
 
 **Decision** (Rick, the wallet lane's PR 2 brief; A17 of the alpha.11 bug
 hunt).
 
 - **balance = spendable + held**, and **held = incoming + parked**.
+  SUPERSEDED the same day (the user freeze is deleted, below): balance =
+  spendable + incoming, and `held` names nothing in the balance.
 - **Spendable** is what a send could use at the wallet's synced tip: not
   spent, not parked by the user, not unspendable, not under an in-flight
   send's lock, and in the tree of the reference block the wallet anchors to
@@ -7250,6 +7252,7 @@ hunt).
   no incoming output is on chain.
 - **Parked** is the outputs the user took out of coin selection; the word
   is its own because the glossary's `frozen` means frozen shards.
+  SUPERSEDED the same day: there is no parked leg (below).
 - Beside the balance, never in it: **outgoing** (recipients plus fee of
   the in-flight sends), **unspendable**, and the staking legs.
 - The tree rebuild is the wallet's state, not the money's: an output
@@ -7258,7 +7261,8 @@ hunt).
 - The contract carries the balance and each leg once; no field but
   `balance` holds a sum. `liquid`, `unlocked` and `pending` are deleted.
 - A send the parked money alone would cover is refused with its own
-  error, naming the parked amount and the remedy.
+  error, naming the parked amount and the remedy. SUPERSEDED the same
+  day: `-29127` is retired (below).
 
 **Why.** The balance said "unlocked" seven blocks before a build could
 spend the money, and two fields held the same number. A wallet that says
@@ -7302,19 +7306,49 @@ names).
   selection.
 - **A reserve proof shows money held, not money spendable at the
   reference.** Its candidates are every on-chain output in the balance:
-  spendable, parked and incoming. In-flight inputs and unspendable outputs
-  are out.
+  spendable, parked and incoming (parked SUPERSEDED below: spendable and
+  incoming). In-flight inputs and unspendable outputs are out.
 - **`-29127 OUTPUTS_PARKED` carries no amount**: the parked amount's one
   source is `get_balance.parked`, and error data is logged like the
-  message.
+  message. SUPERSEDED: `-29127` is retired (below).
 - **The fee tier is not a preference.** The prefs file's
   `default_priority` and the fee reply's `default_priority`, which nothing
   read, are deleted.
 - **Names ratified**: `parked` (the user-freeze leg; `frozen` means frozen
   shards), `held` as the definition's name with no field,
   `incoming_wait`, the codes `-29123`…`-29127`, and the `-29119` fault
-  keywords. The sim names the top tier `high` too.
+  keywords. The sim names the top tier `high` too. `parked`, `held` and
+  `-29127` SUPERSEDED below; `incoming_wait`, `-29123`…`-29126` and the
+  fault keywords stand.
 
 **Why.** A fee sized for an output the transaction does not carry marks
 the wallet as surely as a fee of its own. A reserve proof answers "how much
 does this wallet hold", which incoming money is part of.
+
+## 2026-11-15 — The user freeze is deleted
+
+**Decision** (Rick, on #1393: option (b)).
+
+- **A user-set hold on outputs is removed.** The ledger's `frozen` flag,
+  the engine's freeze and thaw, the classifier's parked state, the
+  balance's parked leg and `-29127 OUTPUTS_PARKED` are deleted; `-29127`
+  is retired and never reused. Ledger block version 15 and wallet ledger
+  format 26: a file an earlier build wrote is refused for its version,
+  and the refusal names the remedy, restoring the wallet from its seed.
+- **balance = spendable + incoming.** `held` names nothing in the
+  balance: it would be incoming under a second name, and the grammar's
+  `held` already means the shards a wallet holds.
+- **`freeze`, `thaw` and `frozen` are REJECTED**, the names a Monero user
+  would try, in the CLI's table and the contract's method registry. Each
+  refusal states the reason and points to this entry.
+- This supersedes, in the entries above: held = incoming + parked, the
+  parked leg, the parked refusal, parked outputs among a reserve proof's
+  candidates, and the ratified names `parked`, `held` and `-29127`.
+
+**Why.** FCMP++ already hides which outputs a spend uses, so a hold has no
+privacy job left. Any human choice on a visible parameter (input count,
+consolidation timing) becomes a pattern, while deterministic selection
+gives every wallet the same shapes. The wallet's own reservations already
+keep built and staking-held outputs out of selection.
+
+**Reopens** only on a named user job those reservations do not cover.

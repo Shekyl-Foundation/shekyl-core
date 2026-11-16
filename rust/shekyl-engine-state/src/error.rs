@@ -23,8 +23,8 @@ pub enum WalletLedgerError {
     ///
     /// [`WalletLedger`]: crate::wallet_ledger::WalletLedger
     #[error(
-        "unsupported wallet-ledger format version: file = {file}, binary = {binary}; \
-         no migration path exists in this binary"
+        "unsupported wallet-ledger format version: file = {file}, binary = {binary}; {}",
+        version_remedy(*.file, *.binary)
     )]
     UnsupportedFormatVersion { file: u32, binary: u32 },
 
@@ -33,8 +33,8 @@ pub enum WalletLedgerError {
     /// a mismatch on any block aborts the whole load per the "no silent
     /// migration" stance pinned by rule 42 (serialization-policy).
     #[error(
-        "unsupported {block} block version: file = {file}, binary = {binary}; \
-         no migration path exists in this binary"
+        "unsupported {block} block version: file = {file}, binary = {binary}; {}",
+        version_remedy(*.file, *.binary)
     )]
     UnsupportedBlockVersion {
         block: &'static str,
@@ -66,4 +66,16 @@ pub enum WalletLedgerError {
         invariant: &'static str,
         detail: String,
     },
+}
+
+/// What to do about a file whose version this build does not read. A file
+/// from an earlier build is not migrated (pre-genesis, rule 42): the wallet
+/// is restored from its seed. A file from a later build is opened with that
+/// build.
+fn version_remedy(file: u32, binary: u32) -> &'static str {
+    if file < binary {
+        "this build does not migrate files from earlier versions: restore the wallet from its seed"
+    } else {
+        "the file is from a later build: open it with that build"
+    }
 }

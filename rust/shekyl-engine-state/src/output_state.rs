@@ -7,7 +7,7 @@
 //!
 //! An output is **spendable** when a send could use it at the wallet's
 //! synced tip: it is not spent, not unspendable, not under an in-flight
-//! send's lock, not parked by the user, and its leaf is in the tree of the
+//! send's lock, and its leaf is in the tree of the
 //! reference block a wallet at that tip anchors to
 //! ([`shekyl_curve_tree::in_tree_at_reference`] on
 //! [`shekyl_curve_tree::select_reference_height`]). The predicate is the
@@ -99,12 +99,13 @@ impl SpendHorizon {
 ///    wallet's keys; no send can ever use it.
 /// 3. **InFlight** — an in-flight send of this wallet carries it (the F14
 ///    lock); its value is that send's outgoing and change.
-/// 4. **Parked** — the user took it out of coin selection (`frozen` on the
-///    row). Before maturity: parking is the user's decision, maturity is
-///    the chain's, and parked money stays parked when it matures.
-/// 5. **Incoming** — received and not yet in the reference block's tree,
+/// 4. **Incoming** — received and not yet in the reference block's tree,
 ///    with the blocks until it is.
-/// 6. **Spendable** — a send could use it now.
+/// 5. **Spendable** — a send could use it now.
+///
+/// There is no user-set hold: FCMP++ hides which outputs a spend uses, and
+/// the wallet's own reservations keep built and staking-held outputs out of
+/// selection (`V3_WALLET_DECISION_LOG.md`, 2026-11-15).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputState {
     /// Spent on chain.
@@ -113,8 +114,6 @@ pub enum OutputState {
     Unspendable,
     /// Carried by an in-flight send of this wallet.
     InFlight,
-    /// Parked by the user: held in the balance, out of coin selection.
-    Parked,
     /// Received; spendable once the tip advances `wait` blocks.
     Incoming {
         /// Blocks until the output is in the reference block's tree.
@@ -137,8 +136,6 @@ impl TransferDetails {
             OutputState::Unspendable
         } else if locks.contains(self.global_output_index) {
             OutputState::InFlight
-        } else if self.frozen {
-            OutputState::Parked
         } else if horizon.holds(self.eligible_height) {
             OutputState::Spendable
         } else {

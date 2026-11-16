@@ -38,7 +38,6 @@ struct Legs {
     spendable: u64,
     incoming: u64,
     incoming_wait: Option<u64>,
-    parked: u64,
     outgoing: u64,
 }
 
@@ -52,15 +51,14 @@ fn legs(server: &WalletServer) -> Legs {
             w.as_u64()
                 .unwrap_or_else(|| panic!("incoming_wait is a count: {reply}"))
         }),
-        parked: amount(&reply, "parked"),
         outgoing: amount(&reply, "outgoing"),
     };
     assert_eq!(
         legs.balance,
-        legs.spendable + legs.incoming + legs.parked,
-        "balance = spendable + incoming + parked: {reply}"
+        legs.spendable + legs.incoming,
+        "balance = spendable + incoming: {reply}"
     );
-    for gone in ["liquid", "unlocked", "pending"] {
+    for gone in ["liquid", "unlocked", "pending", "parked"] {
         assert!(reply.get(gone).is_none(), "{gone} is deleted: {reply}");
     }
     legs
@@ -406,92 +404,4 @@ async fn a_change_below_dust_balances() {
     let after = legs(&w.payee);
     assert_eq!(after.incoming, 1, "the change is one atomic unit");
     assert_eq!(after.outgoing, sent + fee_with_change);
-}
-
-/// A17, parked money (engine level: the contract has no method that parks
-/// an output). Parking an output leaves the balance unchanged and drops
-/// spendable by its amount; a send that only the parked money would cover
-/// is refused `OutputsParked`, naming the parked amount, never as plain
-/// insufficient funds.
-///
-/// Observed red 2026-11-15 against an engine without the resolver's
-/// parked arm: "refused Err(InsufficientFunds { .. }), expected
-/// OutputsParked".
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires SHEKYLD_BIN; spawns a live daemon"]
-async fn parked_money_stays_in_the_balance_and_out_of_a_send() {
-    use super::super::error::SendError;
-    use super::super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
-    use shekyl_scanner::WalletLedgerExt;
-    use shekyl_units::AtomicUnits;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-
-    let seed = [0x73; shekyl_crypto_pq::account::SEED_BYTES];
-    let daemon = RegtestDaemon::start_for_seed(&seed).await;
-    let (engine, _tmp) = super::create_wallet(daemon.rpc_port, &seed, b"parked").await;
-    let arc = Arc::new(RwLock::new(engine));
-    super::mine_until_spendable(&daemon, &arc, 10, 40).await;
-
-    let read = |arc: &Arc<RwLock<super::super::Engine<super::super::SoloSigner>>>| {
-        let arc = arc.clone();
-        async move { arc.read().await.ledger().balance() }
-    };
-    let before = read(&arc).await;
-    let (index, parked) = {
-        let g = arc.read().await;
-        let ledger = g.ledger();
-        let horizon = shekyl_engine_state::SpendHorizon::at_tip(ledger.ledger.height());
-        let (index, td) = ledger
-            .spendable_outputs(horizon, None)
-            .into_iter()
-            .max_by_key(|(_, td)| td.amount())
-            .expect("a spendable output");
-        (index, td.amount())
-    };
-    {
-        let g = arc.read().await;
-        assert!(g.ledger.write().ledger.ledger.freeze(index), "parked");
-    }
-    let after = read(&arc).await;
-    assert_eq!(
-        after.balance(),
-        before.balance(),
-        "the balance is unchanged"
-    );
-    assert_eq!(
-        after.spendable,
-        before.spendable.checked_sub(parked).unwrap()
-    );
-    assert_eq!(after.parked, parked);
-
-    // A send of nearly the whole balance: all of it but half the parked
-    // output, so its amount plus fee is more than the spendable and incoming
-    // money and less than the balance.
-    let sent = after
-        .spendable
-        .checked_add(after.incoming)
-        .unwrap()
-        .checked_add(AtomicUnits::from_raw(parked.to_raw() / 2))
-        .unwrap();
-    let request = TxRequest {
-        recipients: vec![TxRecipient {
-            destination: TxDestination::Address(mine_address_from_seed(
-                &[0x74; shekyl_crypto_pq::account::SEED_BYTES],
-                shekyl_address::Network::Regtest,
-            )),
-            amount_atomic_units: sent,
-            rid: None,
-        }],
-        priority: FeePriority::Standard,
-    };
-    let refused = arc.read().await.build_pending_tx(&request).await;
-    match refused {
-        Err(SendError::OutputsParked { parked: named, .. }) => assert_eq!(
-            named,
-            parked.to_raw(),
-            "the refusal names the parked amount"
-        ),
-        other => panic!("refused {other:?}, expected OutputsParked"),
-    }
 }

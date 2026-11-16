@@ -42,8 +42,6 @@ pub(super) struct CandidatePartition {
     pub incoming: Vec<(BlockHeight, u64)>,
     /// Σ of [`Self::incoming`].
     pub incoming_total: u64,
-    /// Parked by the user: in the balance, never selected.
-    pub parked: u64,
 }
 
 impl CandidatePartition {
@@ -81,7 +79,6 @@ impl CandidatePartition {
                     partition.incoming_total = partition.incoming_total.saturating_add(raw);
                     partition.incoming.push((td.eligible_height, raw));
                 }
-                OutputState::Parked => partition.parked = partition.parked.saturating_add(raw),
                 OutputState::Spent | OutputState::Unspendable | OutputState::InFlight => {}
             }
         }
@@ -98,14 +95,11 @@ impl CandidatePartition {
     ///    gap: it heals as the tip advances, and the refusal names the
     ///    wait until enough of them are spendable
     ///    ([`SendError::OutputNotYetSpendable`]).
-    /// 3. **Parked money** — the user's parked outputs close the gap: only
-    ///    the user can release them, and the refusal names how much is
-    ///    parked ([`SendError::OutputsParked`]).
-    /// 4. Otherwise the wallet is short ([`SendError::InsufficientFunds`]):
+    /// 3. Otherwise the wallet is short ([`SendError::InsufficientFunds`]):
     ///    `available` is its spendable money (the rebuild's included) plus
     ///    its incoming outputs, less what other built sends reserve. It
-    ///    leaves out parked money (arm 3 names it) and the change of
-    ///    in-flight sends, which is not an output yet.
+    ///    leaves out the change of in-flight sends, which is not an output
+    ///    yet.
     ///
     /// `reference` is the reference block the build anchors to; arm 2 is
     /// reached only when it is set, since incoming outputs exist only
@@ -146,13 +140,6 @@ impl CandidatePartition {
                     ),
                 };
             }
-        }
-        if self.parked > 0 && available < needed && available.saturating_add(self.parked) >= needed
-        {
-            return SendError::OutputsParked {
-                needed,
-                parked: self.parked,
-            };
         }
         SendError::InsufficientFunds { needed, available }
     }

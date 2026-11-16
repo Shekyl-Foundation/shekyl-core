@@ -15,7 +15,7 @@
 //!   (`TxMetaBlock.tx_keys`) engine-side — see
 //!   [`super::proof_bridge`]'s module docs for the split rationale.
 //! - **`get_reserve_proof`** — selects from every on-chain output in the
-//!   balance: spendable, parked and incoming (`reserve_candidates`),
+//!   balance: spendable and incoming (`reserve_candidates`),
 //!   largest-first — the contract's fewest-beacons choice — and signs
 //!   inside the key actor. Every wallet is FULL (rule 23), so there is
 //!   no capability gate.
@@ -565,7 +565,7 @@ struct ReserveCandidate {
 }
 
 /// The outputs a reserve proof may disclose: every on-chain output in the
-/// balance (A17) — spendable, parked, and incoming, which is on chain and
+/// balance (A17) — spendable, and incoming, which is on chain and
 /// not yet in the reference block's tree. A reserve proof shows money held:
 /// it needs each output's key image and location, not membership in a
 /// reference tree. An in-flight send's inputs are out (their money is that
@@ -583,7 +583,7 @@ fn reserve_candidates(
         .filter(|td| {
             matches!(
                 td.state(horizon, locks),
-                OutputState::Spendable | OutputState::Parked | OutputState::Incoming { .. }
+                OutputState::Spendable | OutputState::Incoming { .. }
             )
         })
         .filter_map(|td| {

@@ -197,7 +197,6 @@ fn row(tag: u8, amount: u64, eligible: u64) -> shekyl_engine_state::TransferDeta
         }),
         output_handle: None,
         eligible_height: shekyl_types::BlockHeight::from_raw(eligible),
-        frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
@@ -206,7 +205,7 @@ fn row(tag: u8, amount: u64, eligible: u64) -> shekyl_engine_state::TransferDeta
 
 /// A reserve proof discloses money held: every on-chain output in the
 /// balance. An output still incoming (on chain, not yet in the reference
-/// block's tree) is a candidate, as are spendable and parked ones; an
+/// block's tree) is a candidate, as is a spendable one; an
 /// in-flight send's input, an unspendable output and a spent one are not.
 /// Bites if the candidates go back to the spendable set (the incoming
 /// output drops out).
@@ -216,8 +215,6 @@ fn a_reserve_proof_includes_money_still_incoming() {
     let tip = 1_000;
     let spendable = row(1, 100, 10);
     let incoming = row(2, 200, tip - 1);
-    let mut parked = row(3, 300, 10);
-    parked.frozen = true;
     let in_flight = row(4, 400, 10);
     let mut unspendable = row(5, 500, 10);
     unspendable.unspendable = Some(UnspendableReason::PqcLeafMismatch);
@@ -239,13 +236,13 @@ fn a_reserve_proof_includes_money_still_incoming() {
     assert!(journal.stamp_lock_baseline(&[9; 32], tip));
 
     let candidates = reserve_candidates(
-        &[spendable, incoming, parked, in_flight, unspendable, spent],
+        &[spendable, incoming, in_flight, unspendable, spent],
         SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(tip)),
         &journal.spend_locks(),
     );
     let mut tags: Vec<u8> = candidates.iter().map(|c| c.txid[0]).collect();
     tags.sort_unstable();
-    assert_eq!(tags, vec![1, 2, 3], "spendable, incoming and parked");
+    assert_eq!(tags, vec![1, 2], "spendable and incoming");
 }
 
 #[test]

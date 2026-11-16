@@ -31,7 +31,6 @@ fn row(gindex: u64, eligible: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: BlockHeight::from_raw(eligible),
-        frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: crate::ReceiveAttribution::default(),
@@ -95,8 +94,8 @@ fn the_wait_counts_down_to_the_tip_that_spends() {
     assert!(SpendHorizon::at_tip(BlockHeight::from_raw(first)).holds(td.eligible_height));
 }
 
-/// Below the anchoring floor no reference exists: every unspent, unlocked,
-/// unparked output is incoming, with the wait counted through the first
+/// Below the anchoring floor no reference exists: every unspent, unlocked
+/// output is incoming, with the wait counted through the first
 /// reference.
 #[test]
 fn below_the_anchoring_floor_nothing_is_spendable() {
@@ -109,10 +108,9 @@ fn below_the_anchoring_floor_nothing_is_spendable() {
     ));
 }
 
-/// The precedence: spent, unspendable, in flight, parked, incoming,
-/// spendable. Each flag outranks every flag below it, so an output that is
-/// parked and immature is parked, and a locked output that is parked is in
-/// flight.
+/// The precedence: spent, unspendable, in flight, incoming, spendable.
+/// Each flag outranks every flag below it, so a locked output that is
+/// immature is in flight.
 #[test]
 fn each_state_outranks_the_ones_below_it() {
     let at = SpendHorizon::at_tip(BlockHeight::from_raw(500));
@@ -123,8 +121,6 @@ fn each_state_outranks_the_ones_below_it() {
         td.state(at, &none()),
         OutputState::Incoming { .. }
     ));
-    td.frozen = true;
-    assert_eq!(td.state(at, &none()), OutputState::Parked);
     assert_eq!(td.state(at, &locked(5)), OutputState::InFlight);
     td.unspendable = Some(UnspendableReason::PqcLeafMismatch);
     assert_eq!(td.state(at, &locked(5)), OutputState::Unspendable);

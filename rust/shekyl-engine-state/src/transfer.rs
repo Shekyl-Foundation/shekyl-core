@@ -369,7 +369,6 @@ pub struct TransferDetails {
     pub eligible_height: BlockHeight,
 
     // ── Engine management ──
-    pub frozen: bool,
     pub fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
 
     /// Received-but-unspendable classification (`PL-D3` §6.2, rule 82).
@@ -457,7 +456,6 @@ struct TransferDetailsSchema {
     source_ciphertext: Option<HybridCiphertext>,
     output_handle: Option<OutputHandle>,
     eligible_height: u64,
-    frozen: bool,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
     unspendable: Option<UnspendableReason>,
     receive_attribution: ReceiveAttribution,
@@ -501,7 +499,6 @@ impl Zeroize for TransferDetails {
         // `(view_secret, source_ciphertext)` and wipes them inside
         // its own boundary.
         self.eligible_height.zeroize();
-        self.frozen.zeroize();
         if let Some(ref mut path) = self.fcmp_precomputed_path {
             path.reference_block.zeroize();
             path.path_blob.zeroize();
@@ -525,7 +522,6 @@ impl std::fmt::Debug for TransferDetails {
             .field("amount", &self.amount())
             .field("spent", &self.spent)
             .field("eligible_height", &self.eligible_height)
-            .field("frozen", &self.frozen)
             .field("unspendable", &self.unspendable)
             .finish_non_exhaustive()
     }
@@ -593,7 +589,6 @@ mod tests {
             source_ciphertext: None,
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(110),
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),

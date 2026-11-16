@@ -5,7 +5,7 @@
 
 //! The balance and its legs (A17; Rick, 2026-11-15).
 //!
-//! **balance = spendable + held**, and **held = incoming + parked**:
+//! **balance = spendable + incoming**:
 //!
 //! - **spendable** — what a send could use at the wallet's synced tip:
 //!   the classifier's `Spendable` ([`TransferDetails::state`]).
@@ -15,7 +15,6 @@
 //!   counted by the rule. [`BalanceSummary::incoming_wait`] is the blocks
 //!   until the soonest on-chain incoming output becomes spendable, absent
 //!   (not zero) when no incoming output is on chain.
-//! - **parked** — outputs the user took out of coin selection.
 //!
 //! Beside the balance, never in it: **outgoing**, Σ (recipients + fee) of
 //! the in-flight sends, and **unspendable**, outputs that are this wallet's
@@ -35,8 +34,7 @@ use shekyl_units::AtomicUnits;
 use crate::transfer::TransferDetails;
 
 /// The balance's legs at one synced tip. Each holds one quantity, and no
-/// field is a sum of others: [`Self::balance`] and [`Self::held`] are
-/// computed from them.
+/// field is a sum of others: [`Self::balance`] is computed from them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BalanceSummary {
     /// What a send could use now.
@@ -47,8 +45,6 @@ pub struct BalanceSummary {
     /// `None` when no incoming output is on chain (only change in flight,
     /// or nothing incoming).
     pub incoming_wait: Option<BlockCount>,
-    /// Parked by the user: in the balance, out of coin selection.
-    pub parked: AtomicUnits,
     /// Σ (recipients + fee) of the in-flight sends. Beside the balance.
     pub outgoing: AtomicUnits,
     /// This wallet's but never spendable by it. Beside the balance.
@@ -67,16 +63,10 @@ fn accumulate(bucket: AtomicUnits, amount: AtomicUnits) -> AtomicUnits {
 }
 
 impl BalanceSummary {
-    /// The balance: spendable + incoming + parked.
+    /// The balance: spendable + incoming.
     #[must_use]
     pub fn balance(&self) -> AtomicUnits {
-        accumulate(self.spendable, self.held())
-    }
-
-    /// Held: incoming + parked, the balance a send cannot use now.
-    #[must_use]
-    pub fn held(&self) -> AtomicUnits {
-        accumulate(self.incoming, self.parked)
+        accumulate(self.spendable, self.incoming)
     }
 
     /// The legs of `transfers` at `horizon`, with `journal`'s in-flight
@@ -108,12 +98,8 @@ impl BalanceSummary {
 
         // The legs are summed in locals and written once, so the loop keeps
         // them in registers (`hot_path_bench_balance_compute`).
-        let (mut spendable, mut incoming, mut parked, mut unspendable) = (
-            AtomicUnits::ZERO,
-            AtomicUnits::ZERO,
-            AtomicUnits::ZERO,
-            AtomicUnits::ZERO,
-        );
+        let (mut spendable, mut incoming, mut unspendable) =
+            (AtomicUnits::ZERO, AtomicUnits::ZERO, AtomicUnits::ZERO);
         // The wait grows with the eligible height, so the soonest incoming
         // output's wait is the wait at the least eligible height: taken
         // once, after the walk.
@@ -123,7 +109,6 @@ impl BalanceSummary {
             match td.state(horizon, &locks) {
                 OutputState::Spent | OutputState::InFlight => {}
                 OutputState::Unspendable => unspendable = accumulate(unspendable, amount),
-                OutputState::Parked => parked = accumulate(parked, amount),
                 OutputState::Incoming { .. } => {
                     incoming = accumulate(incoming, amount);
                     first_incoming = Some(
@@ -137,7 +122,6 @@ impl BalanceSummary {
             spendable,
             incoming,
             incoming_wait: first_incoming.map(|h| horizon.wait(h)),
-            parked,
             outgoing: AtomicUnits::ZERO,
             unspendable,
         };
