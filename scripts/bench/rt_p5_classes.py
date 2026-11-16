@@ -9,8 +9,10 @@
 #
 # The rule this applies was registered before any registered run, in
 # docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md ("How the classes are
-# derived"). Changing it after a registered result has been read is a change
-# of method, recorded as such in that file, never a quiet edit here.
+# derived"), and applied unchanged by the 4.x wire's registration,
+# docs/benchmarks/rt_p5_rpc_message_sizes_20261115.md. Changing it after a
+# registered result has been read is a change of method, recorded as such in
+# the registration it changes, never a quiet edit here.
 #
 #   derive   RUN_DIR            the per-method table, the candidate tables
 #                               for K = 1..8 and what each does to a
@@ -36,14 +38,20 @@ import os
 import sys
 from collections import Counter, defaultdict
 
-# RPC_CHANNEL.md §4.4. Neither constant exists in code before RT-W9 step 5;
-# the instrument restates the same two numbers.
+# RPC_CHANNEL.md §4.4: `shekyl_noise::MAX_RECORD_PLAINTEXT` and
+# `shekyl_noise::OCCUPANCY_LEN`, which the instrument reads; this script
+# cannot import Rust, so `test_rt_p5_classes.py` checks the two numbers
+# against `rust/shekyl-noise/src/classed.rs`.
 MAX_RECORD_PLAINTEXT = 65_535
 OCCUPANCY_LEN = 2
 RECORD_PAYLOAD_MAX = MAX_RECORD_PLAINTEXT - OCCUPANCY_LEN
 
 K_MAX = 8
-SUBMIT = "/submit_transaction"
+# The 4.x wire carries every method on `/json_rpc` (RW-Q1), so a label is
+# `json_rpc:` and the method's name.
+SUBMIT = "json_rpc:tx_submit"
+BLOCK_BATCH = "json_rpc:block_list"
+SPEND_BUILDING = "json_rpc:fee"
 
 # Registered tolerance for the determinism check: per matched message, the
 # larger of these.
@@ -264,17 +272,16 @@ def derive(run_dir):
         print(f"| {tx} | {wallet} | {n_in} × {n_out} | {depth} | " + " | ".join(cells) + " |")
 
 # What each message is, for the question "does a submission share a class
-# with block batches or with wallet sync". A block batch is a
-# `/get_transactions` response: up to 100 transaction bodies of the blocks
-# being synced (`TXS_PER_REQUEST`), the only response here larger than one
-# record. Wallet sync is every other message a refresh makes. Building a
-# spend is `get_fee_estimate`; submitting it is `/submit_transaction`.
+# with block batches or with wallet sync". A block batch is a `block_list`
+# response: the blocks being synced with their transactions. Wallet sync is
+# every other message a refresh makes. Building a spend is `fee`;
+# submitting it is `tx_submit`.
 def category(label, direction):
     if label == SUBMIT:
         return "submission" if direction == "request" else "submission reply"
-    if label == "/get_transactions" and direction == "response":
+    if label == BLOCK_BATCH and direction == "response":
         return "block batch"
-    if label == "json_rpc:get_fee_estimate":
+    if label == SPEND_BUILDING:
         return "spend building"
     return "wallet sync"
 
@@ -364,11 +371,10 @@ def report(run_a, run_b):
           f"{len(ra)} in the first run, {len(rb)} in the second. Padding is the bytes added to "
           "bring each record to its class; the percentage is of that method's payload "
           "(the record bytes less the two-byte occupancy).\n")
-    print("Categories: a **block batch** is a `/get_transactions` response (up to 100 "
-          "transaction bodies of the blocks being synced); **wallet sync** is every other "
-          "message of a refresh (`get_block`, `get_o_indexes.bin`, `get_height`, "
-          "`get_version`, and the `/get_transactions` request); **spend building** is "
-          "`get_fee_estimate`; a **submission** is a `/submit_transaction` request. A path "
+    print("Categories: a **block batch** is a `block_list` response (the blocks being "
+          "synced, with their transactions); **wallet sync** is every other message of a "
+          "refresh (`chain_height`, `version`, and the `block_list` request among them); "
+          "**spend building** is `fee`; a **submission** is a `tx_submit` request. A path "
           "observer sees each record's direction, so where a submission stands is given in "
           "its own direction first.\n")
     keys = sorted({(l, d) for _, l, d in ra})

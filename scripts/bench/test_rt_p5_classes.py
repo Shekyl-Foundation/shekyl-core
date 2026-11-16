@@ -34,6 +34,20 @@ def brute(records, K):
     return best
 
 
+class RecordConstants(unittest.TestCase):
+    """The script cannot import the Rust constants, so it reads their
+    definitions. Red edit: set `OCCUPANCY_LEN = 3` in the script."""
+
+    def test_the_record_constants_are_the_noise_crates(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        src = os.path.join(here, "..", "..", "rust", "shekyl-noise", "src", "classed.rs")
+        with open(src, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("pub const OCCUPANCY_LEN: usize = %d;" % rc.OCCUPANCY_LEN, text)
+        self.assertIn("pub const MAX_RECORD_PLAINTEXT: usize = u16::MAX as usize;", text)
+        self.assertEqual(rc.MAX_RECORD_PLAINTEXT, 0xFFFF)
+
+
 class RecordSplit(unittest.TestCase):
     def test_a_small_message_is_one_record_with_its_occupancy(self):
         self.assertEqual(rc.records_of(10), [12])
@@ -99,8 +113,8 @@ class Report(unittest.TestCase):
 
     def test_a_submission_alone_in_its_direction_is_reported_alone(self):
         classes = [500, 65_535]
-        recs = [(30_000, rc.SUBMIT, "request"), (200, "/get_height", "request"),
-                (40_000, "json_rpc:get_block", "response")]
+        recs = [(30_000, rc.SUBMIT, "request"), (200, "json_rpc:chain_height", "request"),
+                (40_000, "json_rpc:block_header_show", "response")]
         standing = rc.submission_standing(recs, classes)
         n, same, either = standing[65_535]
         self.assertEqual(n, 1)

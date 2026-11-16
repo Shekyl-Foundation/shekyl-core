@@ -58,11 +58,12 @@ use super::super::refresh::RefreshOptions;
 use super::super::{Engine, SoloSigner};
 use super::{assert_tx_confirmed, create_wallet, require_fresh_accept, RegtestDaemon};
 
-/// The largest record payload a message is split at: `MAX_RECORD_PLAINTEXT`
-/// (65,535) less `OCCUPANCY_LEN` (2), both `RPC_CHANNEL.md` §4.4. Neither
-/// constant exists in code before RT-W9 step 5, so the value is restated
-/// here and in the derivation script, and the registration cites both.
-const RECORD_PAYLOAD_MAX: usize = 65_535 - 2;
+/// The largest record payload a message is split at: the channel's
+/// largest record less its occupancy field (`RPC_CHANNEL.md` §4.4).
+const RECORD_PAYLOAD_MAX: usize = shekyl_noise::MAX_RECORD_PLAINTEXT - shekyl_noise::OCCUPANCY_LEN;
+
+/// A submission's label: the 4.x wire carries every method on `/json_rpc`.
+const SUBMISSION: &str = "json_rpc:tx_submit";
 
 /// Outputs per fan-out transaction: fifteen recipients and the change.
 const FANOUT_RECIPIENTS: usize = 15;
@@ -104,11 +105,13 @@ const SHAPES: &[(usize, usize)] = &[
     (8, 16),
 ];
 
-/// The registered run's cell. Its seeds are used by no other run.
+/// The registered run's cell (the 4.x registration of 2026-11-15). Its
+/// seeds are used by no other run, the 2026-10-17 registration's
+/// `0x51` and `0x52` included.
 const REGISTERED: Cell = Cell {
     name: "registered",
-    funder_seed: 0x51,
-    wallet_seed: 0x52,
+    funder_seed: 0x53,
+    wallet_seed: 0x54,
     fanout_txs: 4,
     shapes: SHAPES,
 };
@@ -118,8 +121,8 @@ const REGISTERED: Cell = Cell {
 /// writes can be mistaken for the registered data.
 const DRY: Cell = Cell {
     name: "dry",
-    funder_seed: 0xD1,
-    wallet_seed: 0xD2,
+    funder_seed: 0xD3,
+    wallet_seed: 0xD4,
     fanout_txs: 4,
     shapes: SHAPES,
 };
@@ -422,10 +425,10 @@ async fn run_cell(cell: &Cell) {
 /// subject must be present, not merely unrefuted).
 fn check_subjects(messages: &[Row], built: &[Built]) {
     for needle in [
-        "/submit_transaction",
-        "json_rpc:get_block",
-        "/get_transactions",
-        "/get_o_indexes.bin",
+        SUBMISSION,
+        "json_rpc:block_list",
+        "json_rpc:chain_height",
+        "json_rpc:fee",
     ] {
         assert!(
             messages.iter().any(|m| m.label == needle),
@@ -447,7 +450,7 @@ fn check_subjects(messages: &[Row], built: &[Built]) {
     );
     let submissions = messages
         .iter()
-        .filter(|m| m.label == "/submit_transaction" && m.direction == "request")
+        .filter(|m| m.label == SUBMISSION && m.direction == "request")
         .count();
     assert_eq!(
         submissions,

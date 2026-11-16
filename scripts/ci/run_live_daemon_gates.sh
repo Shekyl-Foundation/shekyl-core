@@ -309,7 +309,7 @@ ARMED_SLOW=(
 #     proposition; run manually when the CT-2 Tier-B scenarios change.
 #   rt_p5::rt_p5_dry_run, rt_p5::rt_p5_registered_run — RT-P5's sizes
 #     part, a registered measurement
-#     (docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md), not a
+#     (docs/benchmarks/rt_p5_rpc_message_sizes_20261115.md), not a
 #     pass/fail proposition: each writes its trace under RT_P5_OUT and is
 #     run by hand when the registration says. The parser they rely on is
 #     covered by ordinary unit tests in the same module.
