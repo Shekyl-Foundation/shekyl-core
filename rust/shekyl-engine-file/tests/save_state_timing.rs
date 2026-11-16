@@ -74,7 +74,6 @@ fn transfer(seed: u64) -> TransferDetails {
             0,
         )),
         eligible_height: BlockHeight::from_raw(100) + SPENDABLE_AGE,
-        frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),

@@ -212,7 +212,6 @@ where no pre-fork output set exists. Per rule
 | `default_decimal_point`        | `12`          | Display only. |
 | `show_wallet_name_when_locked` | `false`       | Cosmetic. |
 | `setup_background_mining`      | `prompt`      | UX flow. |
-| `default_priority`             | `medium`      | Fee priority default; trivial impact if tampered. |
 | `confirm_backlog`, `confirm_backlog_threshold` | `true, 4096` | UX confirmation. |
 | `confirm_export_overwrite`     | `true`        | UX confirmation. |
 | `always_confirm_transfers`     | `true`        | UX confirmation. |

@@ -101,7 +101,15 @@ pub async fn dispatch(
         // SV-D shard view: forwarded to the open wallet's daemon, which
         // fetches the shard body from a holder and answers the aggregate.
         "get_shard_view" => shard_view::get_shard_view(tenants, params).await,
-        other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
+        other => Err(
+            match shekyl_wallet_contract::rejected::rejected_method(other) {
+                Some(reason) => WalletRpcError::MethodRejected {
+                    method: other.to_owned(),
+                    reason,
+                },
+                None => WalletRpcError::MethodNotFound(other.to_owned()),
+            },
+        ),
     }
 }
 
@@ -222,6 +230,28 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
+    /// The names a Monero client would try for the user freeze are REJECTED
+    /// (decision log 2026-11-15): each is answered `-32601`, and the
+    /// message states why. Bites if the fallthrough loses the reason (a
+    /// bare "method not found").
+    #[tokio::test]
+    async fn the_user_freeze_names_are_refused_with_their_reason() {
+        let tenants = test_tenants();
+        for method in ["freeze", "thaw", "frozen"] {
+            let err = dispatch(&tenants, method, &json!({}), KdfParams::default())
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound, "{method}");
+            let message = err.message();
+            assert!(
+                message.starts_with(&format!("{method} is not offered")),
+                "{message}"
+            );
+            assert!(message.contains("no user-set hold"), "{message}");
+            assert!(message.contains("2026-11-15"), "{message}");
+        }
     }
 
     /// The inverse of the RESERVED fallthrough, pinned at the moment it

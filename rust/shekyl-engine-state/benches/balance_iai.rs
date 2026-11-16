@@ -59,7 +59,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
-        frozen: (seed & 0xf) == 0,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
@@ -78,16 +77,14 @@ fn hot_path_bench_balance_compute(
     transfers: Vec<TransferDetails>,
 ) -> (BalanceSummary, Vec<TransferDetails>) {
     let h = 1_000 + (transfers.len() as u64) / 2;
-    // PR-SJ-1b: locks are journal-derived and caller-supplied. Empty map =
-    // the baseline-comparable workload (the retired field was `None` on
-    // every fixture row); the per-row cost under measurement is the
-    // `contains_key` lookup that replaced the field read. Derivation cost
-    // is O(live sends), measured at its consumer, not per-row here.
-    let spend_locks = shekyl_engine_state::SendJournalBlock::empty().spend_locks();
+    // An empty journal: nothing in flight, the baseline-comparable workload.
+    // The per-row cost under measurement is the classifier (A17): the lock
+    // lookup and the reference predicate at one horizon.
+    let journal = shekyl_engine_state::SendJournalBlock::empty();
     let summary = black_box(BalanceSummary::compute(
         &transfers,
-        shekyl_types::BlockHeight::from_raw(h),
-        black_box(&spend_locks),
+        shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(h)),
+        black_box(&journal),
     ));
     // Return the fixture: its zeroize-on-drop teardown must be charged to the
     // harness, not the measured region (see the module comment).

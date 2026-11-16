@@ -398,7 +398,7 @@ fn default_fee_estimates() -> FeeEstimates {
     FeeEstimates {
         economy: FeeRate::new(5).expect("economy fee rate is non-zero"),
         standard: FeeRate::new(10).expect("standard fee rate is non-zero"),
-        priority: FeeRate::new(40).expect("priority fee rate is non-zero"),
+        high: FeeRate::new(40).expect("high fee rate is non-zero"),
     }
 }
 
@@ -1389,7 +1389,7 @@ mod tests {
         // documented default constants.
         assert_eq!(fees.economy, FeeRate::new(5).unwrap());
         assert_eq!(fees.standard, FeeRate::new(10).unwrap());
-        assert_eq!(fees.priority, FeeRate::new(40).unwrap());
+        assert_eq!(fees.high, FeeRate::new(40).unwrap());
     }
 
     #[tokio::test]
@@ -1398,7 +1398,7 @@ mod tests {
         let custom = FeeEstimates {
             economy: FeeRate::new(7).unwrap(),
             standard: FeeRate::new(70).unwrap(),
-            priority: FeeRate::new(700).unwrap(),
+            high: FeeRate::new(700).unwrap(),
         };
         daemon.set_fee_estimates(custom);
         for _ in 0..3 {

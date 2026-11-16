@@ -215,11 +215,8 @@ impl ReservationId {
 /// the same event already carries.
 pub use shekyl_types::TxHash;
 
-// `FeePriority` migrated to `engine::fee_estimator` per PR 5
-// C4γ (`STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X "trait-surface
-// is the canonical citation" pin). Re-exported here for
-// backward source-text compatibility within the crate; the
-// `engine::mod` re-export surface is unchanged.
+// The fee tier a request names: defined once in `shekyl-economics`
+// beside the ladder, re-exported through the estimator that resolves it.
 pub use super::fee_estimator::FeePriority;
 
 /// Success surface of [`Engine::submit_pending_tx`] — the daemon's
@@ -383,7 +380,8 @@ pub struct TxRequest {
 impl TxRequest {
     /// The refusals that need no ledger, no daemon and no permit, run
     /// first on every build path. `network` is the wallet's own, not a
-    /// daemon query. An empty recipient list, an address that cannot be
+    /// daemon query. An empty recipient list, more recipients than a
+    /// transaction carries beside its change, an address that cannot be
     /// paid on that network, and a `rid` the label cannot echo are each
     /// refused here, at the request, not discovered after selection and
     /// proving as a signer failure: a bad address behind an empty wallet
@@ -395,6 +393,15 @@ impl TxRequest {
             return Err(SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
             });
+        }
+        // Every send carries a change output beside its payments, so the
+        // payments get one output fewer than a transaction carries. Refused
+        // here with the signer's own fault, before selection and proving.
+        let outputs = self.recipients.len().saturating_add(1);
+        if outputs > shekyl_tx_builder::MAX_OUTPUTS {
+            return Err(SendError::Sign(
+                shekyl_tx_builder::SignFault::TooManyOutputs { count: outputs },
+            ));
         }
         for recipient in &self.recipients {
             if let TxDestination::Address(address) = &recipient.destination {
@@ -552,7 +559,7 @@ pub(crate) struct Reservation {
     /// `dead_code` allow: the field is consumed only by the
     /// `Debug` derive until C5β's handler-body rewrite reads it
     /// for the staleness check. Pattern matches the surrounding
-    /// `fee_atomic_units` / `recipients` / `priority` fields
+    /// `fee_atomic_units` / `recipients` fields
     /// whose production readers also land in later commits.
     #[allow(dead_code)]
     pub snapshot_id: SnapshotId,
@@ -584,10 +591,6 @@ pub(crate) struct Reservation {
     /// the caller-facing path.
     #[allow(dead_code)]
     pub recipients: Vec<TxRecipientSummary>,
-    /// Caller-supplied fee tier. Stored for diagnostics; the rate it
-    /// resolved to is already charged in [`Self::fee_atomic_units`].
-    /// Read only via `Debug` and tests.
-    pub priority: FeePriority,
 }
 
 /// In-flight transaction handle.
@@ -829,7 +832,11 @@ pub(crate) fn build_pending_tx_in_state(
         .collect();
 
     let mut candidates: Vec<(usize, AtomicUnits)> = ledger
-        .spendable_outputs(synced, None, &SendJournalBlock::empty().spend_locks())
+        .spendable_outputs(
+            shekyl_engine_state::SpendHorizon::at_tip(synced),
+            None,
+            &SendJournalBlock::empty().spend_locks(),
+        )
         .into_iter()
         .filter(|(idx, _)| !reserved.contains(idx))
         .map(|(idx, td)| (idx, td.amount()))
@@ -889,7 +896,6 @@ pub(crate) fn build_pending_tx_in_state(
         extensions: Vec::new(),
         fee_atomic_units: fee,
         recipients: summary.clone(),
-        priority: request.priority,
     };
 
     let pending = PendingTx {

@@ -95,8 +95,8 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 44 | `encrypted_seed` | N/A | Out of scope | Encrypted seed export not needed with display.rs safety |
 | 45 | `export_outputs` | N/A | Out of scope | Removed by construction: the cold-coordination flow it served is rejected permanently with cold signing (decision log 2026-09-07), and FCMP++ membership proofs need no per-wallet output export |
 | 46 | `export_transfers` | N/A | Out of scope | CSV export, low priority |
-| 47 | `freeze` | N/A | Out of scope | Removed by construction (rule 60): freezing exists to keep a poisoned decoy out of a ring. FCMP++ has no decoy selection, so the hazard has no referent |
-| 48 | `frozen` | N/A | Out of scope | As row 47 — nothing can be frozen |
+| 47 | `freeze` | N/A | Out of scope | REJECTED (decision log 2026-11-15): the wallet has no user-set hold on outputs. FCMP++ hides which outputs a spend uses, any human choice on a visible parameter becomes a pattern, and the wallet's own reservations keep built and staking-held outputs out of selection. `shekyl-cli` refuses the command with this reason, and the wallet RPC refuses the method |
+| 48 | `frozen` | N/A | Out of scope | As row 47 |
 | 49 | `get_description` | N/A | Out of scope | Wallet description, trivial metadata |
 | 50 | `get_tx_note` | `tx note <txid>` | Covered | Native `get_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. An absent note is also the answer for an unknown txid — the note store carries no existence claim |
 | 51 | `hw_key_images_sync` | N/A | Out of scope | Hardware wallet, not supported |
