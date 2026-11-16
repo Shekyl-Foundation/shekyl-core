@@ -223,8 +223,8 @@ The two daemons share 2,000 blocks and then mine apart, each past its own branch
 
 | B is | tip | places | held alternatives | `RssAnon` |
 | --- | --- | --- | --- | --- |
-| peered with A, after the switch | 2,125 | 2 | 120 | 580,080 kB |
-| peered with A | 2,200 | 2 | 120 | 588,016 kB |
+| peered with A, after the switch (`dev` at `0b433c40fd`) | 2,125 | 3 | 120 | 848,096 kB |
+| peered with A (`dev` at `0b433c40fd`) | 2,200 | 3 | 120 | 853,948 kB |
 | alone, same store | 2,200 | 3 | 120 | 806,320 kB |
 | alone | 2,700 | 3 | 120 | 873,912 kB |
 | alone, the last tip with the fork's root in reach | 2,720 | 3 | 120 | 876,444 kB |
@@ -232,7 +232,7 @@ The two daemons share 2,000 blocks and then mine apart, each past its own branch
 | alone | 2,820 | 2 | 0 | 614,248 kB |
 | alone | 2,840 | 1 | 0 | 352,364 kB |
 
-- **Peered, the held fork is not the third** (§5.1): A's run is the frontier, it outweighs the fork B left, and its seed is the window's. Alone, with no frontier, the same store names the fork's seed third.
+- **Peered or alone, the held fork's seed is the third** (§5.1, HA-R2): A's run is the frontier and outweighs the fork B left, but its seed is the window's, so it is set aside and the fork's seed takes the place. B names three places from 30 s after it starts peered to the last sample, `RssAnon` between 807,372 kB and 855,064 kB. The two peered rows are a second run, from copies of the two stores as they stood before peering, on `dev` at `0b433c40fd`. The alone reading at tip 2,200 is lower only because it was taken 30 s after that daemon started, before it had mined a block: its samples read 855,188 kB one block later.
 - **The list changes where the arithmetic says.** Three at tip 2,720 and two at 2,723: the fork's root, block 2,000, left the 720-block reach at tip 2,721, and the store retired the alternatives. Two at 2,831 and one at 2,834: the window names one seed from tip 2,832.
 - **A place given up returns 256 MiB.** 876,444 kB to 614,296 kB is 262,148 kB; 614,984 kB to 352,840 kB is 262,144 kB.
 - **The process outside the caches is about 88 MiB on regtest** with one cache (352,364 kB) and with three (876,444 kB). HA-F7's 90 MiB stands, and so does its sum for three caches against PB-R1, 1,946 MiB of 2,048. It is still a regtest reading: the store cache there holds a few megabytes of its 1 GiB.
