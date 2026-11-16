@@ -234,10 +234,12 @@ impl Descriptor {
         }
     }
 
-    /// The uploads to ask about: the open round's while it has a success,
-    /// else the latest ended round's that had one.
-    fn directories(&self) -> Vec<RoundUpload> {
-        if self.open.iter().any(|upload| upload.ended.confirmed()) {
+    /// The uploads to ask about: the open round's once it has a success or
+    /// is no longer `young`, else the latest ended round's that had one.
+    fn directories(&self, young: bool) -> Vec<RoundUpload> {
+        if !self.open.is_empty()
+            && (!young || self.open.iter().any(|upload| upload.ended.confirmed()))
+        {
             self.project(&self.open)
         } else {
             self.last.clone()
@@ -338,16 +340,22 @@ impl UploadRounds {
         }
     }
 
-    /// For each descriptor kept, in the order first seen, every upload of its
-    /// latest round with a success, each with its end: the open round's while
-    /// it has a success, else the latest ended round's. A round with no
-    /// success yet says nothing about where the descriptor is. Empty before
-    /// any upload succeeded.
+    /// For each descriptor kept, in the order first seen, every upload of
+    /// the round the check asks about, each with its end (Rick, 2026-11-16):
+    /// the open round once it has a success or is no longer young, else the
+    /// latest ended round that had a success. `young` names the descriptors
+    /// whose open round is younger than the probe's round wait; the core
+    /// knows the rounds' ages, and the driver reads them in the same turn as
+    /// this list. A young round with no success may yet land, and says
+    /// nothing. An older one stands for where the descriptor is now: a new
+    /// pass can go to other directories than the last good one, and none of
+    /// its uploads confirmed is the case the check must see. Empty before any
+    /// round is listed.
     #[must_use]
-    pub fn directories(&self) -> Vec<RoundUpload> {
+    pub fn directories(&self, young: &[DescriptorKey]) -> Vec<RoundUpload> {
         self.descriptors
             .iter()
-            .flat_map(Descriptor::directories)
+            .flat_map(|held| held.directories(young.contains(&held.key)))
             .collect()
     }
 
@@ -564,6 +572,14 @@ mod tests {
     const SECOND: DescriptorKey = DescriptorKey(1);
     const THIRD: DescriptorKey = DescriptorKey(2);
 
+    /// Every descriptor these tests key, all with their open round young: a
+    /// round is listed only once it has a success. The tests of an older
+    /// round pass `OLD`.
+    const YOUNG: &[DescriptorKey] = &[FIRST, SECOND, THIRD, DescriptorKey(3)];
+
+    /// No open round young: every open round is listed.
+    const OLD: &[DescriptorKey] = &[];
+
     fn hs_desc_event(line: &str) -> HsDescEvent {
         let mut framer = ReplyFramer::default();
         framer.push_bytes(format!("650 {line}\r\n").as_bytes());
@@ -670,7 +686,7 @@ mod tests {
             rounds.in_round(),
             "two of each descriptor's uploads had not ended"
         );
-        let list = rounds.directories();
+        let list = rounds.directories(YOUNG);
         assert_eq!(list.len(), 16);
         assert!(
             list[..8]
@@ -717,7 +733,7 @@ mod tests {
         );
         rounds.observe(&upload(4, "next"));
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Open)],
             "the next descriptor has no success yet"
         );
@@ -731,7 +747,7 @@ mod tests {
             [RoundMark::FirstUploaded { descriptor: SECOND }]
         );
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [
                 to(1, "cur", FIRST, Done),
                 to(2, "cur", FIRST, Done),
@@ -1081,18 +1097,18 @@ mod tests {
     fn every_upload_is_kept_with_its_descriptor_and_its_end() {
         use UploadEnd::{Failed as Fail, Open, Uploaded as Done};
         let mut rounds = tracker();
-        assert!(rounds.directories().is_empty());
+        assert!(rounds.directories(YOUNG).is_empty());
         rounds.observe(&upload(1, "cur"));
         rounds.observe(&upload(2, "cur"));
         rounds.observe(&upload(3, "next"));
         rounds.observe(&upload(2, "next"));
         assert!(
-            rounds.directories().is_empty(),
+            rounds.directories(YOUNG).is_empty(),
             "a round with no success yet says nothing"
         );
         rounds.observe(&uploaded(2));
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(1, "cur", FIRST, Open), to(2, "cur", FIRST, Done)],
             "the current descriptor's round, once it has a success"
         );
@@ -1105,11 +1121,42 @@ mod tests {
             to(3, "next", SECOND, Done),
             to(2, "next", SECOND, Done),
         ];
-        assert_eq!(rounds.directories(), ended);
+        assert_eq!(rounds.directories(YOUNG), ended);
         // A round with no success leaves that descriptor's latest set.
         rounds.observe(&upload(4, "cur"));
         rounds.observe(&failed(4));
-        assert_eq!(rounds.directories(), ended);
+        assert_eq!(rounds.directories(YOUNG), ended);
+    }
+
+    /// **An open round older than the wait is listed without a success; a
+    /// young one is not** (Rick, 2026-11-16). The current descriptor's first
+    /// pass went to directories 1 and 2 and confirmed; its next pass goes to
+    /// 3 and 4, and neither upload reports an end. While that round is young
+    /// the list keeps the last good round. Once it is older than the probe's
+    /// round wait, the new pass is where the descriptor is now, and its
+    /// directories are listed though none confirmed. Fails if
+    /// `Descriptor::directories` lists an open round only once it has a
+    /// success (the old pass's 1 and 2, which clients may no longer ask).
+    #[test]
+    fn an_old_round_is_listed_without_a_success_and_a_young_one_is_not() {
+        use UploadEnd::{Open, Uploaded as Done};
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&uploaded(1));
+        rounds.observe(&uploaded(2));
+        rounds.observe(&upload(3, "cur"));
+        rounds.observe(&upload(4, "cur"));
+        assert_eq!(
+            rounds.directories(&[FIRST]),
+            [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Done)],
+            "young: the last good round"
+        );
+        assert_eq!(
+            rounds.directories(OLD),
+            [to(3, "cur", FIRST, Open), to(4, "cur", FIRST, Open)],
+            "older than the wait: the new pass, to other directories"
+        );
     }
 
     /// **An end pairs with the earliest upload still open to its directory**,
@@ -1141,12 +1188,12 @@ mod tests {
             "the current descriptor's upload began first"
         );
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(1, "cur", SECOND, Fail), to(2, "cur", SECOND, Done)]
         );
         rounds.observe(&uploaded(2));
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [
                 to(2, "next", FIRST, Done),
                 to(7, "next", FIRST, Open),
@@ -1170,18 +1217,18 @@ mod tests {
         rounds.observe(&upload(2, "cur"));
         rounds.observe(&uploaded(1));
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Open)]
         );
         // The next pass's first UPLOAD ends this one; it has no success yet,
         // so the ended round's set stands, its open upload now unfinished.
         rounds.observe(&upload(3, "cur"));
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Unfinished)]
         );
         rounds.observe(&uploaded(3));
-        assert_eq!(rounds.directories(), [to(3, "cur", FIRST, Done)]);
+        assert_eq!(rounds.directories(YOUNG), [to(3, "cur", FIRST, Done)]);
 
         // The same through `resync`.
         let mut rounds = tracker();
@@ -1190,7 +1237,7 @@ mod tests {
         rounds.observe(&uploaded(1));
         rounds.resync();
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Unfinished)]
         );
     }
@@ -1216,7 +1263,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(1, "cur", FIRST, UploadEnd::Uploaded)]
         );
     }
@@ -1286,7 +1333,7 @@ mod tests {
             "the freed descriptor's open round is forgotten"
         );
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(2, "next", SECOND, UploadEnd::Uploaded)],
             "the promoted descriptor's round stands"
         );
@@ -1318,14 +1365,14 @@ mod tests {
         rounds.observe(&uploaded(1));
         rounds.observe(&created("new"));
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(1, "cur", SECOND, UploadEnd::Uploaded)],
             "the wrong descriptor was dropped"
         );
         rounds.observe(&upload(4, "next"));
         rounds.observe(&uploaded(4));
         assert_eq!(
-            rounds.directories(),
+            rounds.directories(YOUNG),
             [to(4, "next", DescriptorKey(3), UploadEnd::Uploaded)],
             "the promoted descriptor is back, and the freed one is gone"
         );
@@ -1343,7 +1390,7 @@ mod tests {
         let mut next = rounds
             .next_publication(ServiceId::parse(CAPTURED_ONION).expect("the captured address"));
         assert!(!next.in_round());
-        assert!(next.directories().is_empty());
+        assert!(next.directories(YOUNG).is_empty());
         assert_eq!(next.end_round(FIRST), None);
         assert_eq!(
             next.observe(&upload(1, "cur")),

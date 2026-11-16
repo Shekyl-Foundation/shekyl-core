@@ -161,6 +161,14 @@ impl OpenUploads {
         Self { in_flight }
     }
 
+    /// The descriptors whose open round was younger than
+    /// `Policy::round_wait`: the round tracker lists such a round only once
+    /// it has a success (`UploadRounds::directories`).
+    #[must_use]
+    pub fn young(&self) -> &[DescriptorKey] {
+        &self.in_flight
+    }
+
     /// An upload of `descriptor` still open is hung, and its directory is
     /// asked: its round was already older than `Policy::round_wait`, or had
     /// ended.

@@ -724,7 +724,21 @@ both rounds. Two rounds close together still bring one probe: a probe
 already in hand is each round's one probe. A scheduled probe goes out only
 once every open round is `Policy::round_wait` old, and the check's list is
 drawn then (`Action::CheckDirectories`), not when the probe was scheduled,
-so it holds what both descriptors' rounds did. On the floor device's runs
+so it holds what both descriptors' rounds did. **For each descriptor the
+list holds its open round once that round has a success or is
+`Policy::round_wait` old, and otherwise its last round with a success**
+(Rick, 2026-11-16): one rule for every descriptor. An open round that old
+is where the descriptor is now, though none of its uploads confirmed: a new
+pass can go to other directories than the last good one, and a descriptor
+whose every upload hangs is the case the check must see. A younger round
+with no success may yet land and says nothing, so the last good round
+stands for it. The driver reads which rounds are young in the same turn as
+the list (`OpenUploads::young`), since the list's request can queue behind
+another and a pass can begin in between. On the floor device's slow node
+(2026-11-16, start 3) the asked descriptor's eight uploads all hung on the
+48 kbit link and it had no earlier round: listing only rounds with a
+success, the check held only the other descriptor and counted nothing
+(`the_slow_nodes_blind_check_replayed_lists_the_asked_descriptor`). On the floor device's runs
 of 2026-11-15, 6 of 14 checks counted nothing: one descriptor's pass had
 ended the other's round, and the list drawn at that end held only the
 descriptor clients were not asking for (`shekyl-dev`
@@ -792,7 +806,11 @@ check's, and a failed fetch never ends a round. `SIGNAL NEWNYM` would also clear
 client state, but it purges Tor's client state for every onion and moves
 every new peer stream onto new circuits, and is not used. The bound is not
 a respawn. The floor-device soak measures both miss rates; if the
-second-miss rate is near zero, the rule is settled. The 2026-10-31 soak
+second-miss rate is near zero, the rule is settled. It also counts how often
+a first miss is followed by Held (Rick, 2026-11-16): an upload Tor never
+confirmed can land later (the floor device's control node, 2026-11-16,
+start 3), so unfinished is not absent, and a high count means
+`Policy::round_wait` is short for the network. It is not tuned before then. The 2026-10-31 soak
 (§12, increment 6) had one first miss in 322 probes, and its second probe
 arrived 19 s later: no second miss.
 
@@ -838,6 +856,18 @@ has broken its own lifetime, and repairing that is not second-guessing Tor.
   `HSFETCH`, a second probe, then a republish. The suppression rules are
   unchanged, and the probe stays outside the dial tally and the in-flight
   bound (`TSR-Q14`).
+
+**The node answers from its own evidence only (Rick, 2026-11-16).** The
+probe and the directory check answer one question for this node's callers:
+can this node be reached at its onion? The answer comes from this node's own
+evidence alone: its own probe, its own directory fetches, its own dials.
+Never from another peer, and never from an outside service, in production. A
+peer's word would be a trust dependency: a node that can be told it is
+unreachable can be talked into republishing or into silence; and asking
+reveals the node, since whoever is asked learns which onion wonders whether
+it can be reached. In testing, another of our nodes may dial the onion as
+the answer key: it grades the node's answer and never feeds it, and no
+daemon code reads it.
 
 **The directory check (Rick, 2026-10-31).** The rendezvous probe never
 fetches from the directories: this node's Tor answers it from its own copy
@@ -939,10 +969,10 @@ it.
   line for any other directory, and an answer that arrives before the
   send, is not evidence: the rendezvous probe and the unscoped refetch are
   answered from this node's own cache and from a directory this check did
-  not choose. The list holds, for each descriptor kept, its latest round
-  with a success (`UploadRounds::directories`), each directory with the
-  descriptor its `UPLOAD` named, so it holds the descriptor clients ask for
-  whenever Tor has uploaded it. Once a sent fetch's `REQUESTED`, or its
+  not choose. The list holds, for each descriptor kept, the round the
+  listing rule above names (`UploadRounds::directories`), each directory
+  with the descriptor its `UPLOAD` named, so it holds the descriptor clients
+  ask for whenever Tor has begun to upload it. Once a sent fetch's `REQUESTED`, or its
   answer, names the descriptor Tor's client asks for, a directory whose
   upload was a different descriptor is excluded, including one not yet
   sent, whatever its upload. A command Tor refuses, or a fetch

@@ -462,7 +462,7 @@ fn run_four_replayed_from_its_own_lines_is_a_miss() {
         unreachable!("found above");
     };
     let unconfirmed: Vec<_> = rounds
-        .directories()
+        .directories(&[])
         .iter()
         .filter(|upload| upload.descriptor_id == ours.descriptor_id && !upload.ended.confirmed())
         .map(|upload| upload.hsdir)
@@ -486,7 +486,7 @@ fn run_four_replayed_from_its_own_lines_is_a_miss() {
         secs(2),
     );
     let fetches = rounds
-        .directories()
+        .directories(&[])
         .into_iter()
         .map(|upload| DirectoryFetch { upload, draw: 0 })
         .collect();
@@ -605,7 +605,7 @@ fn a_cut_round_from_tors_own_bytes_is_a_miss() {
     }
     assert!(rounds.in_round(), "the cut uploads never report");
     let unconfirmed: Vec<_> = rounds
-        .directories()
+        .directories(&[])
         .into_iter()
         .filter(|upload| !upload.ended.confirmed())
         .collect();
@@ -626,7 +626,7 @@ fn a_cut_round_from_tors_own_bytes_is_a_miss() {
         secs(2),
     );
     let fetches = rounds
-        .directories()
+        .directories(&[])
         .into_iter()
         .map(|upload| DirectoryFetch { upload, draw: 0 })
         .collect();

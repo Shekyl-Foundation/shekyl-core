@@ -307,7 +307,7 @@ fn the_control_nodes_lost_check_replayed_reads_no_directory() {
         })
         .expect("a fetch names the descriptor clients ask for");
     let fetches: Vec<DirectoryFetch> = rounds
-        .directories()
+        .directories(&[])
         .into_iter()
         .map(|upload| DirectoryFetch { upload, draw: 0 })
         .collect();
@@ -379,6 +379,93 @@ fn checking_with(
     (core, fetched(&taken))
 }
 
+/// The slow node's start 3 on the floor device (2026-11-16): its lines (the
+/// fixture's header says where they came from).
+const SLOW_START_THREE: &str =
+    include_str!("../../../control/testdata/tsr_pi_2026_11_16_slow_start3_daemon_debug.txt");
+
+/// **The slow node's blind check, replayed: the asked descriptor's round is
+/// listed** (Rick, 2026-11-16). Tor uploaded the descriptor clients do not
+/// ask for, every upload confirmed, then began the one they ask for, and on
+/// the 48 kbit link none of its eight uploads reported an end. The check
+/// listed only the first descriptor's directories and counted nothing.
+/// Fed through the tracker to the probe at 04:45:09Z, when the asked
+/// descriptor's round was 60 s old (the core's reading: no round young), the
+/// list now holds its eight directories, every upload open, beside the other
+/// descriptor's eight. With no confirmed directory of the asked descriptor,
+/// their silence is excluded: the check reports it heard nothing from them
+/// (`Exclusion::Silent`) instead of having no directory of theirs at all,
+/// and the probe, which missed, decides. Fails if `Descriptor::directories`
+/// lists an open round only once it has a success (the list holds only the
+/// other descriptor's eight, as the run's did).
+#[test]
+fn the_slow_nodes_blind_check_replayed_lists_the_asked_descriptor() {
+    let address = ServiceId::parse("url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid")
+        .expect("a test address");
+    let lines: Vec<Logged> = SLOW_START_THREE
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| logged(line, &address))
+        .collect();
+    let drawn_at = lines
+        .iter()
+        .position(|line| matches!(line, Logged::Ours(_)))
+        .expect("the check's own descriptor");
+    let mut rounds = UploadRounds::new(address.clone());
+    for line in &lines[..drawn_at] {
+        if let Logged::Event(event) = line {
+            rounds.observe(event);
+        }
+    }
+    let Logged::Ours(ours_then) = &lines[drawn_at] else {
+        unreachable!("found above");
+    };
+    let asked_for = lines[drawn_at + 1..]
+        .iter()
+        .find_map(|line| match line {
+            Logged::Event(event) if event.action == HsDescAction::Requested => {
+                event.descriptor_id.clone()
+            }
+            _ => None,
+        })
+        .expect("a fetch names the descriptor clients ask for");
+    let list = rounds.directories(&[]);
+    let asked: Vec<_> = list
+        .iter()
+        .filter(|upload| upload.descriptor_id == asked_for)
+        .collect();
+    assert_eq!(asked.len(), 8, "the asked descriptor's round is listed");
+    assert!(asked.iter().all(|upload| upload.ended == UploadEnd::Open));
+    let other = list.len() - asked.len();
+    assert_eq!(other, 8);
+    let first_asked = asked[0].hsdir;
+
+    let fetches: Vec<DirectoryFetch> = list
+        .into_iter()
+        .map(|upload| DirectoryFetch { upload, draw: 0 })
+        .collect();
+    let (mut core, sent) = checking_with(fetches, ours_then);
+    assert_eq!(sent.len(), 16, "every listed directory is asked");
+    core.on(
+        Input::DirectoryAsked {
+            hsdir: first_asked,
+            descriptor_id: asked_for.clone(),
+        },
+        secs(16),
+    );
+    let window = core.on_deadline(secs(75));
+    let step = served(&mut core, window, secs(75));
+    assert_eq!(
+        counted(&step, Counted::Excluded(Exclusion::Silent)).len(),
+        8,
+        "the asked descriptor's directories, asked and silent"
+    );
+    assert_eq!(
+        counted(&step, Counted::Excluded(Exclusion::OtherDescriptor)).len(),
+        8
+    );
+}
+
 /// The control node's start 4 on the floor device (2026-11-15): its lines
 /// (the fixture's header says where they came from).
 const CONTROL_START_FOUR: &str =
@@ -413,7 +500,7 @@ fn a_blind_check_replayed_now_holds_the_asked_descriptor() {
         }
     }
     let asked_for = asked_for.expect("Tor's client named the descriptor it asks for");
-    let list = rounds.directories();
+    let list = rounds.directories(&[]);
     let asked: Vec<_> = list
         .iter()
         .filter(|upload| upload.descriptor_id == asked_for)
