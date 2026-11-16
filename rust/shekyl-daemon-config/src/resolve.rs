@@ -45,7 +45,7 @@ impl Resolved {
 /// The two command-line-only choosers the file cannot change: the network
 /// and the run mode (DC-Q18). Read before the file is located.
 #[must_use]
-pub fn choosers(cli: &Cli) -> (Network, RunMode) {
+pub(crate) fn choosers(cli: &Cli) -> (Network, RunMode) {
     let network = cli
         .given
         .iter()
@@ -69,7 +69,7 @@ pub fn choosers(cli: &Cli) -> (Network, RunMode) {
 /// Every development lever given on a network its row does not name
 /// (`config.dev.network`), and every default the table cannot build, which
 /// `Table::defects` already refuses.
-pub fn resolve(
+pub(crate) fn resolve(
     table: &Table,
     network: Network,
     cli: Cli,
