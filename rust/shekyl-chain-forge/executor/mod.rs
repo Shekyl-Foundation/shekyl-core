@@ -832,6 +832,7 @@ impl Forge {
             self.producer.start_spread,
         )
         .await;
+        let mut admitted = 0usize;
         while self.chain.last().expect("genesis at least").height < settled_at {
             let queued = !self
                 .scenario()
@@ -842,11 +843,13 @@ impl Forge {
                 .expect("the queue reads")
                 .is_empty();
             let mined = if queued {
-                self.scenario()
+                let (mined, bundles) = self
+                    .scenario()
                     .mine_admitting(Vec::new())
                     .await
-                    .unwrap_or_else(|outcome| panic!("a producer-plan block lands: {outcome}"))
-                    .0
+                    .unwrap_or_else(|outcome| panic!("a producer-plan block lands: {outcome}"));
+                admitted += bundles.len();
+                mined
             } else {
                 self.scenario()
                     .mine_listing(Vec::new())
@@ -864,6 +867,12 @@ impl Forge {
         let ended = std::mem::take(&mut *producing.ended.lock().expect("the outcome list"));
         producing.stop().await;
         drop(endpoint);
+        // The subject (rule 47): the producer made bundles the chain took.
+        if admitted == 0 && self.stopped.is_none() {
+            return Err(ForgeFault::Plan(
+                "the producer filed no bundle the chain admitted: the step produced nothing".into(),
+            ));
+        }
         if let Some(first) = ended.first() {
             return Err(ForgeFault::Plan(format!(
                 "{} read(s) did not pass, the first {first:?}: a stall changes a produced \

@@ -10,6 +10,14 @@
 //!     --plan rust/shekyl-chain-forge/plans/small.toml --out <dir> \
 //!     [--hashers N] [--swap S1,S5] [--stop-at <committed blocks.txt>]
 //!     [--live-producer] [--start-spread-ms N]
+//! cargo run -p shekyl-chain-forge --example forge -- --diff <old blocks.txt> <new blocks.txt>
+//! ```
+//!
+//! `--diff` prints the first block where two ledgers differ, the line a
+//! regeneration's pull request names (`CHAIN_FORGE.md` §9), and exits 1 if
+//! they differ.
+//!
+//! ```text
 //! ```
 //!
 //! A cargo example, not a binary (`CF-R8`): it builds against the crate's
@@ -49,6 +57,12 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [flag, old, new] = args.as_slice() {
+        if flag == "--diff" {
+            return diff(old, new);
+        }
+    }
     let mut plan_path = None;
     let mut out = None;
     let mut hashers = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
@@ -145,6 +159,24 @@ fn run() -> Result<ExitCode, String> {
                 took.as_secs_f64()
             );
             Ok(ExitCode::from(3))
+        }
+    }
+}
+
+/// The first block where the ledgers at `old` and `new` differ.
+fn diff(old: &str, new: &str) -> Result<ExitCode, String> {
+    let read = |path: &str| {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        BlocksTxt::parse(&text).map_err(|e| format!("{path}: {e}"))
+    };
+    match read(old)?.first_difference(&read(new)?) {
+        None => {
+            println!("the ledgers are the same chain");
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(difference) => {
+            println!("first differing block (old, new): {difference}");
+            Ok(ExitCode::from(1))
         }
     }
 }
