@@ -26,12 +26,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// The console's socket, in the network's data directory (Unix).
-pub const CONSOLE_SOCKET_FILE: &str = "rpc-console.sock";
-
-/// The file naming the console's pipe, in the network's data directory
-/// (Windows).
-pub const CONSOLE_PIPE_FILE: &str = "rpc-console.pipe";
+pub use shekyl_rpc_rendezvous::{CONSOLE_PIPE_FILE, CONSOLE_SOCKET_FILE};
 
 /// The console leg's listener.
 #[cfg(unix)]
@@ -41,17 +36,11 @@ pub type ConsoleListener = tokio::net::UnixListener;
 #[cfg(windows)]
 pub type ConsoleListener = crate::owner::OwnerListener;
 
-/// Where the console's leg is named for the data directory `dir`.
+/// Where the console's leg is named for the data directory `dir`
+/// (`shekyl_rpc_rendezvous::console_leg_place`, which the CLI dials).
 #[must_use]
 pub fn place(dir: &Path) -> PathBuf {
-    #[cfg(unix)]
-    {
-        dir.join(CONSOLE_SOCKET_FILE)
-    }
-    #[cfg(windows)]
-    {
-        dir.join(CONSOLE_PIPE_FILE)
-    }
+    shekyl_rpc_rendezvous::console_leg_place(dir)
 }
 
 /// Bind the console's leg for the data directory `dir`. Called inside the

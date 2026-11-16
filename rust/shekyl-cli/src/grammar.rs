@@ -13,9 +13,10 @@
 use crate::catalog::{self, split_flags, usage, CommandId, Split, Walk};
 use crate::resolve::{
     diag, parse_flag_str, parse_invoice_expiry, raw_remainder, reject_removed_command,
-    reject_removed_flags, unix_now, BlockRef, FeePriority, FlagValue, RequestFilter,
+    reject_removed_flags, unix_now, BlockRef, Enrol, FeePriority, FlagValue, RequestFilter,
     ResolvedCommand, View,
 };
+use shekyl_rpc_types::wire::rpc::CeilingWord;
 
 /// How a free-form tail is recovered.
 ///
@@ -134,6 +135,26 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         }),
         OptionSet => parse_option_set(args),
         OptionShow => parse_option_show(args),
+        RpcClientAdd => parse_client_ceiling(RpcClientAdd, args, |fingerprint, ceiling| {
+            Enrol::ClientAdd {
+                fingerprint,
+                ceiling,
+            }
+        }),
+        RpcClientSet => parse_client_ceiling(RpcClientSet, args, |fingerprint, ceiling| {
+            Enrol::ClientSet {
+                fingerprint,
+                ceiling,
+            }
+        }),
+        RpcClientRemove => one_word(id, args, |word| match parse_hash(word) {
+            Ok(fingerprint) => ResolvedCommand::Enrol(Enrol::ClientRemove { fingerprint }),
+            Err(message) => diag(message),
+        }),
+        RpcClientList => bare(id, args, ResolvedCommand::Enrol(Enrol::ClientList)),
+        RpcBundleShow => bare(id, args, ResolvedCommand::Enrol(Enrol::BundleShow)),
+        RpcKeyCreate => bare(id, args, ResolvedCommand::Enrol(Enrol::KeyCreate)),
+        RpcKeyShow => bare(id, args, ResolvedCommand::Enrol(Enrol::KeyShow)),
         DaemonStop => bare(id, args, ResolvedCommand::Daemon(View::DaemonStop)),
         TxRelay => one_word(id, args, parse_tx_relay),
         Version => bare(id, args, ResolvedCommand::Version),
@@ -200,9 +221,8 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         // Subjects. `walk` asks for a verb before this match; the arm keeps
         // the match exhaustive if that ever changes.
         Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check | Block | BlockHeader
-        | Peer | P2p | Sync | Daemon | Txpool | ChainCoinbase | Ban | Option => {
-            diag(catalog::need_verb(id))
-        }
+        | Peer | P2p | Sync | Daemon | Txpool | ChainCoinbase | Ban | Option | Rpc | RpcClient
+        | RpcBundle | RpcKey => diag(catalog::need_verb(id)),
     }
 }
 
@@ -333,6 +353,48 @@ fn parse_host(word: &str, view: View) -> ResolvedCommand {
 
 fn host_token(word: &str) -> bool {
     word.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// `rpc client add|set <fingerprint> --ceiling <word>...` (IG-Q87): the
+/// fingerprint a hash, the ceiling one or more grant or preset keywords,
+/// the flag repeated (IG-6).
+fn parse_client_ceiling(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(String, Vec<CeilingWord>) -> Enrol,
+) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [fingerprint] = split.positional.as_slice() else {
+        return diag(usage(id));
+    };
+    let fingerprint = match parse_hash(fingerprint) {
+        Ok(fingerprint) => fingerprint,
+        Err(message) => return diag(message),
+    };
+    let words = split.values("--ceiling");
+    if words.is_empty() {
+        return diag(usage(id));
+    }
+    let mut ceiling = Vec::with_capacity(words.len());
+    for word in words {
+        match CeilingWord::ALL.iter().find(|known| known.as_str() == word) {
+            Some(known) => ceiling.push(*known),
+            None => {
+                return diag(format!(
+                    "{word:?} is not a grant or a preset; one of: {}",
+                    CeilingWord::ALL
+                        .iter()
+                        .map(|known| known.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            }
+        }
+    }
+    ResolvedCommand::Enrol(build(fingerprint, ceiling))
 }
 
 fn parse_ban_add(args: &[&str]) -> ResolvedCommand {
@@ -915,6 +977,54 @@ fn parse_verify(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The enrolment words (IG-Q87): a ceiling is the flag repeated
+    /// (IG-6), each a grant or a preset, and at least one; the fingerprint
+    /// a hash. Red edit: let `record` refuse a repeated `List` flag, and the
+    /// two-word ceiling is "given twice".
+    #[test]
+    fn the_enrolment_words_take_a_hash_and_a_repeated_ceiling() {
+        let fingerprint = "ab".repeat(32);
+        match parse(&format!(
+            "rpc client add {fingerprint} --ceiling view --ceiling submit"
+        )) {
+            ResolvedCommand::Enrol(Enrol::ClientAdd {
+                fingerprint: got,
+                ceiling,
+            }) => {
+                assert_eq!(got, fingerprint);
+                assert_eq!(ceiling, vec![CeilingWord::View, CeilingWord::Submit]);
+            }
+            other => panic!("expected rpc client add, got {other:?}"),
+        }
+        assert!(matches!(
+            parse(&format!("rpc client set {fingerprint} --ceiling admin")),
+            ResolvedCommand::Enrol(Enrol::ClientSet { .. })
+        ));
+        assert!(matches!(
+            parse(&format!("rpc client remove {fingerprint}")),
+            ResolvedCommand::Enrol(Enrol::ClientRemove { .. })
+        ));
+        for words in [
+            "rpc client list",
+            "rpc bundle show",
+            "rpc key create",
+            "rpc key show",
+        ] {
+            assert!(matches!(parse(words), ResolvedCommand::Enrol(_)), "{words}");
+        }
+        for refused in [
+            format!("rpc client add {fingerprint}"),
+            format!("rpc client add {fingerprint} --ceiling viewer"),
+            "rpc client add abc --ceiling view".to_owned(),
+            "rpc client".to_owned(),
+        ] {
+            assert!(
+                !matches!(parse(&refused), ResolvedCommand::Enrol(_)),
+                "{refused}"
+            );
+        }
+    }
 
     #[test]
     fn tx_alarm_and_tx_resend_parse() {

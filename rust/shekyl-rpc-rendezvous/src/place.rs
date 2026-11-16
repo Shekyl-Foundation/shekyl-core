@@ -69,6 +69,36 @@ pub fn service_file_name(name: &RendezvousName) -> String {
     format!("shekyl-{name}")
 }
 
+/// The daemon's static key, in the network's data directory (RT-O34).
+pub const CHANNEL_KEY_FILE: &str = "rpc-channel.key";
+
+/// The daemon's public bundle, in the network's data directory: the X25519
+/// key then the ML-KEM-768 encapsulation key, what `rpc_bundle_show` replies.
+pub const CHANNEL_BUNDLE_FILE: &str = "rpc-channel.bundle";
+
+/// A service's console key, in the network's data directory (§5).
+pub const CONSOLE_KEY_FILE: &str = "rpc-console.key";
+
+/// A service's console leg on Unix: a socket in the network's data
+/// directory (RT-O37).
+pub const CONSOLE_SOCKET_FILE: &str = "rpc-console.sock";
+
+/// The file naming a service's console pipe on Windows, in the network's
+/// data directory (RT-O37).
+pub const CONSOLE_PIPE_FILE: &str = "rpc-console.pipe";
+
+/// Where a service's console leg is named for its data directory `dir`:
+/// the socket on Unix, the pipe's file on Windows. The service binds there
+/// and the CLI dials there, through this one function.
+#[must_use]
+pub fn console_leg_place(dir: &Path) -> PathBuf {
+    dir.join(if cfg!(windows) {
+        CONSOLE_PIPE_FILE
+    } else {
+        CONSOLE_SOCKET_FILE
+    })
+}
+
 /// Where a service's record is: [`service_file_name`] in the service's
 /// rendezvous directory `dir`, under the RT-O10 name of `network_id` and
 /// `instance`. The daemon publishes there and a client on the same

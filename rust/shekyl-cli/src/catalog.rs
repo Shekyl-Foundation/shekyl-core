@@ -62,6 +62,17 @@ pub(crate) enum CommandId {
     BanAdd,
     BanRemove,
     BanShow,
+    Rpc,
+    RpcClient,
+    RpcClientAdd,
+    RpcClientSet,
+    RpcClientRemove,
+    RpcClientList,
+    RpcBundle,
+    RpcBundleShow,
+    RpcKey,
+    RpcKeyCreate,
+    RpcKeyShow,
     Option,
     OptionSet,
     OptionShow,
@@ -202,6 +213,17 @@ const IDS: &[CommandId] = &[
     CommandId::BanAdd,
     CommandId::BanRemove,
     CommandId::BanShow,
+    CommandId::Rpc,
+    CommandId::RpcClient,
+    CommandId::RpcClientAdd,
+    CommandId::RpcClientSet,
+    CommandId::RpcClientRemove,
+    CommandId::RpcClientList,
+    CommandId::RpcBundle,
+    CommandId::RpcBundleShow,
+    CommandId::RpcKey,
+    CommandId::RpcKeyCreate,
+    CommandId::RpcKeyShow,
     CommandId::Option,
     CommandId::OptionSet,
     CommandId::OptionShow,
@@ -222,6 +244,9 @@ pub(crate) enum FlagKind {
     Value,
     /// A value drawn from a closed set. Tab offers the set.
     OneOf(&'static [&'static str]),
+    /// A list: the flag repeated, one value each time (`INPUT_GRAMMAR.md`
+    /// IG-6). Read with [`Split::values`].
+    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +276,13 @@ impl Flag {
             kind: FlagKind::OneOf(words),
         }
     }
+
+    const fn list(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: FlagKind::List,
+        }
+    }
 }
 
 const NO_FLAGS: &[Flag] = &[];
@@ -267,6 +299,7 @@ const HEADER_LIST_FLAGS: &[Flag] = &[Flag::value("--from"), Flag::value("--to")]
 const COINBASE_SUM_FLAGS: &[Flag] = &[Flag::value("--from"), Flag::value("--to")];
 const TXPOOL_LIST_FLAGS: &[Flag] = &[Flag::switch("--short")];
 const BAN_ADD_FLAGS: &[Flag] = &[Flag::value("--duration")];
+const CEILING_FLAGS: &[Flag] = &[Flag::list("--ceiling")];
 const PEER_LIST_FLAGS: &[Flag] = &[
     Flag::switch("--white"),
     Flag::switch("--gray"),
@@ -418,6 +451,27 @@ fn meta(id: CommandId) -> Meta {
         ),
         BanRemove => child("remove", "ban remove <ip>", Ban),
         BanShow => child("show", "ban show <ip>", Ban),
+        Rpc => interior("rpc", "rpc", None),
+        RpcClient => interior("client", "rpc client", Some(Rpc)),
+        RpcClientAdd => flagged(
+            "add",
+            "rpc client add <fingerprint> --ceiling <grant> [--ceiling <grant>]...",
+            RpcClient,
+            CEILING_FLAGS,
+        ),
+        RpcClientSet => flagged(
+            "set",
+            "rpc client set <fingerprint> --ceiling <grant> [--ceiling <grant>]...",
+            RpcClient,
+            CEILING_FLAGS,
+        ),
+        RpcClientRemove => child("remove", "rpc client remove <fingerprint>", RpcClient),
+        RpcClientList => child("list", "rpc client list", RpcClient),
+        RpcBundle => interior("bundle", "rpc bundle", Some(Rpc)),
+        RpcBundleShow => child("show", "rpc bundle show", RpcBundle),
+        RpcKey => interior("key", "rpc key", Some(Rpc)),
+        RpcKeyCreate => child("create", "rpc key create", RpcKey),
+        RpcKeyShow => child("show", "rpc key show", RpcKey),
         Option => interior("option", "option", None),
         OptionSet => child("set", "option set <name> <value>", Option),
         OptionShow => child("show", "option show [<name>]", Option),
@@ -724,6 +778,15 @@ impl Split<'_> {
             .find(|(flag, _)| *flag == name)
             .map(|(_, value)| *value)
     }
+
+    /// Every value a list flag was given, in order (IG-6).
+    pub(crate) fn values(&self, name: &str) -> Vec<&str> {
+        self.values
+            .iter()
+            .filter(|(flag, _)| *flag == name)
+            .map(|(_, value)| *value)
+            .collect()
+    }
 }
 
 /// Reject unknown flags and flags whose value is missing or outside the set.
@@ -754,7 +817,7 @@ pub(crate) fn split_flags<'a>(
             let flag = known_flag(flags, arg)?;
             match flag.kind {
                 FlagKind::Switch => record(flag, None, &mut switches, &mut values)?,
-                FlagKind::Value | FlagKind::OneOf(_) => {
+                FlagKind::Value | FlagKind::OneOf(_) | FlagKind::List => {
                     let raw = args.get(index + 1).copied().unwrap_or("");
                     if raw.is_empty() || raw.starts_with("--") {
                         return Err(missing_flag_value(flag));
@@ -815,7 +878,10 @@ fn record<'a>(
     switches: &mut Vec<&'static str>,
     values: &mut Vec<(&'static str, &'a str)>,
 ) -> Result<(), String> {
-    if switches.contains(&flag.name) || values.iter().any(|(name, _)| *name == flag.name) {
+    let repeats = matches!(flag.kind, FlagKind::List);
+    if switches.contains(&flag.name)
+        || (!repeats && values.iter().any(|(name, _)| *name == flag.name))
+    {
         return Err(format!("{} was given twice", flag.name));
     }
     match value {
@@ -1160,6 +1226,18 @@ const HELP_GROUPS: &[(&str, &[CommandId])] = &[
         ],
     ),
     (
+        "Clients of the node (enrolment, over the channel or the owner's leg)",
+        &[
+            CommandId::RpcClientAdd,
+            CommandId::RpcClientSet,
+            CommandId::RpcClientRemove,
+            CommandId::RpcClientList,
+            CommandId::RpcBundleShow,
+            CommandId::RpcKeyCreate,
+            CommandId::RpcKeyShow,
+        ],
+    ),
+    (
         "Other",
         &[
             CommandId::Address,
@@ -1298,7 +1376,7 @@ fn value_words(id: CommandId, args: &[&str]) -> Option<Vec<&'static str>> {
     let flag = meta(id).flags.iter().find(|flag| flag.name == last)?;
     match flag.kind {
         FlagKind::OneOf(words) => Some(words.to_vec()),
-        FlagKind::Switch | FlagKind::Value => None,
+        FlagKind::Switch | FlagKind::Value | FlagKind::List => None,
     }
 }
 

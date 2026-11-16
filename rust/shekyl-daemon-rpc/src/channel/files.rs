@@ -17,15 +17,11 @@ use std::path::{Path, PathBuf};
 use shekyl_os_account::private_file::{self, PrivateFileError};
 use shekyl_rpc_channel::handshake::{KeyFileError, StaticKeypair};
 
-/// The daemon's static key (`StaticKeypair::to_key_file`).
-pub const KEY_FILE: &str = "rpc-channel.key";
-
-/// The daemon's public bundle: the X25519 key then the ML-KEM-768
-/// encapsulation key, what `rpc_bundle_show` replies and a client is given.
-pub const BUNDLE_FILE: &str = "rpc-channel.bundle";
-
-/// A service's console key: the host administrator's credential (§5).
-pub const CONSOLE_KEY_FILE: &str = "rpc-console.key";
+/// The files' names: `shekyl-rpc-rendezvous`'s, which the clients that read
+/// them use too.
+pub use shekyl_rpc_rendezvous::{
+    CHANNEL_BUNDLE_FILE as BUNDLE_FILE, CHANNEL_KEY_FILE as KEY_FILE, CONSOLE_KEY_FILE,
+};
 
 /// Why a channel file cannot be used.
 #[derive(Debug)]

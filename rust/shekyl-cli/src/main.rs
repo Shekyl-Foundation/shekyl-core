@@ -110,6 +110,19 @@ pub struct ReplArgs {
     #[arg(long, global = true)]
     proxy: Option<String>,
 
+    /// The node's public bundle, as `rpc bundle show` prints it on that
+    /// node. Set, the enrolment words reach the node at --daemon-address
+    /// over the channel, as this client's key (--rpc-key-file); unset, they
+    /// reach this computer's node (`INPUT_GRAMMAR.md` IG-Q108).
+    #[arg(long, global = true, value_name = "PATH")]
+    daemon_bundle_file: Option<std::path::PathBuf>,
+
+    /// This client's channel key, readable by this account alone (made with
+    /// `rpc key create`). Default: ~/.shekyl/rpc-shekyl-cli-<network>.key
+    /// (IG-Q108, IG-Q109).
+    #[arg(long, global = true, value_name = "PATH")]
+    rpc_key_file: Option<std::path::PathBuf>,
+
     /// Show structured RPC error details (error.data) on failures.
     #[arg(long, global = true, default_value_t = false)]
     pub debug: bool,
@@ -170,6 +183,54 @@ impl ReplArgs {
                 parse_network(self.network_name())?.ports().rpc
             )),
         }
+    }
+
+    /// What the enrolment words read from the flags (`enrol`): the
+    /// network, the node on another host when `--daemon-bundle-file` is
+    /// set, and this client's key file.
+    fn enrol_options(&self) -> Result<shekyl_cli::enrol::EnrolOptions, String> {
+        let network = parse_network(self.network_name())?;
+        let key_file = match &self.rpc_key_file {
+            Some(path) => path.clone(),
+            None => dirs::home_dir()
+                .ok_or("cannot determine the home directory; pass --rpc-key-file explicitly")?
+                .join(".shekyl")
+                .join(format!("rpc-shekyl-cli-{}.key", network.name())),
+        };
+        let remote = match &self.daemon_bundle_file {
+            None => None,
+            Some(bundle_file) => {
+                let address = self.daemon_address()?;
+                let endpoint = address
+                    .split_once("://")
+                    .map_or(address.as_str(), |(_, rest)| rest)
+                    .trim_end_matches('/')
+                    .to_owned();
+                let socks = match &self.proxy {
+                    None => None,
+                    Some(proxy) => {
+                        let bare = proxy
+                            .split_once("://")
+                            .map_or(proxy.as_str(), |(_, rest)| rest);
+                        Some(bare.parse().map_err(|_| {
+                            format!(
+                                "--proxy {proxy}: the channel's SOCKS proxy is an IP and a port"
+                            )
+                        })?)
+                    }
+                };
+                Some(shekyl_cli::enrol::Remote {
+                    endpoint,
+                    socks,
+                    bundle_file: bundle_file.clone(),
+                })
+            }
+        };
+        Ok(shekyl_cli::enrol::EnrolOptions {
+            network,
+            remote,
+            key_file,
+        })
     }
 
     /// The wallet-file directory: `--wallet-dir` as given, else the
@@ -644,7 +705,15 @@ fn run_repl_command(
         }
     }
 
-    commands::run(rpc, daemon_client.as_ref(), network, *presentation, source)
+    let enrol = cli.enrol_options()?;
+    commands::run(
+        rpc,
+        daemon_client.as_ref(),
+        &enrol,
+        network,
+        *presentation,
+        source,
+    )
 }
 
 #[cfg(test)]

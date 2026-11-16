@@ -202,6 +202,48 @@ impl View {
     }
 }
 
+/// The words that enrol clients on a node, and this client's own channel
+/// key (`INPUT_GRAMMAR.md` IG-Q87, IG-Q109).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Enrol {
+    /// `rpc client add <fingerprint> --ceiling <word>...`.
+    ClientAdd {
+        fingerprint: String,
+        ceiling: Vec<shekyl_rpc_types::wire::rpc::CeilingWord>,
+    },
+    /// `rpc client set <fingerprint> --ceiling <word>...`.
+    ClientSet {
+        fingerprint: String,
+        ceiling: Vec<shekyl_rpc_types::wire::rpc::CeilingWord>,
+    },
+    /// `rpc client remove <fingerprint>`.
+    ClientRemove { fingerprint: String },
+    /// `rpc client list`.
+    ClientList,
+    /// `rpc bundle show`.
+    BundleShow,
+    /// `rpc key create`: this client's key, for a node on another host.
+    KeyCreate,
+    /// `rpc key show`: this client's fingerprint.
+    KeyShow,
+}
+
+impl Enrol {
+    /// The words, as the person typed them.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::ClientAdd { .. } => "rpc client add",
+            Self::ClientSet { .. } => "rpc client set",
+            Self::ClientRemove { .. } => "rpc client remove",
+            Self::ClientList => "rpc client list",
+            Self::BundleShow => "rpc bundle show",
+            Self::KeyCreate => "rpc key create",
+            Self::KeyShow => "rpc key show",
+        }
+    }
+}
+
 /// A fully-resolved command ready for execution.
 #[derive(Debug)]
 pub enum ResolvedCommand {
@@ -371,6 +413,10 @@ pub enum ResolvedCommand {
     ChainHealth,
     /// A daemon word (`INPUT_GRAMMAR.md` §13). The arguments are typed.
     Daemon(View),
+    /// An enrolment word (IG-Q87) or this client's channel key (IG-Q109),
+    /// reached on its own leg, never the plaintext listener
+    /// (`RPC_CHANNEL.md` §5; [`crate::enrol`]).
+    Enrol(Enrol),
 
     // -- Proofs (WI-RPC-3 surface) --
     GetTxProof {
