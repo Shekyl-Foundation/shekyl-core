@@ -38,6 +38,14 @@ rulings rest on:
 
 ## Registered before the run
 
+*Amended once, 2026-11-15, before any run on the host (the build had
+started, nothing had run). The instrument now writes its files before it
+reads the gates, and a missing subject names the labels the trace does
+carry. A run that fails a gate is still void; its files now show why, so
+a wrong subject name is found from the dry run's files instead of
+needing another run to discover. The host's build is made again from the
+amended commit.*
+
 **Subject, instrument, unit and flush policy: the 2026-10-17
 registration's, unchanged** except where this section says otherwise.
 The instrument is `engine::regtest_e2e::rt_p5`

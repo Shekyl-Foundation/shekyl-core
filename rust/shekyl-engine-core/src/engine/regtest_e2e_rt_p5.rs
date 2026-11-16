@@ -417,8 +417,10 @@ async fn run_cell(cell: &Cell) {
         }
     }
 
-    check_subjects(&messages, &built);
+    // The outputs are written before the gates are read: a gate that fails
+    // voids the run, and the files say why (registration, first amendment).
     write_outputs(&out, cell, &messages, &built, &depth, chain_height);
+    check_subjects(&messages, &built);
 }
 
 /// The gates of the registration that read the messages (rule 47: the
@@ -432,7 +434,11 @@ fn check_subjects(messages: &[Row], built: &[Built]) {
     ] {
         assert!(
             messages.iter().any(|m| m.label == needle),
-            "the trace must carry `{needle}`"
+            "the trace must carry `{needle}`; it carries {:?}",
+            messages
+                .iter()
+                .map(|m| m.label.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
         );
     }
     assert!(
