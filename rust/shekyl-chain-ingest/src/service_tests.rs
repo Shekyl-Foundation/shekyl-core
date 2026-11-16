@@ -502,7 +502,7 @@ async fn a_spend_anchored_on_a_root_its_own_run_writes_lands_with_it() {
     let mut y = Scenario::open("service-run-anchor-y");
     let mut blocks = y.mine(at).await;
     let spend = {
-        let spender = Spender::over(&blocks);
+        let spender = Spender::on(y.network_id(), &blocks);
         spender.spend_coinbase(y.wallet(), h(0), h(at), Family::Main.fee())
     };
     let spending = y

@@ -26,6 +26,20 @@ license.workspace = true
 # check_test_only_features.py) and never depends on the template or the
 # ingest: `MinedBlock` names what it reads off a mined block, so the
 # ingest's `Mined` and a store test's own block implement it alike.
+[features]
+# Seeded building (CHAIN_FORGE.md §5.3, seam T4): `SpendPlan` draws one
+# spend's seeds at a time, `Spender::drawing` builds that spend from them,
+# and `Persona::with_signing_seed` draws the persona's ML-DSA randomness.
+# The spender holds no generator. TEST_ONLY
+# (`scripts/ci/check_test_only_features.py`): forwards the seeded signers
+# and provers it calls; this crate is reached through dev edges only, and
+# no build that ships has any of it.
+seeded-rng = [
+  "shekyl-tx-builder/seeded-rng",
+  "shekyl-crypto-pq/seeded-rng",
+  "dep:rand_chacha",
+]
+
 [dependencies]
 # The network id a spend signs under (NETWORK_IDENTITY.md NI-Q4).
 shekyl-network = { path = "../shekyl-network" }
@@ -55,6 +69,15 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-wire = { path = "../shekyl-wire" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-units = { path = "../shekyl-units" }
+# The seeds a seeded spend draws, wiped on drop (rule 35).
+zeroize = { workspace = true }
+# The planning thread's per-spend seed sequence (`seeded-rng` only).
+rand_chacha = { version = "0.3", optional = true }
+
+[dev-dependencies]
+# This crate's determinism test for the persona's signing seed. A dev edge,
+# so `seeded-rng` stays off every build that ships.
+shekyl-harness-spender = { path = ".", features = ["seeded-rng"] }
 
 [lints]
 workspace = true

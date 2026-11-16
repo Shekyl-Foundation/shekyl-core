@@ -343,6 +343,54 @@ fn test_sign_pqc_length_mismatch() {
     ));
 }
 
+/// Seams T2 and T3 (`CHAIN_FORGE.md` §5.3): one seed signs every input the
+/// same, byte for byte; another seed signs differently; each signature
+/// verifies under the key the production signer derives too; and production
+/// draws ML-DSA's randomness from the OS, so it matches no seed.
+#[test]
+fn seeded_pqc_auths_are_byte_identical_per_seed_and_verify() {
+    use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
+    let mut second = dummy_spend_input(50);
+    second.output_index = 1;
+    let inputs = [dummy_spend_input(100), second];
+    let hashes = [
+        SigningPayloadHash::from_bytes([1u8; 64]),
+        SigningPayloadHash::from_bytes([2u8; 64]),
+    ];
+    let sigs =
+        |auths: &[PqcAuth]| -> Vec<Vec<u8>> { auths.iter().map(|a| a.signature.clone()).collect() };
+    let one = crate::sign_pqc_auths_seeded(&[7u8; 32], &hashes, &inputs).expect("signs");
+    let again = crate::sign_pqc_auths_seeded(&[7u8; 32], &hashes, &inputs).expect("signs");
+    assert_eq!(sigs(&one), sigs(&again), "one seed, one set of signatures");
+    assert_ne!(
+        one[0].signature, one[1].signature,
+        "each input draws its own nonce"
+    );
+    let other = crate::sign_pqc_auths_seeded(&[8u8; 32], &hashes, &inputs).expect("signs");
+    assert_ne!(sigs(&one), sigs(&other), "another seed, other signatures");
+    let production = sign_pqc_auths(&hashes, &inputs).expect("signs");
+    assert_ne!(
+        sigs(&one),
+        sigs(&production),
+        "production draws from the OS"
+    );
+    let network = shekyl_network::Network::Regtest.network_id();
+    for ((auth, made), hash) in one.iter().zip(&production).zip(&hashes) {
+        assert_eq!(
+            auth.public_key, made.public_key,
+            "one key per output, seeded or not"
+        );
+        verify_pqc_auth(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &auth.public_key,
+            &auth.signature,
+            hash,
+            &network,
+        )
+        .expect("a seeded signature verifies");
+    }
+}
+
 // ── Parametric depth tests ────────────────────────────────────────────
 //
 // The c1/c2 split is derived from the FCMP++ tower spec, not observed
