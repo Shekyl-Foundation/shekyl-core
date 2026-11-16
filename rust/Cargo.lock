@@ -5319,6 +5319,7 @@ dependencies = [
  "shekyl-os-account",
  "shekyl-process",
  "shekyl-rpc-channel",
+ "shekyl-rpc-client",
  "shekyl-rpc-grants",
  "shekyl-rpc-rendezvous",
  "shekyl-rpc-stream",

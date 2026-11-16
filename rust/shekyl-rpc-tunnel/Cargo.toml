@@ -41,13 +41,15 @@ tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
-# The end-to-end test (tests/end_to_end.rs): a real service daemon in a
-# child of the test binary, as shekyl-daemon's own tests run one; the CLI's
-# enrolment words, as a library; the spawn lock every launcher takes.
+# The end-to-end test (tests/end_to_end.rs): a real daemon in a child of
+# the test binary, as shekyl-daemon's own tests run one; the owner's calls
+# that enrol the administrator; the CLI's enrolment words, as a library;
+# the spawn lock every launcher takes.
 shekyl-daemon = { path = "../shekyl-daemon" }
 shekyl-cli = { path = "../shekyl-cli" }
 shekyl-spawn = { path = "../shekyl-spawn" }
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 
 [lints]
 workspace = true

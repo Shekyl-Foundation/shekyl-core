@@ -6,13 +6,19 @@
 //! RT-W11 end to end, against a real daemon (Rick, 2026-11-15): enrol,
 //! dial, call, revoke, and a refused call after the revocation.
 //!
-//! A service daemon runs in a child of this test binary, as
-//! `shekyl-daemon`'s own tests run one, listening on the channel on
-//! loopback. Its console key enrols through `shekyl-cli`'s enrolment words
-//! (the library), reaching the node as a CLI on another host does: the
-//! node's bundle in a file and a key file. The tunnel is this crate's
-//! binary. A consumer is a plain HTTP client of the tunnel's loopback
-//! listener.
+//! A daemon runs in a child of this test binary, as `shekyl-daemon`'s own
+//! tests run one, listening on the channel on loopback, with its owner's
+//! leg in a private socket directory. The owner reads the node's bundle
+//! (`rpc bundle show`) and enrols an administrator's key with an `enrol`
+//! ceiling; the administrator then runs `shekyl-cli`'s enrolment words (the
+//! library) as a CLI on another host does: the node's bundle in a file and
+//! its key file. The tunnel is this crate's binary. A consumer is a plain
+//! HTTP client of the tunnel's loopback listener.
+//!
+//! The daemon is not a service: a service never runs as root, and CI runs
+//! its tests as root. A service's console leg, the other way an
+//! administrator reaches the node, is `shekyl-daemon`'s `service_rendezvous`
+//! test, through the same initiator.
 #![cfg(unix)]
 
 use std::fs::File;
@@ -24,8 +30,12 @@ use std::time::{Duration, Instant};
 use shekyl_cli::enrol::{self, EnrolOptions, Remote};
 use shekyl_cli::resolve::Enrol;
 use shekyl_daemon_config::{Network, Platform};
-use shekyl_rpc_rendezvous::ServiceRecord;
-use shekyl_rpc_types::wire::rpc::CeilingWord;
+use shekyl_rpc_client::wire;
+use shekyl_rpc_rendezvous::Instance;
+use shekyl_rpc_transport::local::LocalTarget;
+use shekyl_rpc_types::hash::HashHex;
+use shekyl_rpc_types::kinds::NoParams;
+use shekyl_rpc_types::wire::rpc::{CeilingWord, ClientCeiling};
 
 const CHILD_DIR: &str = "SHEKYL_TEST_TUNNEL_CHILD_DIR";
 const CHILD_LISTEN: &str = "SHEKYL_TEST_TUNNEL_CHILD_LISTEN";
@@ -38,12 +48,12 @@ fn run_child_if_requested() {
     };
     let dir = PathBuf::from(dir);
     let listen = std::env::var(CHILD_LISTEN).expect("the channel listener");
-    let log = dir.join("shekyld.log");
+    let data_dir = dir.join("data");
+    let log = data_dir.join("shekyld.log");
     let args: Vec<std::ffi::OsString> = [
         "shekyld",
         "--network",
         "regtest",
-        "--service",
         "--clearnet",
         "off",
         "--tor",
@@ -52,6 +62,10 @@ fn run_child_if_requested() {
         "none",
         "--rpc-listen",
         &listen,
+        "--data-dir",
+        data_dir.to_str().expect("a UTF-8 path"),
+        "--rpc-socket-dir",
+        socket_dir(&dir).to_str().expect("a UTF-8 path"),
         "--log-file",
         log.to_str().expect("a UTF-8 path"),
     ]
@@ -61,10 +75,10 @@ fn run_child_if_requested() {
     let status = shekyl_daemon::run::main(
         &args,
         &Platform {
-            home: Some(dir.clone()),
-            service_parent: Some(dir.clone()),
+            home: Some(dir),
+            service_parent: None,
             session_dir: None,
-            service_rendezvous: Some(dir.join("run")),
+            service_rendezvous: None,
         },
     );
     std::process::exit(status);
@@ -77,18 +91,23 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// The service's directory: the data home 0700, the rendezvous 0755.
+/// The private socket directory a harness names (`rpc-socket-dir`). Named
+/// `s`: under macOS's per-user temporary directory a longer name leaves the
+/// socket's path over the 104-byte limit.
+fn socket_dir(dir: &Path) -> PathBuf {
+    dir.join("s")
+}
+
+/// The test's directory and its socket directory, each 0700.
 fn workdir() -> tempfile::TempDir {
-    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let dir = tempfile::tempdir().expect("a directory");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("the test's directory");
     std::fs::DirBuilder::new()
         .mode(0o700)
-        .create(dir.path().join("shekyl"))
-        .expect("the data home");
-    std::fs::DirBuilder::new()
-        .mode(0o755)
-        .create(dir.path().join("run"))
-        .expect("the rendezvous directory");
+        .create(socket_dir(dir.path()))
+        .expect("the socket directory");
     dir
 }
 
@@ -126,24 +145,23 @@ fn spawn(what: &'static str, mut command: Command, stderr: PathBuf) -> Running {
     }
 }
 
-/// The record the service publishes, once whole.
-fn wait_for_record(service: &mut Running, dir: &Path) -> ServiceRecord {
+/// The owner's leg, once the daemon answers on it, and the node's bundle as
+/// `rpc bundle show` prints it.
+fn wait_for_owner(daemon: &mut Running, dir: &Path) -> (LocalTarget, String) {
+    let owner = LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(&socket_dir(dir)))
+        .expect("a named directory");
     let deadline = Instant::now() + READY;
     while Instant::now() < deadline {
-        if let Some(status) = service.child.try_wait().expect("the child") {
-            panic!("the {} ended: {status}\n{}", service.what, service.stderr());
+        if let Some(status) = daemon.child.try_wait().expect("the child") {
+            panic!("the {} ended: {status}\n{}", daemon.what, daemon.stderr());
         }
-        let found = std::fs::read_dir(dir.join("run"))
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .find_map(|entry| ServiceRecord::parse(&std::fs::read(entry.path()).ok()?));
-        if let Some(record) = found {
-            return record;
+        if let Ok(bundle) = owner.call::<wire::RpcBundleShow>(&NoParams) {
+            let text = shekyl_rpc_transport::channel::bundle_text(&bundle.bundle.0);
+            return (owner, text);
         }
         std::thread::sleep(POLL);
     }
-    panic!("no rendezvous\n{}", service.stderr());
+    panic!("the owner's leg never answered\n{}", daemon.stderr());
 }
 
 /// One JSON-RPC call through the tunnel's loopback listener, as a plain
@@ -175,8 +193,8 @@ fn consumer_call(listen: &str, method: &str) -> (u16, String) {
 }
 
 /// **Enrol, dial, call, revoke, and a refused call after the revocation**
-/// (RT-W11, against a real daemon). The console enrols the tunnel's key
-/// with `rpc client add` over the channel; the tunnel reports its grant and
+/// (RT-W11, against a real daemon). An administrator the owner enrolled
+/// enrols the tunnel's key with `rpc client add` over the channel; the tunnel reports its grant and
 /// serves a consumer's call; `rpc client remove` revokes it; the next call
 /// is refused, the tunnel exits naming the revocation, and `rpc client
 /// list` no longer lists it. A second tunnel ends cleanly on SIGTERM, as a
@@ -192,38 +210,37 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
     run_child_if_requested();
     let dir = workdir();
     let channel_listen = format!("127.0.0.1:{}", free_port());
-    let mut service = {
+    let mut daemon = {
         let mut command = Command::new(std::env::current_exe().expect("this test binary"));
         command
             .args(["--exact", NAME, "--nocapture"])
             .env(CHILD_DIR, dir.path())
             .env(CHILD_LISTEN, &channel_listen)
             .stdout(Stdio::null());
-        spawn("service", command, dir.path().join("service.stderr"))
+        spawn("daemon", command, dir.path().join("daemon.stderr"))
     };
-    let record = wait_for_record(&mut service, dir.path());
-
-    // The CLI as the console, on another host's terms: the bundle in a
-    // file, the console key as its key file.
+    let (owner, bundle) = wait_for_owner(&mut daemon, dir.path());
     let bundle_file = dir.path().join("node.bundle");
-    std::fs::write(
-        &bundle_file,
-        shekyl_rpc_transport::channel::bundle_text(&record.bundle),
-    )
-    .unwrap();
-    let console = EnrolOptions {
+    std::fs::write(&bundle_file, bundle).unwrap();
+
+    // The CLI as an administrator on another host: the bundle in a file,
+    // its own key (`rpc key create`), which the owner enrols to enrol.
+    let cli = EnrolOptions {
         network: Network::Regtest,
         remote: Some(Remote {
-            endpoint: record.channel.to_string(),
+            endpoint: channel_listen.clone(),
             socks: None,
             bundle_file: bundle_file.clone(),
         }),
-        key_file: dir
-            .path()
-            .join("shekyl")
-            .join("regtest")
-            .join(shekyl_rpc_rendezvous::CONSOLE_KEY_FILE),
+        key_file: dir.path().join("admin.key"),
     };
+    let admin = enrol::run(&cli, &Enrol::KeyCreate).expect("rpc key create");
+    owner
+        .call::<wire::RpcClientAdd>(&ClientCeiling {
+            fingerprint: HashHex::from_hex(&admin).expect("a fingerprint"),
+            ceiling: vec![CeilingWord::Enrol, CeilingWord::View],
+        })
+        .expect("the owner enrols the administrator");
 
     // The tunnel's key.
     let tunnel = env!("CARGO_BIN_EXE_shekyl-rpc-tunnel");
@@ -239,14 +256,14 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
 
     // Enrol.
     enrol::run(
-        &console,
+        &cli,
         &Enrol::ClientAdd {
             fingerprint: fingerprint.clone(),
             ceiling: vec![CeilingWord::View],
         },
     )
     .expect("rpc client add");
-    let listed = enrol::run(&console, &Enrol::ClientList).expect("rpc client list");
+    let listed = enrol::run(&cli, &Enrol::ClientList).expect("rpc client list");
     assert!(listed.contains(&fingerprint), "{listed}");
 
     // Dial: the tunnel reports its grant and listens.
@@ -255,7 +272,7 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
         let mut command = Command::new(tunnel);
         command
             .args(["--network", "regtest", "--daemon-endpoint"])
-            .arg(record.channel.to_string())
+            .arg(&channel_listen)
             .arg("--daemon-bundle-file")
             .arg(&bundle_file)
             .arg("--rpc-key-file")
@@ -300,7 +317,7 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
         let mut command = Command::new(tunnel);
         command
             .args(["--network", "regtest", "--daemon-endpoint"])
-            .arg(record.channel.to_string())
+            .arg(&channel_listen)
             .arg("--daemon-bundle-file")
             .arg(&bundle_file)
             .arg("--rpc-key-file")
@@ -339,7 +356,7 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
 
     // Revoke.
     enrol::run(
-        &console,
+        &cli,
         &Enrol::ClientRemove {
             fingerprint: fingerprint.clone(),
         },
@@ -376,6 +393,6 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
         "{}",
         tunnel_run.stderr()
     );
-    let listed = enrol::run(&console, &Enrol::ClientList).expect("rpc client list");
+    let listed = enrol::run(&cli, &Enrol::ClientList).expect("rpc client list");
     assert!(!listed.contains(&fingerprint), "{listed}");
 }
