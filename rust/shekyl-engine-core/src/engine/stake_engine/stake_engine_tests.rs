@@ -108,7 +108,7 @@ async fn active_persona_payment_destination_is_recovered_by_p_dual_scan() {
     let amount = 50_000u64;
     let output_index = 7u64;
     let constructed = construct_output(
-        &[0x5Au8; 32],
+        &shekyl_crypto_pq::TxKey::seeded([0x5Au8; 32]),
         &x25519_pk,
         destination.ml_kem_ek(),
         destination.spend_pk().as_canonical_bytes(),
@@ -175,11 +175,11 @@ fn p_source_secrets_bundle_byte_identical_against_scan_chain() {
     use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
 
     let keys = derive_bundle(0);
-    let tx_key_secret = [0x5Au8; 32];
+    let tx_key = shekyl_crypto_pq::TxKey::seeded([0x5Au8; 32]);
 
     for output_index in [0u64, 1, 7, 255, 1_000_000] {
         let constructed = construct_output(
-            &tx_key_secret,
+            &tx_key,
             &keys.x25519_pk,
             &keys.ml_kem_ek,
             keys.spend_pk.as_canonical_bytes(),
@@ -1346,7 +1346,6 @@ mod emission_claim_assembly {
     use shekyl_tx_builder::{LeafEntry, SpendInput};
     use shekyl_types::BlockHeight;
     use shekyl_wire::{Ct, Transaction};
-    use zeroize::Zeroizing;
 
     use crate::engine::backing_set::{BackingSet, ClaimOperands, MembershipPath};
     use crate::engine::bond_assembly::SpentRecordsDurablyPruned;
@@ -1522,7 +1521,7 @@ mod emission_claim_assembly {
                 // construction; the gate has its own boundary test in
                 // `emission_claim.rs`).
                 fee_floor: 0,
-                tx_key: TxKeyDraw::Fresh,
+                tx_key: shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
             })
             .await
             .expect("emission-claim assembly completes end-to-end");
@@ -1737,16 +1736,17 @@ mod emission_claim_assembly {
             .await
             .expect("slot 0 held");
         let shape = DifferentialShape::build();
-        let tx_key = Zeroizing::new([0x5cu8; 32]);
+        // One key, pinned, so the two assemblies share it.
+        const TX_KEY: [u8; 32] = [0x5cu8; 32];
 
-        // The handler's claim, drawing the fixed key.
+        // The handler's claim, under the pinned key.
         let reply = handle
             .assemble_emission_claim(AssembleEmissionClaim {
                 handle: h,
                 operands: shape.operands(),
                 tree_ctx: shape.tree_ctx.clone(),
                 fee_floor: 0,
-                tx_key: TxKeyDraw::Fixed(tx_key.clone()),
+                tx_key: shekyl_crypto_pq::TxKey::seeded(TX_KEY),
             })
             .await
             .expect("the handler assembles the differential's claim");
@@ -1761,7 +1761,7 @@ mod emission_claim_assembly {
         assert_eq!(claims.total_reward, reply.total_reward);
         let drivers = assemble_emission_claim(
             &shape.keys,
-            &tx_key,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY),
             vec![shape.spend_input(&shape.fee_record)],
             shape.spend_input(&shape.backing_record),
             ClaimTerms {

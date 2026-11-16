@@ -33,18 +33,28 @@ sha2 = "0.10"
 # `Transaction` and the coinbase `tx_extra` grammar's one constructor
 # (`build_coinbase_extra`). Already in the rules crate's closure.
 shekyl-wire = { path = "../shekyl-wire" }
-# `b·G` for the spend public key and `r·G` for the tx public key, and the
-# X25519 half of the KEM target as `shekyl-crypto-pq`'s own test keygen
+# `b·G` for the spend public key, and the X25519 half of the KEM target as `shekyl-crypto-pq`'s own test keygen
 # derives it (`keypair_generate`: raw scalar times basepoint). The `zeroize`
 # feature gives `Scalar` its `Zeroize` impl (rule 35). Already in the rules
 # crate's closure.
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 zeroize = { workspace = true }
 
+[features]
+# TEST_ONLY (check_test_only_features.py): the fixture coinbase
+# (`coinbase.rs`), whose transaction key is pinned per height through
+# `shekyl-crypto-pq`'s own TEST_ONLY `seeded-rng`. Forwarded by the rules
+# crate's TEST_ONLY `harness` feature and the spender's `seeded-rng`, and
+# enabled on the test crates' dev edges; no normal edge names it.
+seeded-rng = ["shekyl-crypto-pq/seeded-rng"]
+
 [dev-dependencies]
 # The wallet's payment-address decoder, which the public seed's regtest
 # address must be refused by on every other network (`HARNESS_SEED`).
 shekyl-address = { path = "../shekyl-address" }
+# This crate's own tests build the coinbase (`seeded-rng`); a dev edge, so
+# the feature reaches no build a consumer's normal edge makes.
+shekyl-harness-wallet = { path = ".", features = ["seeded-rng"] }
 
 [lints]
 workspace = true

@@ -3136,7 +3136,6 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_economics::{ClosedShardCount, EconomicParams, EmissionError, TxVolume};
     use shekyl_types::{BlockCount, BlockHeight, SectionRoot, Timestamp};
     use shekyl_wire::{Block, Transaction};
-    use zeroize::Zeroizing;
 
     let daemon =
         RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
@@ -3263,7 +3262,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             },
             params: &params,
             miner: &miner,
-            tx_key_secret: Zeroizing::new([0x42; 32]),
+            tx_key: &shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
             extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
             draw_commitment,
             listed,

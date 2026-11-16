@@ -1109,9 +1109,9 @@ mod tests {
         w.tx_meta.tx_keys.insert(
             txid,
             crate::tx_meta_block::TxSecretKeys {
-                primary: crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new(
-                    [0x5A; 32],
-                )),
+                primary: crate::tx_meta_block::TxSecretKey::new(
+                    shekyl_crypto_pq::TxKey::seeded([0x5A; 32]).store(),
+                ),
             },
         );
     }
@@ -1217,12 +1217,16 @@ mod tests {
         let mut w = WalletLedger::empty();
         w.record_retained_tx_key(
             txid,
-            crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new([0x5A; 32])),
+            crate::tx_meta_block::TxSecretKey::new(
+                shekyl_crypto_pq::TxKey::seeded([0x5A; 32]).store(),
+            ),
         );
         w.check_invariants().expect("record is I-2-atomic");
         w.record_retained_tx_key(
             txid,
-            crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new([0x5B; 32])),
+            crate::tx_meta_block::TxSecretKey::new(
+                shekyl_crypto_pq::TxKey::seeded([0x5B; 32]).store(),
+            ),
         );
         assert_eq!(
             w.sync_state.pending_tx_hashes,
@@ -1475,7 +1479,9 @@ mod tests {
         let mut w = WalletLedger::empty();
         w.record_retained_tx_key(
             txid,
-            crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new([0x5C; 32])),
+            crate::tx_meta_block::TxSecretKey::new(
+                shekyl_crypto_pq::TxKey::seeded([0x5C; 32]).store(),
+            ),
         );
         w.record_dispatched_send(txid, 0, Vec::new(), Vec::new(), vec![0xAA]);
         assert!(w.send_journal.rows.contains_key(&txid));

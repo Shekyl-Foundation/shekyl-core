@@ -443,7 +443,7 @@ mod check_workflows {
             .enumerate()
             .map(|(i, &amount)| {
                 construct_output(
-                    &TX_KEY_SECRET,
+                    &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
                     &keys.x25519_pk,
                     &keys.ml_kem_ek,
                     keys.spend_pk.as_canonical_bytes(),
@@ -657,7 +657,7 @@ mod check_workflows {
         // after vout discovery.
         let bytes = generate_outbound_proof(
             &fx.address.network.network_id(),
-            &TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &canonical_address_bytes(&fx.address),
             MSG.as_bytes(),
@@ -1137,15 +1137,19 @@ mod check_workflows {
             .expect("fixture tx fetches");
         let on_chain = on_chain_outputs_of(&fetched.tx).expect("outputs project");
 
-        let discovered =
-            discover_recipient_outputs(&TX_KEY_SECRET, &keys.x25519_pk, &keys.ml_kem_ek, &on_chain);
+        let discovered = discover_recipient_outputs(
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
+            &keys.x25519_pk,
+            &keys.ml_kem_ek,
+            &on_chain,
+        );
         let vouts: Vec<u64> = discovered.iter().map(|(i, _)| *i).collect();
         assert_eq!(vouts, vec![0, 1], "both fixture outputs pay the wallet");
 
         let address_bytes = canonical_address_bytes(&fx.address);
         let with_secrets = generate_outbound_proof_with_secrets(
             &shekyl_network::HARNESS_NETWORK_ID,
-            &TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &address_bytes,
             MSG.as_bytes(),
@@ -1154,7 +1158,7 @@ mod check_workflows {
         .expect("with-secrets generation succeeds");
         let rederived = generate_outbound_proof(
             &shekyl_network::HARNESS_NETWORK_ID,
-            &TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &address_bytes,
             MSG.as_bytes(),

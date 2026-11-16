@@ -96,18 +96,12 @@ use shekyl_crypto_pq::{
     },
     leaf_commitment::PQC_LEAF_ENTRY_LEN,
     output::construct_output,
+    TxKey,
 };
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
 use crate::{extra::Extra, view_pair::ViewPair, ScannableBlock};
 use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot, TxHash};
-
-/// Fixed per-transaction key for deterministic fixture construction.
-/// Real transactions use a fresh random `tx_key`; here we pin a
-/// constant so identical bench runs produce byte-identical
-/// transactions (modulo the wallet keypair, which is generated per
-/// call to [`make_bench_wallet`]).
-const BENCH_TX_KEY: [u8; 32] = [0x42; 32];
 
 /// Fixed per-output amount; arbitrary positive value (the bench is
 /// invariant to the specific amount thanks to constant-time amount
@@ -266,10 +260,13 @@ fn assemble_scannable_block(
     let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut per_output_kem_cts: Vec<Vec<u8>> = Vec::with_capacity(n_outputs);
     let mut leaf_entries: Vec<u8> = Vec::with_capacity(n_outputs * PQC_LEAF_ENTRY_LEN);
+    // A fresh key, as a real transaction has: the wallet keypair is drawn
+    // per call too, so no two fixture blocks were ever byte-identical.
+    let tx_key = TxKey::random().expect("the OS draws a key");
 
     for output_index in 0..n_outputs {
         let out = construct_output(
-            &BENCH_TX_KEY,
+            &tx_key,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             recipient_spend_pub,
@@ -318,8 +315,7 @@ fn assemble_scannable_block(
     // packing mismatch") stayed invisible to the bench sanity tests.
     // The scanner re-parses the byte slice via `Extra::read` at scan
     // time, mirroring the production daemon → scanner path.
-    let tx_pubkey = Scalar::from_bytes_mod_order(BENCH_TX_KEY) * ED25519_BASEPOINT_POINT;
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, per_output_kem_cts);
+    let mut extra = Extra::for_hybrid_transfer(tx_key.public(), per_output_kem_cts);
     extra.push_pqc_leaf_entries(leaf_entries);
     let extra_serialized = extra.serialize();
 
@@ -534,7 +530,7 @@ mod tests {
     /// per-output `OutputData` after writing it into the wire fields).
     fn first_output_data(recipient_pk: &HybridKemPublicKey) -> OutputData {
         construct_output(
-            &BENCH_TX_KEY,
+            &TxKey::random().expect("the OS draws a key"),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &fake_spend_key_bytes(),

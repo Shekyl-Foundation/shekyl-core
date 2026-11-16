@@ -23,6 +23,10 @@ impl From<ProofsError> for WalletRpcError {
                 WalletRpcError::ProofMalformed
             }
             ProofsError::TxSecretUnavailable => WalletRpcError::ProofTxSecretUnavailable,
+            ProofsError::TxSecretUnreadable(detail) => {
+                tracing::warn!(detail = %detail, "retained tx secret does not open");
+                WalletRpcError::InternalError("retained tx secret does not open".into())
+            }
             ProofsError::NoProvableOutputs(detail) => {
                 tracing::info!(detail = %detail, "proof request had no provable outputs");
                 WalletRpcError::ProofNoProvableOutputs
@@ -102,6 +106,12 @@ mod tests {
             ),
             (
                 ProofsError::Key("x".into()),
+                WalletRpcErrorCode::InternalError,
+            ),
+            (
+                ProofsError::TxSecretUnreadable(
+                    shekyl_crypto_pq::tx_key::StoredKeyError::NotCanonical,
+                ),
                 WalletRpcErrorCode::InternalError,
             ),
         ];

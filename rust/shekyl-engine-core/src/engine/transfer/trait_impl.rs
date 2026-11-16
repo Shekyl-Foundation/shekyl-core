@@ -479,9 +479,7 @@ where
                     AtomicUnits::ZERO,
                 )
                 .expect("empty fingerprint is constructible"),
-                tx_key_secret: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
-                    [0u8; 32],
-                )),
+                tx_key: shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
             },
         );
     }

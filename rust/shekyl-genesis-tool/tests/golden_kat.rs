@@ -15,9 +15,10 @@
 use sha2::{Digest, Sha256};
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::account_from_seed;
+use shekyl_crypto_pq::TxKey;
 use shekyl_genesis_tool::builder::{build_genesis_tx, genesis_block, GENESIS_DRAW_COMMITMENT};
 use shekyl_genesis_tool::recipients::{parse_and_validate, Recipient};
-use shekyl_genesis_tool::txkey::{derive_genesis_tx_secret, tx_pubkey};
+use shekyl_genesis_tool::txkey::genesis_tx_key;
 use shekyl_network::GenesisTimestamp;
 use shekyl_wire::tx_extra::{
     self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, PQC_LEAF_ENTRY_LEN,
@@ -76,8 +77,7 @@ fn fixture_recipients() -> Vec<Recipient> {
 fn golden_kat() {
     let recipients = fixture_recipients();
 
-    let tx_secret = derive_genesis_tx_secret(Network::Testnet, &recipients);
-    let tx_pub = tx_pubkey(&tx_secret);
+    let tx_pub = genesis_tx_key(Network::Testnet, &recipients).public_bytes();
 
     let built = build_genesis_tx(Network::Testnet, &recipients).expect("build");
     let blob = built.tx.serialize();
@@ -86,14 +86,25 @@ fn golden_kat() {
     let block = genesis_block(built.tx, mint).expect("block");
 
     // Capture aid: on any mismatch the actual values are printed here.
-    eprintln!("tx_secret      = {}", hex::encode(tx_secret));
     eprintln!("tx_pub         = {}", hex::encode(tx_pub));
     eprintln!("blob_len       = {}", blob.len());
     eprintln!("blob_sha256    = {blob_sha256}");
     eprintln!("tx_hash        = {}", hex::encode(built.tx_hash));
     eprintln!("block_id       = {}", hex::encode(block.hash()));
 
-    assert_eq!(hex::encode(tx_secret), KAT_TX_SECRET_HEX, "tx secret drift");
+    // The derived key's scalar is the pinned one: `R = r·G` is one-to-one
+    // on canonical scalars, so the key whose scalar is the pinned bytes has
+    // the derived point exactly when the two scalars are one. The key hands
+    // out no bytes (R-21), so the secret is held through its point.
+    let pinned: [u8; 32] = hex::decode(KAT_TX_SECRET_HEX)
+        .expect("hex")
+        .try_into()
+        .expect("32 bytes");
+    assert_eq!(
+        TxKey::seeded(pinned).public_bytes(),
+        tx_pub,
+        "tx secret drift"
+    );
     assert_eq!(hex::encode(tx_pub), KAT_TX_PUB_HEX, "tx pubkey drift");
     assert_eq!(blob.len(), KAT_BLOB_LEN, "serialized length drift");
     assert_eq!(blob_sha256, KAT_BLOB_SHA256_HEX, "serialized bytes drift");
@@ -110,9 +121,9 @@ fn golden_kat() {
 #[test]
 fn txkey_domain_separation_by_network() {
     let recipients = fixture_recipients();
-    let testnet = derive_genesis_tx_secret(Network::Testnet, &recipients);
-    let mainnet = derive_genesis_tx_secret(Network::Mainnet, &recipients);
-    let stagenet = derive_genesis_tx_secret(Network::Stagenet, &recipients);
+    let testnet = genesis_tx_key(Network::Testnet, &recipients).public_bytes();
+    let mainnet = genesis_tx_key(Network::Mainnet, &recipients).public_bytes();
+    let stagenet = genesis_tx_key(Network::Stagenet, &recipients).public_bytes();
     assert_ne!(testnet, mainnet);
     assert_ne!(testnet, stagenet);
     assert_ne!(mainnet, stagenet);
@@ -128,8 +139,7 @@ fn txkey_domain_separation_by_network() {
 #[test]
 fn extra_is_canonical_fixed_point() {
     let recipients = fixture_recipients();
-    let tx_secret = derive_genesis_tx_secret(Network::Testnet, &recipients);
-    let tx_pub = tx_pubkey(&tx_secret);
+    let tx_pub = genesis_tx_key(Network::Testnet, &recipients).public_bytes();
     let built = build_genesis_tx(Network::Testnet, &recipients).expect("build");
 
     let extra = &built.tx.prefix.extra;

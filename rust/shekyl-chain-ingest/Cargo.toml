@@ -289,7 +289,7 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # with; the store's tests take the same two edges (the wallet's already,
 # the spender's with its fixture migration), which is why the spender is
 # a crate and not this crate's module.
-shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet", features = ["seeded-rng"] }
 # `seeded-rng` (TEST_ONLY): the seeded spender's determinism test
 # (`scenario_spend_tests`), the full signing stack's seams T1–T4 through one
 # real chain (CHAIN_FORGE.md §5.3).
@@ -307,10 +307,12 @@ shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # The persona's keys (`derive_archival_p_keys`) and the emission claim's
 # assembly (`emission_assembly.rs`, also behind `harness` above).
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# `seeded-rng`: the transaction keys the driver and its tests pin
+# (`TxKey::seeded`, R-21).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
-# The driver's coinbase secret is a `Zeroizing<[u8; 32]>`, the type
-# `TemplateContext` takes (rule 35).
+# The tests' witness seeds are `Zeroizing` cells, as the ring holds them
+# (rule 35).
 zeroize = { workspace = true }
 # The emission claim's assembly (`emission_assembly.rs`): the production
 # tx-builder signs it and `open_spend` encodes it. Also behind `harness` above.

@@ -89,7 +89,7 @@ pub(crate) fn constructed_record_with_entry(
     lineage: MintLineageOutput,
 ) -> (PFundingOutputRecord, LeafEntry, [u8; 64]) {
     let constructed = construct_output(
-        &FIXTURE_TX_KEY,
+        &shekyl_crypto_pq::TxKey::seeded(FIXTURE_TX_KEY),
         &keys.x25519_pk,
         &keys.ml_kem_ek,
         keys.spend_pk.as_canonical_bytes(),

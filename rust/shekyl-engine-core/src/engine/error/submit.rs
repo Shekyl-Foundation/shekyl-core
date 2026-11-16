@@ -444,6 +444,9 @@ impl From<KeyEngineError> for SignerError {
             KeyEngineError::Proof(_) => Self::RemoteFailure {
                 reason: "proof generation failure",
             },
+            KeyEngineError::Randomness(_) => Self::RemoteFailure {
+                reason: "the OS random source failed",
+            },
         }
     }
 }

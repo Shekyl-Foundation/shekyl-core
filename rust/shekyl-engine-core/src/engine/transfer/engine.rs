@@ -868,10 +868,7 @@ where
         // per-tx secret rides into `consumer_held` alongside the bytes
         // (persisted at submit-ACCEPTED, wiped with the entry on
         // discard). Destructure once; the secret moves, never copies.
-        let SignedTransfer {
-            tx_bytes,
-            tx_key_secret,
-        } = signed;
+        let SignedTransfer { tx_bytes, tx_key } = signed;
         let mut state = self.state.lock().map_err(|_| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
@@ -945,7 +942,7 @@ where
                         // A fresh build is generation 0; re-anchor bumps it (§4).
                         content_gen: 0,
                         fingerprint,
-                        tx_key_secret,
+                        tx_key,
                     },
                 );
                 Ok(())
@@ -1228,10 +1225,7 @@ where
             // so the swap below replaces the entry's held secret too;
             // the superseded secret zeroizes on drop. A `continue`
             // retry drops this pair the same way — no residue.
-            let SignedTransfer {
-                tx_bytes,
-                tx_key_secret,
-            } = signed;
+            let SignedTransfer { tx_bytes, tx_key } = signed;
             // Checked + single-sourced with the fresh-build path (§4 F-G); the
             // fee-coverage check above guarantees this succeeds here.
             let new_fingerprint =
@@ -1301,7 +1295,7 @@ where
             };
 
             entry.tx_bytes = tx_bytes;
-            entry.tx_key_secret = tx_key_secret;
+            entry.tx_key = tx_key;
             entry.reference = reference;
             entry.fingerprint = new_fingerprint;
             entry.content_gen = content_gen;
@@ -1456,9 +1450,7 @@ where
                 fee: wire_fee(&held.tx_bytes),
                 tx_bytes: held.tx_bytes.clone(),
                 selected,
-                retained: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
-                    *held.tx_key_secret.as_bytes(),
-                )),
+                retained: shekyl_engine_state::TxSecretKey::new(held.tx_key.store()),
                 recipients: held
                     .request
                     .recipients

@@ -29,9 +29,11 @@
 //! # Secret handling
 //!
 //! Tx secret keys are 32-byte canonical scalars that must never leak. They
-//! are wrapped in [`TxSecretKey`], which holds a [`Zeroizing<[u8; 32]>`] and
-//! serializes via the airtight [`zeroizing_bytes_32`] helper — deserialization
-//! never leaves a copy of the scalar in un-zeroed heap memory. The wrapper
+//! are held as [`TxSecretKey`], the record's name for
+//! [`shekyl_crypto_pq::tx_key::StoredTxKey`]: the stored form of a
+//! transaction key, made and opened only in `shekyl-crypto-pq` (R-21). It
+//! serializes as its 32 bytes and deserializes straight into its wiped heap
+//! cell, so no copy of the scalar is left in un-zeroed memory. The wrapper
 //! implements a redacted [`fmt::Debug`] (`"TxSecretKey(<redacted>)"`) so an
 //! accidental `{:?}` on a `TxMetaBlock` does not spill the scalar to logs.
 //!
@@ -45,16 +47,14 @@
 //! just round-trips whatever the orchestrator hands it; the pruning policy
 //! itself lands in a later commit (tracked as follow-up in the 2f plan
 //! entry).
-//!
-//! [`zeroizing_bytes_32`]: crate::serde_helpers::zeroizing_bytes_32
 
 use core::fmt;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
+use shekyl_crypto_pq::tx_key::StoredTxKey;
 
-use crate::{error::WalletLedgerError, serde_helpers::zeroizing_bytes_32};
+use crate::error::WalletLedgerError;
 
 /// Schema version of the tx-meta block. V3.0 ships version `3`.
 /// Any field addition / removal / renaming inside the block bumps this;
@@ -176,23 +176,23 @@ pub enum SetTxNoteOutcome {
     },
 }
 
-/// A single 32-byte tx secret scalar, wrapped so both its in-memory
-/// representation and its deserialization path zeroize on drop.
+/// A transaction's key as the wallet keeps it for later OUTBOUND proofs: a
+/// [`StoredTxKey`], made by `TxKey::store` and opened only by
+/// `TxKey::open` (`shekyl-crypto-pq`, R-21). This crate never sees the bytes.
 ///
 /// The wrapper deliberately does **not** implement [`Clone`] — duplicating
-/// a secret into a second heap cell is a secret-handling anti-pattern, and
-/// every caller that legitimately needs two copies can re-serialize. It
+/// a secret into a second heap cell is a secret-handling anti-pattern. It
 /// also implements a redacted [`fmt::Debug`] so logs and panic messages
 /// never contain the raw scalar.
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
-pub struct TxSecretKey(#[serde(with = "zeroizing_bytes_32")] pub Zeroizing<[u8; 32]>);
+pub struct TxSecretKey(StoredTxKey);
 
 // ── `postcard-schema` support (see transfer.rs for the broader design). ──
 //
-// `#[serde(with = "zeroizing_bytes_32")]` makes the wire `NewtypeStruct(
-// length-prefixed-bytes)`; postcard-schema's derive cannot see through
-// `serde(with)`, so we delegate via a mirror newtype whose field is
-// `Vec<u8>` (wire-identical to what `zeroizing_bytes_32` emits). The outer
+// The wire is `NewtypeStruct(length-prefixed-bytes)`: the stored key
+// serializes as its bytes (`StoredTxKey`'s own impl). postcard-schema's
+// derive cannot see into a foreign type's hand-written impl, so we delegate
+// via a mirror newtype whose field is `Vec<u8>` (wire-identical). The outer
 // name is restored to `TxSecretKey` so the snapshot matches the public API.
 #[derive(postcard_schema::Schema)]
 #[allow(dead_code)]
@@ -207,14 +207,13 @@ impl postcard_schema::Schema for TxSecretKey {
 }
 
 impl TxSecretKey {
-    /// Construct from a freshly-allocated `Zeroizing` buffer.
-    pub fn new(bytes: Zeroizing<[u8; 32]>) -> Self {
-        Self(bytes)
+    /// The record of a stored key (`TxKey::store`).
+    pub fn new(stored: StoredTxKey) -> Self {
+        Self(stored)
     }
 
-    /// Borrow the inner bytes. Callers must treat the returned slice as a
-    /// secret and avoid copying it into non-zeroizing containers.
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    /// The stored key, for `TxKey::open`.
+    pub fn stored(&self) -> &StoredTxKey {
         &self.0
     }
 }
@@ -222,12 +221,6 @@ impl TxSecretKey {
 impl fmt::Debug for TxSecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TxSecretKey(<redacted>)")
-    }
-}
-
-impl Zeroize for TxSecretKey {
-    fn zeroize(&mut self) {
-        self.0.zeroize();
     }
 }
 
@@ -475,6 +468,7 @@ impl TxMetaBlock {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use shekyl_crypto_pq::TxKey;
 
     fn key(a: u8, b: u8) -> [u8; 32] {
         let mut k = [0u8; 32];
@@ -487,7 +481,7 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[0] = a;
         bytes[31] = a ^ 0xAA;
-        TxSecretKey::new(Zeroizing::new(bytes))
+        TxSecretKey::new(TxKey::seeded(bytes).store())
     }
 
     fn populated() -> TxMetaBlock {
@@ -676,12 +670,17 @@ mod tests {
 
     #[test]
     fn tx_secret_key_roundtrips_via_postcard() {
-        // Sanity check at the leaf level that a lone TxSecretKey makes it
-        // through the airtight zeroizing helper intact.
-        let sk = secret(0x77);
+        // A lone TxSecretKey is its 32 bytes behind a length prefix (the
+        // record's shape), reads back equal, and opens to the same key.
+        let key = TxKey::seeded([0x77; 32]);
+        let sk = TxSecretKey::new(key.store());
         let bytes = postcard::to_allocvec(&sk).expect("serialize");
+        assert_eq!(bytes.len(), 1 + shekyl_crypto_pq::tx_key::TX_KEY_LEN);
+        assert_eq!(usize::from(bytes[0]), shekyl_crypto_pq::tx_key::TX_KEY_LEN);
         let back: TxSecretKey = postcard::from_bytes(&bytes).expect("deserialize");
-        assert_eq!(sk.as_bytes(), back.as_bytes());
+        assert_eq!(sk, back);
+        let opened = TxKey::open(back.stored()).expect("a stored key opens");
+        assert_eq!(opened.public(), key.public());
     }
 
     proptest! {

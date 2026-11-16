@@ -41,6 +41,7 @@ use shekyl_crypto_pq::kem::{
     SharedSecret, ML_KEM_768_CT_LEN,
 };
 use shekyl_crypto_pq::output::{construct_output, recover_combined_ss, scan_output_recover};
+use shekyl_crypto_pq::TxKey;
 
 fn random_keypair() -> (HybridKemPublicKey, HybridKemSecretKey) {
     HybridX25519MlKem
@@ -69,7 +70,7 @@ fn encap_decap_byte_identical_combined_ss() {
 fn scan_output_recover_prefix_byte_identical() {
     let (recipient_pk, recipient_sk) = random_keypair();
 
-    let tx_key = Scalar::random(&mut rand::rngs::OsRng).to_bytes();
+    let tx_key = TxKey::random().expect("the OS draws a key");
     let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
         .compress()
         .to_bytes();
@@ -121,7 +122,7 @@ fn scan_output_recover_prefix_byte_identical() {
 #[test]
 fn distinct_outputs_yield_distinct_combined_ss() {
     let (recipient_pk, recipient_sk) = random_keypair();
-    let tx_key = Scalar::random(&mut rand::rngs::OsRng).to_bytes();
+    let tx_key = TxKey::random().expect("the OS draws a key");
     let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
         .compress()
         .to_bytes();

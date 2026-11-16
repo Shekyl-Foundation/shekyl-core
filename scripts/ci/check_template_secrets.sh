@@ -9,7 +9,8 @@
 #
 # The tip follower builds the node's one block template
 # (rust/shekyl-chain-ingest/src/template.rs). Its coinbase transaction
-# secret is OS-random per template and its draw commitment is the witness
+# key is OS-random per template (`TxKey::random`, shekyl-crypto-pq's one
+# mint, R-21) and its draw commitment is the witness
 # ring's (`WitnessRing::draw`: a witness key and seed from the OS, kept
 # for the bundle producer, SO-D12 increment 4c). The scenario driver, a
 # test instrument, builds
@@ -21,8 +22,8 @@
 #   1. the production code of the crates that build, carry and serve the
 #      template names neither CONFORMING_DRAW_COMMITMENT nor the scenario's
 #      builder;
-#   2. the producer draws from the OS and commits through the witness
-#      ring;
+#   2. the producer mints its key from the OS (`TxKey::random`) and
+#      commits through the witness ring;
 #   3. the scenario's builder still uses both test values where this gate
 #      expects them (rule 47: a moved subject fails loudly, never passes
 #      on zero hits).
@@ -94,7 +95,7 @@ if [[ -n "$hits" ]]; then
 fi
 
 # -- 2. The producer draws from the OS --------------------------------------
-for needle in 'OsRng' 'WitnessRing' '\.draw\(connecting\)'; do
+for needle in 'TxKey::random\(\)' 'WitnessRing' '\.draw\(connecting\)'; do
   found="$(scan -c "$needle" "$PRODUCER")"
   if [[ -z "$found" ]]; then
     echo "FAIL: ${PRODUCER} no longer names ${needle} — the template's secrets must be the OS's" >&2

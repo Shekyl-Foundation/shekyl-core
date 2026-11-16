@@ -14,6 +14,7 @@ use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, scan_output, OutputData,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_tree::{
     AssembleInput, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock, TargetKind,
     TxLeafInputs,
@@ -922,6 +923,44 @@ struct SpendShape<'a> {
     twist: Twist,
 }
 
+/// A spend's transaction key: the OS's, or — in a seeded build, so a chain
+/// built twice comes out the same — one pinned per spend. What matters is
+/// that two spends are never built from one key. Keyed on the connecting
+/// height alone, two spends in one block to one recipient derived identical
+/// output keys — the same key, the same indices — and a block listing both
+/// carried a duplicate output, not two bodies. The spent outputs' key images
+/// are the spend's own identity, so the first (the largest, after the CEN-I5
+/// sort — no two spends share one) is mixed in.
+///
+/// # Panics
+///
+/// When the OS's random source fails: a harness with no randomness builds
+/// nothing.
+#[cfg_attr(
+    not(feature = "seeded-rng"),
+    allow(
+        unused_variables,
+        reason = "the height and key image pin only a seeded build's key"
+    )
+)]
+fn spend_tx_key(
+    seeds: Option<&SpendSeeds>,
+    connecting: BlockHeight,
+    first_key_image: &KeyImage,
+) -> TxKey {
+    match seeds {
+        #[cfg(feature = "seeded-rng")]
+        Some(_) => {
+            let mut pinned = [0u8; 32];
+            pinned[..8]
+                .copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting.to_raw()).to_le_bytes());
+            pinned[8..].copy_from_slice(&first_key_image.as_bytes()[8..]);
+            TxKey::seeded(pinned)
+        }
+        _ => TxKey::random().expect("the OS draws a key"),
+    }
+}
+
 impl SpendShape<'_> {
     /// The spend of `sourced` in this shape — one or more inputs, every path assembled
     /// against the same reference — paying `fee` to the chain and the rest
@@ -1002,24 +1041,10 @@ impl SpendShape<'_> {
                 }
             })
             .collect();
-        // The transaction key is a seed (`derive_kem_seed` hashes it), so
-        // any 32 bytes serve; what matters is that two spends are never
-        // built from one. Keyed on the connecting height alone, two spends
-        // in one block to one recipient derived identical output keys —
-        // the same seed, the same keys, the same indices — and a block
-        // listing both carried a duplicate output, not two bodies. The
-        // spent outputs' key images are the spend's own identity, so the
-        // first (the largest, after the CEN-I5 sort — no two spends share
-        // one) is mixed in.
-        let tx_secret = {
-            let mut s = [0u8; 32];
-            s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting.to_raw()).to_le_bytes());
-            s[8..].copy_from_slice(&key_images[0].as_bytes()[8..]);
-            s
-        };
+        let tx_key = spend_tx_key(seeds.as_ref(), connecting, &key_images[0]);
         let pay = |amount: u64, index: u64| -> OutputData {
             construct_output(
-                &tx_secret,
+                &tx_key,
                 &recipient.x25519_pk,
                 &recipient.ml_kem_ek,
                 &recipient.spend_public,

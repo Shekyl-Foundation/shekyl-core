@@ -85,7 +85,7 @@ use crate::pscan_cursor::PScanCursor;
 /// ledger over its sub-blocks).
 pub const PSCAN_STATE_VERSION: u32 = 11;
 
-/// Diagnostic name of this block. [`crate::version_gate::gate_leading_version`]
+/// Diagnostic name of this block. `crate::version_gate::gate_leading_version`
 /// stamps it on [`WalletLedgerError::UnsupportedBlockVersion`] when the outer
 /// schema word disagrees, and the P-scan start path matches it so a nested
 /// cursor refusal is not reported as this file's format.

@@ -18,6 +18,7 @@ use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
+use shekyl_crypto_pq::TxKey;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
@@ -82,7 +83,7 @@ pub(super) struct BuiltOutput {
 /// link, the sentinel for everything else. The wire is the same width
 /// either way.
 pub(super) fn build_output(
-    tx_key_secret: &[u8; 32],
+    tx_key: &TxKey,
     recipient_spend_pk: &[u8; 32],
     recipient_x25519: &[u8; 32],
     recipient_ml_kem: &[u8],
@@ -91,7 +92,7 @@ pub(super) fn build_output(
     label_plaintext: &[u8; 8],
 ) -> Result<BuiltOutput, KeyEngineError> {
     let constructed = construct_output_with_label_plaintext(
-        tx_key_secret,
+        tx_key,
         recipient_x25519,
         recipient_ml_kem,
         recipient_spend_pk,
@@ -347,9 +348,8 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         });
     };
 
-    // `r` is minted canonical by the crypto crate: it is retained for the
-    // OUTBOUND proof, which signs with it as a scalar (A19).
-    let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
+    // The transaction key: retained for the OUTBOUND proof (WI-RPC-3).
+    let tx_key = TxKey::random()?;
 
     let mut built_outputs: Vec<BuiltOutput> = Vec::new();
     let mut kem_blobs: Vec<Vec<u8>> = Vec::new();
@@ -375,7 +375,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
             }
         })?;
         let built = build_output(
-            &tx_key_secret,
+            &tx_key,
             &recipient.spend_key,
             &recipient_x25519,
             &recipient.ml_kem_encap_key,
@@ -395,7 +395,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         if change_amount > 0 {
             let change_pk = derived.change_spend_pk();
             let built = build_output(
-                &tx_key_secret,
+                &tx_key,
                 &change_pk,
                 &keys.x25519_pk,
                 &keys.ml_kem_ek,
@@ -420,7 +420,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     // the bond/emission assembly paths (stake_engine.rs) append the same
     // value through the same primitive.
     let leaf_entry_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
+    let mut extra = Extra::for_hybrid_transfer(tx_key.public(), kem_blobs);
     extra.push_pqc_leaf_entries(leaf_entry_blob);
     let tx_extra = extra.serialize();
 
@@ -579,11 +579,10 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         output_keys,
         view_tags,
         tx_extra,
-        // WI-RPC-3 retention: the minted scalar leaves the signing
-        // frame inside a zeroize-on-drop wrapper instead of dying at
-        // function exit; the submit path persists it at
-        // submit-ACCEPTED.
-        tx_key_secret: shekyl_engine_state::TxSecretKey::new(tx_key_secret),
+        // WI-RPC-3 retention: the key leaves the signing frame instead of
+        // dying at function exit; the submit path persists its stored form
+        // at dispatch.
+        tx_key,
     })
 }
 
@@ -705,7 +704,7 @@ mod tests {
         ] {
             let label = label_plaintext_for_recipient(rid).expect("an encodable rid");
             let built = build_output(
-                &TX_KEY,
+                &TxKey::seeded(TX_KEY),
                 &decoded.spend_key,
                 &recipient_x25519,
                 &decoded.ml_kem_encap_key,
@@ -745,7 +744,7 @@ mod tests {
         let recipient_x25519 =
             ed25519_pk_to_x25519_pk(&resolved.view_key).expect("map view key to X25519");
         let built = build_output(
-            &TX_KEY,
+            &TxKey::seeded(TX_KEY),
             &resolved.spend_key,
             &recipient_x25519,
             &resolved.ml_kem_encap_key,
@@ -814,7 +813,7 @@ mod tests {
 
         // Build the change output exactly as `sign_tx` does.
         let constructed = construct_output(
-            &TX_KEY,
+            &TxKey::seeded(TX_KEY),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             &change_pk,
@@ -910,7 +909,7 @@ mod tests {
         // by the recipient's view-derived Montgomery secret (the production
         // scanner's derivation).
         let constructed = construct_output(
-            &TX_KEY,
+            &TxKey::seeded(TX_KEY),
             &recipient_x25519,
             &decoded.ml_kem_encap_key,
             &decoded.spend_key,
@@ -942,7 +941,7 @@ mod tests {
         // the RAW Edwards view-key bytes (interpreted as a Montgomery
         // u-coordinate) produces an output the recipient CANNOT recover.
         let wrong = construct_output(
-            &TX_KEY,
+            &TxKey::seeded(TX_KEY),
             &decoded.view_key,
             &decoded.ml_kem_encap_key,
             &decoded.spend_key,

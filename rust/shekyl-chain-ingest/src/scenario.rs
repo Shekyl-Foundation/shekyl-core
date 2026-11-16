@@ -44,6 +44,7 @@
 //! against, and the producer's ledger of what it priced (`Priced`, handed
 //! to `connect` through `Composed`) went with the last of them.
 
+use shekyl_crypto_pq::TxKey;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -69,7 +70,6 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::Notify;
-use zeroize::Zeroizing;
 
 use crate::connector::{
     AltBlocksHeld, Applied, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector,
@@ -1093,10 +1093,10 @@ pub(crate) fn build_template(
     listed: &[Transaction],
     drawn: Option<shekyl_types::archival::DrawCommitment>,
 ) -> Result<Template, TemplateError> {
-    // Written straight into the zeroizing cell: no bare copy of the
-    // scalar's bytes exists on this stack after the context drops.
-    let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-    tx_key_secret[..8].copy_from_slice(&counter.to_le_bytes());
+    // The coinbase's key, pinned per block by the driver's counter.
+    let mut pinned = [0u8; 32];
+    pinned[..8].copy_from_slice(&counter.to_le_bytes());
+    let tx_key = TxKey::seeded(pinned);
     let mut commitment = *shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT.as_bytes();
     commitment[..8].copy_from_slice(&counter.to_le_bytes());
     if let Some(drawn) = drawn {
@@ -1130,7 +1130,7 @@ pub(crate) fn build_template(
         },
         params,
         miner,
-        tx_key_secret,
+        tx_key: &tx_key,
         extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
         draw_commitment: shekyl_wire::tx_extra::DrawCommitment::from_bytes(commitment),
         listed,

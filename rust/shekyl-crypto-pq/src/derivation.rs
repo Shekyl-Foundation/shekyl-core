@@ -325,7 +325,7 @@ pub fn derive_view_tag_x25519_counterfactual(x25519_ss: &[u8; 32], output_index:
 /// `SHA3-256(x25519_pk || ml_kem_ek)` (32-byte fingerprint) `|| output_index_le64`.
 /// The fingerprint is collision-resistant at 2^128, far exceeding what's needed
 /// for domain separation, while avoiding a 1224-byte info field.
-pub fn derive_kem_seed(
+pub(crate) fn derive_kem_seed(
     tx_key_secret: &[u8; 32],
     x25519_pk: &[u8; 32],
     ml_kem_ek: &[u8],
