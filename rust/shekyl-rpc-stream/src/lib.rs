@@ -84,11 +84,12 @@ pub const READ_STALL: Duration = Duration::from_secs(4);
 /// A response write that makes no progress for this long is closed.
 pub const WRITE_STALL: Duration = Duration::from_secs(4);
 
-/// Idle between records when the caller has not set one. RT-W11's pool
-/// replaces it with the pool's own limit (`set_idle`), long enough that a
-/// session is not closed and opened again through a new handshake. The
-/// plaintext listeners do not use this: their idle is the 4-second header
-/// timer.
+/// Idle between records when the caller has not set one: the daemon's
+/// channel connections and a client pool's kept session (`RPC_CHANNEL.md`
+/// §6.3, ruled 2026-11-15). An hour is long enough that a session is not
+/// closed and opened again through a new handshake. A pool's extra
+/// sessions set a shorter one ([`RecordStream::set_idle`]). The plaintext
+/// listeners do not use this: their idle is the 4-second header timer.
 pub const RECORD_IDLE: Duration = Duration::from_secs(60 * 60);
 
 /// How much the adapter asks of the transport at once when reading.
@@ -354,9 +355,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         Ok(stream)
     }
 
-    /// The idle RT-W11's pool sets. A session waits this long with no
-    /// record in progress before it is closed. A record already started
-    /// still fails at [`READ_STALL`].
+    /// An idle other than [`RECORD_IDLE`]: a client pool's extra sessions
+    /// close after a short one. A session waits this long with no record in
+    /// progress before it is closed. A record already started still fails
+    /// at [`READ_STALL`].
     pub fn set_idle(&mut self, idle: Duration) {
         self.idle = idle;
     }
