@@ -18,7 +18,12 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
     let second = paying_the_floor(&mut scenario, &mined, 1).await;
     let dear = {
         let floor = fee_of(&second);
-        Spender::over(&mined).spend_coinbase(scenario.wallet(), h(2), h(AT), floor * 10)
+        Spender::on(scenario.network_id(), &mined).spend_coinbase(
+            scenario.wallet(),
+            h(2),
+            h(AT),
+            floor * 10,
+        )
     };
     let dear_id = dear.txid_parts().hash;
     let path = tmp("pool-template-declined-pool");
@@ -408,7 +413,12 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     let second = paying_the_floor(&mut scenario, &mined, 1).await;
     let dear = {
         let floor = fee_of(&second);
-        Spender::over(&mined).spend_coinbase(scenario.wallet(), h(2), h(AT), floor * 10)
+        Spender::on(scenario.network_id(), &mined).spend_coinbase(
+            scenario.wallet(),
+            h(2),
+            h(AT),
+            floor * 10,
+        )
     };
     let (id1, id2, id3) = (
         first.txid_parts().hash,
@@ -463,7 +473,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     );
 
     // Another body over `first`'s image connects; the pool is not told.
-    let twin = Spender::over(&mined).spend_coinbase(
+    let twin = Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(AT),
@@ -514,7 +524,7 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
     let low = paying_the_floor(&mut scenario, &mined, 0).await;
     let fee = fee_of(&low);
     let (high, lower) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(1), h(AT), fee * 4),

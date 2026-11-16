@@ -46,6 +46,9 @@ zeroize = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
+# harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "net"] }
 # The fetch read against the production serve loop behind the loopback
 # SOCKS shim, signing receipts with the staged receipt key's test signer.

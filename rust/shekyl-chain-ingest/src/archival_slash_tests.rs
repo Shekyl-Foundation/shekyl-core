@@ -189,7 +189,7 @@ impl SlashChain {
         self.drive.advance_to(early).await;
         assert_eq!(self.height(), early);
         let riding = |chain: &[Mined], scenario: &Scenario<FreeHash>, height: BlockHeight| {
-            Spender::over(chain).spend_coinbase_posting(
+            Spender::on(scenario.network_id(), chain).spend_coinbase_posting(
                 scenario.wallet(),
                 BlockHeight::ZERO,
                 height,
@@ -396,7 +396,7 @@ impl SlashChain {
         let reinstate_height = self.height();
         let reinstate_epoch = self.schedule.epoch_at_height(reinstate_height.to_raw());
         let riding = {
-            let spender = Spender::over(&self.drive.chain);
+            let spender = Spender::on(self.drive.scenario.network_id(), &self.drive.chain);
             spender.spend_coinbase_posting(
                 self.drive.scenario.wallet(),
                 BlockHeight::from_raw(1),
@@ -464,7 +464,7 @@ impl SlashChain {
         let height = self.height();
         let after_close = reinstated.reinstate_epoch + 1;
         let (no_open_interval, holdings_changed, early_release) = {
-            let spender = Spender::over(&self.drive.chain);
+            let spender = Spender::on(self.drive.scenario.network_id(), &self.drive.chain);
             let riding = |bond| {
                 spender.spend_coinbase_posting(
                     self.drive.scenario.wallet(),
@@ -559,13 +559,14 @@ impl SlashChain {
         let full_release = join
             .persona
             .release(reinstated.stored.bonded_total.to_raw());
-        let at_deadline = Spender::over(&self.drive.chain).spend_coinbase_posting(
-            self.drive.scenario.wallet(),
-            BlockHeight::from_raw(2),
-            BlockHeight::from_raw(boundary),
-            FEE,
-            Some(&full_release),
-        );
+        let at_deadline = Spender::on(self.drive.scenario.network_id(), &self.drive.chain)
+            .spend_coinbase_posting(
+                self.drive.scenario.wallet(),
+                BlockHeight::from_raw(2),
+                BlockHeight::from_raw(boundary),
+                FEE,
+                Some(&full_release),
+            );
         refused_at(
             self.drive.connect(vec![at_deadline]).await,
             CenRow::J16,
@@ -581,13 +582,14 @@ impl SlashChain {
             settling.archival.slashes().is_empty(),
             "nothing to slash at the anchor's deadline"
         );
-        let past_boundary = Spender::over(&self.drive.chain).spend_coinbase_posting(
-            self.drive.scenario.wallet(),
-            BlockHeight::from_raw(2),
-            BlockHeight::from_raw(boundary + 1),
-            FEE,
-            Some(&full_release),
-        );
+        let past_boundary = Spender::on(self.drive.scenario.network_id(), &self.drive.chain)
+            .spend_coinbase_posting(
+                self.drive.scenario.wallet(),
+                BlockHeight::from_raw(2),
+                BlockHeight::from_raw(boundary + 1),
+                FEE,
+                Some(&full_release),
+            );
         let released = self
             .drive
             .connect(vec![past_boundary])

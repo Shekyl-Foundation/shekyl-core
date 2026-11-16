@@ -71,6 +71,8 @@ const AT: u64 = FIRST_SPEND_HEIGHT + 2;
 /// one in the header's order — real spends of block 0's and block 1's
 /// coinbases.
 struct Driven {
+    /// The chain's network id: its spends sign under it.
+    network: shekyl_network::NetworkId,
     mined: Vec<Mined>,
     a: Transaction,
     b: Transaction,
@@ -81,7 +83,10 @@ impl Driven {
     /// admissible on its own — proven against the wallet-side tree over
     /// the blocks below — and a body the header never listed.
     fn third(&self) -> Transaction {
-        let spender = Spender::over(&self.mined[..usize::try_from(AT).expect("small")]);
+        let spender = Spender::on(
+            self.network,
+            &self.mined[..usize::try_from(AT).expect("small")],
+        );
         spender.spend_coinbase(MinerWallet::harness(), h(2), h(AT), Family::Main.fee())
     }
 
@@ -147,7 +152,7 @@ async fn two_body_chain(name: &str) -> Driven {
     let mut mined = scenario.mine(AT).await;
     let at = AT;
     let (a, b) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(0), h(at), Family::Main.fee()),
@@ -165,7 +170,12 @@ async fn two_body_chain(name: &str) -> Driven {
     );
     assert_eq!(two.height, h(at));
     mined.push(two);
-    Driven { mined, a, b }
+    Driven {
+        network: scenario.network_id(),
+        mined,
+        a,
+        b,
+    }
 }
 
 /// Replay `chain` through the production pipeline into a fresh store at

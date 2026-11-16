@@ -372,16 +372,13 @@ impl HybridEd25519MlDsa {
 /// Width of the seed [`HybridEd25519MlDsa::sign_with_ml_dsa_seed`] passes to
 /// ML-DSA's `try_sign_with_seed`. Production [`SignatureScheme::sign`] does
 /// not take this seed; ML-DSA draws its own nonce.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "seeded-rng"))]
 pub const ML_DSA_SIGNING_SEED_LEN: usize = 32;
 
-// Test-support surface (F-7). Behind `test-utils` (or `cfg(test)` in-crate).
-// **Not** a production isolation gate: `shekyl-p-serve`'s `test-signer` feature
-// forwards `test-utils` on a normal dependency edge, and cargo feature
-// unification keeps these symbols in any artifact built beside an enabler
-// (`scripts/ci/check_test_only_features.py`). The structural gate is tracked in
-// FOLLOWUPS F-7.
-// Names announce test-only intent; do not call from production paths.
+// Test-support surface, behind `test-utils` (or `cfg(test)` in-crate), a
+// TEST_ONLY feature enabled from dev edges only
+// (`scripts/ci/check_test_only_features.py`). Names announce test-only intent;
+// do not call from production paths.
 #[cfg(any(test, feature = "test-utils"))]
 impl HybridEd25519MlDsa {
     pub fn generate_ephemeral_keypair_for_tests(
@@ -403,7 +400,13 @@ impl HybridEd25519MlDsa {
 
         Ok((public_key, secret_key))
     }
+}
 
+// Deterministic signing, behind the TEST_ONLY `seeded-rng` feature
+// (CHAIN_FORGE.md §5.3, seam T3): no build that ships has it, so no
+// production signer can be handed a seed.
+#[cfg(any(test, feature = "seeded-rng"))]
+impl HybridEd25519MlDsa {
     /// Deterministic nested sign for iai benches / KATs. Same nesting as
     /// [`SignatureScheme::sign`]; only the PQ half uses a fixed seed (stable
     /// instruction counts).
