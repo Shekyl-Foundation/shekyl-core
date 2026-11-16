@@ -224,10 +224,12 @@ operator's words (`ban …`) are in `console/operator.rs`. There is no
 
 ### 3.10 What was and was not executed
 
-- **Step 4's channel tests at the ground** (`shekyl-daemon-rpc`'s
-  `channel::tests`, `shekyl-daemon`'s `service_rendezvous` and
-  `owner_socket`): run on a fleet host once RT-P5's measurement frees it,
-  and recorded here. They gate review, not pushing (Rick, 2026-11-15).
+- **Step 4's channel tests at the ground: pass.** Run 2026-11-16 on
+  `skl-staker-test` from a clean checkout of `bc3df402f4` (toolchain
+  1.94.0): `shekyl-daemon-rpc`'s `channel::` tests, 29 passed (and the one
+  other test the filter names); `shekyl-daemon`'s `service_rendezvous`, 2
+  passed, and `owner_socket`, 2 passed. They gate review, not pushing
+  (Rick, 2026-11-15).
 - **The dependency gates the initiator's edge reaches.** Adding
   `shekyl-rpc-channel` under `shekyl-rpc-transport` puts the handshake,
   and with it ML-KEM decapsulation, into the graphs of `shekyl-cli`,
