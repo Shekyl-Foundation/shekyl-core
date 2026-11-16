@@ -189,8 +189,14 @@ impl TxKey {
         self.secret.as_array()
     }
 
+    /// `r` as a scalar. The stored bytes are a canonical encoding
+    /// ([`Self::from_scalar`] writes `Scalar::to_bytes`; [`Self::open`]
+    /// refuses anything else), so this does not reduce them. Reducing here
+    /// would sign with a different scalar from the bytes the encapsulation
+    /// consumes.
     fn scalar(&self) -> Zeroizing<Scalar> {
-        Zeroizing::new(Scalar::from_bytes_mod_order(*self.ikm()))
+        let canonical: Option<Scalar> = Scalar::from_canonical_bytes(*self.ikm()).into();
+        Zeroizing::new(canonical.expect("a transaction key's bytes are a canonical scalar"))
     }
 }
 
@@ -468,6 +474,22 @@ mod tests {
         assert_eq!(own_ss.0, ss.0);
         assert_eq!(own_eph, eph);
         assert_eq!(own_ct, ct);
+    }
+
+    /// A seed above the group order is reduced at the door. Disclosure
+    /// publishes the stored scalar, which is that reduction and not the seed.
+    #[cfg(feature = "seeded-rng")]
+    #[test]
+    fn a_seed_above_the_group_order_is_reduced_once() {
+        let key = TxKey::seeded([0xFF; TX_KEY_LEN]);
+        assert_ne!(key.ikm(), &[0xFF; TX_KEY_LEN]);
+        let canonical: Option<Scalar> = Scalar::from_canonical_bytes(*key.ikm()).into();
+        assert!(
+            canonical.is_some(),
+            "the stored bytes are a canonical scalar"
+        );
+        let disclosure = key.disclose(b"d", &message(1));
+        assert_eq!(&disclosure.key.to_bytes(), key.ikm());
     }
 
     #[test]
