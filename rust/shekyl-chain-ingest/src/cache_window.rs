@@ -15,7 +15,7 @@
 //!    most two seeds, because the window fits inside one seed epoch. The
 //!    connecting height's seed is first.
 //! 2. **the third**: the seed the next block of the most-work chain the
-//!    window does not cover hashes under. That chain is a held fork inside
+//!    body window does not cover hashes under. That chain is a held fork inside
 //!    the cap, or the header frontier.
 //!
 //! A hash never reads this list. Every hash is a job on its own seed, and
@@ -199,12 +199,12 @@ pub fn ranked_on(
 /// The ranked list (`RANDOMX_CACHE_ACTOR.md` §5.1, HA-R4). Pure.
 ///
 /// 1. The window's canonical seed, then its other seed.
-/// 2. The third: the seed of the most-work chain the window does not
-///    cover, among the held forks and the frontier (HA-R2). A chain whose
-///    seed the window names is set aside first, and the heaviest of the
-///    rest is listed: a synced node's frontier is a run on its own chain,
-///    always the heaviest and always in the window, and it does not keep
-///    a held fork from the place.
+/// 2. The third: the seed of the most-work chain the body window does
+///    not cover, among the held forks and the frontier (HA-R2). A chain
+///    whose seed the window names ([`SeedPair::holds`]) is set aside first,
+///    and the heaviest of the rest is listed: a synced node's frontier is
+///    a run on its own chain, always the heaviest and always in the
+///    window, and it does not keep a held fork from the place.
 ///
 /// Equal work is decided by a fixed order: a held fork before the
 /// frontier, and between forks the first in the alt table's key order. The
