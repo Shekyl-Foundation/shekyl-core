@@ -68,6 +68,10 @@ macro_rules! wire_keywords {
 
             /// Every keyword, in declaration order.
             pub const ALL: &'static [Self] = &[$(Self::$variant,)+];
+
+            /// Every keyword's spelling, in declaration order: a closed set
+            /// an option table's `one-of` row can name.
+            pub const WORDS: &'static [&'static str] = &[$($word,)+];
         }
 
         const _: () = { $($crate::wire::shared::assert_keyword($word);)+ };

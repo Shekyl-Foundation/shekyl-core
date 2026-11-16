@@ -32,14 +32,15 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use shekyl_daemon_config::{paths, RunMode};
-use shekyl_os_account::private_file;
-use shekyl_rpc_channel::handshake::{StaticKeypair, StaticPublic};
 use shekyl_rpc_client::{wire, RpcMethod};
 use shekyl_rpc_grants::{Grant, GrantSet};
-use shekyl_rpc_transport::channel::{ChannelDaemon, ChannelTarget, Leg};
+use shekyl_rpc_transport::channel::{
+    bundle_from_bytes, bundle_from_text, bundle_text, create_client_key, fingerprint_hex,
+    read_client_key, ChannelDaemon, ChannelTarget, Leg,
+};
 use shekyl_rpc_transport::local::LocalTarget;
 use shekyl_rpc_types::hash::HashHex;
-use shekyl_rpc_types::kinds::{Bytes, NoParams};
+use shekyl_rpc_types::kinds::NoParams;
 use shekyl_rpc_types::wire::rpc::{ClientCeiling, ClientFingerprint};
 use shekyl_wallet_rpc::Network;
 
@@ -128,7 +129,7 @@ pub fn run(options: &EnrolOptions, word: &Enrol) -> Result<String, String> {
         }
         Enrol::BundleShow => {
             let bundle = leg.call::<wire::RpcBundleShow>(&NoParams)?;
-            bundle_text(&bundle.bundle)
+            Ok(bundle_text(&bundle.bundle.0))
         }
         Enrol::KeyCreate | Enrol::KeyShow => unreachable!("answered above"),
     }
@@ -136,25 +137,6 @@ pub fn run(options: &EnrolOptions, word: &Enrol) -> Result<String, String> {
 
 fn hash(fingerprint: &str) -> Result<HashHex, String> {
     HashHex::from_hex(fingerprint).map_err(|error| error.to_string())
-}
-
-/// A bundle as `rpc bundle show` prints it and `daemon-bundle-file` holds
-/// it: the `bytes` kind's one encoding (IG-6), base64.
-fn bundle_text(bundle: &Bytes) -> Result<String, String> {
-    serde_json::to_value(bundle)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(|| "the bundle could not be encoded".to_owned())
-}
-
-/// The daemon's public bundle from its bytes: the X25519 key, then the
-/// ML-KEM-768 encapsulation key.
-fn bundle_of(bytes: &[u8]) -> Option<StaticPublic> {
-    if bytes.len() != shekyl_rpc_channel::X25519_PUBLIC_LEN + shekyl_rpc_channel::MLKEM768_EK_LEN {
-        return None;
-    }
-    let (x25519, mlkem) = bytes.split_at(shekyl_rpc_channel::X25519_PUBLIC_LEN);
-    StaticPublic::from_parts(x25519.try_into().ok()?, mlkem.try_into().ok()?).ok()
 }
 
 /// The leg one enrolment word runs on.
@@ -175,17 +157,13 @@ impl EnrolLeg {
                     remote.bundle_file.display()
                 )
             })?;
-            let daemon =
-                serde_json::from_value::<Bytes>(serde_json::Value::String(text.trim().to_owned()))
-                    .ok()
-                    .and_then(|bytes| bundle_of(&bytes.0))
-                    .ok_or_else(|| {
-                        format!(
-                            "{} does not hold a node's bundle as `rpc bundle show` prints one",
-                            remote.bundle_file.display()
-                        )
-                    })?;
-            let key = read_key(&options.key_file)?.ok_or_else(|| {
+            let daemon = bundle_from_text(&text).ok_or_else(|| {
+                format!(
+                    "{} does not hold a node's bundle as `rpc bundle show` prints one",
+                    remote.bundle_file.display()
+                )
+            })?;
+            let key = read_client_key(&options.key_file)?.ok_or_else(|| {
                 format!(
                     "this client has no key at {}; make one with `rpc key create`, then enrol \
                      its fingerprint on the node",
@@ -235,13 +213,13 @@ fn service_console(network: Network, request: GrantSet) -> Result<Option<EnrolLe
         return Ok(None);
     }
     // A service runs here: from now on, no other leg (§4.5).
-    let console = read_key(&dir.join(shekyl_rpc_rendezvous::CONSOLE_KEY_FILE))
+    let console = read_client_key(&dir.join(shekyl_rpc_rendezvous::CONSOLE_KEY_FILE))
         .ok()
         .flatten()
         .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())?;
     let daemon = std::fs::read(dir.join(shekyl_rpc_rendezvous::CHANNEL_BUNDLE_FILE))
         .ok()
-        .and_then(|bytes| bundle_of(&bytes))
+        .and_then(|bytes| bundle_from_bytes(&bytes))
         .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())?;
     let leg = console_leg_of(&place)?;
     let target = ChannelTarget::new(network.network_id(), daemon, console, leg);
@@ -261,7 +239,7 @@ fn console_leg_of(place: &Path) -> Result<Leg, String> {
 
 #[cfg(windows)]
 fn console_leg_of(place: &Path) -> Result<Leg, String> {
-    let name = private_file::read_private(place)
+    let name = shekyl_os_account::private_file::read_private(place)
         .ok()
         .flatten()
         .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
@@ -269,48 +247,20 @@ fn console_leg_of(place: &Path) -> Result<Leg, String> {
     Ok(Leg::Pipe(name))
 }
 
-/// This client's key at `path`, checked to be this account's alone.
-fn read_key(path: &Path) -> Result<Option<StaticKeypair>, String> {
-    let Some(bytes) = private_file::read_private(path).map_err(|error| error.to_string())? else {
-        return Ok(None);
-    };
-    StaticKeypair::from_key_file(&bytes)
-        .map(Some)
-        .map_err(|error| format!("{}: {error}", path.display()))
-}
-
 /// `rpc key create`: a new key at `path`, this account's alone, refused if
 /// one is there; its fingerprint, for the node's `rpc client add`.
 fn key_create(path: &Path) -> Result<String, String> {
-    if std::fs::symlink_metadata(path).is_ok() {
-        return Err(format!(
-            "{} already holds a key; `rpc key show` prints its fingerprint",
-            path.display()
-        ));
-    }
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("{}: {error}", parent.display()))?;
-    }
-    let key = StaticKeypair::generate().map_err(|error| error.to_string())?;
-    private_file::write_private(path, &key.to_key_file()).map_err(|error| error.to_string())?;
-    Ok(fingerprint_text(&key))
+    create_client_key(path).map(|key| fingerprint_hex(key.public()))
 }
 
 /// `rpc key show`: this client's fingerprint.
 fn key_show(path: &Path) -> Result<String, String> {
-    read_key(path)?
-        .map(|key| fingerprint_text(&key))
+    read_client_key(path)?
+        .map(|key| fingerprint_hex(key.public()))
         .ok_or_else(|| {
             format!(
                 "this client has no key at {}; make one with `rpc key create`",
                 path.display()
             )
         })
-}
-
-/// A fingerprint as `rpc client list` prints one, so the operator pastes
-/// it into `rpc client add` unchanged.
-fn fingerprint_text(key: &StaticKeypair) -> String {
-    hex::encode(key.public().fingerprint().as_bytes())
 }

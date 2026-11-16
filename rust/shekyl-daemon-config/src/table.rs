@@ -45,7 +45,8 @@ pub fn runtime_owner(name: &str) -> Option<RuntimeOwner> {
     }
 }
 
-const LEVEL: Kind = Kind::OneOf(LEVELS);
+/// The kind of `log-level`, which every binary's logging rows share.
+pub const LEVEL: Kind = Kind::OneOf(LEVELS);
 const ENDPOINT: Kind = Kind::Endpoint(EndpointRule::Any);
 const LOOPBACK: Kind = Kind::Endpoint(EndpointRule::Loopback);
 const GLOBAL: Kind = Kind::Endpoint(EndpointRule::GlobalUnicast);
@@ -66,10 +67,22 @@ const RATE: Kind = Kind::Quantity {
     min: 1,
     keywords: &["unlimited"],
 };
-const BYTES: Kind = Kind::Quantity {
+/// The kind of a byte budget (`log-size-max`), which every binary's logging
+/// rows share.
+pub const BYTES: Kind = Kind::Quantity {
     dimension: Dimension::Bytes,
     min: 1,
     keywords: &[],
+};
+
+/// The kind of `log-category`, which every binary's logging rows share: a
+/// level for each log subsystem.
+pub const LOG_CATEGORY: Kind = Kind::Map {
+    keys: KeyRule {
+        describe: "a log subsystem: daemon, p2p, sync, chain, store, txpool, relay, rpc, tor, miner, notify or archival",
+        check: shekyl_logging::subsystem::is_subsystem,
+    },
+    value: &LEVEL,
 };
 const COUNT: Kind = Kind::Integer {
     min: 1,
@@ -185,13 +198,7 @@ const ROWS: &[Row] = &[
     runtime("log-level", LEVEL, "warn", "The log level: error, warn, info, debug or trace."),
     runtime(
         "log-category",
-        Kind::Map {
-            keys: KeyRule {
-                describe: "a log subsystem: daemon, p2p, sync, chain, store, txpool, relay, rpc, tor, miner, notify or archival",
-                check: shekyl_logging::subsystem::is_subsystem,
-            },
-            value: &LEVEL,
-        },
+        LOG_CATEGORY,
         "none",
         "A log level for one subsystem, as subsystem=level; `none` is no overrides.",
     ),
