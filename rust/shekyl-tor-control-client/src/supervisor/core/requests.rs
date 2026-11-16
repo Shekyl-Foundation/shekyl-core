@@ -449,6 +449,12 @@ impl super::Core {
                     if let Sent::FetchFrom { hsdir } = sent {
                         self.directory_fetch_sent(now, hsdir);
                     }
+                    // The driver starts this publication's rounds afresh,
+                    // with keys of their own. The rounds open now, and the
+                    // refusals of the keys they belong to, end here.
+                    if sent == Sent::AddOnion {
+                        self.forget_publication(now);
+                    }
                     self.requests.sent(sent, now);
                     out.push(action);
                     break;

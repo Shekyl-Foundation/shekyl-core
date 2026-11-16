@@ -411,7 +411,9 @@ async fn an_upload_before_the_add_onion_reply_is_read() {
     ));
     let inputs = drive.event_inputs(&upload);
     assert!(
-        inputs.contains(&Input::UploadRoundStarted),
+        inputs
+            .iter()
+            .any(|input| matches!(input, Input::UploadRoundStarted { .. })),
         "the upload was not read: {inputs:?}"
     );
     if let Some(control) = drive.control.take() {

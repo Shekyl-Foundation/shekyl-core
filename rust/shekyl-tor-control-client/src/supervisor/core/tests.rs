@@ -16,6 +16,13 @@ use super::super::posture::{
 };
 use super::{duration_ns, Action, Core, DirectoryPlan, Input, LaunchDirectory, Policy, Step};
 
+/// The first descriptor a tracker sees: the key every single-descriptor
+/// round in these tests carries.
+pub(super) const D0: crate::control::DescriptorKey = crate::control::DescriptorKey::new(0);
+
+/// The second descriptor a tracker sees.
+pub(super) const D1: crate::control::DescriptorKey = crate::control::DescriptorKey::new(1);
+
 impl Input {
     /// The pin's acceptance, carrying a witness no test spawns: the core
     /// hands it to the launch and never reads it.
@@ -1306,7 +1313,9 @@ mod clock;
 mod clock_evidence;
 mod clock_jump;
 mod clock_line;
+mod descriptor_rounds;
 mod directories;
+mod directory_silence;
 mod directory_uploads;
 mod overdue;
 mod pace;
