@@ -65,9 +65,9 @@ It is not:
    same thing in both, and it reuses existing names where they fit. The
    tunnel's listener is loopback-only, never a wildcard (RT-14).
 4. **A per-client cap.** `SESSIONS_PER_CLIENT = 4` in
-   `shekyl-rpc-channel`, an Assumption. Its basis as first given was
-   that at a full pool five clients and the console fit in 25
-   (`rpc-connections-max`'s default); RT-O37 restates it (§4). The daemon refuses a fingerprint's next session past it with
+   `shekyl-rpc-channel`, an Assumption whose basis is that five clients
+   fit in 25 (`rpc-connections-max`'s default) with five to spare, and the
+   console's four are its own (RT-O37, §4). The daemon refuses a fingerprint's next session past it with
    a typed refusal, and the tunnel's pool uses the same constant. The
    reason: the session index has no cap per fingerprint (§3.3), so one
    compromised enrolled key, such as the website's internet-facing tunnel,
