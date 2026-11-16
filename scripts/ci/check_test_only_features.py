@@ -117,12 +117,14 @@ DEFERRED_DOCS / bijection-allowlist shape that records each crate's **exact
 hit set** (feature, consumer, edge kind). A new feature or a new enabler on a
 listed crate is red (an owner-keyed exemption would have covered it
 silently); a recorded hit that vanished is red until deleted; a crate that
-has joined `GOVERNED_OWNERS` may not also be listed. Three of the fifteen are
+has joined `GOVERNED_OWNERS` may not also be listed. Two of the entries are
 findings rather than chores — a feature whose name says test-only, enabled
-on a **normal** edge. Two are hygiene (move the edge, or rule PERMANENT with
-the reason) and share the governance FOLLOWUPS row; the third,
-`shekyl-crypto-pq/test-utils` enabled on a normal edge only through
-`shekyl-p-serve`'s forwarding `test-signer` feature, is **FOLLOWUPS F-7**'s.
+on a **normal** edge — and are hygiene (move the edge, or rule PERMANENT with
+the reason) under the governance FOLLOWUPS row. A third,
+`shekyl-crypto-pq/test-utils` reaching a normal edge through
+`shekyl-p-serve`'s forwarding `test-signer`, left the list with `CF-1b`
+(CHAIN_FORGE.md): the forward was never needed and is gone, and the crate is
+governed, its `test-utils` and `seeded-rng` TEST_ONLY rows.
 
 # The production-shape lint lane lives next door
 
@@ -285,6 +287,70 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "from shekyl-relay's dev edge, which pins the origin publication "
     "budget to the recovery cycle count, and from this crate's own dev "
     "edge for its instruments. A shipped relay does not grade",
+    (
+        "shekyl-crypto-pq",
+        "test-utils",
+    ): "exposes test-support helpers that take no seed: an ephemeral, non-derived "
+    "hybrid keypair (generate_ephemeral_keypair_for_tests), an FN-DSA key made "
+    "undecodable in place (corrupt_fn_dsa_half_for_tests) and the persona's "
+    "onion-seed derivation (derive_p_hs_id_seed). A non-derived key must never "
+    "reach a wallet. Enabled from dev edges only; shekyl-p-serve's test-signer "
+    "no longer forwards it (it never needed it: F-7, CHAIN_FORGE.md CF-1b)",
+    (
+        "shekyl-crypto-pq",
+        "seeded-rng",
+    ): "exposes deterministic signing: sign_with_ml_dsa_seed, "
+    "sign_pqc_auth_for_output_with_ml_dsa_seed and both FN-DSA sign_with_rng_seed, "
+    "which sign with a caller's seed in place of the OS's. For KATs, "
+    "instruction-count benches and the chain forge's byte-identical chains "
+    "(CHAIN_FORGE.md §5.3, seam T3); no build that ships has these symbols, so "
+    "no production signer can be handed a seed (CF-R9)",
+    (
+        "shekyl-fcmp",
+        "seeded-rng",
+    ): "exposes the provers' seeded forms, proof::prove_with_rng and "
+    "proof::prove_membership_only_with_rng, which take their randomness from a "
+    "caller's generator (CHAIN_FORGE.md §5.3, seam T1). The production entry "
+    "points, prove and prove_membership_only, draw from the OS; no build that "
+    "ships has a prover that takes its caller's randomness (CF-R9, CF-F12). "
+    "Reached through shekyl-verify-cost's TEST_ONLY seeded-rng forward",
+    (
+        "shekyl-verify-cost",
+        "seeded-rng",
+    ): "compiles the crate's fixtures (relay, door, connect), each proving through "
+    "shekyl-fcmp's seeded prover so a run is byte-identical and the drift gate's "
+    "instruction counts hold still; forwards shekyl-fcmp/seeded-rng. Enabled by "
+    "the crate's own dev edge for its benches and pins; without it the library "
+    "is empty, and nothing that ships depends on this crate",
+    (
+        "shekyl-tx-builder",
+        "seeded-rng",
+    ): "exposes the signers' seeded forms (sign_transaction_with_terms_seeded, "
+    "sign_pqc_auths_seeded, open_spend_seeded, prove_backing_membership_seeded), "
+    "which draw the range proof, the pseudo-out blinds, the membership proof and "
+    "the ML-DSA nonces from a caller's seed (CHAIN_FORGE.md §5.3, seam T2). "
+    "Forwards shekyl-fcmp's and shekyl-crypto-pq's seeded-rng; the production "
+    "signers draw from the OS, and no build that ships has one that takes its "
+    "caller's randomness (CF-R9)",
+    (
+        "shekyl-harness-spender",
+        "seeded-rng",
+    ): "exposes seeded building (SpendPlan, Spender::drawing, "
+    "Persona::with_signing_seed): each spend's seeds are drawn on the planning "
+    "thread and handed to that spend, and a persona's ML-DSA randomness comes "
+    "from its own seed, so a chain built twice comes out byte for byte the same "
+    "(CHAIN_FORGE.md §5.3, seam T4). Forwards shekyl-tx-builder's and "
+    "shekyl-crypto-pq's seeded-rng. The crate is test support reached through dev "
+    "edges only; this row keeps the seeded surface there too",
+    (
+        "shekyl-network",
+        "harness",
+    ): "exposes HARNESS_NETWORK_ID, the id a harness chain that mines its own "
+    "genesis is judged under (Trust::UNPINNED): no network's row has it, and no "
+    "build that ships has the constant (CHAIN_FORGE.md CF-R15; deleted in CF-5). "
+    "Forwarded by shekyl-chain-rules' TEST_ONLY harness feature (CF-F5's rule "
+    "accepts the forward), and enabled from the dev edges of the crates whose "
+    "tests sign or judge under it",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -467,6 +533,9 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-network",
         "randomx-v2-sys",
         "shekyl-fcmp",
+        "shekyl-crypto-pq",
+        "shekyl-tx-builder",
+        "shekyl-harness-spender",
     }
 )
 
@@ -479,38 +548,24 @@ Hit = tuple[str, str, str]  # feature, consumer, edge kind
 # and a vanished hit is red until deleted. Shrink-only: a crate leaves this
 # list by joining GOVERNED_OWNERS
 # with its features categorized (FOLLOWUPS "Thirteen crates meet the feature-
-# governance trigger ungoverned", Target: pre-genesis; the fourteenth entry,
-# shekyl-crypto-pq, leaves via FOLLOWUPS F-7). Entries marked FINDING enable
+# governance trigger ungoverned", Target: pre-genesis; shekyl-crypto-pq left
+# with CF-1b, governed). Entries marked FINDING enable
 # a test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
 # and are governed first. Forwarding raised the count from twelve to fifteen
 # (shekyl-curve-io, shekyl-curve-primitives, shekyl-fcmp are reached only by
 # forwarded `std` / `multisig` features) and added the two forwarded
 # normal-edge test paths named in the FINDING notes.
 MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = {
-    "shekyl-crypto-pq": (
-        "FINDING owned by FOLLOWUPS F-7, not the governance row: test-utils reaches "
-        "shekyl-p-serve on a NORMAL edge by forwarding (its test-signer feature, "
-        "itself a FINDING in shekyl-p-serve's entry). Leaves this list when F-7 lands. "
-        "The shekyl-verify-cost dev edge (2026-11-09, BA-T1) is the pool-admission drift "
-        "gate calling sign_pqc_auth_for_output_with_ml_dsa_seed, the wallet signer's "
-        "assembly with a seeded ML-DSA nonce — the same shape as shekyl-tx-builder's "
-        "transfer_e2e_iai. The shekyl-chain-store dev edge (2026-11-11, SO-D12 #1327) "
-        "is the shard-fill capture writer's regeneration guard, "
-        "test_support::regen_decision_or_refuse — the guard every pinned vector's "
-        "rewrite goes through, as in shekyl-archival-retention's gate-4 KAT.",
-        frozenset({
-            ("test-utils", "shekyl-archival-retention", "dev"),
-            ("test-utils", "shekyl-chain-store", "dev"),
-            ("test-utils", "shekyl-p-fetch", "dev"),
-            ("test-utils", "shekyl-p-serve", "normal"),
-            ("test-utils", "shekyl-tx-builder", "dev"),
-            ("test-utils", "shekyl-verify-cost", "dev"),
-        }),
-    ),
     "shekyl-curve-generators": (
-        "categorization only",
+        "categorization only. The two normal-edge `std` hits are the build-edge "
+        "forwards of shekyl-bulletproofs' and shekyl-fcmp-proofs' own `std`, seen "
+        "on the normal edge each crate also has to this one once forwards were "
+        "recorded per edge (CHAIN_FORGE.md CF-F5, 2026-11-14): the same forwards, "
+        "not new enablers.",
         frozenset({
             ("std", "shekyl-bulletproofs", "build"),
+            ("std", "shekyl-bulletproofs", "normal"),
+            ("std", "shekyl-fcmp-proofs", "normal"),
             ("std", "shekyl-curve-primitives", "normal"),
             ("std", "shekyl-fcmp-proofs", "build"),
             ("std", "shekyl-scanner", "normal"),
@@ -582,9 +637,16 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         }),
     ),
     "shekyl-scanner": (
-        "categorization only",
+        "categorization only. The normal-edge test-utils hit is shekyl-engine-core's "
+        "`test-helpers = [\"shekyl-scanner/test-utils\"]` forward, seen on the normal "
+        "edge engine-core also has to this crate once forwards were recorded per edge "
+        "(CHAIN_FORGE.md CF-F5, 2026-11-14). It is on only when test-helpers is, and "
+        "test-helpers' only enablers are dev edges (shekyl-engine-core's own entry "
+        "below); the gate holds that once engine-core is governed with test-helpers "
+        "as a TEST_ONLY row, whose forwards CF-F5 then accepts.",
         frozenset({
             ("test-utils", "shekyl-engine-core", "dev"),
+            ("test-utils", "shekyl-engine-core", "normal"),
             ("test-utils", "shekyl-wallet-rpc", "dev"),
         }),
     ),
@@ -639,6 +701,13 @@ def cargo_metadata() -> dict:
 # consumer's *alias* for it (`package = "..."` renames), resolved through the
 # consumer's dependency list; `"dep:<name>"` entries enable an optional
 # dependency and no feature, and are not enablements.
+#
+# **One forward, every edge (`CHAIN_FORGE.md` `CF-F5`).** A consumer may name
+# the same owner on more than one edge (a normal dependency and a dev one).
+# Cargo applies a forward to whichever of those edges a build activates, so a
+# forward is recorded once per edge the alias names. Recording it once, for
+# the edge the manifest happened to list last, let a forward over a normal
+# edge pass as dev.
 Enablement = tuple[str, str, str, str, str]  # owner, feature, consumer, kind, via
 
 
@@ -648,11 +717,13 @@ def enablements(meta: dict) -> list[Enablement]:
     members = {p["name"] for p in meta["packages"]}
     out: list[Enablement] = []
     for consumer in meta["packages"]:
-        alias_to_edge: dict[str, tuple[str, str]] = {}
+        alias_to_edges: dict[str, list[tuple[str, str]]] = {}
         for dep in consumer["dependencies"]:
             kind = dep.get("kind") or "normal"
             alias = dep.get("rename") or dep["name"]
-            alias_to_edge[alias] = (dep["name"], kind)
+            edges = alias_to_edges.setdefault(alias, [])
+            if (dep["name"], kind) not in edges:
+                edges.append((dep["name"], kind))
             for feature in dep.get("features", []):
                 out.append((dep["name"], feature, consumer["name"], kind, "edge"))
         for fname, entries in consumer.get("features", {}).items():
@@ -661,13 +732,94 @@ def enablements(meta: dict) -> list[Enablement]:
                     continue
                 alias, feature = entry.split("/", 1)
                 alias = alias.rstrip("?")
-                edge = alias_to_edge.get(alias)
-                if edge is None:
-                    continue
-                owner, kind = edge
-                if owner in members:
-                    out.append((owner, feature, consumer["name"], kind, f"feature:{fname}"))
+                for owner, kind in alias_to_edges.get(alias, []):
+                    if owner in members:
+                        out.append((owner, feature, consumer["name"], kind, f"feature:{fname}"))
     return out
+
+
+def check_test_only(
+    meta: dict,
+    registry: dict[tuple[str, str], str],
+    all_enablements: list[Enablement] | None = None,
+) -> list[str]:
+    """The test-only limb, over one `cargo metadata` document: every feature
+    in `registry` is declared, enabled by no other feature of its owner, by
+    no non-dev edge, and by at least one dev edge.
+
+    One exception, and it is the only one (`CHAIN_FORGE.md` `CF-F5`): a
+    forward over a non-dev edge passes when the feature that forwards it is
+    itself a row of `registry`. That row's own limbs keep the forwarding
+    feature on dev edges only, so the forward is on only in the builds the
+    row allows. A forward from any other feature over a normal edge is red.
+    Such a forward also answers the subject check below: the chain it
+    starts ends in a dev edge, because the forwarding row needs one.
+    """
+    packages = {p["name"]: p for p in meta["packages"]}
+    if all_enablements is None:
+        all_enablements = enablements(meta)
+    failures: list[str] = []
+    for (owner, feature), why in sorted(registry.items()):
+        # Subject assertion: the feature must exist where it is claimed to.
+        pkg = packages.get(owner)
+        if pkg is None:
+            failures.append(
+                f"{owner}: registered in TEST_ONLY but is not a workspace member — "
+                f"stale row, or the crate was renamed"
+            )
+            continue
+        features_map = pkg.get("features", {})
+        if feature not in features_map:
+            failures.append(
+                f"{owner}: no feature `{feature}` — TEST_ONLY names a feature this "
+                f"crate does not declare, so every edge check below is vacuous"
+            )
+            continue
+
+        # Owner-side enablement ships the arm to every consumer, including
+        # those whose edges never name it. `default` is the loud case;
+        # any other feature that lists this one is the same hole with a
+        # different name.
+        for other, enables in sorted(features_map.items()):
+            if other == feature:
+                continue
+            if feature in enables:
+                failures.append(
+                    f"{owner}: feature `{other}` enables `{feature}` — this "
+                    f"feature {why}, and an intra-crate enablement puts it in "
+                    f"every build that takes `{other}` (including `default`). "
+                    f"Keep `{feature}` as a standalone empty feature enabled "
+                    f"only from a consumer's [dev-dependencies] edge."
+                )
+
+        dev_enablers: list[str] = []
+        for o, f, consumer, kind, via in all_enablements:
+            if o != owner or f != feature:
+                continue
+            if kind == "dev":
+                dev_enablers.append(consumer)
+                continue
+            if via.startswith("feature:") and (consumer, via[len("feature:"):]) in registry:
+                dev_enablers.append(consumer)
+                continue
+            how = "on a" if via == "edge" else f"by forwarding (`{via}`) over a"
+            failures.append(
+                f"{consumer}: enables `{owner}/{feature}` {how} {kind} "
+                f"dependency edge — this feature {why}, and a non-dev edge puts "
+                f"it in builds that ship. Move the feature to the "
+                f"[dev-dependencies] edge, or forward it only from a feature "
+                f"that is itself TEST_ONLY."
+            )
+
+        if not dev_enablers:
+            failures.append(
+                f"{owner}/{feature}: no dev-dependency edge enables it, directly or "
+                f"through a TEST_ONLY feature's forward. Either the "
+                f"consumer stopped needing it (delete the feature and this row) or "
+                f"the edge was renamed — until one is true, the non-dev check above "
+                f"passes without a subject."
+            )
+    return failures
 
 
 def check_consumer_owned(
@@ -851,6 +1003,31 @@ def _synthetic_forwarded() -> dict:
                 "name": "forwarder",
                 "features": {"x": ["owner/cfeat"]},
                 "dependencies": [{"name": "owner", "features": [], "kind": None}],
+            },
+        ]
+    }
+
+
+def _synthetic_dual_edge_forward() -> dict:
+    """`CF-F5`'s shape: `fwd` depends on `owner` twice, a normal edge and a
+    dev edge (the dev edge listed last, which is the order that hid the
+    normal one), and forwards `owner/cfeat` from its own feature `x`.
+    `tester` turns `x` on from a dev edge only."""
+    return {
+        "packages": [
+            {"name": "owner", "features": {"cfeat": []}, "dependencies": []},
+            {
+                "name": "fwd",
+                "features": {"x": ["owner/cfeat"]},
+                "dependencies": [
+                    {"name": "owner", "features": [], "kind": None},
+                    {"name": "owner", "features": ["cfeat"], "kind": "dev"},
+                ],
+            },
+            {
+                "name": "tester",
+                "features": {},
+                "dependencies": [{"name": "fwd", "features": ["x"], "kind": "dev"}],
             },
         ]
     }
@@ -1042,7 +1219,77 @@ def selftest() -> int:
     fwd_en = enablements(fwd)
     if ("owner", "cfeat", "forwarder", "normal", "feature:x") not in fwd_en:
         bad_pre.append(f"enablements() did not record the forwarded activation: {fwd_en!r}")
+    # CF-F5: a forward is recorded on every edge its alias names.
+    dual = _synthetic_dual_edge_forward()
+    dual_en = enablements(dual)
+    for kind in ("normal", "dev"):
+        if ("owner", "cfeat", "fwd", kind, "feature:x") not in dual_en:
+            bad_pre.append(
+                f"enablements() did not record the dual-edge forward on its {kind} edge: {dual_en!r}"
+            )
+    test_only_cases = [
+        (
+            "dev edge only: green",
+            {"packages": [
+                {"name": "owner", "features": {"cfeat": []}, "dependencies": []},
+                {"name": "t", "features": {}, "dependencies": [
+                    {"name": "owner", "features": ["cfeat"], "kind": "dev"}]}]},
+            {("owner", "cfeat"): "is test-only"},
+            [],
+        ),
+        (
+            "normal edge: red",
+            _synthetic({"cfeat": []}, {"shipper": [("owner", ["cfeat"])]}),
+            {("owner", "cfeat"): "is test-only"},
+            ["on a normal dependency edge"],
+        ),
+        (
+            "dual-edge forward from an ordinary feature: red (green before CF-F5)",
+            _synthetic_dual_edge_forward(),
+            {("owner", "cfeat"): "is test-only"},
+            ["by forwarding (`feature:x`) over a normal"],
+        ),
+        (
+            "dual-edge forward from a TEST_ONLY feature: green",
+            _synthetic_dual_edge_forward(),
+            {("owner", "cfeat"): "is test-only", ("fwd", "x"): "is test-only too"},
+            [],
+        ),
+        (
+            "only a TEST_ONLY feature's normal-edge forward enables it: green",
+            {"packages": [
+                {"name": "owner", "features": {"cfeat": []}, "dependencies": []},
+                {"name": "fwd", "features": {"x": ["owner/cfeat"]}, "dependencies": [
+                    {"name": "owner", "features": [], "kind": None}]},
+                {"name": "tester", "features": {}, "dependencies": [
+                    {"name": "fwd", "features": ["x"], "kind": "dev"}]}]},
+            {("owner", "cfeat"): "is test-only", ("fwd", "x"): "is test-only too"},
+            [],
+        ),
+        (
+            "no dev edge enables it: red",
+            _synthetic({"cfeat": []}, {"unrelated": [("owner", [])]}),
+            {("owner", "cfeat"): "is test-only"},
+            ["no dev-dependency edge enables it"],
+        ),
+        (
+            "the owner's own feature enables it: red",
+            {"packages": [
+                {"name": "owner", "features": {"cfeat": [], "default": ["cfeat"]}, "dependencies": []},
+                {"name": "t", "features": {}, "dependencies": [
+                    {"name": "owner", "features": ["cfeat"], "kind": "dev"}]}]},
+            {("owner", "cfeat"): "is test-only"},
+            ["intra-crate enablement"],
+        ),
+    ]
     bad: list[str] = list(bad_pre)
+    for label, meta, registry, want in test_only_cases:
+        got = check_test_only(meta, registry)
+        if not want and got:
+            bad.append(f"{label}: expected green, got {got!r}")
+        for needle in want:
+            if not any(needle in f for f in got):
+                bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
     for label, meta, governed, grand, want in trigger_cases:
         got = check_trigger(meta, governed, grand)
         if not want and got:
@@ -1081,7 +1328,7 @@ def selftest() -> int:
     print(
         f"feature-gate selftest: {len(cases)} consumer-owned cases + "
         f"{len(exhaustive_cases) + 1} exhaustiveness cases + "
-        f"{len(trigger_cases)} trigger cases held"
+        f"{len(trigger_cases)} trigger cases + {len(test_only_cases)} test-only cases held"
     )
     return 0
 
@@ -1098,61 +1345,7 @@ def main() -> int:
     failures += check_exhaustive(meta, GOVERNED_OWNERS, TEST_ONLY, CONSUMER_OWNED, PERMANENT)
     failures += check_trigger(meta, GOVERNED_OWNERS, MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)
 
-    for (owner, feature), why in sorted(TEST_ONLY.items()):
-        # Subject assertion: the feature must exist where it is claimed to.
-        pkg = packages.get(owner)
-        if pkg is None:
-            failures.append(
-                f"{owner}: registered in TEST_ONLY but is not a workspace member — "
-                f"stale row, or the crate was renamed"
-            )
-            continue
-        features_map = pkg.get("features", {})
-        if feature not in features_map:
-            failures.append(
-                f"{owner}: no feature `{feature}` — TEST_ONLY names a feature this "
-                f"crate does not declare, so every edge check below is vacuous"
-            )
-            continue
-
-        # Owner-side enablement ships the arm to every consumer, including
-        # those whose edges never name it. `default` is the loud case;
-        # any other feature that lists this one is the same hole with a
-        # different name.
-        for other, enables in sorted(features_map.items()):
-            if other == feature:
-                continue
-            if feature in enables:
-                failures.append(
-                    f"{owner}: feature `{other}` enables `{feature}` — this "
-                    f"feature {why}, and an intra-crate enablement puts it in "
-                    f"every build that takes `{other}` (including `default`). "
-                    f"Keep `{feature}` as a standalone empty feature enabled "
-                    f"only from a consumer's [dev-dependencies] edge."
-                )
-
-        dev_enablers: list[str] = []
-        for o, f, consumer, kind, via in all_enablements:
-            if o != owner or f != feature:
-                continue
-            if kind == "dev":
-                dev_enablers.append(consumer)
-            else:
-                how = "on a" if via == "edge" else f"by forwarding (`{via}`) over a"
-                failures.append(
-                    f"{consumer}: enables `{owner}/{feature}` {how} {kind} "
-                    f"dependency edge — this feature {why}, and a non-dev edge puts "
-                    f"it in builds that ship. Move the feature to the "
-                    f"[dev-dependencies] edge."
-                )
-
-        if not dev_enablers:
-            failures.append(
-                f"{owner}/{feature}: no dev-dependency edge enables it. Either the "
-                f"consumer stopped needing it (delete the feature and this row) or "
-                f"the edge was renamed — until one is true, the non-dev check above "
-                f"passes without a subject."
-            )
+    failures += check_test_only(meta, TEST_ONLY, all_enablements)
 
     if failures:
         print("Test-only feature gate FAILED:\n", file=sys.stderr)

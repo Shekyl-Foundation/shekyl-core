@@ -439,7 +439,11 @@ fn shapes(
                 .iter()
                 .map(|b| shekyl_harness_spender::Linked::new(&b.block, &b.transactions))
                 .collect();
-            shekyl_harness_spender::Spender::over(&linked).spend_coinbase_referencing(
+            shekyl_harness_spender::Spender::on(
+                shekyl_chain_rules::Trust::UNPINNED.network_id(),
+                &linked,
+            )
+            .spend_coinbase_referencing(
                 shekyl_harness_spender::MinerWallet::harness(),
                 BlockHeight::ZERO,
                 BlockHeight::from_raw(len),

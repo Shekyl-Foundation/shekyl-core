@@ -8,11 +8,15 @@
 //! The rendezvous probe never asks a directory: this node's Tor answers it
 //! from its own copy of the descriptor, which it keeps until the next time
 //! period (tor 0.4.9.14 `hs_cache.c:618`). With each probe this node also
-//! asks each directory the latest round's uploads reached, one
-//! `HSFETCH … SERVER=` each. `HSFETCH` ignores the client cache
-//! (`control_cmd.c:1489`). Tor's answers are its own statements: `RECEIVED`
-//! only once the descriptor decoded and was stored (`hs_client.c:1667-1690`),
-//! `FAILED REASON=NOT_FOUND` when that directory does not have it.
+//! asks every directory the latest round sent an upload to, one
+//! `HSFETCH … SERVER=` each, whether or not that upload was confirmed: an
+//! upload whose connection failed reports nothing, and its directory is one
+//! a client may still ask (SO-D12's run 4, 2026-11-14). `HSFETCH` ignores
+//! the client cache (`control_cmd.c:1489`). Tor's answers are its own
+//! statements: `RECEIVED` only once the descriptor decoded and was stored
+//! (`hs_client.c:1667-1690`), `FAILED REASON=NOT_FOUND` when that directory
+//! does not have it. A fetch whose circuit or connection fails says nothing
+//! at all (`dirclient.c:713-727`), and its answer window decides it.
 //!
 //! The check is a closed set. A line counts only for a directory this check
 //! has already sent a fetch to. `REQUESTED` from one of those names the
@@ -22,20 +26,27 @@
 //! refetch are answered from caches and from directories this check did not
 //! choose.
 //!
+//! **What an answer counts for depends on the upload** (Rick, 2026-11-15).
+//! For an upload Tor confirmed, an answer that says nothing about the copy
+//! (a failure other than `NOT_FOUND`, or a counter that cannot be read) is
+//! not counted. For one it never confirmed, anything but a matching copy is
+//! missing: nothing shows the directory took it. An upload still open
+//! arrives already settled, from the reading taken with the list
+//! ([`OpenUploads`]): asked once its round is older than
+//! `Policy::round_wait`, and left in flight before that.
+//!
 //! Each fetch's answer window is `probe_within` from the moment Tor accepts
 //! that command. It is the supervisor's wait for the `HS_DESC` line, not the
 //! connector's dial deadline and not the dialer's outage backoff.
 
-use crate::control::{RelayFingerprint, ServiceDescriptor};
+use crate::control::{RelayFingerprint, RoundUpload, ServiceDescriptor, UploadEnd};
 
-/// One directory to ask, from the driver: where an upload went, which
-/// descriptor it was, and a CSPRNG draw for this fetch's own delay.
+/// One directory to ask, from the driver: an upload of the latest round,
+/// and a CSPRNG draw for this fetch's own delay.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectoryFetch {
-    /// The directory.
-    pub hsdir: RelayFingerprint,
-    /// The descriptor id its upload named: the blinded key.
-    pub descriptor_id: String,
+    /// Where the upload went, which descriptor it was, and how it ended.
+    pub upload: RoundUpload,
     /// Uniform over `u64`; the core maps it onto the probe's delay range.
     pub draw: u64,
 }
@@ -57,11 +68,98 @@ pub enum DirectoryAnswer {
     },
     /// `HS_DESC FAILED REASON=NOT_FOUND`: the directory does not have it.
     NotFound,
-    /// `HS_DESC FAILED` for another reason: nothing about the descriptor.
+    /// `HS_DESC FAILED` for another reason (`QUERY_REJECTED`, `UNEXPECTED`,
+    /// `BAD_DESC`): nothing about the descriptor.
     Other,
     /// The driver could not ask: Tor refused the command, or no control
     /// connection.
     Unusable,
+}
+
+/// How the check counted one directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Counted {
+    /// It holds the descriptor Tor's client asks for, at our counter.
+    Found,
+    /// It does not: `NOT_FOUND`, a stale copy, no answer within the window,
+    /// or, for an upload Tor never confirmed, any answer but a matching copy.
+    Missing,
+    /// Not counted.
+    Excluded(Exclusion),
+}
+
+/// Why a directory was not counted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exclusion {
+    /// Its upload was another descriptor than the one Tor's client asks
+    /// for: the other time period's.
+    OtherDescriptor,
+    /// A confirmed upload's directory answered without saying whether it
+    /// holds the copy: a failure other than `NOT_FOUND`, or a copy whose
+    /// counter could not be read.
+    SaidNothing,
+    /// This node did not ask: Tor refused the command, there was no control
+    /// connection, or the request queue withheld the fetch. Our failure to
+    /// ask says nothing about the directory, confirmed or not.
+    NotAsked,
+    /// The upload was still open and its round younger than
+    /// `Policy::round_wait` when the check was drawn: it may yet land.
+    UploadInFlight,
+}
+
+/// One directory's line in a settled check, said at debug (§4.5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryReport {
+    /// The directory.
+    pub hsdir: RelayFingerprint,
+    /// How its upload ended.
+    pub upload: UploadEnd,
+    /// What Tor said about its copy. `None` when nothing came: no answer
+    /// within the window, or no fetch sent.
+    pub answer: Option<DirectoryAnswer>,
+    /// How the check counted it.
+    pub counted: Counted,
+}
+
+/// How the round a directory list was read from treats uploads that have
+/// not ended (§4.5). The driver reads it in the same turn as the list and
+/// the check keeps that reading: the round may end while the descriptor is
+/// being read, and a later reading would be a different round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenUploads {
+    /// That round was already older than `Policy::round_wait`. An upload
+    /// still open is hung, and its directory is asked.
+    Hung,
+    /// That round was younger, or none was open. An upload still open may
+    /// yet land, and is not asked.
+    InFlight,
+}
+
+impl OpenUploads {
+    /// Uploads still open in that round are asked.
+    #[must_use]
+    pub const fn asks(self) -> bool {
+        matches!(self, Self::Hung)
+    }
+}
+
+/// One directory as the probe hands it to the check. A settled row was
+/// decided with the list. The check does not revisit it.
+pub(super) enum DirectoryRow {
+    /// Ask this directory at `due`.
+    Ask {
+        /// The upload, and how it ended.
+        upload: RoundUpload,
+        /// When the fetch comes due.
+        due: u64,
+    },
+    /// Already counted. No fetch, and no answer window.
+    Settled {
+        /// The upload, and how it ended.
+        upload: RoundUpload,
+        /// How it was counted.
+        counted: Counted,
+    },
 }
 
 /// The directory half of one probe, from the moment the check is asked.
@@ -75,21 +173,14 @@ pub(super) enum DirectoryHalf {
     Open(DirectoryCheck),
 }
 
-/// One directory's place in the check.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Held {
-    Pending,
-    Found,
-    Missing,
-    Excluded,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Ask {
     hsdir: RelayFingerprint,
     /// The descriptor id the upload named.
     descriptor_id: String,
-    /// When the fetch comes due. `None` once due, excluded, or answered.
+    /// How the upload ended.
+    upload: UploadEnd,
+    /// When the fetch comes due. `None` once due or decided.
     due: Option<u64>,
     /// The fetch came due and the driver sent it. Until then it waits in
     /// the request queue: no window runs, and nothing Tor says about the
@@ -98,22 +189,42 @@ struct Ask {
     /// When a sent fetch with no answer counts as missing. `None` until
     /// the fetch is sent, and cleared once the directory is decided.
     answer_by: Option<u64>,
-    held: Held,
+    /// What Tor said, for the report.
+    answer: Option<DirectoryAnswer>,
+    /// `None` while undecided.
+    counted: Option<Counted>,
 }
 
 impl Ask {
+    fn start(upload: RoundUpload, due: Option<u64>, counted: Option<Counted>) -> Self {
+        Self {
+            hsdir: upload.hsdir,
+            descriptor_id: upload.descriptor_id,
+            upload: upload.ended,
+            due,
+            sent: false,
+            answer_by: None,
+            answer: None,
+            counted,
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.counted.is_none()
+    }
+
     /// The fetch has been sent and the directory has not been decided.
     fn is_open(&self) -> bool {
-        self.held == Held::Pending && self.sent
+        self.is_pending() && self.sent
     }
 
     /// The fetch came due and waits to be sent.
     fn is_queued(&self) -> bool {
-        self.held == Held::Pending && self.due.is_none() && !self.sent
+        self.is_pending() && self.due.is_none() && !self.sent
     }
 
-    fn exclude(&mut self) {
-        self.held = Held::Excluded;
+    fn decide(&mut self, counted: Counted) {
+        self.counted = Some(counted);
         self.due = None;
         self.answer_by = None;
     }
@@ -147,39 +258,32 @@ pub(super) struct DirectoryCheck {
 }
 
 impl DirectoryCheck {
-    /// `fetches` are `(directory, uploaded descriptor, when to send)`.
-    /// An empty list is complete: nothing to count, so the probe decides.
-    /// So is a missing counter of ours: no fetch is sent, and the probe is
-    /// not held for answer windows it cannot compare (§4.5).
-    pub(super) fn new(
-        fetches: Vec<(RelayFingerprint, String, u64)>,
-        ours: Option<ServiceDescriptor>,
-    ) -> Self {
-        if ours.is_none() {
-            return Self {
-                ours,
-                asks: Vec::new(),
-                asked_for: None,
-                complete: true,
-            };
-        }
-        let complete = fetches.is_empty();
-        Self {
-            ours,
-            asks: fetches
-                .into_iter()
-                .map(|(hsdir, descriptor_id, due)| Ask {
-                    hsdir,
-                    descriptor_id,
-                    due: Some(due),
-                    sent: false,
-                    answer_by: None,
-                    held: Held::Pending,
+    /// `rows` are the directories the probe handed over. One already settled
+    /// is not asked. A check with nothing to ask is complete: nothing to
+    /// count, so the probe decides. So is a missing counter of ours: no
+    /// fetch is sent, and the probe is not held for answer windows it
+    /// cannot compare (§4.5).
+    pub(super) fn new(rows: Vec<DirectoryRow>, ours: Option<ServiceDescriptor>) -> Self {
+        let asks = if ours.is_none() {
+            Vec::new()
+        } else {
+            rows.into_iter()
+                .map(|row| match row {
+                    DirectoryRow::Ask { upload, due } => Ask::start(upload, Some(due), None),
+                    DirectoryRow::Settled { upload, counted } => {
+                        Ask::start(upload, None, Some(counted))
+                    }
                 })
-                .collect(),
+                .collect()
+        };
+        let mut check = Self {
+            ours,
+            asks,
             asked_for: None,
-            complete,
-        }
+            complete: false,
+        };
+        check.settle();
+        check
     }
 
     /// The next time the check needs the core: a fetch to send, or an
@@ -190,7 +294,7 @@ impl DirectoryCheck {
         }
         self.asks
             .iter()
-            .filter(|ask| ask.held == Held::Pending)
+            .filter(|ask| ask.is_pending())
             .filter_map(|ask| ask.due.or(ask.answer_by))
             .min()
     }
@@ -203,7 +307,7 @@ impl DirectoryCheck {
         self.expire(now);
         let mut fetch = Vec::new();
         for ask in &mut self.asks {
-            if ask.held == Held::Pending && ask.due.is_some_and(|due| now >= due) {
+            if ask.is_pending() && ask.due.is_some_and(|due| now >= due) {
                 ask.due = None;
                 fetch.push(ask.hsdir);
             }
@@ -236,7 +340,7 @@ impl DirectoryCheck {
     pub(super) fn withheld(&mut self, hsdir: RelayFingerprint) {
         for ask in &mut self.asks {
             if ask.hsdir == hsdir && ask.is_queued() {
-                ask.exclude();
+                ask.decide(Counted::Excluded(Exclusion::NotAsked));
             }
         }
         self.settle();
@@ -269,11 +373,9 @@ impl DirectoryCheck {
         self.settle();
     }
 
-    /// `hsdir` answered a fetch this check has sent. An answer about a
-    /// descriptor other than the one uploaded there excludes that
-    /// directory. Answers that say nothing about the descriptor exclude
-    /// it too. An answer for a directory not yet sent, or not in this
-    /// check, is ignored.
+    /// `hsdir` answered a fetch this check has sent. How the answer counts
+    /// is [`Self::hold`]'s. An answer for a directory not yet sent, or not
+    /// in this check, is ignored.
     pub(super) fn answered(
         &mut self,
         hsdir: RelayFingerprint,
@@ -287,43 +389,56 @@ impl DirectoryCheck {
         else {
             return;
         };
-        let uploaded = self.asks[at].descriptor_id.clone();
-        let held = self.hold(&uploaded, descriptor_id, answer);
+        let counted = self.hold(&self.asks[at], descriptor_id, answer);
         let ask = &mut self.asks[at];
-        ask.answer_by = None;
-        ask.held = held;
+        ask.answer = Some(answer);
+        ask.decide(counted);
         self.settle();
     }
 
-    /// What this answer does to the directory that was sent `uploaded`.
-    fn hold(&self, uploaded: &str, descriptor_id: Option<&str>, answer: DirectoryAnswer) -> Held {
-        match (descriptor_id, answer) {
-            (Some(id), _) if id != uploaded => Held::Excluded,
-            (_, DirectoryAnswer::Received { revision_counter }) => {
-                self.copy_held(uploaded, revision_counter)
+    /// What this answer does to `ask`'s directory, read in order. An answer
+    /// about a descriptor other than the one uploaded there excludes it,
+    /// whatever the upload. Our failure to ask excludes it too. Otherwise
+    /// the answer counts, and an answer that says nothing about the copy is
+    /// excluded only for an upload Tor confirmed: for one it never
+    /// confirmed, nothing shows the directory took it (Rick, 2026-11-15).
+    fn hold(&self, ask: &Ask, descriptor_id: Option<&str>, answer: DirectoryAnswer) -> Counted {
+        if descriptor_id.is_some_and(|id| id != ask.descriptor_id) {
+            return Counted::Excluded(Exclusion::OtherDescriptor);
+        }
+        let counted = match answer {
+            DirectoryAnswer::Received { revision_counter } => {
+                self.copy_held(&ask.descriptor_id, revision_counter)
             }
-            (_, DirectoryAnswer::NotFound) => Held::Missing,
-            (_, DirectoryAnswer::Other | DirectoryAnswer::Unusable) => Held::Excluded,
+            DirectoryAnswer::NotFound => Counted::Missing,
+            DirectoryAnswer::Other => Counted::Excluded(Exclusion::SaidNothing),
+            DirectoryAnswer::Unusable => return Counted::Excluded(Exclusion::NotAsked),
+        };
+        match counted {
+            Counted::Excluded(Exclusion::SaidNothing) if !ask.upload.confirmed() => {
+                Counted::Missing
+            }
+            counted => counted,
         }
     }
 
     /// How a stored copy counts (§4.5), asked in order. When Tor gave no
-    /// descriptor, this directory does not count and the probe alone
-    /// decides. When ours names a different descriptor, a stored copy counts
-    /// by being there (`desc_next`). When this is the descriptor ours names,
-    /// the counters decide: equal is found, any other counter is missing,
-    /// and an unreadable counter is excluded.
-    fn copy_held(&self, uploaded: &str, revision_counter: Option<u64>) -> Held {
+    /// descriptor, the copy says nothing. When ours names a different
+    /// descriptor, a stored copy counts by being there (`desc_next`). When
+    /// this is the descriptor ours names, the counters decide: equal is
+    /// found, any other counter is missing, and an unreadable counter says
+    /// nothing.
+    fn copy_held(&self, uploaded: &str, revision_counter: Option<u64>) -> Counted {
         let Some(ours) = &self.ours else {
-            return Held::Excluded;
+            return Counted::Excluded(Exclusion::SaidNothing);
         };
         if ours.descriptor_id != uploaded {
-            return Held::Found;
+            return Counted::Found;
         }
         match revision_counter {
-            Some(theirs) if theirs == ours.revision_counter => Held::Found,
-            Some(_) => Held::Missing,
-            None => Held::Excluded,
+            Some(theirs) if theirs == ours.revision_counter => Counted::Found,
+            Some(_) => Counted::Missing,
+            None => Counted::Excluded(Exclusion::SaidNothing),
         }
     }
 
@@ -348,8 +463,8 @@ impl DirectoryCheck {
     }
 
     pub(super) fn verdict(&self) -> DirectoryVerdict {
-        let found = self.count(Held::Found);
-        let counted = found + self.count(Held::Missing);
+        let found = self.count(Counted::Found);
+        let counted = found + self.count(Counted::Missing);
         if counted == 0 {
             DirectoryVerdict::Unmatched
         } else if found * 2 > counted {
@@ -359,8 +474,26 @@ impl DirectoryCheck {
         }
     }
 
-    fn count(&self, held: Held) -> usize {
-        self.asks.iter().filter(|ask| ask.held == held).count()
+    /// One line per decided directory, in the round's order.
+    pub(super) fn report(&self) -> Vec<DirectoryReport> {
+        self.asks
+            .iter()
+            .filter_map(|ask| {
+                ask.counted.map(|counted| DirectoryReport {
+                    hsdir: ask.hsdir,
+                    upload: ask.upload,
+                    answer: ask.answer,
+                    counted,
+                })
+            })
+            .collect()
+    }
+
+    fn count(&self, counted: Counted) -> usize {
+        self.asks
+            .iter()
+            .filter(|ask| ask.counted == Some(counted))
+            .count()
     }
 
     fn learn(&mut self, descriptor_id: &str) {
@@ -371,25 +504,23 @@ impl DirectoryCheck {
             return;
         };
         for ask in &mut self.asks {
-            if ask.held == Held::Pending && ask.descriptor_id != asked_for {
-                ask.exclude();
+            if ask.is_pending() && ask.descriptor_id != asked_for {
+                ask.decide(Counted::Excluded(Exclusion::OtherDescriptor));
             }
         }
     }
 
     fn expire(&mut self, now: u64) {
         for ask in &mut self.asks {
-            if ask.held == Held::Pending && ask.answer_by.is_some_and(|at| now >= at) {
-                ask.held = Held::Missing;
-                ask.due = None;
-                ask.answer_by = None;
+            if ask.is_pending() && ask.answer_by.is_some_and(|at| now >= at) {
+                ask.decide(Counted::Missing);
             }
         }
         self.settle();
     }
 
     fn settle(&mut self) {
-        if self.asks.iter().all(|ask| ask.held != Held::Pending) {
+        if self.asks.iter().all(|ask| !ask.is_pending()) {
             self.complete = true;
         }
     }

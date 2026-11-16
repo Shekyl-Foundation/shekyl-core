@@ -600,8 +600,8 @@ fn a_refusal_reaches_the_operator_as_class_and_code() {
     assert!(!out.contains("english"), "{out}");
 }
 /// The C++ printed `<unknown>` below its cutoff and UTC
-/// `%Y-%m-%d %H:%M:%S` above it. A genesis block with timestamp 0 is the
-/// case an operator actually sees.
+/// `%Y-%m-%d %H:%M:%S` above it. A zero timestamp, which no block carries
+/// now that genesis has its mint time (NI-R18), still renders `<unknown>`.
 #[test]
 fn timestamps_render_as_the_cpp_did() {
     assert_eq!(human_readable_timestamp(0), "<unknown>");

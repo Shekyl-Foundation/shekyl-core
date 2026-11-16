@@ -80,7 +80,7 @@ One actor owns every `PreparedCache` in the process. Nothing else builds, holds 
 - **Output:** at most three seeds, in order:
   1. the connecting height's seed;
   2. the window's other seed, when it names one;
-  3. the seed of the most-work chain among the held forks and the frontier, when the window does not already name it. When it does there is no third: the next-heaviest chain does not take the place (HA-R2's one rule).
+  3. the seed of the most-work chain the body window does not cover, among the held forks and the frontier (HA-R2). A chain whose seed the window names is set aside before the work is compared: a synced node's frontier is a run on its own chain, always the heaviest and always in the window, and it does not keep a held fork from the place.
 - **Equal work** is decided by a fixed order: a held fork before the frontier, and between forks the first in the alt table's key order.
 - **The third's class** is the class its jobs hash at: `HeaderPow` for the frontier, `Unsolicited` for a held fork, which is lighter than the main chain and reaches this node as announcements.
 - **A store with no block ranks nothing,** so the list never names the null seed. Genesis is still hashed under it: its form is a job, which builds the null seed's cache in an outside place, and refill frees it at the next quiescence. A fresh store therefore derives twice (the null seed, then block 0's id) and keeps one cache. A restart derives once.
@@ -235,7 +235,7 @@ The cache store, the slot methods on `Substrate`, the ingest's pin lock, window 
 
 ## 8. Tests
 
-- **`ranked_seeds`, in isolation** (`cache_window.rs`): one table over a one-seed and a two-seed window, a held fork past its seed point, two held forks (the heavier is listed; of two equal, the first in key order), a header frontier ahead of the window, a frontier and a fork together (the more work is listed; of two equal, the fork), and a seed already in the window (not listed twice, and the next-heaviest does not take the place). A store with no block ranks nothing.
+- **`ranked_seeds`, in isolation** (`cache_window.rs`): one table over a one-seed and a two-seed window, a held fork past its seed point, two held forks (the heavier is listed; of two equal, the first in key order), a header frontier ahead of the window, a frontier and a fork together (the more work is listed; of two equal, the fork), a seed already in the window (not listed twice, and the heaviest chain outside the window is the third), and a frontier outside the window that outweighs a held fork (the frontier is listed). A store with no block ranks nothing.
 - **The invariant (HA-R5):** once the actor is quiet it holds exactly the caches a fresh actor fed the same list would hold, and no more than three caches exist at any time.
   - In the crate: the core's property test, and the same sequences through the real shell in the nightly lane.
   - In the shell: a quiet hasher holds exactly the seeds its last list names, before a list, once built, and after an outside job; a job parked for its permit keeps `quiet` false (`shell_tests.rs`). The property test holds `quiet` to the model's own quiescence after every event, and that no state has a waiting job beside places that are all warm.

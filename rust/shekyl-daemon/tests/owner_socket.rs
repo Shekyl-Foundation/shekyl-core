@@ -79,7 +79,7 @@ fn run_child_if_requested() {
         ]);
     }
     let args: Vec<std::ffi::OsString> = args.iter().map(std::ffi::OsString::from).collect();
-    let status = shekyl_daemon::run::main(
+    let status = shekyl_daemon::run::main_loading(
         &args,
         &Platform {
             home: Some(dir),
@@ -87,6 +87,7 @@ fn run_child_if_requested() {
             session_dir: None,
             service_rendezvous: None,
         },
+        shekyl_daemon_config::load_default_file_unread,
     );
     std::process::exit(status);
 }

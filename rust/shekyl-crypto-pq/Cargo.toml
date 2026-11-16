@@ -8,15 +8,20 @@ license.workspace = true
 autoexamples = false
 
 [features]
-# Exposes test-support helpers (F-7): `generate_ephemeral_keypair_for_tests`,
-# `sign_with_ml_dsa_seed`, and `sign_pqc_auth_for_output_with_ml_dsa_seed`
-# (the wallet signer's assembly with that seeded nonce). Names announce
-# test-only intent; a non-derived
-# keypair must never reach a wallet. Enabled under `[dev-dependencies]`
-# (benches, integration tests), and forwarded by `shekyl-p-serve`'s
-# `test-signer` feature, whose own enablers are listed in
-# `scripts/ci/check_test_only_features.py` (FOLLOWUPS F-7).
+# Test-support helpers that take no seed: `generate_ephemeral_keypair_for_tests`
+# (a non-derived keypair, which must never reach a wallet),
+# `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests` and
+# `derive_p_hs_id_seed`. TEST_ONLY (`scripts/ci/check_test_only_features.py`):
+# enabled from `[dev-dependencies]` edges only.
 test-utils = []
+# Deterministic signing: `sign_with_ml_dsa_seed`,
+# `sign_pqc_auth_for_output_with_ml_dsa_seed` and both FN-DSA
+# `sign_with_rng_seed`s, which sign with a caller's seed in place of the OS's.
+# For KATs, instruction-count benches and the chain forge's byte-identical
+# chains (CHAIN_FORGE.md §5.3, seam T3). TEST_ONLY like `test-utils`: no build
+# that ships has these symbols, so no production signer can be handed a seed
+# (CF-R9).
+seeded-rng = []
 
 [dependencies]
 thiserror.workspace = true
@@ -232,11 +237,12 @@ hex = "0.4"
 # needs the original. Not a dependency of the library, so no shipped path can
 # reach for the generator that does not wipe itself.
 rand_chacha = "0.3"
-# Self-reference enabling `test-utils` for this crate's own integration tests
-# and benches (F-7): `generate_ephemeral_keypair_for_tests` is gated behind
-# that feature, and a separate integration-test crate cannot see the in-crate
-# `cfg(test)` gate. Standard cargo idiom for feature-enabling one's own tests.
-shekyl-crypto-pq = { path = ".", features = ["test-utils"] }
+# Self-reference enabling `test-utils` and `seeded-rng` for this crate's own
+# integration tests and benches: the KATs and benches sign with fixed seeds
+# and take ephemeral keys, and a separate integration-test crate cannot see
+# the in-crate `cfg(test)` gate. Standard cargo idiom for feature-enabling
+# one's own tests; a dev edge, so neither feature reaches a shipped build.
+shekyl-crypto-pq = { path = ".", features = ["test-utils", "seeded-rng"] }
 # Note: the ARCHIVAL_P_DERIVE_V2 KAT computes its p_canonical_id via an inline
 # cSHAKE256 (so the `shekyl-archival-retention` cross-check proves the two
 # cSHAKE paths agree). It uses `sha3` directly, which is already a normal

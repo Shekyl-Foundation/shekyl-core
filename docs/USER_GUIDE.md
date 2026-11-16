@@ -160,9 +160,10 @@ refused.
 A file that holds a SOCKS username or password is read only by root, by
 the daemon's account, and by the daemon's group while that account is the
 group's only member (a service install keeps the file `root:shekyl`
-`0640`). The check reads the accounts the system enumerates, so accounts
-from a directory service that does not list its accounts are not seen by
-it: keep the daemon's group a local group.
+`0640`). The check reads the accounts the system enumerates. A directory
+service that is stopped, or that does not list its accounts, is treated as
+listing none of them, so its accounts are not seen: keep the daemon's group
+a local group.
 
 <!-- shekyld-example: begin -->
 # shekyld configuration file. Every key is an option's name, spelled
@@ -965,17 +966,14 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 > **Status: Experimental.** There are known metadata leak vectors. See
 > [ANONYMITY_NETWORKS.md](ANONYMITY_NETWORKS.md) for the full threat matrix.
 
-> **Tor-zone cover is an operator choice, not a protocol default (TRC,
-> recorded 2026-09-12).** Wire-observer resistance on Tor comes from running a
-> **non-exit** Tor relay in a **separate process** from `shekyld`, with the
-> node's Tor **client that same process** (originated cells on the relay's OR
-> connections). A sidecar client Tor — including the default managed
-> ephemeral instance — is uncovered. See [TOR_RELAY.md](TOR_RELAY.md). The
-> daemon does not check, warn, or refuse on that basis. The contract is
-> [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md).
+> **Tor hides your IP address from peers, not when you send.** Someone
+> watching your connection to the Tor network can tell when your node sends
+> its own transaction. Running a Tor relay does not change that
+> ([TOR_RELAY.md](TOR_RELAY.md)). Cover traffic is being redesigned
+> ([design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md)).
 
-Shekyl can broadcast transactions over Tor so that observers cannot
-link your IP address to your transactions. I2P is not a network this
+Shekyl can broadcast transactions over Tor so that peers do not learn
+your IP address from your transactions. I2P is not a network this
 daemon dials. Regular block sync and peer communication still uses IPv4
 to resist Sybil attacks.
 
@@ -991,9 +989,7 @@ endpoint it forwards to:
     --tor-onion <your-onion>.onion:11021 --tor-onion-listen 127.0.0.1:11021
 ```
 
-`--tor off` is clearnet only. For Tor-zone *cover*, that SocksPort must be
-the non-exit relay process — see [TOR_RELAY.md](TOR_RELAY.md) — not a
-second client Tor.
+`--tor off` is clearnet only.
 
 ### Wallet through Tor
 
@@ -1014,10 +1010,9 @@ operator sees what it asks for — true of your own node too; see
   **only** sent to peers on anonymity networks.
 - If no anonymity peers are available, the transaction is **held** -- it will
   never be broadcast over a public connection.
-- V3 transactions are larger (~7-8 KB vs ~2-3 KB pre-PQC), creating a more
-  distinctive traffic burst. On Tor that burst is mixed by operator relay
-  volume ([TOR_RELAY.md](TOR_RELAY.md)), not by dummy traffic. Tor is the
-  only encrypted network, so dummy traffic is not a second network's cover.
+- A transaction's send is a burst on your node's Tor connection, and today
+  nothing hides it, a relay included (see the note at the top of this
+  section).
 
 ---
 

@@ -30,6 +30,14 @@ import subprocess
 import sys
 import tempfile
 
+# Git exports GIT_DIR and its kin into hooks. A throwaway repository built
+# here must not inherit them, or `git init --bare` and `git config` act on the
+# caller's real repository (a pre-push hook's run once made it bare and gave
+# it a test author, 2026-11-15). Git finds a repository from the working
+# directory without them.
+for _name in [_k for _k in os.environ if _k.startswith("GIT_")]:
+    del os.environ[_name]
+
 GATE = pathlib.Path(__file__).resolve().parent / "check_doc_claims.py"
 
 # ── outcome coverage ──────────────────────────────────────────────────────────

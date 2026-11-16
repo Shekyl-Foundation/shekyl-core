@@ -229,54 +229,11 @@ jobs:
             echo "FATAL: expected x86_64 runner, got $ARCH"
             exit 1
           fi
-      - name: verify fuzz harness inventory (smoke gate)
-        shell: bash
-        run: |
-          REQUIRED_TARGETS=(
-            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_fcmp_proof_deserialize.rs
-            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_curve_tree_leaf_hash.rs
-            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_block_header_tree_root.rs
-            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_kem_decapsulate.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_bech32m_address_decode.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_blob_roundtrip.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_envelope_v2_decode.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_intent_validation.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_body_proposal_decode.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_body_commitment_decode.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_body_signing_set_decode.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_body_responder_share_decode.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_body_signature_share_decode.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_body_final_tx_decode.rs
-            rust/shekyl-multisig/fuzz/fuzz_targets/fuzz_body_hybrid_sig_decode.rs
-            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs
-            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_block_parse.rs
-            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_parse.rs
-            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
-            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs
-            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_open_one.rs
-            rust/shekyl-noise/fuzz/fuzz_targets/fuzz_classed_opener.rs
-          )
-          MISSING=0
-          for target in "${REQUIRED_TARGETS[@]}"; do
-            if [ ! -f "$target" ]; then
-              echo "FATAL: missing required fuzz harness: $target"
-              MISSING=1
-            fi
-          done
-          if [ "$MISSING" -ne 0 ]; then
-            exit 1
-          fi
-          echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
       - uses: Swatinem/rust-cache@v2
         with:
           # Workspace at rust/ with target dir at rust/target/.
-          # The fcmp fuzz workspace is excluded from that workspace, so
-          # it is listed on its own line and caches rust/shekyl-fcmp/fuzz/target.
-          # No CARGO_TARGET_DIR: that target must not be rust/target.
+          # No CARGO_TARGET_DIR: that target must not be rust/target. The
+          # fuzz crates are compiled by fuzz-harness.yml, not here.
           # Swatinem auto-caches ~/.cargo/{registry,git,bin} plus the
           # workspace target/. The default cache key already mixes
           # rustc version + Cargo.lock hash + a per-job component, so
@@ -296,8 +253,6 @@ jobs:
           # docs/formal/checkct/dynamic, with its own target/ likewise.
           workspaces: |
             rust -> target
-            rust/shekyl-fcmp/fuzz -> target
-            rust/shekyl-wire/fuzz -> target
             docs/formal/checkct/dynamic -> target
           # Saved by push runs only (`dev`, `main`); a pull request
           # restores and never saves. A cache saved by a pull request is
@@ -494,30 +449,6 @@ jobs:
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
-      - name: compile the shekyl-fcmp fuzz harnesses
-        # The inventory step only checks the files exist. This is a separate
-        # workspace, so `cargo check --workspace` does not see it
-        # (rust/Cargo.toml exclude: a stable workspace check must not resolve
-        # libfuzzer-sys). This job is the exception: the four harnesses are
-        # the API-drift gate for shekyl-fcmp, and libfuzzer-sys 0.4 typechecks
-        # on the pinned stable toolchain. The lockfile is the fuzz workspace's
-        # own. Placed after the cache so the registry restore is already warm.
-        # No CARGO_TARGET_DIR: this workspace must not share rust/target.
-        # Its own target/ is the second cache workspace above.
-        run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
-      - name: compile the shekyl-wire fuzz harnesses
-        # The wire parsers that read untrusted bytes: the block, the
-        # transaction and tx_extra. Same shape as the fcmp step above: its
-        # own workspace and lockfile, type-checked on the pinned stable
-        # toolchain as the API-drift gate; running them needs nightly.
-        run: cargo check --locked --manifest-path rust/shekyl-wire/fuzz/Cargo.toml
-      - name: compile the shekyl-multisig fuzz harnesses
-        # The multisig envelope, payload and intent decoders read bytes a
-        # group member's file carries. Same shape as the fcmp and wire steps:
-        # its own workspace and lockfile, type-checked on the pinned stable
-        # toolchain as the API-drift gate (rule 47: a fuzz crate nothing
-        # compiles cannot see its own drift); running them needs nightly.
-        run: cargo check --locked --manifest-path rust/shekyl-multisig/fuzz/Cargo.toml
       - name: "constant-time dynamic harness: fmt, clippy, tests"
         # docs/formal/checkct/dynamic is its own workspace (its own lockfile
         # pins the audited crypto-bigint) on the shipped toolchain (its
@@ -722,7 +653,7 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-curve-tree -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-wire --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-wire --lib -- -D warnings
       - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
         working-directory: rust
         # The economics sim depends on shekyl-mempool with
