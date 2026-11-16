@@ -115,7 +115,7 @@ impl Seeds {
 
     /// The seed `role` draws at `index` for `source`: the plan's, or once
     /// `source` is swapped, the OS's, the same for the rest of the run.
-    fn pick(&self, source: Source, role: Role, index: u64) -> [u8; 32] {
+    pub fn pick(&self, source: Source, role: Role, index: u64) -> [u8; 32] {
         if !self.swapped.contains(&source) {
             return seed_for(&self.plan, role, index);
         }
@@ -132,7 +132,7 @@ impl Seeds {
     }
 
     /// A key the plan derives (no source: keys are derived, not drawn).
-    fn key(&self, role: Role, index: u64) -> [u8; 32] {
+    pub fn key(&self, role: Role, index: u64) -> [u8; 32] {
         seed_for(&self.plan, role, index)
     }
 

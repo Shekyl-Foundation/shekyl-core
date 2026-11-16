@@ -535,6 +535,53 @@ pub async fn close_shards_drawing(
     Filled { closed }
 }
 
+/// Shard `shard`'s body as its holder serves it: the closed shard's
+/// transactions, in chain order, as one `shard_frame` over their two
+/// archival segments. What a persona serving the shard on the production
+/// serve loop sends (the producer's gate test, the chain forge's producer
+/// plan).
+///
+/// # Panics
+///
+/// If the shard is not closed, or a transaction of it is not on `chain`.
+#[cfg(feature = "producer")]
+pub fn shard_body(
+    scenario: &Scenario<FreeHash>,
+    chain: &[Mined],
+    shard: ShardId,
+) -> std::sync::Arc<[u8]> {
+    use shekyl_archival_fetch_sched::{ShardFacts as _, ShardStanding};
+    use shekyl_wire::shard_frame::{encode_frame, FrameTx};
+    let facts = crate::shard_facts::StoreShardFacts::new(scenario.store());
+    let ShardStanding::Closed(closed) = facts.shard(shard).expect("the facts read") else {
+        panic!("shard {shard:?} is closed");
+    };
+    let mut segments = Vec::new();
+    for row in closed.expected.txs() {
+        let tx = chain
+            .iter()
+            .flat_map(|mined| mined.template.transactions.iter())
+            .find(|tx| tx.txid_parts().hash == row.hash)
+            .expect("every transaction of the shard was mined here");
+        let shekyl_wire::Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
+            panic!("a fill transaction is an FCMP++ spend");
+        };
+        segments.push((
+            u64::try_from(pqc_auths.len()).expect("fits"),
+            tx.write_segments().expect("segments"),
+        ));
+    }
+    let frame: Vec<FrameTx<'_>> = segments
+        .iter()
+        .map(|(count, segments)| FrameTx {
+            pqc_auth_count: *count,
+            pqc_auths: &segments.pqc_auths,
+            prunable: &segments.prunable,
+        })
+        .collect();
+    std::sync::Arc::from(encode_frame(&frame))
+}
+
 /// The first height at or after `from` such that it and the `following`
 /// heights after it sit in one levered epoch and none of them is an epoch
 /// close (the block at `last_block(E)`). A scenario whose join block and

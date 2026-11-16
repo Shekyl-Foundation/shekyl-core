@@ -26,6 +26,7 @@
 //! record is `CF-3`'s.
 
 pub mod claim;
+pub mod produce;
 pub mod seeds;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -83,6 +84,30 @@ pub struct Options {
     pub stop_at_difference: Option<BlocksTxt>,
     /// `form` workers hashing at once in the trace's replay.
     pub hashers: NonZeroUsize,
+    /// How a `produce` step's producer runs.
+    pub producer: ProducerOptions,
+}
+
+/// How a `produce` step's producer runs.
+pub struct ProducerOptions {
+    /// Draw every producer input from the OS, through the seams a node
+    /// runs, instead of the plan's seed: the live cross-check's run
+    /// (`CF-R18` (2)).
+    pub live: bool,
+    /// The spread each read's start delay is drawn below. A planned run's
+    /// bytes do not depend on it (`CF-R18` (3)).
+    pub start_spread: std::time::Duration,
+}
+
+impl Default for ProducerOptions {
+    /// A planned run, its start delays drawn below 50 ms: a chain mined in
+    /// seconds a block has no use for the node's two-minute spread.
+    fn default() -> Self {
+        Self {
+            live: false,
+            start_spread: std::time::Duration::from_millis(50),
+        }
+    }
 }
 
 /// A forged chain.
@@ -242,6 +267,7 @@ pub struct Forge {
     stop: Option<BlocksTxt>,
     stopped: Option<Difference>,
     built: Vec<Built>,
+    producer: ProducerOptions,
 }
 
 impl Forge {
@@ -299,6 +325,7 @@ impl Forge {
             stop: options.stop_at_difference,
             stopped: None,
             built: Vec::new(),
+            producer: options.producer,
         };
         forge.write_new()?;
         Ok(forge)
@@ -489,6 +516,7 @@ impl Forge {
             Action::Serve { persona } => self.serve(*persona).await?,
             Action::Claim { persona } => self.claim(*persona).await?,
             Action::Reorg { depth } => self.reorg(*depth).await?,
+            Action::Produce { persona } => self.produce(*persona).await?,
         }
         self.write_new()
     }
@@ -740,6 +768,109 @@ impl Forge {
             .unwrap_or_else(|outcome| panic!("the claim connects: {outcome}"));
         assert_eq!(block.height, connecting);
         self.chain.push(block);
+        Ok(())
+    }
+
+    /// Persona `slot` serves its shard, the bundle producer's task reads it
+    /// and files, and the chain mines through the slash pass of the first
+    /// epoch the persona is drawn in ([`produce`]).
+    async fn produce(&mut self, slot: u32) -> Result<(), ForgeFault> {
+        use produce::{Draws, PlanReceipts, Producing};
+        let (shard, join_epoch) = {
+            let joined = self
+                .personas
+                .get(&slot)
+                .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+            (joined.shard.shard, joined.join_epoch)
+        };
+        let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
+        let settled_at =
+            BlockHeight::from_raw(self.schedule.slash_deadline_height(served.to_raw()));
+        let network = self.scenario().network_id();
+        let draws = if self.producer.live {
+            Draws::Live
+        } else {
+            Draws::Plan(Arc::clone(&self.seeds))
+        };
+        let ring = Producing::ring(&draws, network);
+        self.scenario().draw_from(Arc::clone(&ring));
+        let tip = Arc::new(shekyl_p_host::DaemonTipCache::new(
+            std::time::Duration::from_secs(24 * 60 * 60),
+        ));
+        tip.stamp_synced(self.chain.last().expect("genesis at least").height);
+        let body = shekyl_chain_ingest::scenario_shard::shard_body(
+            self.scenario.as_ref().expect("home"),
+            &self.chain,
+            shard,
+        );
+        // The persona's own receipt secret, owned by the serving key.
+        let receipt =
+            Persona::from_master(&self.seeds.persona_master(slot), Network::Regtest, slot)
+                .into_keys()
+                .receipt_sign_sk;
+        let key: Arc<dyn shekyl_p_host::PassKey> = Arc::new(PlanReceipts::new(
+            receipt,
+            match &draws {
+                Draws::Plan(seeds) => Some(Arc::clone(seeds)),
+                Draws::Live => None,
+            },
+        ));
+        let signer = shekyl_p_host::signer_over_tip(Arc::clone(&tip), key);
+        let (endpoint, client) = shekyl_p_loopback::endpoint_and_client(
+            shard.to_raw(),
+            body,
+            signer,
+            produce::timeouts(),
+        )
+        .await;
+        let mut producing = Producing::start(
+            self.scenario.as_ref().expect("home"),
+            self.rules,
+            &ring,
+            client,
+            &draws,
+            self.producer.start_spread,
+        )
+        .await;
+        while self.chain.last().expect("genesis at least").height < settled_at {
+            let queued = !self
+                .scenario()
+                .store()
+                .begin_read()
+                .expect("snapshot")
+                .queued_bundles()
+                .expect("the queue reads")
+                .is_empty();
+            let mined = if queued {
+                self.scenario()
+                    .mine_admitting(Vec::new())
+                    .await
+                    .unwrap_or_else(|outcome| panic!("a producer-plan block lands: {outcome}"))
+                    .0
+            } else {
+                self.scenario()
+                    .mine_listing(Vec::new())
+                    .await
+                    .unwrap_or_else(|outcome| panic!("a producer-plan block lands: {outcome}"))
+            };
+            tip.stamp_synced(mined.height);
+            self.chain.push(mined);
+            producing.settle().await;
+            self.write_new()?;
+            if self.stopped.is_some() {
+                break;
+            }
+        }
+        let ended = std::mem::take(&mut *producing.ended.lock().expect("the outcome list"));
+        producing.stop().await;
+        drop(endpoint);
+        if let Some(first) = ended.first() {
+            return Err(ForgeFault::Plan(format!(
+                "{} read(s) did not pass, the first {first:?}: a stall changes a produced \
+                 bundle, so this run cannot be the plan's chain (CHAIN_FORGE.md §4)",
+                ended.len()
+            )));
+        }
         Ok(())
     }
 

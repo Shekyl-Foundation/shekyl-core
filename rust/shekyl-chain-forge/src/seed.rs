@@ -109,6 +109,17 @@ pub enum Role {
     ClaimAuth,
     /// S5: an emission claim's emission slot, by its persona's identity key.
     EmissionSlot,
+    /// The bundle producer's ring: a witness's two keygen seeds (two
+    /// indices a template height).
+    RingKey,
+    /// The bundle producer's ring: a witness's draw seed.
+    RingSeed,
+    /// The bundle producer's ring: a bundle's witness signature.
+    RingSignature,
+    /// A receipt the serving persona signs for the bundle producer.
+    ProducerReceipt,
+    /// The bundle producer's task: its read plans and start delays.
+    ProducerReads,
     /// A transaction key the plan names (an emission claim's): not a source
     /// of §5.2, which reads every other transaction key as derived, but a
     /// value the plan, not a constant, decides.
@@ -117,7 +128,7 @@ pub enum Role {
 
 impl Role {
     /// Every role, in declaration order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 20] = [
         Self::Range,
         Self::Blinds,
         Self::Membership,
@@ -132,6 +143,11 @@ impl Role {
         Self::BackingAuth,
         Self::ClaimAuth,
         Self::EmissionSlot,
+        Self::RingKey,
+        Self::RingSeed,
+        Self::RingSignature,
+        Self::ProducerReceipt,
+        Self::ProducerReads,
         Self::TxKey,
     ];
 
@@ -153,6 +169,11 @@ impl Role {
             Self::BackingAuth => "backing-auth",
             Self::ClaimAuth => "claim-auth",
             Self::EmissionSlot => "emission-slot",
+            Self::RingKey => "ring-key",
+            Self::RingSeed => "ring-seed",
+            Self::RingSignature => "ring-signature",
+            Self::ProducerReceipt => "producer-receipt",
+            Self::ProducerReads => "producer-reads",
             Self::TxKey => "tx",
         }
     }

@@ -57,6 +57,11 @@ const CHILD_OUT: &str = "SHEKYL_FORGE_CHILD_OUT";
 const CHILD_SWAP: &str = "SHEKYL_FORGE_CHILD_SWAP";
 const CHILD_STOP_AT: &str = "SHEKYL_FORGE_CHILD_STOP_AT";
 const CHILD_HASHERS: &str = "SHEKYL_FORGE_CHILD_HASHERS";
+/// The plan the child forges, from the crate's directory; the small plan
+/// when unset.
+const CHILD_PLAN: &str = "SHEKYL_FORGE_CHILD_PLAN";
+/// The producer's start spread, in milliseconds.
+const CHILD_SPREAD_MS: &str = "SHEKYL_FORGE_CHILD_SPREAD_MS";
 /// What the child wrote when it stopped at a difference.
 const STOPPED_FILE: &str = "stopped.txt";
 
@@ -78,14 +83,14 @@ const ENVIRONMENTS: [Environment; 2] = [
     Environment {
         name: "one-thread-utc-c",
         tokio_threads: "1",
-        hashers: "1",
+        hashers: "2",
         time_zone: "UTC",
         locale: "C",
     },
     Environment {
         name: "many-threads-chatham-turkish",
         tokio_threads: "7",
-        hashers: "3",
+        hashers: "4",
         // UTC+12:45, and a locale whose case mapping of `i` is not ASCII's.
         time_zone: "Pacific/Chatham",
         locale: "tr_TR.UTF-8",
@@ -99,6 +104,23 @@ fn spawn_child(
     out: &Path,
     swap: Option<Source>,
     stop_at: Option<&Path>,
+) -> std::process::ExitStatus {
+    let mut vars: Vec<(&str, String)> = Vec::new();
+    if let Some(source) = swap {
+        vars.push((CHILD_SWAP, source.name().to_owned()));
+    }
+    if let Some(ledger) = stop_at {
+        vars.push((CHILD_STOP_AT, ledger.display().to_string()));
+    }
+    let vars: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    spawn_child_with(env, out, &vars)
+}
+
+/// [`spawn_child`] with the child's switches as `vars`.
+fn spawn_child_with(
+    env: &Environment,
+    out: &Path,
+    vars: &[(&str, &str)],
 ) -> std::process::ExitStatus {
     let cwd = tempfile::Builder::new()
         .prefix(&format!("forge-cwd-{}-", env.name))
@@ -120,11 +142,8 @@ fn spawn_child(
         .env("TZ", env.time_zone)
         .env("LC_ALL", env.locale)
         .env("LANG", env.locale);
-    if let Some(source) = swap {
-        command.env(CHILD_SWAP, source.name());
-    }
-    if let Some(ledger) = stop_at {
-        command.env(CHILD_STOP_AT, ledger);
+    for (name, value) in vars {
+        command.env(name, value);
     }
     command.status().expect("the child forging runs")
 }
@@ -137,11 +156,12 @@ fn child_forge() {
     let Some(out) = std::env::var_os(CHILD_OUT).map(PathBuf::from) else {
         return;
     };
-    let plan_path = crate_dir().join(PLAN);
+    let plan_name = std::env::var(CHILD_PLAN).unwrap_or_else(|_| PLAN.to_owned());
+    let plan_path = crate_dir().join(&plan_name);
     let bytes = std::fs::read(&plan_path).expect("the plan reads");
     let plan = Plan::parse(std::str::from_utf8(&bytes).expect("utf-8")).expect("the plan parses");
     let plan_ref = PlanRef {
-        path: format!("rust/shekyl-chain-forge/{PLAN}"),
+        path: format!("rust/shekyl-chain-forge/{plan_name}"),
         sha256: sha256_hex(&bytes),
     };
     let swapped: BTreeSet<Source> = std::env::var(CHILD_SWAP)
@@ -170,6 +190,14 @@ fn child_forge() {
                 swapped,
                 stop_at_difference,
                 hashers,
+                producer: executor::ProducerOptions {
+                    live: false,
+                    start_spread: std::time::Duration::from_millis(
+                        std::env::var(CHILD_SPREAD_MS)
+                            .ok()
+                            .map_or(50, |ms| ms.parse().expect("a count of milliseconds")),
+                    ),
+                },
             },
         ))
         .expect("the forging finishes");
@@ -321,18 +349,61 @@ fn the_small_plan_forges_the_same_bytes_in_two_processes() {
     }
 }
 
+/// Where `source` first moves the chain, as lines of `blocks.txt` (from 1):
+/// above the first and at most the second. Read off the committed
+/// manifest's events, so a plan that moves its events moves these with it.
+/// A source swapped to the OS must change the first block that draws from
+/// it, and none before: a control that differs earlier is one source's
+/// swap moving another's bytes, which `seed_for`'s roles exist to prevent.
+fn first_moves(source: Source, manifest: &Manifest) -> (usize, usize) {
+    let line = |name: &str| {
+        let event = manifest
+            .events
+            .iter()
+            .find(|event| event.name == name)
+            .unwrap_or_else(|| panic!("the committed manifest indexes {name}"));
+        usize::try_from(event.record).expect("fits") + 1
+    };
+    let at = |line: usize| (line - 1, line);
+    match source {
+        // The plan's first spend, two inputs: its range proof, its first
+        // input's blind, its membership proof, its slots.
+        Source::S1 | Source::S2 | Source::S3 | Source::S5 => at(line("first-spend-2in")),
+        // The shard fill's spends, after the first spend.
+        Source::S9 => (line("first-spend-2in"), line("shard-0-closed")),
+        // The block after the join commits the served epoch's first draw.
+        Source::S7 => at(line("first-compact-join") + 1),
+        // The first bundle, filed for a drawing block and carried by the
+        // next block, inside the served epoch.
+        Source::S8 => (line("first-compact-join") + 1, line("first-serve-credit")),
+        // The claim's backing proof.
+        Source::S4 => at(line("first-claim")),
+    }
+}
+
 /// One negative control per source of randomness: that source swapped to
-/// the OS's, the forging differs from the committed ledger.
+/// the OS's, the forging differs from the committed ledger, at the first
+/// block that draws from it.
 #[test]
 #[ignore = "a forging per source, up to the source's first block; run by chain-forge.yml"]
 fn each_source_drawn_from_the_os_moves_the_chain() {
-    let committed = crate_dir().join(COMMITTED).join(BLOCKS_FILE);
-    let ledger = BlocksTxt::parse(&std::fs::read_to_string(&committed).expect("committed"))
+    let committed = crate_dir().join(COMMITTED);
+    let ledger_path = committed.join(BLOCKS_FILE);
+    let ledger = BlocksTxt::parse(&std::fs::read_to_string(&ledger_path).expect("committed"))
         .expect("the committed ledger parses");
+    let manifest = Manifest::parse(
+        &std::fs::read_to_string(committed.join(MANIFEST_FILE)).expect("committed"),
+    )
+    .expect("the committed manifest parses");
     for source in Source::ALL {
         let out = tempfile::tempdir().expect("a directory");
         let started = std::time::Instant::now();
-        let status = spawn_child(&ENVIRONMENTS[0], out.path(), Some(source), Some(&committed));
+        let status = spawn_child(
+            &ENVIRONMENTS[0],
+            out.path(),
+            Some(source),
+            Some(&ledger_path),
+        );
         assert!(
             status.success(),
             "the {} control failed: {status}",
@@ -350,15 +421,66 @@ fn each_source_drawn_from_the_os_moves_the_chain() {
             stopped.trim(),
             started.elapsed().as_secs_f64()
         );
-        let blocks: usize = stopped
+        let line: usize = stopped
             .split_whitespace()
             .next()
             .and_then(|n| n.parse().ok())
-            .expect("the stop names its block count");
+            .expect("the stop names its line");
         assert!(
-            blocks <= ledger.lines().len(),
-            "{} stopped inside the committed chain",
+            line <= ledger.lines().len(),
+            "{} stopped inside the chain",
             source.name()
         );
+        let (after, through) = first_moves(source, &manifest);
+        assert!(
+            after < line && line <= through,
+            "{} first moved the chain at line {line}, not in ({after}, {through}]",
+            source.name()
+        );
+    }
+}
+
+/// The producer plan (`CHAIN_FORGE.md` §4, `CF-R18` (1) and (3)): forged in
+/// two processes, under two start spreads, the same bytes. Every input the
+/// producer audit classes as drawn comes from the plan's seed through the
+/// production seams, so two processes agree (1); the forge advances the tip
+/// only once the producer has acted on it, so when a read starts inside its
+/// block moves nothing (3).
+#[test]
+#[ignore = "two producer-plan forgings, minutes each; run by chain-forge.yml's nightly"]
+fn the_producer_plan_forges_the_same_bytes_under_two_start_spreads() {
+    let spreads = ["5", "400"];
+    let outs: Vec<tempfile::TempDir> = ENVIRONMENTS
+        .iter()
+        .map(|env| {
+            tempfile::Builder::new()
+                .prefix(&format!("forge-producer-{}-", env.name))
+                .tempdir()
+                .expect("an output directory")
+        })
+        .collect();
+    for ((env, out), spread) in ENVIRONMENTS.iter().zip(&outs).zip(spreads) {
+        let started = std::time::Instant::now();
+        let status = spawn_child_with(
+            env,
+            out.path(),
+            &[
+                (CHILD_PLAN, "plans/producer.toml"),
+                (CHILD_SPREAD_MS, spread),
+            ],
+        );
+        assert!(
+            status.success(),
+            "the {} producer forging failed: {status}",
+            env.name
+        );
+        eprintln!(
+            "forged the producer plan under {} with start delays below {spread} ms in {:.1} s",
+            env.name,
+            started.elapsed().as_secs_f64()
+        );
+    }
+    if let Some(difference) = first_difference(outs[0].path(), outs[1].path()) {
+        panic!("two forgings of the producer plan differ: {difference}");
     }
 }

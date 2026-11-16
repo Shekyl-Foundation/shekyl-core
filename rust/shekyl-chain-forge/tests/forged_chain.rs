@@ -80,6 +80,7 @@ async fn the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt() {
             swapped: BTreeSet::new(),
             stop_at_difference: None,
             hashers: NonZeroUsize::MIN,
+            producer: executor::ProducerOptions::default(),
         },
     )
     .await

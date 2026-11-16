@@ -9,6 +9,7 @@
 //! cargo run --release -p shekyl-chain-forge --example forge -- \
 //!     --plan rust/shekyl-chain-forge/plans/small.toml --out <dir> \
 //!     [--hashers N] [--swap S1,S5] [--stop-at <committed blocks.txt>]
+//!     [--live-producer] [--start-spread-ms N]
 //! ```
 //!
 //! A cargo example, not a binary (`CF-R8`): it builds against the crate's
@@ -34,7 +35,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use executor::seeds::Source;
-use executor::{forge, Options, Outcome};
+use executor::{forge, Options, Outcome, ProducerOptions};
 use shekyl_chain_forge::{sha256_hex, BlocksTxt, Plan, PlanRef};
 
 fn main() -> ExitCode {
@@ -53,6 +54,12 @@ fn run() -> Result<ExitCode, String> {
     let mut hashers = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
     let mut swapped = BTreeSet::new();
     let mut stop_at = None;
+    let mut live_producer = false;
+    let mut start_spread_ms = ProducerOptions::default()
+        .start_spread
+        .as_millis()
+        .try_into()
+        .map_err(|_| "the default spread fits".to_owned())?;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} takes a value"));
@@ -70,6 +77,12 @@ fn run() -> Result<ExitCode, String> {
                 }
             }
             "--stop-at" => stop_at = Some(PathBuf::from(value()?)),
+            "--live-producer" => live_producer = true,
+            "--start-spread-ms" => {
+                start_spread_ms = value()?
+                    .parse()
+                    .map_err(|_| "--start-spread-ms is a count".to_owned())?;
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -94,6 +107,10 @@ fn run() -> Result<ExitCode, String> {
         swapped,
         stop_at_difference,
         hashers: NonZeroUsize::new(hashers).ok_or("--hashers is at least one")?,
+        producer: ProducerOptions {
+            live: live_producer,
+            start_spread: std::time::Duration::from_millis(start_spread_ms),
+        },
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

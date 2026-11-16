@@ -130,6 +130,17 @@ pub enum Action {
         /// The persona's slot in the plan.
         persona: u32,
     },
+    /// Persona `persona` serves its shard on the production serve loop
+    /// over loopback, the bundle producer's own task reads it and files
+    /// the bundles, and the chain mines through the slash pass of the first
+    /// epoch the persona is drawn in: a producer plan (`CHAIN_FORGE.md`
+    /// §4, the producer audit). Every input the audit classes as drawn
+    /// comes from the plan's seed; a run in which any read stalled is
+    /// refused.
+    Produce {
+        /// The persona's slot in the plan.
+        persona: u32,
+    },
     /// Pop the last `depth` blocks and mine `depth + 1` blocks on the fork,
     /// the first listing a spend the popped branch did not: a shallow
     /// reorg, written as a rewind and the branch after it.
