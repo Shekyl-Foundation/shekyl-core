@@ -428,7 +428,7 @@ async fn run_cell(cell: &Cell) {
 fn check_subjects(messages: &[Row], built: &[Built]) {
     for needle in [
         SUBMISSION,
-        "json_rpc:block_list",
+        "json_rpc:block_show",
         "json_rpc:chain_height",
         "json_rpc:fee",
     ] {

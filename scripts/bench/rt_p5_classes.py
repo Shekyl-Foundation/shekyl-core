@@ -50,7 +50,7 @@ K_MAX = 8
 # The 4.x wire carries every method on `/json_rpc` (RW-Q1), so a label is
 # `json_rpc:` and the method's name.
 SUBMIT = "json_rpc:tx_submit"
-BLOCK_BATCH = "json_rpc:block_list"
+BLOCK_BATCH = "json_rpc:block_show"
 SPEND_BUILDING = "json_rpc:fee"
 
 # Registered tolerance for the determinism check: per matched message, the
@@ -272,8 +272,8 @@ def derive(run_dir):
         print(f"| {tx} | {wallet} | {n_in} × {n_out} | {depth} | " + " | ".join(cells) + " |")
 
 # What each message is, for the question "does a submission share a class
-# with block batches or with wallet sync". A block batch is a `block_list`
-# response: the blocks being synced with their transactions. Wallet sync is
+# with block batches or with wallet sync". A block batch is a `block_show`
+# response: one block being synced, with its transactions. Wallet sync is
 # every other message a refresh makes. Building a spend is `fee`;
 # submitting it is `tx_submit`.
 def category(label, direction):
@@ -371,9 +371,9 @@ def report(run_a, run_b):
           f"{len(ra)} in the first run, {len(rb)} in the second. Padding is the bytes added to "
           "bring each record to its class; the percentage is of that method's payload "
           "(the record bytes less the two-byte occupancy).\n")
-    print("Categories: a **block batch** is a `block_list` response (the blocks being "
-          "synced, with their transactions); **wallet sync** is every other message of a "
-          "refresh (`chain_height`, `version`, and the `block_list` request among them); "
+    print("Categories: a **block batch** is a `block_show` response (one block being "
+          "synced, with its transactions); **wallet sync** is every other message of a "
+          "refresh (`chain_height`, `version`, and the `block_show` request among them); "
           "**spend building** is `fee`; a **submission** is a `tx_submit` request. A path "
           "observer sees each record's direction, so where a submission stands is given in "
           "its own direction first.\n")

@@ -38,12 +38,21 @@ rulings rest on:
 
 ## Registered before the run
 
-*Amended once, 2026-11-15, before any run on the host (the build had
+*Amended twice, 2026-11-15, before any registered run. Second, after
+the dry run: the wallet's refresh reads each block with `block_show`,
+which carries the block's transactions, and never calls `block_list`
+(the chain-ingest fetch's method), so the dry run failed the subject gate
+and named the labels it carried (`block_show`, `chain_height`, `fee`,
+`tx_submit`, `version`). The subject and the script's block batch are
+`json_rpc:block_show`. The clone on the host is moved to the amended
+commit (a checkout, the tree checked clean) and the test binary rebuilt;
+the amendment does not touch the daemon. The dry run is made again from
+that build. First, (the build had
 started, nothing had run). The instrument now writes its files before it
 reads the gates, and a missing subject names the labels the trace does
 carry. A run that fails a gate is still void; its files now show why, so
 a wrong subject name is found from the dry run's files instead of
-needing another run to discover. The host's build is made again from the
+needing another run to discover. The host's build was made again from the
 amended commit.*
 
 **Subject, instrument, unit and flush policy: the 2026-10-17
@@ -78,10 +87,9 @@ registration's commit:
   `0xD2`). Each run writes into its own directory, which must not exist
   beforehand.
 - **The subjects the trace must carry** (rule 47) are 4.x methods:
-  `json_rpc:tx_submit`, `json_rpc:block_list`, `json_rpc:chain_height`
-  and `json_rpc:fee`. They are the submission, the block fetch, the tip
-  read and the fee read the wallet's daemon client makes
-  (`shekyl-rpc-client`, `shekyl-chain-ingest`'s fetch). If the dry run
+  `json_rpc:tx_submit`, `json_rpc:block_show`, `json_rpc:chain_height`
+  and `json_rpc:fee`. They are the submission, the block read, the tip
+  read and the fee read the wallet's daemon client makes. If the dry run
   shows the wallet reaching a method this list should name in place of
   one of them, that is an amendment, made before the registered run.
 - **The record constants** are read from `shekyl-noise`
@@ -90,7 +98,7 @@ registration's commit:
   import them; its tests check its two numbers against the crate's
   definitions.
 - **The derivation script** (`scripts/bench/rt_p5_classes.py`) names the
-  submission `json_rpc:tx_submit`, the block batch a `json_rpc:block_list`
+  submission `json_rpc:tx_submit`, the block batch a `json_rpc:block_show`
   response, and spend building `json_rpc:fee`. The derivation rule is
   unchanged.
 
@@ -166,9 +174,13 @@ reopen: the classes are derived again from a registered mainnet trace.
 
 ## Dry run
 
-Not yet made. It is made on the host from the same build, under seeds
-`0xD3` and `0xD4`, before the registered runs. It is a check of the
-instrument, not data.
+Made on the host, seeds `0xD3` and `0xD4`. It is a check of the
+instrument, not data, and its sizes are not read here.
+
+- **First attempt, 2026-11-16 02:16Z, 842 s: stopped at the subject
+  gate.** Every traffic step passed (the fan-out, the eight shapes, each
+  confirmed in its block); the gate found no `json_rpc:block_list` and
+  named the labels the trace carries. Fixed by the second amendment.
 
 ## Results
 
