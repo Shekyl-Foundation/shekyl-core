@@ -336,7 +336,7 @@ macro_rules! stage2_common {
 /// `--stage2` on the production fee arm: the common set, the long-term
 /// clamp, and the relay fields the production ladder prices the fee with
 /// (`w_ref`, the Standard ratio, the lattice). The lookback, the slack, the
-/// claim hold and the Priority factor are not read: every ordinary
+/// claim hold and the High factor are not read: every ordinary
 /// transaction pays Standard and no fold admits against a window.
 pub const STAGE2_PRODUCTION_READS: &[Reader] = &{
     let common = stage2_common!();
@@ -361,8 +361,8 @@ pub const STAGE2_PRODUCTION_READS: &[Reader] = &{
 };
 
 /// `--esr10`: the production arm's fold, which every cell runs, read by
-/// the narration's tables, and the Priority factor, which the rung mixes
-/// price Priority with. Measured on the reach probe
+/// the narration's tables, and the High factor, which the rung mixes
+/// price High with. Measured on the reach probe
 /// (`esr10::run_reach_probe`), not assumed: of `--stage2`'s production
 /// readers, the four archival fields its archival sections read (the
 /// settlement epoch, the claim age and the failure window's `m` and `n`)
@@ -383,7 +383,7 @@ pub const ESR10_READS: &[Reader] = &{
         }
         i += 1;
     }
-    all[j] = read("relay.priority_factor", 3);
+    all[j] = read("relay.high_factor", 3);
     assert!(j + 1 == all.len(), "the list is exactly the readers kept");
     all
 };
@@ -411,14 +411,14 @@ pub fn esr10_reach() -> (&'static str, &'static [Reader]) {
 }
 
 /// The instruments that run all Standard (§5.32): ESR-10's readers less
-/// the Priority factor, which prices no rung they send demand to.
+/// the High factor, which prices no rung they send demand to.
 pub const INSTRUMENT_READS: &[Reader] = &{
     let esr10 = ESR10_READS;
     let mut all = [read("", 0); 22];
     let mut i = 0;
     let mut j = 0;
     while i < esr10.len() {
-        if !const_str_eq(esr10[i].path, "relay.priority_factor") {
+        if !const_str_eq(esr10[i].path, "relay.high_factor") {
             all[j] = esr10[i];
             j += 1;
         }
@@ -430,7 +430,7 @@ pub const INSTRUMENT_READS: &[Reader] = &{
 
 /// An instrument's mode and readers: the fields ESR-10's fold reads, which
 /// `every_declared_reader_moves_its_report` measures on `--esr10`'s probe.
-/// The instruments that run a rung mix (EI-6, EI-7) read the Priority
+/// The instruments that run a rung mix (EI-6, EI-7) read the High
 /// factor as `--esr10` does; the rest run all Standard.
 ///
 /// Whether a field reaches an instrument's own figures is checked where the
@@ -444,7 +444,7 @@ pub const INSTRUMENT_READS: &[Reader] = &{
 pub fn instrument_reach(instrument: crate::eup4::Instrument) -> (&'static str, &'static [Reader]) {
     use crate::eup4::Instrument;
     let reads = match instrument {
-        Instrument::PriorityElasticity | Instrument::MedianPath => ESR10_READS,
+        Instrument::HighElasticity | Instrument::MedianPath => ESR10_READS,
         Instrument::MinerIncome
         | Instrument::Predictability
         | Instrument::DemandResponse

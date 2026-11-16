@@ -162,7 +162,7 @@ pub fn cmd_transfer(
         "build_pending_tx",
         json!({
             "recipients": [{ "address": dest, "amount": amount.to_string() }],
-            "priority": priority.wire(),
+            "priority": priority.name(),
         }),
     ) {
         Ok(v) => v,
@@ -551,13 +551,14 @@ mod tests {
     use crate::resolve::FeePriority;
     use serde_json::json;
 
-    /// The named tiers are the OpenAPI `FeePriority` enum values. An absent
-    /// `--priority` is Standard, the server's documented default.
+    /// The wire carries the tier's one name, lowercase (IG-Q52); an absent
+    /// `--priority` is the tier set's default, `standard`.
     #[test]
-    fn priority_flag_maps_onto_named_tiers() {
-        assert_eq!(FeePriority::Standard.wire(), "STANDARD");
-        assert_eq!(FeePriority::Economy.wire(), "ECONOMY");
-        assert_eq!(FeePriority::High.wire(), "PRIORITY");
+    fn priority_flag_sends_the_tiers_name() {
+        assert_eq!(FeePriority::Standard.name(), "standard");
+        assert_eq!(FeePriority::Economy.name(), "economy");
+        assert_eq!(FeePriority::High.name(), "high");
+        assert_eq!(FeePriority::default(), FeePriority::Standard);
     }
 
     /// The never-default contract, whose violation is a fund-lock: a

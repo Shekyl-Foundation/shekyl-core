@@ -255,37 +255,43 @@ pub use shekyl_units::AtomicUnitsString;
 /// a placeholder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetBalanceResult {
-    /// Spendable liquid balance (maps from unlocked until staking splits
-    /// liquid from locked principal).
-    pub liquid: AtomicUnitsString,
+    /// The balance: `spendable + incoming`. The only field that is
+    /// a sum of others (A17).
+    pub balance: AtomicUnitsString,
+    /// What a send could use now.
+    pub spendable: AtomicUnitsString,
+    /// Received and not yet spendable, plus in-flight sends' change.
+    pub incoming: AtomicUnitsString,
+    /// Blocks until the soonest on-chain incoming output is spendable.
+    /// **Absent (not `0`)** when no incoming output is on chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incoming_wait: Option<u64>,
+    /// Σ (recipients + fee) of the in-flight sends. Beside the balance.
+    pub outgoing: AtomicUnitsString,
+    /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;
+    /// `PL-D3` §6.2): on chain, retained, never spendable by this wallet.
+    /// Beside the balance. Always present; `"0"` is a true zero.
+    pub unspendable: AtomicUnitsString,
     /// Bond principal under confirmed live bonds PLUS principal committed
     /// by in-flight sealed posts — the sum of `get_staked_balance`'s two
     /// bonded legs (the legs stay separate on that method).
     ///
     /// **Absent (not `"0"`) when the wallet's sealed staking state cannot
-    /// be read**: the liquid fields stay authoritative while the staking
+    /// be read**: the ledger's legs stay authoritative while the staking
     /// projection degrades, and absence is structurally distinct from a
     /// zero — the engine pin "never render nothing-staked over a bad seal"
     /// holds on the wire. A non-staker's `"0"` is a true zero and is
     /// always present.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staked: Option<AtomicUnitsString>,
-    /// Unlocked / spendable now.
-    pub unlocked: AtomicUnitsString,
-    /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;
-    /// `PL-D3` §6.2): on chain, retained, never spendable by this wallet.
-    /// Always present; `"0"` is a true zero.
-    pub unspendable: AtomicUnitsString,
     /// Emission-reward money received and still unspent in staking-side
     /// outputs — the same quantity as
     /// `get_staked_balance.rewards_received_unspent`; NOT a claim-era
     /// "accrued but unclaimed" entitlement (no such user-visible quantity
     /// exists in the archival design). Absent exactly when `staked` is
     /// (unreadable staking seal — degrade, never a fabricated zero).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimable_rewards: Option<AtomicUnitsString>,
-    /// Awaiting-confirmation / in-flight spend lock.
-    pub pending: AtomicUnitsString,
 }
 
 /// `get_primary_address` result.
@@ -801,14 +807,12 @@ pub struct EstimateTxSizeAndWeightResult {
 /// `get_default_fee_priority` result (WI-RPC-1 fees).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetDefaultFeePriorityResult {
-    /// The default tier (`STANDARD`).
-    pub default_priority: String,
-    /// Converged fee at the daemon's economy rate for the given shape.
-    pub economy_fee: AtomicUnitsString,
-    /// Converged fee at the daemon's standard rate (the default tier).
-    pub standard_fee: AtomicUnitsString,
-    /// Converged fee at the daemon's priority rate.
-    pub priority_fee: AtomicUnitsString,
+    /// Converged fee at the economy rung for the given shape.
+    pub economy: AtomicUnitsString,
+    /// Converged fee at the standard rung.
+    pub standard: AtomicUnitsString,
+    /// Converged fee at the high rung.
+    pub high: AtomicUnitsString,
     /// Curve-tree depth the quotes were evaluated at.
     pub tree_depth: i64,
 }
@@ -1152,6 +1156,30 @@ pub struct CheckReserveProofResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fee reply prints the three tiers by their one name each, the
+    /// fees under `economy`, `standard`, `high`, and nothing else.
+    #[test]
+    fn the_fee_reply_prints_the_three_tier_names() {
+        use shekyl_units::AtomicUnits;
+        let reply = GetDefaultFeePriorityResult {
+            economy: AtomicUnits::from_raw(1).into(),
+            standard: AtomicUnits::from_raw(4).into(),
+            high: AtomicUnits::from_raw(8).into(),
+            tree_depth: 3,
+        };
+        let json = serde_json::to_value(&reply).unwrap();
+        assert!(
+            json.get("default_priority").is_none(),
+            "no front end reads it"
+        );
+        assert_eq!(json["economy"], "1");
+        assert_eq!(json["standard"], "4");
+        assert_eq!(json["high"], "8");
+        for gone in ["economy_fee", "standard_fee", "priority_fee"] {
+            assert!(json.get(gone).is_none(), "{gone}");
+        }
+    }
     use crate::error::WalletRpcErrorCode;
     use serde_json::json;
 

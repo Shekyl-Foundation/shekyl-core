@@ -564,7 +564,7 @@ impl ChainFacts for StoreFacts {
         let view = SnapshotView::new(&snap);
         match fee_ladder_at(&view, connecting(tip)).map_err(derivation_fault)? {
             AtHeight::Recorded(ladder) => Ok(FeeEstimate {
-                fees: [ladder.economy, ladder.standard, ladder.priority],
+                fees: [ladder.economy, ladder.standard, ladder.high],
             }),
             // The connecting height is the tip's successor on this same
             // snapshot; it cannot be above the tip.

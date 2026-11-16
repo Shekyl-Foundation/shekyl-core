@@ -840,13 +840,6 @@
                             }
                           },
                           {
-                            "name": "frozen",
-                            "ty": {
-                              "name": "bool",
-                              "ty": "Bool"
-                            }
-                          },
-                          {
                             "name": "fcmp_precomputed_path",
                             "ty": {
                               "name": "Option<T>",

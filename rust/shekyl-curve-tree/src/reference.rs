@@ -213,6 +213,35 @@ pub fn blocks_until_in_tree(
     }
 }
 
+/// Blocks the tip must advance from `tip` until a leaf maturing at
+/// `maturity_height` is in the tree of the reference block a wallet at that
+/// tip anchors to ([`select_reference_height`]). Zero when it already is.
+///
+/// The reference advances one block per tip block, so once the chain can
+/// anchor a reference this is [`blocks_until_in_tree`] on it. Below that
+/// floor the wait first covers the blocks until the first reference
+/// (height 0, at a tip of [`REF_ANCHOR_AGE`]) and then counts from it.
+#[must_use]
+pub fn tip_blocks_until_in_tree(
+    maturity_height: shekyl_types::BlockHeight,
+    tip: shekyl_types::BlockHeight,
+) -> shekyl_types::BlockCount {
+    match select_reference_height(tip) {
+        Some(reference) => blocks_until_in_tree(maturity_height, reference),
+        None => {
+            let first_anchoring_tip =
+                shekyl_types::BlockHeight::ZERO.saturating_add(REF_ANCHOR_AGE);
+            first_anchoring_tip
+                .saturating_sub(tip)
+                .checked_add(blocks_until_in_tree(
+                    maturity_height,
+                    shekyl_types::BlockHeight::ZERO,
+                ))
+                .unwrap_or(shekyl_types::BlockCount::from_raw(u64::MAX))
+        }
+    }
+}
+
 /// The canonical reference height for a proof built at `tip`:
 /// `tip − REF_ANCHOR_AGE` (§5.1).
 ///
@@ -361,6 +390,32 @@ pub fn should_reanchor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tip wait is the tip's own search: the fewest blocks `k` after
+    /// which the reference a wallet at `tip + k` anchors to holds the leaf,
+    /// below the anchoring floor and above it. Bites if the floor arm
+    /// drops the blocks before the first reference, or counts from a
+    /// reference the chain cannot yet anchor.
+    #[test]
+    fn the_tip_wait_is_the_first_tip_whose_reference_holds_the_leaf() {
+        use shekyl_types::{BlockCount, BlockHeight};
+        for tip in 0..40u64 {
+            for maturity in 0..40u64 {
+                let m = BlockHeight::from_raw(maturity);
+                let searched = (0..200u64)
+                    .find(|&k| {
+                        select_reference_height(BlockHeight::from_raw(tip + k))
+                            .is_some_and(|r| in_tree_at_reference(m, r))
+                    })
+                    .expect("every leaf enters some reference");
+                assert_eq!(
+                    tip_blocks_until_in_tree(m, BlockHeight::from_raw(tip)),
+                    BlockCount::from_raw(searched),
+                    "tip {tip}, maturity {maturity}"
+                );
+            }
+        }
+    }
     use shekyl_types::{BlockCount, BlockHeight};
 
     #[test]

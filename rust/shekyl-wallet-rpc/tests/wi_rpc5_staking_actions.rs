@@ -375,8 +375,8 @@ async fn corrupt_staking_seal_degrades_to_liquid_with_absent_staking_fields() {
         "a staking-seal fault must not black out the balance surface: {bal}"
     );
     let result = &bal["result"];
-    assert!(result.get("liquid").is_some(), "{bal}");
-    assert!(result.get("unlocked").is_some(), "{bal}");
+    assert!(result.get("balance").is_some(), "{bal}");
+    assert!(result.get("spendable").is_some(), "{bal}");
     assert!(
         result.get("staked").is_none(),
         "an unreadable seal must project ABSENT, never a fabricated value: {bal}"
