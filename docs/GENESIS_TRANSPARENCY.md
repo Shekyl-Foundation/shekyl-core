@@ -217,8 +217,9 @@ module and `GENESIS_ALLOCATIONS.md` §3). Genesis is transparent by
 design — CT type Null, cleartext amounts, published recipients — so the
 public derivation discloses nothing beyond this document, and it makes
 each network's pinned genesis byte-reproducible by anyone: `geblock
-verify` rebuilds all four networks from the committed files and
-byte-compares against the network table's pins
+verify` rebuilds all four networks from the committed files at each
+network's recorded mint time (NI-R18) and byte-compares against the network
+table's pins
 (`rust/shekyl-network/genesis/`).
 
 **The allocations are final and published.** The recipient wallets were

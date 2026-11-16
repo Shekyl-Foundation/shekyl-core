@@ -4591,6 +4591,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-types",
  "shekyl-wire",
+ "tempfile",
  "thiserror",
  "zeroize",
 ]
