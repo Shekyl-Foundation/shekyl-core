@@ -313,3 +313,30 @@ fn a_connector_with_no_source_excuses_at_once() {
     assert_eq!(dialer.pending_verdicts(CLEARNET), 0, "nothing to wait for");
     assert!(dialer.shared().lists.is_excused(&address));
 }
+
+/// **A dead onion address on a settled node climbs on its first verdict**
+/// (Rick, 2026-11-15). The node holds its sessions; a dead onion fails its
+/// test with an uncertain answer, the Tor connector is asked, and the
+/// reading after the failure is working (the Tor Manager's check, or a
+/// completed dial, answered the want). The address counts one failed test
+/// and cools at the ladder's first rung, on that first verdict; it is not
+/// excused and redialed first. The manager's half, a want answered working
+/// by its check, is `shekyl-tor-control-client`'s
+/// `a_want_with_no_reading_starts_a_check` and the directory check's
+/// working fact. The edits that make this red: excusing a failure whose
+/// reading is working, or waiting for a second test before counting.
+#[test]
+fn a_dead_onion_on_a_settled_node_climbs_on_its_first_verdict() {
+    let mut rig = JudgeRig::new(TOR, 17);
+    let dead = rig.addresses(0, 1);
+    rig.admit(&dead);
+    rig.fail_uncertain();
+    assert_eq!(rig.path.asks(), 1, "the Tor connector was asked");
+    rig.read(PathReading::Working);
+    assert_eq!(rig.failures(&dead[0]), 1, "counted on its first verdict");
+    assert!(!rig.excused(&dead[0]), "not excused");
+    assert!(
+        rig.dialer.shared().lists.is_cooling(&dead[0]),
+        "it cools at the first rung"
+    );
+}
