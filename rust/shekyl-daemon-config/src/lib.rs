@@ -38,15 +38,15 @@ pub mod resolve;
 pub mod sections;
 pub mod table;
 
-pub use load::{load, Loaded};
+pub use load::{after_file, load, AfterFile, Loaded};
 pub use lock::Lock;
 pub use marker::{MarkerOutcome, MarkerRead, NetworkId};
 pub use network::Network;
 pub use owner_socket::OwnerSocketPlan;
 pub use platform::{Platform, RunMode};
-pub use resolve::{choosers, resolve, Resolved};
+pub use resolve::Resolved;
 pub use sections::{
-    apply_logging, build, link_limits, log_location_creatable, log_location_writable, Clearnet,
+    apply_logging, link_limits, log_location_creatable, log_location_writable, Clearnet,
     DaemonConfig, Tor,
 };
 pub use table::{runtime_owner, RuntimeOwner, LEVELS, NETWORKS, TABLE};

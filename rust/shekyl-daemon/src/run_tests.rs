@@ -111,7 +111,9 @@ fn offline_node(d: &Path, data: &Path, log: &Path) -> (DaemonConfig, shekyl_node
         log.to_str().unwrap(),
     ]);
     let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-    let config = load(cli, &platform(d)).unwrap().config;
+    let config = shekyl_daemon_config::after_file(cli, &platform(d), None)
+        .unwrap()
+        .config;
     let node = shekyl_node::Node::open(shekyl_node::OpenArgs {
         config: &config,
         version: "test".to_owned(),

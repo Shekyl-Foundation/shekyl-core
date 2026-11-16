@@ -223,7 +223,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
-    use shekyl_daemon_config::{load, Platform};
+    use shekyl_daemon_config::{after_file, Platform};
     use shekyl_options::read_cli;
 
     use crate::EXIT_REFUSED;
@@ -333,7 +333,7 @@ mod tests {
         let mut a = offline_regtest(&data, &log);
         a.extend(["--dev-pow-seed-epoch-blocks", "3"].map(OsString::from));
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &platform(d.path())).unwrap();
+        let loaded = after_file(cli, &platform(d.path()), None).unwrap();
         let ds = walk(&loaded.config, &loaded.resolved, &platform(d.path()))
             .err()
             .expect("a seed-epoch length of 3 is refused");
@@ -371,7 +371,7 @@ mod tests {
             log.to_str().unwrap(),
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &platform(d.path())).unwrap();
+        let loaded = after_file(cli, &platform(d.path()), None).unwrap();
         let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
         assert_eq!(walked.network_id, regtest_id());
         assert_eq!(walked.warnings.len(), 1);
@@ -384,10 +384,12 @@ mod tests {
             warning.contains("It will not sync until Tor is up."),
             "clearnet is off, and a check holds no session: {warning}"
         );
+        // No file step ran, so the path the lines name is the test's own:
+        // an absent file, as a host with no default file has.
         let (out, err) = accepted_lines(
             &loaded.resolved,
             loaded.file_read.as_deref(),
-            &loaded.config_path,
+            &d.path().join("shekyld.toml"),
             &loaded.config,
             &walked.warnings,
         );
@@ -438,12 +440,12 @@ mod tests {
             full.extend_from_slice(cli);
             let a = args(&full);
             let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-            let loaded = load(cli, &platform(d.path())).unwrap();
+            let loaded = after_file(cli, &platform(d.path()), None).unwrap();
             let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
             let (_, err) = accepted_lines(
                 &loaded.resolved,
                 loaded.file_read.as_deref(),
-                &loaded.config_path,
+                &d.path().join("shekyld.toml"),
                 &loaded.config,
                 &walked.warnings,
             );
@@ -527,7 +529,7 @@ mod tests {
         let mut a = offline_regtest(&d.path().join("data"), &d.path().join("shekyld.log"));
         a.push(OsString::from("--service"));
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &platform).unwrap();
+        let loaded = after_file(cli, &platform, None).unwrap();
         let ds = walk(&loaded.config, &loaded.resolved, &platform)
             .err()
             .expect("the service start is refused");
@@ -582,7 +584,7 @@ mod tests {
                 a.insert(1, OsString::from("--rpc-console-key-reset"));
             }
             let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-            load(cli, &platform).unwrap()
+            after_file(cli, &platform, None).unwrap()
         };
         let reset = load_at(true);
         walk(&reset.config, &reset.resolved, &platform).expect("the reset walks");
