@@ -741,6 +741,53 @@ mod tests {
         );
     }
 
+    /// **A pass is tallied whole, across the other descriptor's upload** (the
+    /// brief's test 3). One upload of the current descriptor fails, then the
+    /// next descriptor's pass begins, then the current one's second upload
+    /// lands: coalesced as one round, the first pass ended at the next
+    /// descriptor's `UPLOAD` with nothing uploaded, a failed round, and its
+    /// late success closed nothing. Kept apart, the pass ends with one
+    /// uploaded and one failed. Likewise a refused majority is counted over
+    /// the whole pass: three refusals of three, where the cut pass counted
+    /// one of three, not a majority. Fails if an `UPLOAD` of one descriptor
+    /// ends the other's round.
+    #[test]
+    fn a_pass_is_tallied_whole_across_the_other_descriptors_upload() {
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&failed(1));
+        assert_eq!(
+            rounds.observe(&upload(3, "next")),
+            [RoundMark::Started { descriptor: SECOND }],
+            "the current descriptor's pass is not cut"
+        );
+        assert_eq!(
+            rounds.observe(&uploaded(2)),
+            [
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                ended(FIRST, 1, 1, 0, 0)
+            ]
+        );
+
+        let refusal = |hsdir: u8| HsDescEvent {
+            reason: Some("UPLOAD_REJECTED".to_owned()),
+            ..event(HsDescAction::Failed, hsdir, Some("cur"))
+        };
+        let mut rounds = tracker();
+        for hsdir in 1..=3 {
+            rounds.observe(&upload(hsdir, "cur"));
+        }
+        rounds.observe(&refusal(1));
+        rounds.observe(&upload(4, "next"));
+        rounds.observe(&refusal(2));
+        assert_eq!(
+            rounds.observe(&refusal(3)),
+            [ended(FIRST, 0, 3, 3, 0)],
+            "three refused of three: the whole pass"
+        );
+    }
+
     /// A round ends when every upload it began has ended, and the next one
     /// starts fresh. Both descriptors went to directory 1; its first end is
     /// the upload that began first. Fails if a second success triggers
