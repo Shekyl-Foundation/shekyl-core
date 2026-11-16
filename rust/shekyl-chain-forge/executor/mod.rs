@@ -378,6 +378,12 @@ impl Forge {
         self.rules
     }
 
+    /// The settlement schedule the plan's epochs run on.
+    #[must_use]
+    pub const fn schedule(&self) -> SettlementSchedule {
+        self.schedule
+    }
+
     /// Every body the plan built, in the order it built them.
     #[must_use]
     pub fn built(&self) -> &[Built] {

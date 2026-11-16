@@ -57,8 +57,12 @@ shekyl-bundle-producer = { path = "../shekyl-bundle-producer", features = ["seed
 shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
 shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
 shekyl-p-loopback = { path = "../shekyl-p-loopback" }
-# The live cross-check reads the store's rows (`RawRows`).
+# The live cross-check reads the store's rows (`RawRows`), decodes their
+# keys as the store's tables type them (redb) and their values through the
+# store's codec, so it can hold a field rather than a whole row.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-store-codec = { path = "../shekyl-store-codec" }
+redb = { workspace = true }
 # The identity test's lock 2: another network's table genesis.
 shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }
