@@ -94,7 +94,15 @@ impl<const W: u64> VolumeFold<W> {
             VolumeSignal::MedianRestated => {
                 let median = self.median_operand();
                 let restated = crate::rng::geometric_median(baseline);
-                TxVolume::window(median.tx_count_sum() * baseline, median.blocks() * restated)
+                // Widened, so a product past u64 is a stop, not a wrap.
+                let scaled = |count: u64, by: u64| {
+                    u64::try_from(u128::from(count) * u128::from(by))
+                        .expect("the restated operand fits the chain's u64 volume")
+                };
+                TxVolume::window(
+                    scaled(median.tx_count_sum(), baseline),
+                    scaled(median.blocks(), restated),
+                )
             }
             VolumeSignal::Fixed => TxVolume::per_block(baseline),
         }

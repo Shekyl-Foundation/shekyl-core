@@ -20,6 +20,7 @@
 //! median and the baseline are the fold's `VolumeSignal`, the traffic its
 //! `Traffic`. It prints measures, never verdicts.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use serde::Serialize;
@@ -72,7 +73,7 @@ fn design_load_txs(base: &SimParams) -> u64 {
 }
 
 /// One of J's arms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Signal {
     /// Production's window sum.
     Sma,
@@ -388,26 +389,31 @@ fn honest_row(
     let step = &honest_step(&params)[0];
     let baseline = params.economic().tx_volume_baseline;
     let derived = crate::rng::geometric_median(baseline);
-    let median_count = signal.median_count(0, baseline).map(|_| {
-        let (mut blocks, mut sum, mut below, mut at) = (0u64, 0u128, 0u64, 0u64);
-        for (&ratio, &n) in &step.ratio_counts {
-            let count = signal.median_count(ratio, baseline).expect("a median arm");
-            blocks += n;
-            sum += u128::from(count) * u128::from(n);
-            if count + 1 == derived {
-                below += n;
-            } else if count == derived {
-                at += n;
+    // A variable-traffic reading only: on steady traffic every block
+    // carries the schedule's count, so there is no distribution to read.
+    let median_count = signal
+        .median_count(0, baseline)
+        .filter(|_| matches!(traffic, Traffic::Variable(_)))
+        .map(|_| {
+            let (mut blocks, mut sum, mut below, mut at) = (0u64, 0u128, 0u64, 0u64);
+            for (&ratio, &n) in &step.ratio_counts {
+                let count = signal.median_count(ratio, baseline).expect("a median arm");
+                blocks += n;
+                sum += u128::from(count) * u128::from(n);
+                if count + 1 == derived {
+                    below += n;
+                } else if count == derived {
+                    at += n;
+                }
             }
-        }
-        let share = |n: u64| 100.0 * n as f64 / blocks.max(1) as f64;
-        MedianCount {
-            derived,
-            mean: sum as f64 / blocks.max(1) as f64,
-            below_pct: share(below),
-            at_pct: share(at),
-        }
-    });
+            let share = |n: u64| 100.0 * n as f64 / blocks.max(1) as f64;
+            MedianCount {
+                derived,
+                mean: sum as f64 / blocks.max(1) as f64,
+                below_pct: share(below),
+                at_pct: share(at),
+            }
+        });
     HonestRow {
         signal: signal.name(),
         traffic: traffic_name(traffic),
@@ -654,6 +660,7 @@ pub fn run(
     // w_ref and start, then each campaign.
     type Key = (Signal, Traffic, usize, u64, u64);
     let mut bases: Vec<Key> = Vec::new();
+    let mut base_index: HashMap<Key, usize> = HashMap::new();
     let mut cells: Vec<(Key, u64)> = Vec::new();
     for z in 0..zone_axis.len() {
         for &w in &w_refs {
@@ -661,9 +668,10 @@ pub fn run(
                 for &signal in signals.iter().filter(|s| s.runs_on(t)) {
                     for &year in &starts {
                         let key = (signal.honest(), t, z, w, year);
-                        if !bases.contains(&key) {
+                        base_index.entry(key).or_insert_with(|| {
                             bases.push(key);
-                        }
+                            bases.len() - 1
+                        });
                         for &share in &shares {
                             cells.push(((signal, t, z, w, year), share));
                         }
@@ -697,9 +705,8 @@ pub fn run(
     });
     let mut campaigns = Vec::new();
     for (&((signal, t, z, w, year), share), (campaign, run)) in cells.iter().zip(&campaign_runs) {
-        let base_run: &Folded = &base_runs[bases
-            .iter()
-            .position(|&k| k == (signal.honest(), t, z, w, year))
+        let base_run: &Folded = &base_runs[*base_index
+            .get(&(signal.honest(), t, z, w, year))
             .expect("every cell has its unstuffed span")];
         let (longest, _) = crate::window_stuffer::longest_run_above_one(&run.m_r);
         let mean = run.m_r.iter().map(|&m| u128::from(m)).sum::<u128>() as f64

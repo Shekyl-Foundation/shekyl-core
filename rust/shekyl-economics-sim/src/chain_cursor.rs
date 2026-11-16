@@ -64,7 +64,7 @@ pub(crate) struct ChainStep {
 }
 
 /// What each block is offered (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.34).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Traffic {
     /// The scenario's demand, every block.
     #[default]
