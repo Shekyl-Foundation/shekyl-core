@@ -48,6 +48,19 @@ pub const MAC1_LEN: usize = 16;
 /// Length of a busy reply.
 pub const BUSY_LEN: usize = 16;
 
+/// The most live channel sessions one client key may hold
+/// (`RPC_CHANNEL.md` §6.3, RT-O37). The daemon refuses a fingerprint's next
+/// session past it (`bound.sessions`), and a client's session pool opens no
+/// more than it.
+///
+/// **Assumption** (Rick, 2026-11-15). Basis: five clients fit in
+/// `rpc-connections-max`'s default of 25 with five to spare, and the
+/// console's four are its own, beyond that number. Without a cap, one
+/// compromised enrolled key could hold every connection the daemon admits
+/// and lock its administrator out of revoking it. RT-P10 measures whether
+/// a pool of this size serves its load.
+pub const SESSIONS_PER_CLIENT: usize = 4;
+
 /// Length of the genesis-derived network id (`shekyl-p2p-transport`'s
 /// `NetworkId`; a test holds the two equal).
 pub const NETWORK_ID_LEN: usize = 16;

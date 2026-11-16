@@ -1209,6 +1209,7 @@ internals); the log may be specific.
 | Requested grant exceeds the ceiling | Yes — message 4 carries the ceiling, and the client clamps its request to it | "Connected with GRANT; this client is enrolled for at most CEILING." | "client FINGERPRINT requested REQUEST, granted GRANT" |
 | A call for host-only data or an armed test lever from an enrolled key, whatever its ceiling | Yes | "METHOD is served only on the node's own computer, to its administrator." | — |
 | A request over a resource bound (§6.3) | Yes | "This request asks for N; the node serves at most LIMIT per request." Never truncated | — |
+| A session past its key's cap, `SESSIONS_PER_CLIENT` (§6.3, RT-O37) | Yes — the session's first request is answered `bound.sessions`, then the connection closes | "This client already holds N connections to the node, the most one client may hold." | "refused client FINGERPRINT from IP: it already holds N sessions" |
 | A call outside the connection's grant | Yes | "This connection is not granted METHOD (granted: GRANT)." — never "method not found" | — |
 | Handshake deadline expired | Yes, after one retry with a fresh ephemeral that also ran out (§4.3) | "The node did not complete the handshake in time." | Timeout, with the stage reached |
 | The node's handshake budget is spent (§4.3) | Yes — a busy reply, verified, in place of message 2. The client backs off and retries, and says so only when its handshake deadline expires | "The node is busy and did not accept the connection in time. Try again shortly." | Aggregated: "answered N handshakes busy in the last minute (budget: B a second)" |
@@ -1630,6 +1631,17 @@ the admin listener.
   timer: idle is the record stream's, one hour, and a record already started still fails after 4 seconds
   without progress. A response write that makes no progress for 4 seconds
   closes the connection, on every listener.
+- **Sessions per client key** (RT-O37, ruled 2026-11-15). One key holds at
+  most `SESSIONS_PER_CLIENT` (4, `shekyl-rpc-channel`) live channel
+  sessions; the console key too. The count is read where a session joins
+  the index, under the index's lock. The next session's first request is
+  answered `OverResourceBound`, `bound.sessions`, and the connection
+  closes. A client's pool opens no more than the cap. The cap is an
+  Assumption: five clients fit in `rpc-connections-max`'s default of 25
+  with five to spare, and the console's four are its own. Without it, one
+  compromised enrolled key on the operator's network, the internet-facing
+  tunnel the likeliest, could hold every connection and lock the
+  administrator out of revoking it.
 - **A shard fetch** (`INPUT_GRAMMAR.md` IG-Q90). Bounded callers share one shard-fetch permit, taken at the view desk's cache miss (`rust/shekyl-archival-fetch-sched/src/view.rs`). A cached view takes none, and neither does a call that joins a flight already in the air. A bounded call that would open a flight while the permit is out is `OverResourceBound`, `bound.shard`, and the flight is not queued. The host takes no permit. The bundle producer's challenge reads come first by reservation, not priority: the node's one fetch client has exactly the slots its lanes use, `READS_AT_ONCE` for the producer when the node mines and `VIEW_SLOTS` (two: the bounded permit's flight and one host flight beside it) for every view flight, the host's included (`rust/shekyl-node/src/producer.rs`). Views never hold more than their lane, so a started producer read never waits for a slot and its read ceiling holds; a missed read is a missed witness duty. Every node with a Tor builds the scheduler and serves the view; a node with Tor off has no client to read through and refuses with `RefusedByMethod`, `shard.tor-off`.
 - **A request over a bound is refused with the bound named**, never silently truncated. Each bound has its own dotted code (`INPUT_GRAMMAR.md` IG-Q79).
 

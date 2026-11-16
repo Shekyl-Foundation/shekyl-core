@@ -47,6 +47,10 @@ use shekyl_rpc_stream::{class_table, RecordStream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 
+use shekyl_rpc_channel::SESSIONS_PER_CLIENT;
+use shekyl_rpc_types::errors::RpcError;
+
+use super::sessions::Registration;
 use super::{Admitted, Channel, ChannelCall};
 use crate::authority::Authority;
 
@@ -132,14 +136,24 @@ async fn connection<S>(
     // as it would have been (§5). A raised ceiling keeps it: the grant it
     // holds still lies within.
     let registering = Arc::clone(&channel);
-    let Some(mut registered) = channel.sessions.register(fingerprint, move || {
+    let mut registered = match channel.sessions.register(fingerprint, move || {
         registering
             .admitted(&fingerprint)
             .ok()
             .flatten()
             .is_some_and(|now| still_admitted(admitted, now))
-    }) else {
-        return;
+    }) {
+        Registration::Registered(registered) => registered,
+        Registration::NotAdmitted => return,
+        Registration::AtCap => {
+            tracing::info!(
+                target: "global",
+                "refused client {} from {peer}: it already holds {SESSIONS_PER_CLIENT} sessions",
+                hex::encode(fingerprint)
+            );
+            refuse_at_cap(io, session, first).await;
+            return;
+        }
     };
     let console = admitted == Admitted::Console;
     let authority = Authority::channel(request.intersection(admitted.ceiling()), console);
@@ -181,6 +195,43 @@ async fn connection<S>(
             }
         }
     }
+}
+
+/// A session past its key's cap (RT-O37): its first request is answered
+/// with `bound.sessions` and the connection closes. The client is
+/// authenticated by now, so it is told why rather than closed in silence.
+/// The answer is bounded by the handshake deadline, so a refused connection
+/// cannot keep its slot.
+async fn refuse_at_cap<S>(io: S, session: AuthenticatedSession, first: shekyl_noise::Opened)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let Ok(stream) =
+        RecordStream::after_first_opened(io, session.send, session.recv, first, Vec::new())
+    else {
+        return;
+    };
+    let app = Router::new().fallback(|body: axum::body::Bytes| async move {
+        let id = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|request| request.get("id").cloned())
+            .unwrap_or(serde_json::Value::Null);
+        axum::Json(crate::authority::refusal(id, &at_cap()))
+    });
+    let served = http1::Builder::new()
+        .keep_alive(false)
+        .serve_connection(TokioIo::new(stream), TowerToHyperService::new(app));
+    drop(tokio::time::timeout(HANDSHAKE_DEADLINE, served).await);
+}
+
+/// The refusal a session past its key's cap is answered with.
+fn at_cap() -> RpcError {
+    crate::methods::over_bound(
+        crate::methods::codes::BOUND_SESSIONS,
+        "sessions held by one client key",
+        u64::try_from(SESSIONS_PER_CLIENT).unwrap_or(u64::MAX),
+        u64::try_from(SESSIONS_PER_CLIENT + 1).unwrap_or(u64::MAX),
+    )
 }
 
 /// Whether a session admitted as `then` is still admitted as `now`: the

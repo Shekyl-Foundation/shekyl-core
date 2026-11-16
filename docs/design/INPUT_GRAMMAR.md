@@ -1450,6 +1450,7 @@ A state other than the item is a one-key object naming the state, with its paylo
 | `bound.pow-size` | the size of `pow`'s hashing bytes | `MAX_POW_BLOB_SIZE` | `D/read_methods.rs:191` |
 | `bound.hash` | the shared hash budget, when it cannot pay one hash | one hash | `D/hash_budget.rs:141` |
 | `bound.shard` | a bounded caller's shard fetch that would open a flight while another bounded caller's holds the one permit (IG-Q90) | one flight | after the ground, at `34255a8945`: the view desk's cache miss, `rust/shekyl-archival-fetch-sched/src/view.rs` (`ViewRefusal::Busy`); `D/shard_view.rs` |
+| `bound.sessions` | channel sessions one client key may hold at once (`RPC_CHANNEL.md` RT-O37); the session past it is answered with this code on its first request and closed | `SESSIONS_PER_CLIENT`, 4 | after the ground, RT-W11: `Sessions::register` in `D/channel/sessions.rs`, answered by `refuse_at_cap` in `D/channel/listener.rs` |
 
 The `pow` switch on a header read has no code (IG-F24), and a bounded `chain_coinbase_sum` waits for its one permit and is not refused. The method is never a parameter: the caller knows what it called.
 

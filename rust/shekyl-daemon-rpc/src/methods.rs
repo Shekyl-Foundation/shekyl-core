@@ -66,6 +66,9 @@ pub mod codes {
     pub const BOUND_HASH: &str = "bound.hash";
     /// The bounded callers' one shard fetch is in flight (IG-Q90).
     pub const BOUND_SHARD: &str = "bound.shard";
+    /// This client key already holds `SESSIONS_PER_CLIENT` channel
+    /// sessions (RT-O37).
+    pub const BOUND_SESSIONS: &str = "bound.sessions";
 }
 
 /// Why a method could not answer.
@@ -231,7 +234,14 @@ pub enum InternalFault {
 /// the caller knows what it called.
 #[must_use]
 pub fn bound_exceeded(code: &str, unit: &str, bound: u64, asked: u64) -> RpcFault {
-    RpcFault::Refused(RpcError::new(
+    RpcFault::Refused(over_bound(code, unit, bound, asked))
+}
+
+/// The refusal [`bound_exceeded`] carries, for a bound that is not a
+/// method's: `bound.sessions`, which the channel's listener answers.
+#[must_use]
+pub fn over_bound(code: &str, unit: &str, bound: u64, asked: u64) -> RpcError {
+    RpcError::new(
         ErrorClass::OverResourceBound,
         Diagnostic::new(
             code,
@@ -241,7 +251,7 @@ pub fn bound_exceeded(code: &str, unit: &str, bound: u64, asked: u64) -> RpcFaul
         )
         .param("bound", bound.to_string())
         .param("asked", asked.to_string()),
-    ))
+    )
 }
 
 /// How many blocks a bounded connection may name in one call (inherited,

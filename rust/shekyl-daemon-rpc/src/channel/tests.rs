@@ -316,6 +316,54 @@ async fn removing_a_client_closes_its_live_session() {
     );
 }
 
+/// **A key holds at most `SESSIONS_PER_CLIENT` sessions** (RT-O37). The
+/// next one is told `bound.sessions` on its first request and closed; a
+/// session that ends frees its place. Red edit: drop the count test in
+/// `Sessions::register`, and the fifth session is served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_past_its_session_cap_is_refused_by_name() {
+    let served = Served::start(false).await;
+    let client = StaticKeypair::generate().unwrap();
+    served.enrol(&client, &[CeilingWord::View]);
+    let mut held = Vec::new();
+    for _ in 0..shekyl_rpc_channel::SESSIONS_PER_CLIENT {
+        let mut session = connect(&served, &client, Preset::View.grants())
+            .await
+            .expect("a session");
+        // The test's node has no handles, so a served call is answered
+        // not ready; what matters is that the cap did not refuse it.
+        let reply = session.call("version", json!({})).await.expect("served");
+        assert_ne!(code(&reply), Some("bound.sessions"), "{reply}");
+        held.push(session);
+    }
+    let mut past = connect(&served, &client, Preset::View.grants())
+        .await
+        .expect("the handshake completes");
+    let refused = past.call("version", json!({})).await.expect("a refusal");
+    assert_eq!(code(&refused), Some("bound.sessions"), "{refused}");
+    assert!(
+        past.call("version", json!({})).await.is_none(),
+        "a refused session stays open"
+    );
+
+    drop(held.pop());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut again = connect(&served, &client, Preset::View.grants())
+            .await
+            .expect("a session");
+        let reply = again.call("version", json!({})).await.expect("an answer");
+        if code(&reply) != Some("bound.sessions") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the closed session's place never freed"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// **A lowered ceiling closes the session; a raised one does not** (§5:
 /// no mid-session downgrade). Red edit: never close in `client_set`, and
 /// the lowered session keeps answering.
