@@ -12,11 +12,11 @@ the questions the round answers; `SSR-Q3` is the one answered.
 
 - **`SSR-R1` — the secrets-storage PR.** The long-lived secret types in
   `shekyl-crypto-pq` apply `mlock` and `madvise(MADV_DONTDUMP)` (and
-  `VirtualLock` on Windows) once, at construction; locking `TxKey`'s pages
-  is part of it. `x` comes from `derive_output_secrets`, which retires the
-  two rows `docs/ci/secret-byte-locality.tsv` still holds (the `x = ho + b`
-  sites, `SSR-Q4`); the inventory then holds none. The transaction-key rows
-  went with `TxKey` (`SSR-Q3`). This is the implementation
+  `VirtualLock` on Windows) once, at construction. `x` comes from
+  `derive_output_secrets`, which retires the two rows
+  `docs/ci/secret-byte-locality.tsv` still holds (the `x = ho + b` sites,
+  `SSR-Q4`); the inventory then holds none. The transaction-key rows went
+  with `TxKey` (`SSR-Q3`). This is the implementation
   [`35-secure-memory`](../../.cursor/rules/35-secure-memory.mdc)'s
   OS-level section names, and the move
   [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc)'s
@@ -43,8 +43,8 @@ the questions the round answers; `SSR-Q3` is the one answered.
 - The two inventory rows: `shekyl-engine-core` `local_keys.rs` and
   `stake_engine/helpers.rs`, each reducing the spend secret `b` to form
   `x = ho + b`.
-- `shekyl_crypto_pq::TxKey` (`tx_key.rs`), whose scalar sits behind a
-  pointer (`HeapSecret`) and is the first type `SSR-R1` locks.
+- `shekyl_crypto_pq::TxKey` (`tx_key.rs`), whose scalar already sits
+  behind a pointer (`HeapSecret`).
 - `shekyl_process::harden::harden_process()`, which every binary calls
   first; it covers core dumps, not swap.
 
