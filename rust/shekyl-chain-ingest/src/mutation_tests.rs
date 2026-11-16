@@ -169,7 +169,8 @@ impl ResignedBodies {
             .iter()
             .map(|(block, listed)| Linked::new(block, listed))
             .collect();
-        let spender = Spender::over(&below);
+        // The fixture chain is judged under `Trust::UNPINNED`: its id.
+        let spender = Spender::on(shekyl_chain_rules::Trust::UNPINNED.network_id(), &below);
         let wallet = MinerWallet::harness();
         let fee = Family::Main.fee();
         let matured = h(at - FIRST_SPEND_HEIGHT);

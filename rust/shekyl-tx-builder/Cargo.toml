@@ -11,6 +11,18 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# The signers' seeded forms: `sign_transaction_with_terms_seeded`,
+# `sign_pqc_auths_seeded`, `open_spend_seeded` and
+# `prove_backing_membership_seeded`, which draw every random value (the range
+# proof, the pseudo-out blinds, the membership proof, the ML-DSA nonces) from a
+# caller's seed, so one seed gives one transaction byte for byte. For the chain
+# forge's reproducible chains (CHAIN_FORGE.md §5.3, seam T2). TEST_ONLY
+# (`scripts/ci/check_test_only_features.py`): forwards the seeded provers and
+# signers below it, and no build that ships has a signer that takes its
+# caller's randomness (CF-R9).
+seeded-rng = ["shekyl-fcmp/seeded-rng", "shekyl-crypto-pq/seeded-rng", "dep:rand_chacha"]
+
 [dependencies]
 # The network id each input's signature hash binds (NETWORK_IDENTITY.md NI-Q4).
 shekyl-network = { path = "../shekyl-network" }
@@ -42,11 +54,18 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 fips204 = "0.4.6"
 rand_core = { version = "0.6", features = ["std"] }
+# The seeded entry points' generator (`seeded-rng` only).
+rand_chacha = { version = "0.3", optional = true }
 zeroize = { workspace = true }
 thiserror.workspace = true
 
 [dev-dependencies]
+# `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
+# harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 rand = "0.8"
+# The seeded signers' own determinism tests (`seeded-rng`, on this dev edge only).
+shekyl-tx-builder = { path = ".", features = ["seeded-rng"] }
 
 # Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
 # criterion + gungraun harness for `transfer_e2e_1in_2out`. The
@@ -60,8 +79,10 @@ rand = "0.8"
 criterion = { version = "0.5", features = ["html_reports"] }
 gungraun = "0.19"
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
-# test-utils for the transfer_e2e bench keypair (F-7)
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+# The transfer_e2e benches: `test-utils` for the ephemeral keypair, and
+# `seeded-rng` for `sign_with_ml_dsa_seed`, whose fixed nonce keeps the
+# instruction count stable. Both TEST_ONLY; dev edge only.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils", "seeded-rng"] }
 rand_core = { version = "0.6", features = ["std"] }
 
 [[bench]]

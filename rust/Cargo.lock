@@ -4600,6 +4600,7 @@ dependencies = [
 name = "shekyl-harness-spender"
 version = "3.1.0"
 dependencies = [
+ "rand_chacha 0.3.1",
  "shekyl-archival-bond-builder",
  "shekyl-archival-retention",
  "shekyl-chain-rules",
@@ -4607,12 +4608,14 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-harness-spender",
  "shekyl-harness-wallet",
  "shekyl-network",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "zeroize",
 ]
 
 [[package]]
@@ -5586,6 +5589,7 @@ dependencies = [
  "fips204",
  "gungraun",
  "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
@@ -5596,6 +5600,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-fcmp",
  "shekyl-network",
+ "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
@@ -5670,6 +5675,7 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-pow-randomx",
  "shekyl-types",
+ "shekyl-verify-cost",
  "shekyl-wire",
 ]
 

@@ -254,24 +254,21 @@ pub fn plan(config: &DaemonConfig, network_id: [u8; 16]) -> NetworkPlan {
 mod tests {
     use super::*;
     use shekyl_daemon_config::platform::Platform;
-    use shekyl_daemon_config::sections::build;
     use shekyl_daemon_config::Network as DaemonNet;
-    use shekyl_daemon_config::{choosers, resolve, TABLE};
+    use shekyl_daemon_config::{after_file, TABLE};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
     fn config(cli: &[&str]) -> DaemonConfig {
         let args: Vec<OsString> = cli.iter().map(OsString::from).collect();
         let cli = shekyl_options::read_cli(&TABLE, args).unwrap();
-        let (network, mode) = choosers(&cli);
-        let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
         let platform = Platform {
             home: Some(PathBuf::from("/srv/op")),
             service_parent: None,
             session_dir: None,
             service_rendezvous: None,
         };
-        build(&mut resolved, network, mode, &platform, None).unwrap()
+        after_file(cli, &platform, None).unwrap().config
     }
 
     /// A valid v3 onion: the Ed25519 base point's hostname.

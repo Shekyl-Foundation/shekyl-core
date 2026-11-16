@@ -140,7 +140,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         1,
     );
     mine_to(&mut scenario, &mut mined, join_height).await;
-    let mut spender = Spender::over(&mined);
+    let mut spender = Spender::on(scenario.network_id(), &mined);
     let mut seen = mined.len();
 
     // The funding spend: coinbase 0 to the persona in two outputs — the
@@ -644,6 +644,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     // The persona's outputs were paid in the join. Own them before that
     // block is scanned, then price every claim this tail judges.
     let spender = spender_owning_before(
+        drive.scenario.network_id(),
         &drive.chain,
         facts.join_height,
         &[facts.backing_key, facts.fee_key],

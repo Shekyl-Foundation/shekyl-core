@@ -1,13 +1,6 @@
 # F-7 — test-only FFI exports in the production archive: finding record
 
-**Status:** OPEN — finding record for FOLLOWUPS **F-7**, opened 2026-09-19
-(PR #786, the S-TX pre-flight, which found the class again through
-`scripts/ci/check_test_only_features.py`'s governance-trigger limb). This
-file carries the source audit; the FOLLOWUPS row carries one sentence and a
-link (rule 95). Owner: the lane that lands F-7's structural gate — **not**
-S-TX. The `file:line` cites in §2.1 and §5 were re-read on 2026-10-14;
-the rest were read at `dev` `090f2e8f2`–`6c41bf820`. Re-verify before
-acting on one.
+**Status:** CLOSED-as-record (as of 2026-11-14, #1382, `CHAIN_FORGE.md` `CF-1b`). Every route this record found is closed. Shape (b) and shape (a)'s direct edge left with `shekyl-ffi`, which no longer exists (the tree has no first-party C ABI). Shape (a)'s forwarded route (§4) is deleted: `shekyl-p-serve`'s `test-signer` never needed `shekyl-crypto-pq/test-utils` (`TestReceiptKeySigner` takes its key from the production keygen). And the structural gate is in place: `shekyl-crypto-pq` is a governed owner in `scripts/ci/check_test_only_features.py`, every §5 seam behind one of its two TEST_ONLY rows (`test-utils`; `seeded-rng` for the deterministic signers), so a normal or build edge that enables either is red. Opened 2026-09-19 (PR #786, the S-TX pre-flight). The `file:line` cites below are read at the commits each section names; they describe the state this record was opened on.
 
 ## 1. The row this record serves
 
@@ -100,3 +93,4 @@ and a production caller is its name.
 | 2026-09-19 | Record opened by PR #786 to hold the audit the FOLLOWUPS row had grown into (rule 95: a row is one sentence, a link and a target). Content moved verbatim from the row's 2026-09-19 UPDATE, restructured under headings; the forwarded path (§4) added the same day. |
 | 2026-10-12 | Priority raised to `pre-genesis, priority 1` by ruling on PR #1049; §5 added with the feature-edge evidence and the key-mutating instance that PR introduced (`corrupt_fn_dsa_half_for_tests`). The remedy (§2) is unchanged and is still not this PR's. |
 | 2026-10-24 | `shekyl_test_coinbase_extra` added to §2.2 as a ninth shape-(b) export (DRS-X PR 3c). The template-secrets gate is narrowed to it in the meantime; the structural remedy is still this record's. |
+| 2026-11-14 | Closed by #1382 (`CF-1b`): `shekyl-p-serve`'s `test-signer` forward of `test-utils` deleted as unneeded; `shekyl-crypto-pq` governed with `test-utils` and `seeded-rng` as TEST_ONLY rows; with `shekyl-ffi` already gone, no route remains. Moved to `docs/completed/` (rule 95). |
