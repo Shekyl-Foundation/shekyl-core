@@ -30,9 +30,16 @@ use crate::pow::{Fixture, LendJob, Pow, RunJob};
 /// a scripted chain's timestamps look like a chain's.
 const BLOCK_INTERVAL: u64 = 120;
 
-/// Where the driver's clock starts: after the harness fixtures' epoch so a
-/// scenario and a fixture never share a timestamp by accident.
-pub const CLOCK_START: Timestamp = Timestamp::from_raw(1_800_000_000);
+/// Where the driver's clock starts: one block interval after regtest's
+/// genesis was minted (`NETWORK_IDENTITY.md` NI-R18). A chain over regtest's
+/// table genesis needs its first blocks above the mint time (CEN-C2's
+/// genesis-padded median), so the clock follows the recorded mint and a
+/// regenesis moves it, never a date fixed here. The mint is after the
+/// harness fixtures' epoch, so a scenario and a fixture never share a
+/// timestamp by accident.
+pub const CLOCK_START: Timestamp = Timestamp::from_raw(
+    shekyl_network::Network::Regtest.genesis().timestamp().get() + BLOCK_INTERVAL,
+);
 
 /// A substrate whose clock the driver owns and advances, over a longhash
 /// the caller chooses. Production PoW is `Clocked<ProductionPow>`;

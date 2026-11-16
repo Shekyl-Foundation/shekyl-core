@@ -430,6 +430,14 @@ upgrade in `Cargo.lock`, or a change in a crate the path set does not
 list, moves no constant. The paths are a reviewed judgement about where
 the cost lives.
 
+Every commit id in the ledger (`through`, `capture_rev`, `stale_since`, a
+toolchain entry's `commit`) is the full 40-hex id, as `git rev-parse
+<commit>` prints it. The check refuses any other spelling. A shorter or
+upper-case id that still names a commit stays on its row: the refusal is
+the spelling, and the row is still the row. A prefix unique today can
+become ambiguous as the repository grows, and the check would then fail
+on a row nobody touched.
+
 It depends on merge commits. Every entry is a commit id that stays in the
 branch's history. A squash-merge or a rebase-and-merge mints new ids and
 orphans the entries. The check then fails, and the repair is a fresh

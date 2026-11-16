@@ -509,9 +509,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Block-height representation unification at the WI-2 anchoring seam** (surfaced 2026-07-11, WI-2 orchestrator review).
   - Target: pre-genesis
 
-- **Should the genesis block header carry a real mint timestamp instead of 0?** Surfaced by C2-R3-Q2 ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](completed/CONSENSUS_C2_R3_TIMESTAMPS.md) §5.1): with `timestamp: 0` (`rust/shekyl-genesis-tool/src/builder.rs`, `timestamp: 0`) the genesis-padded MTP window admits `ts = 1` at block 1; a real mint timestamp would make the chain unable to start "before" its own genesis time for free under the ratified padding rule. A genesis-mint decision (geblock + the pinned block ids across all three networks), explicitly ruled out of C2-R3's scope at ratification (2026-09-01).
-  - Target: pre-genesis (any regenesis window; #1327 rebuilt every genesis on 2026-11-13 with `timestamp: 0`, and the alpha.12 cut is the next window)
-
 - **External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)**
   - Target: pre-genesis
 
@@ -720,9 +717,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm** [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
-  - Target: pre-genesis
-
-- **Single-sig address decode enforces the Bech32m variant** [`rust/shekyl-address/src/address.rs`](../rust/shekyl-address/src/address.rs)
   - Target: pre-genesis
 
 - **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,

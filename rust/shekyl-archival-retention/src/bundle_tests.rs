@@ -503,27 +503,27 @@ fn the_bundle_commitment_matches_its_vectors() {
     };
     assert_eq!(
         commit(H, 0, &[], &[]),
-        "7f99a011490dddebb1d00f249d9215f111b97ec58ef741035ffab50fa50114b97cf73dddee42d02d6c13de12badb153759a5ebed1a70460851b28f9ef4b3e15a"
+        "fbca15a18b65fda9d96274560dfb4a8f85928e59024fa5093ee400d76c420cd95862d3fc9d7f8efef3ab79b9d48c58a084bf4f89dd40be8a7105fa2ee2ccdecb"
     );
     assert_eq!(
         commit(H, 8, &[0x00], &[]),
-        "1afbfbdaf3efa5453ff46198d75ecaa5bfb057192fc83f544b084dbf330de4cfad24ccdbdd70db909cd0fd8bc29cc3db5a46211d336220408252b61dbe15fb76"
+        "86cae55929188cecc80edda43cd6a51316dbdacba1140ae67d9bbef37a4d156d653488381b03aa6c541acd89ed8571e0c7c75cdf80df61d70110c6f66b4ee3bc"
     );
     assert_eq!(
         commit(H, 1, &[0x01], &record(0).encode()),
-        "5ba8260520cddc8b4660626a1cc473f2e49422b051a0093963b6ddaae9dde1dec783e8bcd1648f788d3708a141ce5cac85b5ab952ecfff891d712d71af12fdfd"
+        "09d962e35b954063a6741f8cdae32b17669546899a2bd00a32cc4a9e6b3812af7d2136eeb10569c820c2f3d8e964eab1b26b694050bd9a0620097d1d483ef314"
     );
     assert_eq!(
         commit(H, 12, &[0x01, 0x0A], &three),
-        "031966f2dbfbb5769bc26dfcb2181627e035b43d824ed678070ea075f8aaf87653e1446aa94b06786692c2a6b899a87498dae268513d8734423451fa0adc65e1"
+        "4bd62f6cc640ff162978380eec67c8bddf198afe8230abab38055cc0aa457d53140e134e02e944ca55db40b5f89d7b260f90cb82d812124aa939005fac575b9f"
     );
     assert_eq!(
         commit(BlockHeight::from_raw(1_000_001), 12, &[0x01, 0x0A], &three),
-        "62974c316e84acf7268e1d1b8e3f89af737dfa5906204793597a27696155af998bcdf4e578e07fd59e39f34764a369d7d3ab866ec61eb3a779dc4827b97c75f2"
+        "e641b5a4e19c4bd178e34c8976ab84425006cd16c5a71b5fa3e2827ea045bb3e230c96cedfb1d50a6f95fd09459f89fd17ede0a748e50edb71400a871b4a5564"
     );
     assert_eq!(
         commit(H, 12, &[0x09, 0x0A], &three),
-        "342468b77461f1c6bb549d0ecff3f61baa705d4fb1b438a30674c8b8bc2f25ece14bfeb1b5adce715cd177a4990b4a67711ae15b2be0442e2499385049570bc9"
+        "c196fa3546415f6dd465aacbbd8bc018e801b9f35f8088d7900fc777b2f50b536a69ab3b12c292022747916a560012dd742f84f5845074de874a4185df979b36"
     );
 }
 

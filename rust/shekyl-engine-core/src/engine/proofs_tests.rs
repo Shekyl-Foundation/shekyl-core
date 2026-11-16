@@ -83,11 +83,16 @@ fn decode_rejects_wrong_hrp() {
     ));
 }
 
+/// A proof has one string, as an address does (R-23): the upper-cased
+/// spelling of a valid proof is refused.
 #[test]
-fn decode_accepts_uppercase_reencoding() {
+fn decode_refuses_an_uppercase_spelling() {
     let encoded = encode_tx_proof(TxProofDirection::Inbound, &[7u8; 10]).unwrap();
-    let upper = encoded.to_uppercase();
-    let payload = decode_proof_payload(&upper, HRP_TX_PROOF).unwrap();
+    assert!(matches!(
+        decode_proof_payload(&encoded.to_uppercase(), HRP_TX_PROOF),
+        Err(ProofsError::Malformed(_))
+    ));
+    let payload = decode_proof_payload(&encoded, HRP_TX_PROOF).unwrap();
     assert_eq!(payload[0], DIRECTION_INBOUND);
 }
 

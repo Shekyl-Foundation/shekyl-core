@@ -941,13 +941,13 @@ fn sealed_reserve_verdict(
 
 // ── Framing helpers ──────────────────────────────────────────────────
 
-/// Bech32m-decode a proof string, pin the HRP (case-insensitively —
-/// Bech32m admits an all-uppercase encoding), and enforce the decoded
+/// Bech32m-decode a proof string (its one canonical spelling, which
+/// `decode_blob` alone accepts), pin the HRP, and enforce the decoded
 /// payload size cap before anything downstream runs.
 fn decode_proof_payload(proof: &str, expected_hrp: &str) -> Result<Vec<u8>, ProofsError> {
     let (hrp, data) = decode_blob(proof)
         .map_err(|e| ProofsError::Malformed(format!("bech32m decode failed: {e}")))?;
-    if !hrp.eq_ignore_ascii_case(expected_hrp) {
+    if hrp != expected_hrp {
         return Err(ProofsError::Malformed(format!(
             "wrong HRP '{hrp}', expected '{expected_hrp}'"
         )));

@@ -15,11 +15,12 @@ license.workspace = true
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-network = { path = "../shekyl-network" }
-bech32 = "0.11"
 thiserror.workspace = true
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Spells a canonical string the ways the codec refuses (`src/respell.rs`).
+bech32 = "0.11"
 tempfile = "3"
 # Reads docs/test_vectors/MULTISIG_FINGERPRINT_V3.json in the fingerprint KAT.
 # Already in Cargo.lock as a workspace dependency (17-dependency-discipline).
