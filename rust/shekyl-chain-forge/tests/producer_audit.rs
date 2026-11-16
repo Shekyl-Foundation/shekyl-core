@@ -88,7 +88,9 @@ async fn forged(plan: &Plan, live: bool) -> (tempfile::TempDir, Forge) {
             hashers: NonZeroUsize::MIN,
             producer: ProducerOptions {
                 live,
-                ..ProducerOptions::default()
+                // The live run's reads start on another spread too: its
+                // timing differs from the planned run's on purpose.
+                start_spread: live.then(|| std::time::Duration::from_millis(400)),
             },
         },
     )
@@ -127,6 +129,18 @@ async fn a_live_producer_run_settles_as_the_planned_one() {
     }
 
     let apart = differing(&planned_rows, &live_rows);
+    for table in &apart {
+        let (a, b) = (&planned_rows[table], &live_rows[table]);
+        if let Some((x, y)) = a.iter().zip(b).find(|(x, y)| x != y) {
+            eprintln!(
+                "{table}: first differing row: planned {} = {}; live {} = {}",
+                hex::encode(&x.0),
+                hex::encode(&x.1),
+                hex::encode(&y.0),
+                hex::encode(&y.1)
+            );
+        }
+    }
     assert!(
         apart.is_empty(),
         "a live producer run's settlement state is not the planned run's in {apart:?} \

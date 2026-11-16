@@ -10,10 +10,10 @@
 # acceptance criteria (CF-R18) are exercised:
 #
 #   (1) every drawn input from this plan's seed, through the production
-#       seams: two forgings, two processes, the same bytes;
-#   (3) the same bytes again under another start spread;
-#   (2) a live run (every producer input from the OS) held to this one on
-#       settlement state, by exclusion.
+#       seams, at this plan's start spread: two forgings, two processes, the
+#       same bytes;
+#   (2), (3) a live run (every producer input from the OS, its reads on
+#       another spread) held to this one on settlement state, by exclusion.
 #
 # The epoch is 1,200 blocks: W2 = SEB / 20 = 60 must clear the producer's
 # filing margin (30), which the settled schedule's 300 does not (CF-F8).
@@ -47,3 +47,6 @@ shards = [0]
 event = "producer-bundle"
 do = "produce"
 persona = 0
+# The spread each read's start delay is drawn below: an input to the bytes
+# (the producer draws its start delays from its read plans' stream).
+start_spread_ms = 50

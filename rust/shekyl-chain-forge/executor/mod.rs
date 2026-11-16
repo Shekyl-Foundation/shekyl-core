@@ -94,18 +94,18 @@ pub struct ProducerOptions {
     /// runs, instead of the plan's seed: the live cross-check's run
     /// (`CF-R18` (2)).
     pub live: bool,
-    /// The spread each read's start delay is drawn below. A planned run's
-    /// bytes do not depend on it (`CF-R18` (3)).
-    pub start_spread: std::time::Duration,
+    /// The spread each read's start delay is drawn below, in place of the
+    /// plan's: a run that varies the timing on purpose (`CF-R18` (3)).
+    /// `None` is the plan's own.
+    pub start_spread: Option<std::time::Duration>,
 }
 
 impl Default for ProducerOptions {
-    /// A planned run, its start delays drawn below 50 ms: a chain mined in
-    /// seconds a block has no use for the node's two-minute spread.
+    /// A planned run at the plan's own spread.
     fn default() -> Self {
         Self {
             live: false,
-            start_spread: std::time::Duration::from_millis(50),
+            start_spread: None,
         }
     }
 }
@@ -516,7 +516,16 @@ impl Forge {
             Action::Serve { persona } => self.serve(*persona).await?,
             Action::Claim { persona } => self.claim(*persona).await?,
             Action::Reorg { depth } => self.reorg(*depth).await?,
-            Action::Produce { persona } => self.produce(*persona).await?,
+            Action::Produce {
+                persona,
+                start_spread_ms,
+            } => {
+                let spread = self
+                    .producer
+                    .start_spread
+                    .unwrap_or(std::time::Duration::from_millis(*start_spread_ms));
+                self.produce(*persona, spread).await?;
+            }
         }
         self.write_new()
     }
@@ -774,7 +783,11 @@ impl Forge {
     /// Persona `slot` serves its shard, the bundle producer's task reads it
     /// and files, and the chain mines through the slash pass of the first
     /// epoch the persona is drawn in ([`produce`]).
-    async fn produce(&mut self, slot: u32) -> Result<(), ForgeFault> {
+    async fn produce(
+        &mut self,
+        slot: u32,
+        start_spread: std::time::Duration,
+    ) -> Result<(), ForgeFault> {
         use produce::{Draws, PlanReceipts, Producing};
         let (shard, join_epoch) = {
             let joined = self
@@ -829,7 +842,7 @@ impl Forge {
             &ring,
             client,
             &draws,
-            self.producer.start_spread,
+            start_spread,
         )
         .await;
         let mut admitted = 0usize;

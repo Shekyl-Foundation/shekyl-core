@@ -69,11 +69,7 @@ fn run() -> Result<ExitCode, String> {
     let mut swapped = BTreeSet::new();
     let mut stop_at = None;
     let mut live_producer = false;
-    let mut start_spread_ms = ProducerOptions::default()
-        .start_spread
-        .as_millis()
-        .try_into()
-        .map_err(|_| "the default spread fits".to_owned())?;
+    let mut start_spread_ms: Option<u64> = None;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} takes a value"));
@@ -93,9 +89,11 @@ fn run() -> Result<ExitCode, String> {
             "--stop-at" => stop_at = Some(PathBuf::from(value()?)),
             "--live-producer" => live_producer = true,
             "--start-spread-ms" => {
-                start_spread_ms = value()?
-                    .parse()
-                    .map_err(|_| "--start-spread-ms is a count".to_owned())?;
+                start_spread_ms = Some(
+                    value()?
+                        .parse()
+                        .map_err(|_| "--start-spread-ms is a count".to_owned())?,
+                );
             }
             other => return Err(format!("unknown flag {other}")),
         }
@@ -123,7 +121,7 @@ fn run() -> Result<ExitCode, String> {
         hashers: NonZeroUsize::new(hashers).ok_or("--hashers is at least one")?,
         producer: ProducerOptions {
             live: live_producer,
-            start_spread: std::time::Duration::from_millis(start_spread_ms),
+            start_spread: start_spread_ms.map(std::time::Duration::from_millis),
         },
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()

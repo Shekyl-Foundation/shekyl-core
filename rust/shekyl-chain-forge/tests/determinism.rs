@@ -192,11 +192,11 @@ fn child_forge() {
                 hashers,
                 producer: executor::ProducerOptions {
                     live: false,
-                    start_spread: std::time::Duration::from_millis(
-                        std::env::var(CHILD_SPREAD_MS)
-                            .ok()
-                            .map_or(50, |ms| ms.parse().expect("a count of milliseconds")),
-                    ),
+                    start_spread: std::env::var(CHILD_SPREAD_MS).ok().map(|ms| {
+                        std::time::Duration::from_millis(
+                            ms.parse().expect("a count of milliseconds"),
+                        )
+                    }),
                 },
             },
         ))
@@ -440,16 +440,17 @@ fn each_source_drawn_from_the_os_moves_the_chain() {
     }
 }
 
-/// The producer plan (`CHAIN_FORGE.md` §4, `CF-R18` (1) and (3)): forged in
-/// two processes, under two start spreads, the same bytes. Every input the
+/// The producer plan (`CHAIN_FORGE.md` §4, `CF-R18` (1)): forged in two
+/// processes, at the plan's start spread, the same bytes. Every input the
 /// producer audit classes as drawn comes from the plan's seed through the
-/// production seams, so two processes agree (1); the forge advances the tip
-/// only once the producer has acted on it, so when a read starts inside its
-/// block moves nothing (3).
+/// production seams, and the spread is the plan's too: the producer draws
+/// its start delays from the stream its read plans come from, so the
+/// spread is an input to the bytes, not only to the timing. Timing itself,
+/// the spread varied and every drawn input the OS's, is `CF-R18` (3)'s, and
+/// is held on settlement state (`producer_audit.rs`).
 #[test]
 #[ignore = "two producer-plan forgings, minutes each; run by chain-forge.yml's nightly"]
-fn the_producer_plan_forges_the_same_bytes_under_two_start_spreads() {
-    let spreads = ["5", "400"];
+fn the_producer_plan_forges_the_same_bytes_in_two_processes() {
     let outs: Vec<tempfile::TempDir> = ENVIRONMENTS
         .iter()
         .map(|env| {
@@ -459,23 +460,16 @@ fn the_producer_plan_forges_the_same_bytes_under_two_start_spreads() {
                 .expect("an output directory")
         })
         .collect();
-    for ((env, out), spread) in ENVIRONMENTS.iter().zip(&outs).zip(spreads) {
+    for (env, out) in ENVIRONMENTS.iter().zip(&outs) {
         let started = std::time::Instant::now();
-        let status = spawn_child_with(
-            env,
-            out.path(),
-            &[
-                (CHILD_PLAN, "plans/producer.toml"),
-                (CHILD_SPREAD_MS, spread),
-            ],
-        );
+        let status = spawn_child_with(env, out.path(), &[(CHILD_PLAN, "plans/producer.toml")]);
         assert!(
             status.success(),
             "the {} producer forging failed: {status}",
             env.name
         );
         eprintln!(
-            "forged the producer plan under {} with start delays below {spread} ms in {:.1} s",
+            "forged the producer plan under {} in {:.1} s",
             env.name,
             started.elapsed().as_secs_f64()
         );

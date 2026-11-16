@@ -140,6 +140,12 @@ pub enum Action {
     Produce {
         /// The persona's slot in the plan.
         persona: u32,
+        /// The spread each read's start delay is drawn below, in
+        /// milliseconds. An input to the chain's bytes: the producer draws
+        /// its start delays from the stream its read plans come from, and
+        /// how much of the stream a draw below the spread takes depends on
+        /// the spread, so another spread moves a later read plan.
+        start_spread_ms: u64,
     },
     /// Pop the last `depth` blocks and mine `depth + 1` blocks on the fork,
     /// the first listing a spend the popped branch did not: a shallow
@@ -260,13 +266,25 @@ persona = 0
 event = "reorg-shallow"
 do = "reorg"
 depth = 2
+
+[[step]]
+do = "produce"
+persona = 0
+start_spread_ms = 50
 "#;
 
     #[test]
     fn a_plan_parses_every_step_kind() {
         let plan = Plan::parse(PLAN).expect("parses");
         assert_eq!(plan.schedule.settlement_epoch_blocks, EpochBlocks::Settled);
-        assert_eq!(plan.steps.len(), 7);
+        assert_eq!(plan.steps.len(), 8);
+        assert_eq!(
+            plan.steps[7].action,
+            Action::Produce {
+                persona: 0,
+                start_spread_ms: 50
+            }
+        );
         assert_eq!(plan.steps[1].action, Action::Spend { inputs: 2 });
         assert_eq!(plan.steps[1].event.as_deref(), Some("first-two-in-spend"));
         assert_eq!(plan.steps[6].action, Action::Reorg { depth: 2 });
