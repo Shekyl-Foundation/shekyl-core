@@ -221,17 +221,22 @@ async fn connection<S>(
             .serve_connection(TokioIo::new(stream), TowerToHyperService::new(app)));
     let mut shutting_down = false;
     loop {
+        // The removal is read first: a session whose key was removed or
+        // lowered serves no request that reaches it afterwards (§5). Polled
+        // in random order, hyper could read and answer that request in the
+        // same wake that also saw the close.
         tokio::select! {
+            biased;
+            () = registered.closed() => return,
+            _stopped = stop.wait_for(|&stopped| stopped), if !shutting_down => {
+                shutting_down = true;
+                served.as_mut().graceful_shutdown();
+            }
             result = served.as_mut() => {
                 if let Err(error) = result {
                     tracing::trace!("channel connection ended: {error:#}");
                 }
                 return;
-            }
-            () = registered.closed() => return,
-            _stopped = stop.wait_for(|&stopped| stopped), if !shutting_down => {
-                shutting_down = true;
-                served.as_mut().graceful_shutdown();
             }
         }
     }

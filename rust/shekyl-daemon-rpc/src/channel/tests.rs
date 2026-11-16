@@ -298,8 +298,10 @@ async fn message_4_carries_the_ceiling_and_the_connection_holds_the_clamp() {
 }
 
 /// **Removing a client closes its live session** (§5; the pre-flight's
-/// named edit "revocation"). Red edit: drop `changing.close` from
-/// `Channel::client_remove`, and the session keeps answering.
+/// named edit "revocation"). Red edits: drop `changing.close` from
+/// `Channel::client_remove`, and the session keeps answering; drop
+/// `biased;` from the connection's select, and the request after the
+/// removal is sometimes answered (CI, 2026-11-16: `daemon.unready`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn removing_a_client_closes_its_live_session() {
     let served = Served::start(false).await;
