@@ -166,8 +166,8 @@ the same lines.
 
 **Host.** The maintainer ruled (2026-11-15) that the host does not
 matter, because RT-P5 measures byte sizes, and that the run is made on
-any unclaimed fleet host and recorded. The host is **`skl-staker-test`**,
-a testnet staker VM (x86-64, 8 vCPU, 15 GiB, Ubuntu 24.04), the same
+any unclaimed fleet host and recorded. The host is a Foundation
+testnet staker VM (x86-64, 8 vCPU, 15 GiB, Ubuntu 24.04), the same
 class of machine as the 2026-10-17 run's. It is claimed shared on the
 estate ledger. Its standing testnet daemon keeps running untouched; its
 load is recorded with the results, as information.
@@ -210,7 +210,7 @@ state at each step).
 
 ### Conditions, recorded as registered
 
-- **Host:** `skl-staker-test`, a testnet staker VM (x86-64, 8 vCPU,
+- **Host:** a Foundation testnet staker VM (x86-64, 8 vCPU,
   15 GiB, Ubuntu 24.04), claimed shared on the estate ledger. Its testnet
   daemon (`shekyld --network testnet`) was active at every check.
 - **Build:** a fresh clone of `3e0e2be4ad` (the second amendment, `dev`
