@@ -1034,9 +1034,12 @@ actor, and publishes it to the connector each time it changes
 the manager runs its check (§4.5, the same check, under the same gates) if
 the last one began at least `CHECK_SPACING` ago; otherwise the answer waits
 for the next check or the next fact, and the check is due when the spacing
-has passed. One check runs at a time, and its result answers every waiting
-failure. While Tor says it cannot reach its network, the answer is
-impaired at once and no check runs. An on-demand check confirms no
+has passed. One check runs at a time. A fact answers every failure before
+its own instant, and the open want is the latest failure still unanswered,
+so a fact between two failures answers the earlier and leaves the later one
+waiting. A check is judged when it ends, after every failure already
+waiting, so that result answers all of them. While Tor says it cannot reach
+its network, the answer is impaired at once and no check runs. An on-demand check confirms no
 republish: only a republish's own round does. Whenever a want waits and no
 check starts, the next chance is due: a check in hand that ends with no
 fact (the probe alone decided, or the check was dropped) leaves the want

@@ -165,12 +165,16 @@ outage matters only when it stops the node finding peers.
   minutes. Under an operator's Tor there is no check, and readings come only
   from completed dials and new inbound sessions.
 - **Clearnet: its own outbound sessions.** A byte received on an outbound
-  clearnet session after the failure is a working reading. Inbound sessions
-  do not count: a censor can block this node's outbound connects while
-  established inbound flows continue, and inbound peers choose this node,
-  not the reverse. Declared wait: 15 s (§3.5). An on-path party who passes
-  only its own session still counts: it must be a peer this node chose, and
-  must keep that session talking after each failure (§7).
+  clearnet session after the failure is a working reading. The byte's stamp
+  is `monotonic_ms`, which is not the process clock: on Windows `Instant`
+  counts through S3 sleep and the process clock does not. The source marks
+  `monotonic_ms` at the first ask and counts a byte strictly after that
+  mark, never by subtracting the two clocks. Inbound sessions do not count:
+  a censor can block this node's outbound connects while established inbound
+  flows continue, and inbound peers choose this node, not the reverse.
+  Declared wait: 15 s (§3.5). An on-path party who passes only its own
+  session still counts: it must be a peer this node chose, and must keep
+  that session talking after each failure (§7).
 
 ### 3.4 The excusal and the clearing rule (`OE-D6` — RULED: hold the rung; clearing is the judge's)
 
@@ -338,7 +342,7 @@ A Tor dial launched before the quiet stretch began can fail inside it: a respawn
   - That party already decides which peers this node reaches. Demoting them records what it enforces: the permanent clearnet residual.
   - Excluding inbound makes it be a peer this node drew. Requiring bytes makes it keep that session talking around each failure, which is cheap for it. The design does not claim more than that.
 - **Tor, an attacker who keeps one session open, or dials in.** A held session's bytes are no reading on Tor. A peer that dials in makes a new inbound Tor session, a working fact, at the cost of a full onion connection and handshake for each; that counts this node's failed dials during an outage of the onion path a peer can still dial through. It is narrower than before 2026-11-15, when any byte on any held Tor session counted ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a).
-- **Many dead onion addresses gossiped to a settled node.** Each failure posts one want to the Tor Manager. The check runs at most once per 15 minutes however many dials fail, and its working verdict answers every waiting failure, so a dead onion is counted on its first verdict and climbs the ladder; between checks, a completed dial or a new inbound session answers too.
+- **Many dead onion addresses gossiped to a settled node.** Each failure posts one want to the Tor Manager. The check runs at most once per 15 minutes however many dials fail. Judged when it ends, its working verdict is after every failure already waiting and answers each of them, so a dead onion is counted on its first verdict and climbs the ladder. A fact dated between two failures answers only the earlier, and the later one keeps its want. Between checks, a completed dial or a new inbound session answers the failures before it.
 - **Clearnet fill from zero sessions, 50 % and 90 % planted dead (§3.4's numbers).** The fill takes as long as the guard's or less: 41 s and 241–259 s against 42 s and 269–277 s (medians). Decay does not matter at these sizes, since each dead address is dialed about once. Where it does matter (two live addresses, so two sessions, for hours), holding the rung keeps excusal from undoing the ladder: 256 dials an hour, against 102 under the guard.
 - **A dead-onion flood while the node is isolated.** Every failure is excused, so dead addresses cool for 10–15 s and never climb. The draw stays uniform over drawable seats, so honest addresses keep their turn. The first working reading clears the excusals. From then on dead onions fail with a working reading after them and climb.
 - **A slow link (the 40 kbit case).** Streams open late but do open, and outbound sessions receive slowly but do receive: on Tor a completed dial is a working fact, and on clearnet a received byte is, so a slow link is never taken for an outage. A live onion that misses the 105 s window on a slow link, while another stream opens, is counted.

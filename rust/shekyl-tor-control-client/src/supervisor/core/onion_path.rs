@@ -18,11 +18,15 @@
 //! Asked for a reading after an instant it has no fact for, the manager
 //! runs its check if the last one began at least [`CHECK_SPACING`] ago;
 //! otherwise the answer waits for the next check or the next fact. One check
-//! runs at a time, and its result answers every waiting failure. While Tor
-//! says it cannot reach its network, the answer is impaired, and no check
-//! runs. The probe is not a monitor of each circuit (`TSR-Q14`, restated):
-//! when asked, the manager is the best-placed component to say whether the
-//! onion path works, and it answers.
+//! runs at a time. A fact answers every failure before its own instant, and
+//! the open want is the latest failure still unanswered, so a fact between
+//! two failures answers the earlier and leaves the later one waiting. A
+//! check is judged when it ends, after every failure already waiting, so
+//! that result answers all of them. While Tor says it cannot reach its
+//! network, the answer is impaired, and no check runs. The probe is not a
+//! monitor of each circuit (`TSR-Q14`, restated): when asked, the manager
+//! is the best-placed component to say whether the onion path works, and
+//! it answers.
 
 use std::time::Duration;
 
@@ -88,7 +92,9 @@ pub struct PathReading {
 pub(super) struct PathState {
     /// The latest fact. `None` until the first.
     latest: Option<PathReading>,
-    /// The earliest failure a reading is wanted after, while one waits.
+    /// The latest failure a reading is still wanted after. A fact answers
+    /// every failure before it, so the want ends only when a fact is after
+    /// this instant.
     wanted_after: Option<u64>,
     /// The draw the waiting check will use for its delay.
     draw: Option<u64>,
@@ -107,8 +113,11 @@ impl PathState {
 
 impl Core {
     /// A fact about the onion path, learned at `at`. A fact older than the
-    /// latest one changes nothing. A fact newer than the earliest waiting
-    /// failure answers every waiting failure, so the want ends.
+    /// latest one changes nothing. A fact answers every failure before it.
+    /// The open want is the latest failure still unanswered, so the want
+    /// ends only when this fact is after that failure. A fact between two
+    /// waiting failures answers the earlier ones and leaves the later one
+    /// waiting.
     pub(super) fn path_fact(&mut self, path: OnionPath, at: u64) -> Vec<Action> {
         if self.path.latest.is_some_and(|latest| latest.at > at) {
             return Vec::new();
@@ -140,8 +149,13 @@ impl Core {
         if self.tor_says_unreachable() {
             return self.path_fact(OnionPath::Impaired, now);
         }
-        self.path.wanted_after = Some(self.path.wanted_after.map_or(after, |at| at.min(after)));
-        self.path.draw = Some(draw);
+        // The open want is the latest failure. An earlier one arriving
+        // after it is already covered by whatever answers the later one,
+        // and it does not replace that failure's draw.
+        if self.path.wanted_after.is_none_or(|waiting| after > waiting) {
+            self.path.wanted_after = Some(after);
+            self.path.draw = Some(draw);
+        }
         self.start_wanted_check(now)
     }
 

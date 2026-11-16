@@ -222,3 +222,32 @@ fn while_the_check_stands_down_a_want_is_asked_again() {
     let step = run_to(&mut core, retry);
     assert_eq!(checks(&step), 1, "a check once the clock has cleared");
 }
+
+/// **A fact between two waiting failures answers only the earlier.** The
+/// open want is the latest failure. A dial that opened between them is a
+/// working fact for the first and leaves the second waiting; a fact after
+/// the later failure ends the want. The edit that makes this red is
+/// clearing every waiter on a fact after the earliest failure.
+#[test]
+fn a_fact_between_two_wants_leaves_the_later_one_waiting() {
+    let mut core = published();
+    assert_eq!(
+        checks(&core.on(want(secs(1)), secs(2))),
+        1,
+        "the first check"
+    );
+    let later = core.on(want(secs(10)), secs(11));
+    assert_eq!(checks(&later), 0, "the first check is still in hand");
+    let between = core.on(Input::OnionDialOpened { at: secs(5) }, secs(12));
+    assert_eq!(readings(&between), [working(secs(5))]);
+    assert!(
+        core.path_due().is_some(),
+        "the failure at 10s is not answered by a fact at 5s"
+    );
+    let answers = core.on(Input::OnionDialOpened { at: secs(11) }, secs(13));
+    assert_eq!(readings(&answers), [working(secs(11))]);
+    assert!(
+        core.path_due().is_none(),
+        "a fact after the latest failure ends the want"
+    );
+}

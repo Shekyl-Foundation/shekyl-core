@@ -14,9 +14,12 @@
 //!   the manager each outbound onion dial that completed and each new
 //!   inbound Tor session. The dialer is not involved in either.
 //! - **Clearnet** reads its own outbound sessions: a byte received on one
-//!   after the failure is a working reading. Inbound sessions do not count:
-//!   an inbound peer chose this node, and a party that blocks this node's
-//!   outbound connects can let established inbound flows continue.
+//!   after the failure is a working reading. The byte's stamp is the
+//!   byte-stamp clock, captured once at the first ask
+//!   ([`ByteMarks`]), and a byte counts only strictly after that mark.
+//!   Inbound sessions do not count: an inbound peer chose this node, and a
+//!   party that blocks this node's outbound connects can let established
+//!   inbound flows continue.
 
 use std::sync::{Arc, Mutex};
 
@@ -118,13 +121,100 @@ impl PathSource for OnionPathSource {
     }
 }
 
+/// One failure's place on the byte-stamp clock.
+struct OpenFailure {
+    /// The failure, in nanoseconds on the process clock.
+    failed: u64,
+    /// [`monotonic_ms`] at the first ask for this failure.
+    at_ms: u64,
+}
+
+/// The byte-stamp mark of each failure still inside its wait.
+///
+/// Byte stamps are [`monotonic_ms`]. That clock is not the process clock:
+/// on Windows `Instant` counts through S3 sleep and the process clock does
+/// not (`P2P_TIMING_ENGINE.md` §8). An age on one minus an age on the other
+/// dates a byte on the wrong side of a failure after suspend. The mark is
+/// the byte clock at the first ask, and every later ask for that failure
+/// reads the same mark. The dialer asks in the turn that records the
+/// failure, so the mark is that failure on this clock. A received byte
+/// counts only when its stamp is strictly after the mark.
+struct ByteMarks {
+    open: Vec<OpenFailure>,
+    /// How long the judge keeps asking, on the process clock. A mark older
+    /// than this is dropped on the next ask for some other failure. The
+    /// failure being asked is kept, so the ask that meets its deadline
+    /// still reads the mark taken at the first ask.
+    wait_nanos: u64,
+}
+
+impl ByteMarks {
+    fn new(wait_nanos: u64) -> Self {
+        Self {
+            open: Vec::new(),
+            wait_nanos,
+        }
+    }
+
+    /// The byte-clock mark of `failed`, taken as `byte_now` on the first
+    /// ask. `now` is the process clock at this ask, and it drops marks
+    /// whose wait has elapsed.
+    fn mark(&mut self, failed: u64, now: u64, byte_now: u64) -> u64 {
+        let at_ms = if let Some(failure) = self.open.iter().find(|failure| failure.failed == failed)
+        {
+            failure.at_ms
+        } else {
+            self.open.push(OpenFailure {
+                failed,
+                at_ms: byte_now,
+            });
+            byte_now
+        };
+        let wait = self.wait_nanos;
+        self.open.retain(|failure| {
+            failure.failed == failed || now.saturating_sub(failure.failed) <= wait
+        });
+        at_ms
+    }
+}
+
+/// A byte stamped at `received_ms` arrived after the failure's mark.
+/// Zero is no byte: [`monotonic_ms`] is never zero, and a mark taken from
+/// it is not either.
+fn byte_after(received_ms: u64, mark_ms: u64) -> bool {
+    received_ms > mark_ms
+}
+
+/// Whether this row is one of `connector`'s established outbound sessions.
+/// Inbound sessions do not count, and neither does a handshake still open.
+fn outbound_session(
+    established: bool,
+    connector: ConnectorId,
+    direction: Direction,
+    want: ConnectorId,
+) -> bool {
+    established && connector == want && direction == Direction::Outbound
+}
+
+/// A working reading when any received byte is strictly after `mark_ms`.
+fn reading_of(mut received: impl Iterator<Item = u64>, mark_ms: u64) -> Option<PathReading> {
+    received
+        .any(|received_ms| byte_after(received_ms, mark_ms))
+        .then_some(PathReading::Working)
+}
+
 /// A connector's source read from its own outbound sessions: a byte one of
 /// them received after the failure is a working reading. With none within
 /// the connector's wait the failure is excused. Clearnet's source.
+///
+/// There is no bell for a byte. The owner loop asks again on its wake, and
+/// the mark stays the first ask's, so a byte that arrives between asks is
+/// still after the failure when the next ask reads it.
 pub(crate) struct OutboundSessions {
     layer: SessionLayer<MonotonicClock>,
     connector: ConnectorId,
     wait_nanos: u64,
+    marks: Mutex<ByteMarks>,
 }
 
 impl OutboundSessions {
@@ -137,32 +227,31 @@ impl OutboundSessions {
             layer,
             connector,
             wait_nanos,
+            marks: Mutex::new(ByteMarks::new(wait_nanos)),
         }
     }
 }
 
 impl PathSource for OutboundSessions {
-    /// The byte stamps are on their own clock (`monotonic_ms`), so the
-    /// comparison is by age, read at one instant: a byte whose age is less
-    /// than the time since the failure arrived after it.
     fn reading_after(&self, failed: Stamp, now: Stamp, _: &PathReady) -> Option<PathReading> {
-        let since_failure_ms = now.tick().get().saturating_sub(failed.tick().get()) / 1_000_000;
-        let now_ms = monotonic_ms();
+        let mark = self.marks.lock().expect("byte marks").mark(
+            failed.tick().get(),
+            now.tick().get(),
+            monotonic_ms(),
+        );
         let gate = shekyl_capped_stream::node_gate();
-        self.layer
-            .board()
-            .rows()
-            .iter()
-            .filter(|row| {
-                row.established()
-                    && row.connector() == self.connector
-                    && row.direction() == Direction::Outbound
-            })
-            .map(|row| gate.activity(row.id().get()).1)
-            .any(|received_ms| {
-                received_ms > 0 && now_ms.saturating_sub(received_ms) < since_failure_ms
-            })
-            .then_some(PathReading::Working)
+        let want = self.connector;
+        reading_of(
+            self.layer
+                .board()
+                .rows()
+                .iter()
+                .filter(|row| {
+                    outbound_session(row.established(), row.connector(), row.direction(), want)
+                })
+                .map(|row| gate.activity(row.id().get()).1),
+            mark,
+        )
     }
 
     fn wait_nanos(&self) -> u64 {
@@ -259,5 +348,98 @@ mod tests {
         let ready: PathReady = Arc::new(|| {});
         assert_eq!(source.wait_nanos(), 0);
         assert_eq!(source.reading_after(at(1), at(2), &ready), None);
+    }
+
+    /// **The first ask freezes the byte-clock mark**, and a later ask for
+    /// the same failure reads it back. Each failure has its own mark. The
+    /// edit that makes this red is taking the byte clock again on every
+    /// ask, or one mark shared by every failure.
+    #[test]
+    fn the_first_ask_freezes_the_byte_mark() {
+        let mut marks = ByteMarks::new(1_000);
+        assert_eq!(marks.mark(10, 20, 100), 100);
+        assert_eq!(
+            marks.mark(10, 21, 999),
+            100,
+            "the later byte clock is ignored"
+        );
+        assert_eq!(
+            marks.mark(15, 21, 140),
+            140,
+            "the next failure has its own mark"
+        );
+        assert_eq!(marks.mark(10, 22, 999), 100);
+    }
+
+    /// **A byte counts only strictly after the mark.** The stamp at the
+    /// mark is the ask itself, and zero is no byte. The edit that makes
+    /// this red is counting a byte from before the failure, or comparing
+    /// the byte's age on this clock with the failure's age on the process
+    /// clock.
+    #[test]
+    fn a_byte_counts_only_strictly_after_the_mark() {
+        assert!(!byte_after(0, 100), "no byte yet");
+        assert!(!byte_after(100, 100), "the mark itself is the ask");
+        assert!(byte_after(101, 100));
+        assert_eq!(reading_of([0, 100].into_iter(), 100), None);
+        assert_eq!(
+            reading_of([50, 101].into_iter(), 100),
+            Some(PathReading::Working)
+        );
+    }
+
+    /// **The ask that meets the deadline still reads the original mark**,
+    /// and the next failure's ask drops a mark whose wait has elapsed.
+    /// The edit that makes this red is moving the mark forward on the late
+    /// ask, or keeping every mark for the life of the process.
+    #[test]
+    fn a_late_ask_keeps_its_mark_and_the_next_ask_drops_one_past_its_wait() {
+        let wait = 1_000;
+        let mut marks = ByteMarks::new(wait);
+        assert_eq!(marks.mark(10, 10, 100), 100);
+        let late = 10 + wait + 5;
+        assert_eq!(
+            marks.mark(10, late, 500),
+            100,
+            "the deadline ask is the first mark"
+        );
+        assert_eq!(marks.mark(80, late, 200), 200);
+        assert_eq!(
+            marks.mark(10, late, 300),
+            300,
+            "the mark past its wait was dropped"
+        );
+    }
+
+    /// **Only an established outbound session of this connector counts.**
+    /// An inbound session, another connector, and a handshake still open
+    /// do not. The edit that makes this red is counting any of those.
+    #[test]
+    fn only_an_established_outbound_session_of_this_connector_counts() {
+        let want = ConnectorId::Clearnet;
+        assert!(outbound_session(
+            true,
+            ConnectorId::Clearnet,
+            Direction::Outbound,
+            want
+        ));
+        assert!(!outbound_session(
+            true,
+            ConnectorId::Clearnet,
+            Direction::Inbound,
+            want
+        ));
+        assert!(!outbound_session(
+            true,
+            ConnectorId::Tor,
+            Direction::Outbound,
+            want
+        ));
+        assert!(!outbound_session(
+            false,
+            ConnectorId::Clearnet,
+            Direction::Outbound,
+            want
+        ));
     }
 }
