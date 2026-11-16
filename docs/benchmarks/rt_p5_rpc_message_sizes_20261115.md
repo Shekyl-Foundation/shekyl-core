@@ -44,10 +44,10 @@ which carries the block's transactions, and never calls `block_list`
 (the chain-ingest fetch's method), so the dry run failed the subject gate
 and named the labels it carried (`block_show`, `chain_height`, `fee`,
 `tx_submit`, `version`). The subject and the script's block batch are
-`json_rpc:block_show`. The clone on the host is moved to the amended
-commit (a checkout, the tree checked clean) and the test binary rebuilt;
-the amendment does not touch the daemon. The dry run is made again from
-that build. First, (the build had
+`json_rpc:block_show`. `dev` was merged into the branch with it, so the
+host's clone and both builds are made again, fresh, from the commit that
+carries this amendment, and the dry run is made again from that build.
+First, (the build had
 started, nothing had run). The instrument now writes its files before it
 reads the gates, and a missing subject names the labels the trace does
 carry. A run that fails a gate is still void; its files now show why, so
