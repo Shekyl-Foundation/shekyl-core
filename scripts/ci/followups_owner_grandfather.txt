@@ -111,7 +111,6 @@ Shard assignment for market staking — the `NoShardsAvailable` stub's discharge
 F5 pruning inherits two constraints from the CompleteTree round
 The wallet-RPC server parses every request into a `serde_json::Value`
 Q11 balance-exclusion KAT — blob-boundary invariant arm
-Single-sig address decode enforces the Bech32m variant
 Raw-import archival/burn bookkeeping parity
 Remove or retain the orphaned `ActivityMetric.total_staked` observable (spawned Stage-1b `stake_factor` delete, commit `7256962`, 2026-07-24).
 Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).
