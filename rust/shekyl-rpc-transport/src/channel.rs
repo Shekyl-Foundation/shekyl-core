@@ -787,11 +787,12 @@ impl Pool {
             let reopen = {
                 let mut state = self.state();
                 state.idle.retain(|(session, _)| !session.is_closed());
-                let now = tokio::time::Instant::now();
-                let mut kept = 0usize;
-                state.idle.retain(|(_, since)| {
-                    kept += 1;
-                    kept == 1 || now.duration_since(*since) < EXTRA_SESSION_IDLE
+                let since: Vec<_> = state.idle.iter().map(|(_, since)| *since).collect();
+                let keep = kept_idle(&since, tokio::time::Instant::now());
+                let mut index = 0;
+                state.idle.retain(|_| {
+                    index += 1;
+                    keep[index - 1]
                 });
                 state.idle.is_empty() && self.slots.available_permits() == SESSIONS_PER_CLIENT
             };
@@ -805,6 +806,17 @@ impl Pool {
             }
         }
     }
+}
+
+/// Which idle sessions a pool keeps, given when each went idle: the first,
+/// whatever its age, and every other idle for less than
+/// [`EXTRA_SESSION_IDLE`].
+fn kept_idle(since: &[tokio::time::Instant], now: tokio::time::Instant) -> Vec<bool> {
+    since
+        .iter()
+        .enumerate()
+        .map(|(index, since)| index == 0 || now.duration_since(*since) < EXTRA_SESSION_IDLE)
+        .collect()
 }
 
 /// A channel target a synchronous caller can hold: one session on a
@@ -889,5 +901,36 @@ impl ChannelDaemon {
         Reply: serde::de::DeserializeOwned,
     {
         crate::json_rpc_via(method, request, |route, body| self.post(route, body))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The kept session stays however long it idles; an extra goes after
+    /// `EXTRA_SESSION_IDLE`. Red edit: drop `index == 0` in `kept_idle`,
+    /// and the kept session is closed with the extras.
+    #[test]
+    fn the_kept_session_stays_and_idle_extras_go() {
+        let now = tokio::time::Instant::now() + Duration::from_secs(3_600);
+        let old = now - EXTRA_SESSION_IDLE - Duration::from_secs(1);
+        let fresh = now - Duration::from_secs(1);
+        assert_eq!(kept_idle(&[old, old, fresh], now), vec![true, false, true]);
+        assert!(kept_idle(&[], now).is_empty());
+    }
+
+    /// A `tx_submit` body is a submission; another method, or a body that
+    /// is not JSON-RPC, is not. Red edit: compare against `"tx_relay"` in
+    /// `is_submission`, and a submission goes unpadded.
+    #[test]
+    fn a_submission_is_known_by_its_method() {
+        assert!(is_submission(
+            br#"{"jsonrpc":"2.0","id":1,"method":"tx_submit","params":{"body":"aa"}}"#
+        ));
+        assert!(!is_submission(
+            br#"{"jsonrpc":"2.0","id":1,"method":"tx_relay","params":{}}"#
+        ));
+        assert!(!is_submission(b"not json"));
     }
 }

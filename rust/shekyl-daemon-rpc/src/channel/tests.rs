@@ -375,6 +375,120 @@ async fn a_key_past_its_session_cap_is_refused_by_name() {
     }
 }
 
+/// A pool to `served` as `key`, asking for `request`.
+fn pool_to(served: &Served, key: StaticKeypair, request: GrantSet) -> Arc<client::Pool> {
+    client::Pool::new(
+        client::ChannelTarget::new(
+            NETWORK,
+            served.bundle(),
+            key,
+            client::Leg::Network {
+                endpoint: served.addr.to_string(),
+                socks: None,
+            },
+        ),
+        request,
+    )
+}
+
+/// **The pool reuses a session, holds at most `SESSIONS_PER_CLIENT`, and a
+/// lend past them waits for one to come back** (§8, RT-O37). Red edit:
+/// make `Pool::lend` leave an idle session in the list and open a new one,
+/// and the daemon holds two sessions after two calls in turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_pool_reuses_its_sessions_and_waits_at_its_cap() {
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    let fingerprint = *key.public().fingerprint().as_bytes();
+    served.enrol(&key, &[CeilingWord::View]);
+    let pool = pool_to(&served, key, Preset::View.grants());
+    let (ceiling, granted) = pool.open_kept().await.expect("the kept session");
+    assert_eq!(
+        (ceiling, granted),
+        (Preset::View.grants(), Preset::View.grants())
+    );
+    for _ in 0..2 {
+        let mut lent = pool.lend().await.expect("a session");
+        lent.session()
+            .post(
+                "json_rpc",
+                br#"{"jsonrpc":"2.0","id":1,"method":"version","params":{}}"#.to_vec(),
+            )
+            .await
+            .expect("an answer");
+        pool.give_back(lent);
+    }
+    assert_eq!(
+        served.channel.sessions.open(&fingerprint),
+        1,
+        "one session, reused"
+    );
+
+    let mut held = Vec::new();
+    for _ in 0..shekyl_rpc_channel::SESSIONS_PER_CLIENT {
+        held.push(pool.lend().await.expect("a session under the cap"));
+    }
+    let waiting = {
+        let pool = Arc::clone(&pool);
+        tokio::spawn(async move { pool.lend().await.map(|_| ()) })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "a lend past the cap waits");
+    pool.give_back(held.pop().expect("held"));
+    tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the returned session is lent")
+        .expect("joined")
+        .expect("a session");
+}
+
+/// **A revocation stops the pool, which does not dial again** (§4.5,
+/// RT-W11). Enrol, dial, call; remove the key; the next call is refused as
+/// revoked, and so is every one after, with no new handshake. Red edit:
+/// make `Pool::open_session` report `NotEnrolled` after a held session, and
+/// the refusal is not a revocation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revocation_stops_the_pool_and_it_does_not_dial_again() {
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    let fingerprint = *key.public().fingerprint().as_bytes();
+    served.enrol(&key, &[CeilingWord::View]);
+    let pool = pool_to(&served, key, Preset::View.grants());
+    let call = || {
+        let pool = Arc::clone(&pool);
+        async move {
+            let request = hyper::Request::post("/json_rpc")
+                .header("content-type", "application/json")
+                .body(hyper::body::Bytes::from_static(
+                    br#"{"jsonrpc":"2.0","id":1,"method":"version","params":{}}"#,
+                ))
+                .unwrap();
+            pool.send(request).await
+        }
+    };
+    call().await.expect("an enrolled key is served");
+    served
+        .channel
+        .client_remove(HOST, fingerprint)
+        .expect("removed");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let refused = loop {
+        match call().await {
+            Ok(_) => {
+                assert!(Instant::now() < deadline, "the pool kept being served");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(client::ChannelFault::Closed) => {}
+            Err(fault) => break fault,
+        }
+    };
+    assert_eq!(refused, client::ChannelFault::Revoked);
+    assert_eq!(pool.stopped(), Some(client::ChannelFault::Revoked));
+    let before = Instant::now();
+    assert_eq!(call().await.err(), Some(client::ChannelFault::Revoked));
+    assert!(before.elapsed() < Duration::from_millis(100), "no new dial");
+}
+
 /// **A lowered ceiling closes the session; a raised one does not** (§5:
 /// no mid-session downgrade). Red edit: never close in `client_set`, and
 /// the lowered session keeps answering.
