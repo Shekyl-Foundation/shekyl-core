@@ -376,7 +376,7 @@ impl DaemonConfig {
 /// value of the wrong arm, every path that needs a home the account lacks,
 /// a mining address off the network, and a ban file that cannot be read or
 /// holds a line that does not parse.
-pub fn build(
+pub(crate) fn build(
     resolved: &mut Resolved,
     network: Network,
     run_mode: RunMode,

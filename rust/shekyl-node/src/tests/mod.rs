@@ -10,8 +10,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use shekyl_daemon_config::sections::build;
-use shekyl_daemon_config::{choosers, resolve, Network, Platform, TABLE};
+use shekyl_daemon_config::{after_file, Network, Platform, TABLE};
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_difficulty::Difficulty;
 use shekyl_miner::Job;
@@ -250,21 +249,15 @@ fn config_with(dir: &Path, network: &str, connectors: &[&str], extra: &[&str]) -
     ]);
     args.extend(extra);
     let cli = read_cli(&TABLE, args.into_iter().map(OsString::from)).expect("cli");
-    // The command line alone, as `load` resolves and builds it with no
-    // file read. `load` would read the network's default file,
+    // Everything `load` does after its file step, with no file opened.
+    // `load` would read the network's default file,
     // `/etc/shekyl/shekyld-<network>.toml`, where a fleet host's daemon
     // keeps its configuration: a test that took it read that host's peers
     // and refused them against its own connectors
-    // (`config.value.conflict`). A file the test named instead would have
-    // to sit where only this account can write, and a test directory is
-    // under the world-writable `/tmp`. These tests are about the node,
-    // not about reading a file.
-    let (network, mode) = choosers(&cli);
-    let mut resolved = resolve(&TABLE, network, cli, Vec::new()).expect("config");
-    build(
-        &mut resolved,
-        network,
-        mode,
+    // (`config.value.conflict`). These tests are about the node, not
+    // about reading a file.
+    after_file(
+        cli,
         &Platform {
             home: Some(dir.to_path_buf()),
             service_parent: None,
@@ -274,6 +267,7 @@ fn config_with(dir: &Path, network: &str, connectors: &[&str], extra: &[&str]) -
         None,
     )
     .expect("config")
+    .config
 }
 
 /// The line the DRS bench reads back (`scripts/bench/drs_artifact.py`,

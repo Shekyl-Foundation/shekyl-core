@@ -31,7 +31,7 @@ use tokio::sync::watch;
 
 use shekyl_daemon_config::sections::{log_location_writable, DaemonConfig};
 use shekyl_daemon_config::{announce, marker, Lock, Platform, TABLE};
-use shekyl_options::{read_cli, Code, Diagnostic};
+use shekyl_options::{read_cli, Cli, Code, Diagnostic};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_spawn::owning::OwningConnection;
 
@@ -51,11 +51,25 @@ pub(crate) fn tell(out: &mut impl Write, line: &str) {
     drop(writeln!(out, "{line}"));
 }
 
+/// The load step of the sequence: [`load`] in the daemon.
+pub type LoadStep = fn(Cli, &Platform) -> Result<Loaded, Vec<Diagnostic>>;
+
 /// The whole sequence, returning the exit status. `platform` is the
 /// account's and the machine's roots, so a test can run it without an
 /// account.
 #[must_use]
 pub fn main(args: &[OsString], platform: &Platform) -> i32 {
+    main_loading(args, platform, load)
+}
+
+/// [`main`], with its load step named. The daemon's is [`load`]. A test
+/// that names no configuration file passes
+/// [`shekyl_daemon_config::load_default_file_unread`]: `platform` gives it
+/// its own roots, but on Unix the default file's path is the machine's, and
+/// a test must not read the host it runs on. Every other step is this one
+/// body's.
+#[must_use]
+pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i32 {
     // Before any handler: what this process can know about an inherited
     // ignore. On Unix that is `SIGINT`'s disposition.
     let interrupt = signals::InheritedInterrupt::at_start();
