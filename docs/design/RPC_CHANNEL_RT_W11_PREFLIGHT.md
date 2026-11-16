@@ -27,9 +27,12 @@ request (Rick, 2026-11-15):
 
 - **The channel initiator** in `shekyl-rpc-transport`: it dials a
   daemon, runs the `hybridXK` handshake against the daemon's public
-  bundle, and carries the record stream, behind the same calls the
-  transport's other targets offer (`call`, `json_rpc`, and the async
-  `Rpc` trait).
+  bundle, and carries the record stream, behind the same calls
+  `LocalTarget` offers (`call`, `json_rpc`). The async `Rpc` trait is
+  RT-W12's, with the engine's move: it answers in `RpcError`, and the
+  channel's own failures (not the daemon, not enrolled, revoked, busy)
+  join it as variants of their own with the wallet contract's change,
+  never folded into an existing one.
 - **`shekyl-cli`'s enrolment words** (IG-Q87): `rpc client add`, `set`,
   `remove`, `list` and `rpc bundle show`.
 - **`shekyl-rpc-tunnel`** as `RPC_CHANNEL.md` §8 rules it, with its
@@ -232,8 +235,10 @@ operator's words (`ban …`) are in `console/operator.rs`. There is no
   gates that read those graphs are `check_rt_p4_standing.py` (the
   `fips203` closure and the build's flags), `check_clatter_not_in_production.py`,
   `check_p_fetch_dep_cut.py`, `check_bench_not_a_dependency.py` and the
-  GUI pin job. They run in step 5, when the edge exists, and are recorded
-  there. Not executed here: there is no edge to read yet.
+  GUI pin job. **Run at step 5, with the edge in place:** the four
+  scripts pass (`check_rt_p4_standing.py`: the `fips203` closure and the
+  flags are unchanged by a new consumer). The GUI pin job runs in the pull
+  request's full pass.
 
 ---
 

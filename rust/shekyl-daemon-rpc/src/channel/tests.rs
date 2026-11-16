@@ -13,19 +13,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper_util::rt::TokioIo;
 use serde_json::{json, Value};
 use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
 use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_mempool::Pool;
-use shekyl_rpc_channel::handshake::{
-    Client, StaticKeypair, StaticPublic, MESSAGE2_LEN, MESSAGE4_LEN,
-};
+use shekyl_rpc_channel::handshake::{Client, StaticKeypair, StaticPublic, MESSAGE2_LEN};
 use shekyl_rpc_channel::NetworkId;
 use shekyl_rpc_grants::{Grant, GrantSet, Preset};
 use shekyl_rpc_stream::RecordStream;
+use shekyl_rpc_transport::channel as client;
 use shekyl_rpc_types::wire::rpc::CeilingWord;
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, UnixSeconds};
@@ -157,12 +153,12 @@ fn app_state(dir: &std::path::Path, channel: Arc<Channel>) -> Arc<AppState> {
     })
 }
 
-/// A client session over the channel: the ceiling message 4 carried, and
-/// HTTP over the record stream.
+/// A client session over the channel, on RT-W11's production initiator
+/// (`shekyl_rpc_transport::channel`): the ceiling message 4 carried, and its
+/// HTTP session.
 struct Session {
     ceiling: GrantSet,
-    sender: hyper::client::conn::http1::SendRequest<Full<Bytes>>,
-    mark: shekyl_rpc_stream::SubmissionMark,
+    inner: client::Session,
 }
 
 /// How a connection ended before a session.
@@ -175,7 +171,8 @@ enum NoSession {
     ClosedBeforeMessage4,
 }
 
-/// The client's side of the handshake, as a record stream.
+/// The client's side of the handshake, as a record stream: the
+/// initiator's handshake layer, the seam the raw-frame tests write through.
 async fn open_stream(
     served: &Served,
     client: &StaticKeypair,
@@ -185,80 +182,68 @@ async fn open_stream(
     open_over(tcp, &served.bundle(), client, request).await
 }
 
-/// The client's side of the handshake over `tcp`, any stream.
+/// The initiator's handshake layer over `io`, any stream.
 async fn open_over<S>(
-    mut tcp: S,
+    io: S,
     daemon: &StaticPublic,
-    client: &StaticKeypair,
+    key: &StaticKeypair,
     request: GrantSet,
 ) -> Result<(RecordStream<S>, GrantSet), NoSession>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let (c, message1) = Client::start(&NETWORK, client, daemon).expect("message 1");
-    tcp.write_all(&message1).await.expect("write message 1");
-    let mut message2 = vec![0u8; MESSAGE2_LEN];
-    if tcp.read_exact(&mut message2).await.is_err() {
-        return Err(NoSession::ClosedBeforeMessage2);
+    match client::handshake_over(io, &NETWORK, key, daemon, request).await {
+        Ok(opened) => Ok((opened.stream, opened.ceiling)),
+        Err(client::Attempt::ClosedAfterMessage3) => Err(NoSession::ClosedBeforeMessage4),
+        Err(client::Attempt::ClosedAfterMessage1 | client::Attempt::Io(_)) => {
+            Err(NoSession::ClosedBeforeMessage2)
+        }
+        Err(other) => panic!("the handshake: {other:?}"),
     }
-    let c = c
-        .read_message2(&message2)
-        .expect("the daemon is the bundle's");
-    let (c, message3) = c.write_message3(&request.to_payload()).expect("message 3");
-    tcp.write_all(&message3).await.expect("write message 3");
-    let mut message4 = vec![0u8; MESSAGE4_LEN];
-    if tcp.read_exact(&mut message4).await.is_err() {
-        return Err(NoSession::ClosedBeforeMessage4);
-    }
-    let (established, ceiling) = c.read_message4(&message4).expect("message 4");
-    let ceiling = GrantSet::from_payload(&ceiling).expect("a ceiling");
-    let (send, recv) = established.into_directions();
-    Ok((RecordStream::new(tcp, send, recv), ceiling))
 }
 
-/// The client's side, as RT-W11's client will run it.
+/// The client's side as RT-W11's initiator runs it.
 async fn connect(
     served: &Served,
-    client: &StaticKeypair,
+    key: &StaticKeypair,
     request: GrantSet,
 ) -> Result<Session, NoSession> {
-    let (stream, ceiling) = open_stream(served, client, request).await?;
-    session_over(stream, ceiling).await
+    let (stream, ceiling) = open_stream(served, key, request).await?;
+    session_over(stream, ceiling, request).await
 }
 
-/// The HTTP session over an opened record stream.
-async fn session_over<S>(stream: RecordStream<S>, ceiling: GrantSet) -> Result<Session, NoSession>
+/// The initiator's HTTP session over an opened record stream.
+async fn session_over<S>(
+    stream: RecordStream<S>,
+    ceiling: GrantSet,
+    request: GrantSet,
+) -> Result<Session, NoSession>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let mark = stream.submission_mark();
-    let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .expect("http");
-    tokio::spawn(connection);
-    Ok(Session {
-        ceiling,
-        sender,
-        mark,
-    })
+    let inner = client::Session::start(
+        client::Opened {
+            stream,
+            ceiling,
+            granted: request.intersection(ceiling),
+        },
+        None,
+    )
+    .await
+    .expect("http");
+    Ok(Session { ceiling, inner })
 }
 
 impl Session {
     /// One JSON-RPC call; the reply's envelope, or `None` once the session
-    /// is closed.
+    /// is closed. A `tx_submit` goes padded, as the initiator sends one.
     async fn call(&mut self, method: &str, params: Value) -> Option<Value> {
         let body = serde_json::to_vec(&json!({
             "jsonrpc": "2.0", "id": 1, "method": method, "params": params,
         }))
         .unwrap();
-        let request = hyper::Request::post("/json_rpc")
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body)))
-            .unwrap();
-        self.sender.ready().await.ok()?;
-        let response = self.sender.send_request(request).await.ok()?;
-        let body = response.into_body().collect().await.ok()?.to_bytes();
-        serde_json::from_slice(&body).ok()
+        let reply = self.inner.post("json_rpc", body).await.ok()?;
+        serde_json::from_slice(&reply).ok()
     }
 }
 
@@ -420,27 +405,51 @@ async fn a_lowered_ceiling_closes_the_session_and_a_raised_one_does_not() {
     );
 }
 
-/// **An unpadded submission is refused over the channel** (RT-O28; the
-/// pre-flight's named edit "submission shape"). The same call armed as a
-/// submission reaches `tx_submit` itself. Red edit: remove the shape check
-/// in the dispatch's `TxSubmit` arm, and the unpadded body is not refused
-/// for its shape.
+/// **An unpadded submission is refused over the channel, and the initiator
+/// sends one padded** (RT-O28; the pre-flight's named edit "submission
+/// shape"; RT-W11's client contracts). Written raw, unarmed, the call is
+/// refused for its shape; through the production `Session`, which arms the
+/// mark for a `tx_submit`, it reaches `tx_submit` itself. Red edits: remove
+/// the shape check in the dispatch's `TxSubmit` arm, and the raw body is not
+/// refused; drop the `arm` in `shekyl_rpc_transport::channel::Session::send`,
+/// and the production call is refused as unpadded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unpadded_submission_is_refused_over_the_channel() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
     served.enrol(&client, &[CeilingWord::Wallet]);
+    // Unpadded: written raw through the handshake layer, the mark not armed.
+    let (mut stream, _) = open_stream(&served, &client, Preset::Wallet.grants())
+        .await
+        .expect("a session");
+    stream
+        .write_all(&tx_submit_post("AAAA"))
+        .await
+        .expect("the request");
+    stream.flush().await.expect("sealed");
+    let mut got = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !got
+        .windows(b"submit.unpadded".len())
+        .any(|window| window == b"submit.unpadded")
+    {
+        assert!(deadline > Instant::now(), "the refusal: {got:?}");
+        let mut buf = [0u8; 1024];
+        let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
+            .await
+            .expect("an answer")
+            .expect("read");
+        assert!(n > 0, "the daemon closed before refusing: {got:?}");
+        got.extend_from_slice(&buf[..n]);
+    }
+    // Padded: the production initiator arms the mark for a `tx_submit`.
     let mut session = connect(&served, &client, Preset::Wallet.grants())
         .await
         .expect("a session");
-    let body = json!({ "body": "AAAA" });
-    let unpadded = session
-        .call("tx_submit", body.clone())
+    let padded = session
+        .call("tx_submit", json!({ "body": "AAAA" }))
         .await
         .expect("a reply");
-    assert_eq!(code(&unpadded), Some("submit.unpadded"), "{unpadded}");
-    session.mark.arm();
-    let padded = session.call("tx_submit", body).await.expect("a reply");
     assert_ne!(code(&padded), Some("submit.unpadded"), "{padded}");
 }
 
@@ -577,7 +586,9 @@ async fn the_console_leg_serves_the_console_key_alone_from_its_reserve() {
     let (stream, ceiling) = open_over(io, &served.bundle(), &console, GrantSet::ALL)
         .await
         .expect("the console is admitted from its reserve");
-    let mut session = session_over(stream, ceiling).await.expect("a session");
+    let mut session = session_over(stream, ceiling, GrantSet::ALL)
+        .await
+        .expect("a session");
     let host = session
         .call("relay_stats", json!({}))
         .await
