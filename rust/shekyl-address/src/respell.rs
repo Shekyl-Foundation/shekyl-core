@@ -95,3 +95,132 @@ impl Spelling {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Spelling;
+    use crate::address::{
+        AddressError, PaymentAddress, ShekylAddress, FULL_SEGMENT_COUNT, SEGMENT_SEPARATOR,
+    };
+    use crate::{Network, MSG_SIGN_PK_LEN, PQC_PAYLOAD_LEN};
+    use shekyl_encoding::EncodingError;
+
+    fn fixture(net: Network) -> ShekylAddress {
+        ShekylAddress::new(
+            net,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; MSG_SIGN_PK_LEN],
+            vec![0xcc; PQC_PAYLOAD_LEN],
+        )
+    }
+
+    /// `encoded` with its segment `at` spelled `spelling`, where that
+    /// segment's length admits the spelling.
+    fn respell_segment(encoded: &str, at: usize, spelling: Spelling) -> Option<String> {
+        let mut segments: Vec<String> = encoded
+            .split(SEGMENT_SEPARATOR)
+            .map(str::to_owned)
+            .collect();
+        segments[at] = spelling.of(&segments[at])?;
+        let mut joined = String::new();
+        for (i, segment) in segments.iter().enumerate() {
+            if i > 0 {
+                joined.push(SEGMENT_SEPARATOR);
+            }
+            joined.push_str(segment);
+        }
+        Some(joined)
+    }
+
+    fn assert_refused(encoded: &str, spelling: Spelling, what: &str) {
+        match ShekylAddress::decode(encoded) {
+            Err(AddressError::Bech32m(err)) => {
+                assert!(
+                    spelling.refused_by(&err),
+                    "{what} {spelling:?}: refused as {err:?}"
+                );
+            }
+            other => panic!("{what} {spelling:?}: {other:?}"),
+        }
+    }
+
+    /// Every network's address round-trips through its one string.
+    #[test]
+    fn every_network_round_trips_its_one_string() {
+        for net in Network::ALL {
+            let addr = fixture(net);
+            let full = addr.encode().unwrap();
+            assert_eq!(ShekylAddress::decode(&full).unwrap(), addr, "{net}");
+            assert_eq!(
+                ShekylAddress::decode(&full).unwrap().encode().unwrap(),
+                full
+            );
+            let display = addr.encode_classical_display().unwrap();
+            assert_eq!(
+                ShekylAddress::decode(&display)
+                    .unwrap()
+                    .encode_classical_display()
+                    .unwrap(),
+                display,
+                "{net}"
+            );
+        }
+    }
+
+    /// An address has one string. Each other spelling the `bech32` crate
+    /// reads as the same address, on any full-address segment, is refused
+    /// by the refusal that names it. No full-address segment admits an
+    /// extra character, and that absence is pinned, so a layout change
+    /// brings the spelling back here.
+    #[test]
+    fn a_full_address_has_one_string() {
+        for net in Network::ALL {
+            let full = fixture(net).encode().unwrap();
+            let segments: Vec<&str> = full.split(SEGMENT_SEPARATOR).collect();
+            assert_eq!(segments.len(), FULL_SEGMENT_COUNT, "{net}");
+            for at in 0..segments.len() {
+                for spelling in Spelling::ALL {
+                    match respell_segment(&full, at, spelling) {
+                        Some(respelled) => {
+                            assert_refused(&respelled, spelling, &format!("{net} segment {at}"));
+                        }
+                        None => assert!(
+                            matches!(spelling, Spelling::ExtraCharacter),
+                            "{net} segment {at} admits {spelling:?}"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    /// The display form has one string too. `CLASSICAL_SEGMENT_LEN`
+    /// leaves one padding bit, so every spelling applies, the extra
+    /// character included. A layout that drops that bit fails the
+    /// unwrap below.
+    #[test]
+    fn a_classical_only_address_has_one_string() {
+        for net in Network::ALL {
+            let display = fixture(net).encode_classical_display().unwrap();
+            for spelling in Spelling::ALL {
+                let respelled = spelling
+                    .of(&display)
+                    .unwrap_or_else(|| panic!("{net} display admits {spelling:?}"));
+                assert_refused(&respelled, spelling, &format!("{net} display"));
+            }
+        }
+    }
+
+    /// Paying decodes through the same codec: an upper-cased address is
+    /// refused at the payer's door, not only at [`ShekylAddress::decode`].
+    #[test]
+    fn a_payment_address_has_one_string() {
+        let full = fixture(Network::Mainnet).encode().unwrap();
+        assert!(matches!(
+            PaymentAddress::decode(&full.to_uppercase(), Network::Mainnet),
+            Err(AddressError::Bech32m(EncodingError::NotLowercase))
+        ));
+        assert!(PaymentAddress::decode(&full, Network::Mainnet).is_ok());
+    }
+}

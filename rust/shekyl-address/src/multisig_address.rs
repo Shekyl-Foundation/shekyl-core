@@ -1230,18 +1230,27 @@ mod tests {
     fn fingerprint_bech32m_refuses_every_other_spelling() {
         // A fingerprint has one string: every other spelling the `bech32`
         // crate would read as the same HRP and bytes is refused, by the
-        // refusal that names it.
+        // refusal that names it. `FINGERPRINT_LEN` leaves no room for an
+        // extra character. A `None` from any other spelling means
+        // `Spelling::of` stopped producing a string the test must refuse.
         let canonical = make_test_payload(2, 2).fingerprint_bech32m().unwrap();
         for spelling in crate::respell::Spelling::ALL {
-            // 32 bytes leave four padding bits: no room for an extra character.
-            let Some(respelled) = spelling.of(&canonical) else {
-                continue;
-            };
-            match MultisigAddressPayload::parse_fingerprint_bech32m(&respelled) {
-                Err(MultisigAddressError::Bech32m(e)) => {
-                    assert!(spelling.refused_by(&e), "{spelling:?}: refused as {e:?}");
+            match spelling.of(&canonical) {
+                Some(respelled) => {
+                    match MultisigAddressPayload::parse_fingerprint_bech32m(&respelled) {
+                        Err(MultisigAddressError::Bech32m(err)) => {
+                            assert!(
+                                spelling.refused_by(&err),
+                                "{spelling:?}: refused as {err:?}"
+                            );
+                        }
+                        other => panic!("{spelling:?}: {other:?}"),
+                    }
                 }
-                other => panic!("{spelling:?}: {other:?}"),
+                None => assert!(
+                    matches!(spelling, crate::respell::Spelling::ExtraCharacter),
+                    "a fingerprint admits {spelling:?}"
+                ),
             }
         }
     }

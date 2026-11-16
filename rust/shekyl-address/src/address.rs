@@ -57,10 +57,10 @@
 //! ## One string per address
 //!
 //! Every segment is written and read by `shekyl-encoding`'s one Bech32m
-//! codec, which accepts only the lowercase string its writer produces
-//! (no uppercase, no Bech32 checksum, no non-zero padding). An address
-//! therefore has exactly one string: the one [`ShekylAddress::encode`]
-//! returns.
+//! codec. The only string that codec accepts is the lowercase one its
+//! writer produces, so [`ShekylAddress::encode`] is the address's one
+//! string. The four refusals (`Malformed`, `Checksum`, `NotCanonical`,
+//! `NotLowercase`) are named on [`shekyl_encoding::EncodingError`].
 
 use shekyl_encoding::{decode_blob, encode_blob, EncodingError};
 
@@ -219,10 +219,17 @@ const _: () = assert!(bech32m_char_len(CLASSICAL_BOUND_SEGMENT_LEN, MAX_CLASSICA
 /// Separator between segments.
 pub const SEGMENT_SEPARATOR: char = '/';
 
+/// A display address is the classical segment alone.
+pub(crate) const DISPLAY_SEGMENT_COUNT: usize = 1;
+
+/// A full address is the classical segment, then the two PQC segments.
+pub(crate) const FULL_SEGMENT_COUNT: usize = 3;
+
 /// Errors specific to address encoding/decoding.
 #[derive(Debug, thiserror::Error)]
 pub enum AddressError {
-    /// A segment is not the one Bech32m string its contents encode to.
+    /// The Bech32m codec refused this segment. The variant names which
+    /// step failed; see [`EncodingError`].
     #[error("address segment: {0}")]
     Bech32m(#[from] EncodingError),
 
@@ -239,7 +246,11 @@ pub enum AddressError {
         got: usize,
     },
 
-    #[error("expected 1 or 3 segments, got {0}")]
+    #[error(
+        "expected {display} or {full} segments, got {0}",
+        display = DISPLAY_SEGMENT_COUNT,
+        full = FULL_SEGMENT_COUNT
+    )]
     BadSegmentCount(usize),
 
     #[error("network mismatch: address is {addr_net}, expected {expected_net}")]
@@ -514,8 +525,8 @@ impl ShekylAddress {
         let parts: Vec<&str> = encoded.split(SEGMENT_SEPARATOR).collect();
 
         match parts.len() {
-            1 => Self::decode_classical_only(parts[0]),
-            3 => Self::decode_full(parts[0], parts[1], parts[2]),
+            DISPLAY_SEGMENT_COUNT => Self::decode_classical_only(parts[0]),
+            FULL_SEGMENT_COUNT => Self::decode_full(parts[0], parts[1], parts[2]),
             n => Err(AddressError::BadSegmentCount(n)),
         }
     }
@@ -638,7 +649,6 @@ impl PaymentAddress {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::respell::Spelling;
 
     fn make_test_address(net: Network) -> ShekylAddress {
         ShekylAddress {
@@ -655,8 +665,8 @@ mod tests {
     fn encode_decode_roundtrip_mainnet() {
         let addr = make_test_address(Network::Mainnet);
         let encoded = addr.encode().unwrap();
-        let parts: Vec<&str> = encoded.split('/').collect();
-        assert_eq!(parts.len(), 3);
+        let parts: Vec<&str> = encoded.split(SEGMENT_SEPARATOR).collect();
+        assert_eq!(parts.len(), FULL_SEGMENT_COUNT);
         assert!(parts[0].starts_with("shekyl1"));
         assert!(parts[1].starts_with("skpq1"));
         assert!(parts[2].starts_with("skpq21"));
@@ -669,7 +679,8 @@ mod tests {
     fn encode_decode_roundtrip_testnet() {
         let addr = make_test_address(Network::Testnet);
         let encoded = addr.encode().unwrap();
-        let parts: Vec<&str> = encoded.split('/').collect();
+        let parts: Vec<&str> = encoded.split(SEGMENT_SEPARATOR).collect();
+        assert_eq!(parts.len(), FULL_SEGMENT_COUNT);
         assert!(parts[0].starts_with("tshekyl1"));
         assert!(parts[1].starts_with("tskpq1"));
         assert!(parts[2].starts_with("tskpq21"));
@@ -683,7 +694,8 @@ mod tests {
     fn encode_decode_roundtrip_stagenet() {
         let addr = make_test_address(Network::Stagenet);
         let encoded = addr.encode().unwrap();
-        let parts: Vec<&str> = encoded.split('/').collect();
+        let parts: Vec<&str> = encoded.split(SEGMENT_SEPARATOR).collect();
+        assert_eq!(parts.len(), FULL_SEGMENT_COUNT);
         assert!(parts[0].starts_with("sshekyl1"));
         assert!(parts[1].starts_with("sskpq1"));
         assert!(parts[2].starts_with("sskpq21"));
@@ -691,105 +703,6 @@ mod tests {
         let decoded = ShekylAddress::decode(&encoded).unwrap();
         assert_eq!(addr, decoded);
         assert_eq!(decoded.network, Network::Stagenet);
-    }
-
-    /// Every network's address round-trips through its one string.
-    #[test]
-    fn every_network_round_trips_its_one_string() {
-        for net in Network::ALL {
-            let addr = make_test_address(net);
-            let full = addr.encode().unwrap();
-            assert_eq!(ShekylAddress::decode(&full).unwrap(), addr, "{net}");
-            assert_eq!(
-                ShekylAddress::decode(&full).unwrap().encode().unwrap(),
-                full
-            );
-            let display = addr.encode_classical_display().unwrap();
-            assert_eq!(
-                ShekylAddress::decode(&display)
-                    .unwrap()
-                    .encode_classical_display()
-                    .unwrap(),
-                display,
-                "{net}"
-            );
-        }
-    }
-
-    /// `encoded` with its segment `at` spelled `spelling`, where that
-    /// segment's length admits the spelling.
-    fn respell_segment(encoded: &str, at: usize, spelling: Spelling) -> Option<String> {
-        let mut segments: Vec<String> = encoded
-            .split(SEGMENT_SEPARATOR)
-            .map(str::to_owned)
-            .collect();
-        segments[at] = spelling.of(&segments[at])?;
-        Some(segments.join(&SEGMENT_SEPARATOR.to_string()))
-    }
-
-    fn assert_refused(encoded: &str, spelling: Spelling, what: &str) {
-        match ShekylAddress::decode(encoded) {
-            Err(AddressError::Bech32m(e)) => {
-                assert!(
-                    spelling.refused_by(&e),
-                    "{what} {spelling:?}: refused as {e:?}"
-                );
-            }
-            other => panic!("{what} {spelling:?}: {other:?}"),
-        }
-    }
-
-    /// An address has one string. Each other spelling the `bech32` crate
-    /// reads as the same address, on any one of the three segments, is
-    /// refused by the refusal that names it. No full-address segment
-    /// admits an extra character (their padding is three and four bits),
-    /// and that is pinned too, so a layout change brings it back here.
-    #[test]
-    fn a_full_address_has_one_string() {
-        for net in Network::ALL {
-            let full = make_test_address(net).encode().unwrap();
-            for at in 0..3 {
-                for spelling in Spelling::ALL {
-                    match respell_segment(&full, at, spelling) {
-                        Some(respelled) => {
-                            assert_refused(&respelled, spelling, &format!("{net} segment {at}"));
-                        }
-                        None => assert!(
-                            matches!(spelling, Spelling::ExtraCharacter),
-                            "{net} segment {at} admits {spelling:?}"
-                        ),
-                    }
-                }
-            }
-        }
-    }
-
-    /// The display form has one string too. Its 113 bytes leave one
-    /// padding bit, so every spelling applies, the extra character
-    /// included.
-    #[test]
-    fn a_classical_only_address_has_one_string() {
-        for net in Network::ALL {
-            let display = make_test_address(net).encode_classical_display().unwrap();
-            for spelling in Spelling::ALL {
-                let respelled = spelling
-                    .of(&display)
-                    .unwrap_or_else(|| panic!("the display form admits {spelling:?}"));
-                assert_refused(&respelled, spelling, &format!("{net} display"));
-            }
-        }
-    }
-
-    /// Paying decodes through the same codec: an upper-cased address is
-    /// refused at the payer's door, not only at [`ShekylAddress::decode`].
-    #[test]
-    fn a_payment_address_has_one_string() {
-        let full = make_test_address(Network::Mainnet).encode().unwrap();
-        assert!(matches!(
-            PaymentAddress::decode(&full.to_uppercase(), Network::Mainnet),
-            Err(AddressError::Bech32m(EncodingError::NotLowercase))
-        ));
-        assert!(PaymentAddress::decode(&full, Network::Mainnet).is_ok());
     }
 
     #[test]
@@ -840,9 +753,14 @@ mod tests {
             vec![0xdd; PQC_PAYLOAD_LEN],
         );
         let bob_encoded = bob.encode().unwrap();
-        let alice_parts: Vec<&str> = encoded.split('/').collect();
-        let bob_parts: Vec<&str> = bob_encoded.split('/').collect();
-        let spliced = format!("{}/{}/{}", alice_parts[0], bob_parts[1], bob_parts[2]);
+        let alice_parts: Vec<&str> = encoded.split(SEGMENT_SEPARATOR).collect();
+        let bob_parts: Vec<&str> = bob_encoded.split(SEGMENT_SEPARATOR).collect();
+        let spliced = format!(
+            "{classical}{SEGMENT_SEPARATOR}{pqc_a}{SEGMENT_SEPARATOR}{pqc_b}",
+            classical = alice_parts[0],
+            pqc_a = bob_parts[1],
+            pqc_b = bob_parts[2],
+        );
         assert!(matches!(
             PaymentAddress::decode(&spliced, Network::Mainnet),
             Err(AddressError::EkBindMismatch)
@@ -930,14 +848,19 @@ mod tests {
     fn cross_network_pqc_hrp_mismatch_rejected() {
         let addr = make_test_address(Network::Mainnet);
         let encoded = addr.encode().unwrap();
-        let parts: Vec<&str> = encoded.split('/').collect();
+        let parts: Vec<&str> = encoded.split(SEGMENT_SEPARATOR).collect();
 
         // Construct a frankenstein with mainnet classical + testnet PQC
         let testnet_addr = make_test_address(Network::Testnet);
         let testnet_encoded = testnet_addr.encode().unwrap();
-        let testnet_parts: Vec<&str> = testnet_encoded.split('/').collect();
+        let testnet_parts: Vec<&str> = testnet_encoded.split(SEGMENT_SEPARATOR).collect();
 
-        let mixed = format!("{}/{}/{}", parts[0], testnet_parts[1], testnet_parts[2]);
+        let mixed = format!(
+            "{classical}{SEGMENT_SEPARATOR}{pqc_a}{SEGMENT_SEPARATOR}{pqc_b}",
+            classical = parts[0],
+            pqc_a = testnet_parts[1],
+            pqc_b = testnet_parts[2],
+        );
         assert!(ShekylAddress::decode(&mixed).is_err());
     }
 
@@ -993,11 +916,16 @@ mod tests {
 
         let alice_enc = alice.encode().unwrap();
         let bob_enc = bob.encode().unwrap();
-        let a: Vec<&str> = alice_enc.split('/').collect();
-        let b: Vec<&str> = bob_enc.split('/').collect();
+        let a: Vec<&str> = alice_enc.split(SEGMENT_SEPARATOR).collect();
+        let b: Vec<&str> = bob_enc.split(SEGMENT_SEPARATOR).collect();
 
         // Alice's classical (tag commits to Alice's ek) + Bob's PQC segments.
-        let spliced = format!("{}/{}/{}", a[0], b[1], b[2]);
+        let spliced = format!(
+            "{classical}{SEGMENT_SEPARATOR}{pqc_a}{SEGMENT_SEPARATOR}{pqc_b}",
+            classical = a[0],
+            pqc_a = b[1],
+            pqc_b = b[2],
+        );
         assert!(matches!(
             ShekylAddress::decode(&spliced),
             Err(AddressError::EkBindMismatch)
