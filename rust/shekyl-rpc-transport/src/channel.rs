@@ -33,7 +33,6 @@
 //! points at the node's log.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -165,7 +164,7 @@ pub enum Leg {
     },
     /// A Unix socket: a service's console leg (RT-O37).
     #[cfg(unix)]
-    Socket(PathBuf),
+    Socket(std::path::PathBuf),
     /// A Windows pipe: a service's console leg (RT-O37).
     #[cfg(windows)]
     Pipe(String),
