@@ -1,9 +1,9 @@
 # `RT-P5`, sizes on the 4.x wire: HTTP message sizes per method on a generated wallet's traffic. Registration of 2026-11-15
 
-**State of this record: measured.** Both registered runs passed every
-gate and the determinism check. Two of the three questions this record
-answers move against RT-O6, and come to the maintainer as findings
-("Findings", below). The section
+**State of this record: measured; its findings ruled (Rick,
+2026-11-16).** Both registered runs passed every gate and the determinism
+check. Two of the three questions this record answers moved against
+RT-O6; "Findings", below, records each ruling. The section
 "Registered before the run" is committed before any run on the host and
 is not edited afterwards. An amendment made before any registered result
 is read is dated and says what changed. Results are added under
@@ -309,7 +309,7 @@ depth (2) it reproduces every measured submission. Message bytes:
 The largest, 108,860 bytes at depth 8, is two largest-class records; a
 padded submission is four (`SUBMISSION_RECORDS`).
 
-## Findings, for the maintainer
+## Findings, and their rulings
 
 - **F1 — the middle response class.** RT-O6's `K` = 3 classes were
   512, 16,384 and 65,535, from the 3.x trace. On the 4.x wire the same
@@ -323,3 +323,14 @@ padded submission is four (`SUBMISSION_RECORDS`).
   bytes" no longer describes the wire: it is base64. The padded
   submission's size, `SUBMISSION_CAP`, already counts base64, so nothing
   in code moves; the sentence in `RPC_CHANNEL.md` §4.4 does.
+
+**Ruled (Rick, 2026-11-16).**
+
+- **F1: the middle class stays 16,384.** The trace's block reads come
+  from a 117-block testnet chain with near-empty blocks, so they do not
+  represent mainnet's block sizes; moving to 4,096 would push every larger
+  mainnet block read into the 65,535 class. The registered mainnet reopen
+  settles it. Recorded in `RPC_CHANNEL.md` §4.4, RT-O6 part 1.
+- **F2: RT-O6 part 2's encoding sentence is base64,** `66 + 4 × ⌈n / 3⌉`;
+  the padded submission's size is unchanged. Done in this record's pull
+  request.
