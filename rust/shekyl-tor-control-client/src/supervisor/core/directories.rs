@@ -32,14 +32,30 @@
 //! not counted. For one it never confirmed, anything but a matching copy is
 //! missing: nothing shows the directory took it. An upload still open
 //! arrives already settled, from the reading taken with the list
-//! ([`OpenUploads`]): asked once its round is older than
+//! ([`OpenUploads`]): asked once its own round is older than
 //! `Policy::round_wait`, and left in flight before that.
+//!
+//! **Silence counts only when the fetch path is shown working** (Rick,
+//! 2026-11-16). A fetch with no answer in its window says nothing about the
+//! directory when this node's own circuits are failing: on the floor
+//! device's control node (2026-11-15) the probe arrived, Tor reported a
+//! guard failing a large share of its circuits, and every counted fetch was
+//! silent, three confirmed uploads among them. The directories whose upload
+//! Tor confirmed are the control group: each was reachable minutes ago and
+//! stored the copy. Silence counts as missing only when more than half of
+//! this check's fetches of confirmed uploads of the descriptor clients ask
+//! for were answered: a copy, or a failure naming the descriptor. Otherwise
+//! every silent fetch is excluded, confirmed or not. With no confirmed upload
+//! of that descriptor, silence never counts; only an explicit `NOT_FOUND`
+//! does. An answer from a directory of the other descriptor proves nothing
+//! about the path to the asked one's. This is decided once, when the check
+//! settles, so an answer that comes late still counts for the silent ones.
 //!
 //! Each fetch's answer window is `probe_within` from the moment Tor accepts
 //! that command. It is the supervisor's wait for the `HS_DESC` line, not the
 //! connector's dial deadline and not the dialer's outage backoff.
 
-use crate::control::{RelayFingerprint, RoundUpload, ServiceDescriptor, UploadEnd};
+use crate::control::{DescriptorKey, RelayFingerprint, RoundUpload, ServiceDescriptor, UploadEnd};
 
 /// One directory to ask, from the driver: an upload of the latest round,
 /// and a CSPRNG draw for this fetch's own delay.
@@ -81,8 +97,9 @@ pub enum DirectoryAnswer {
 pub enum Counted {
     /// It holds the descriptor Tor's client asks for, at our counter.
     Found,
-    /// It does not: `NOT_FOUND`, a stale copy, no answer within the window,
-    /// or, for an upload Tor never confirmed, any answer but a matching copy.
+    /// It does not: `NOT_FOUND`, a stale copy, or, for an upload Tor never
+    /// confirmed, any answer but a matching copy; and no answer within the
+    /// window, when the fetch path was shown working ([`Exclusion::Silent`]).
     Missing,
     /// Not counted.
     Excluded(Exclusion),
@@ -105,6 +122,10 @@ pub enum Exclusion {
     /// The upload was still open and its round younger than
     /// `Policy::round_wait` when the check was drawn: it may yet land.
     UploadInFlight,
+    /// No answer within the window, while no more than half of this check's
+    /// fetches of confirmed uploads were answered: this node's own fetch
+    /// path is the likeliest fault (Rick, 2026-11-16).
+    Silent,
 }
 
 /// One directory's line in a settled check, said at debug (§4.5).
@@ -121,25 +142,31 @@ pub struct DirectoryReport {
     pub counted: Counted,
 }
 
-/// How the round a directory list was read from treats uploads that have
+/// How the rounds a directory list was read from treat uploads that have
 /// not ended (§4.5). The driver reads it in the same turn as the list and
-/// the check keeps that reading: the round may end while the descriptor is
+/// the check keeps that reading: a round may end while the descriptor is
 /// being read, and a later reading would be a different round.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpenUploads {
-    /// That round was already older than `Policy::round_wait`. An upload
-    /// still open is hung, and its directory is asked.
-    Hung,
-    /// That round was younger, or none was open. An upload still open may
-    /// yet land, and is not asked.
-    InFlight,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenUploads {
+    /// The descriptors whose open round was younger than
+    /// `Policy::round_wait`. An upload of theirs still open may yet land.
+    in_flight: Vec<DescriptorKey>,
 }
 
 impl OpenUploads {
-    /// Uploads still open in that round are asked.
+    /// `in_flight` are the descriptors whose open round is younger than
+    /// `Policy::round_wait`.
     #[must_use]
-    pub const fn asks(self) -> bool {
-        matches!(self, Self::Hung)
+    pub(crate) const fn in_flight(in_flight: Vec<DescriptorKey>) -> Self {
+        Self { in_flight }
+    }
+
+    /// An upload of `descriptor` still open is hung, and its directory is
+    /// asked: its round was already older than `Policy::round_wait`, or had
+    /// ended.
+    #[must_use]
+    pub fn asks(&self, descriptor: DescriptorKey) -> bool {
+        !self.in_flight.contains(&descriptor)
     }
 }
 
@@ -186,9 +213,12 @@ struct Ask {
     /// the request queue: no window runs, and nothing Tor says about the
     /// directory is this check's.
     sent: bool,
-    /// When a sent fetch with no answer counts as missing. `None` until
-    /// the fetch is sent, and cleared once the directory is decided.
+    /// When a sent fetch with no answer is silent. `None` until the fetch
+    /// is sent, and cleared once the directory is decided.
     answer_by: Option<u64>,
+    /// The fetch was sent and its window passed with no answer. How that
+    /// counts is decided when the check settles.
+    silent: bool,
     /// What Tor said, for the report.
     answer: Option<DirectoryAnswer>,
     /// `None` while undecided.
@@ -204,13 +234,15 @@ impl Ask {
             due,
             sent: false,
             answer_by: None,
+            silent: false,
             answer: None,
             counted,
         }
     }
 
+    /// Not decided, and not waiting on the settle as a silent fetch.
     fn is_pending(&self) -> bool {
-        self.counted.is_none()
+        self.counted.is_none() && !self.silent
     }
 
     /// The fetch has been sent and the directory has not been decided.
@@ -300,7 +332,7 @@ impl DirectoryCheck {
     }
 
     /// The fetches whose time has come, to be sent; and a sent fetch whose
-    /// answer window has elapsed counts as missing. A fetch's window starts
+    /// answer window has elapsed is silent. A fetch's window starts
     /// when it is sent ([`Self::dispatched`]): the request queue sends one
     /// request at a time, so a fetch can wait behind others.
     pub(super) fn on_deadline(&mut self, now: u64) -> Vec<RelayFingerprint> {
@@ -393,6 +425,12 @@ impl DirectoryCheck {
         let ask = &mut self.asks[at];
         ask.answer = Some(answer);
         ask.decide(counted);
+        // Tor's answer to a fetch this check sent names the descriptor its
+        // client asked for, as the `REQUESTED` before it did. Our own failure
+        // to ask names nothing.
+        if let (Some(id), false) = (descriptor_id, answer == DirectoryAnswer::Unusable) {
+            self.learn(id);
+        }
         self.settle();
     }
 
@@ -457,7 +495,8 @@ impl DirectoryCheck {
         }
     }
 
-    /// Every directory answered, was excluded, or its answer window passed.
+    /// Every directory answered, was excluded, or its answer window passed,
+    /// and the silent ones have been decided.
     pub(super) fn is_complete(&self) -> bool {
         self.complete
     }
@@ -513,15 +552,60 @@ impl DirectoryCheck {
     fn expire(&mut self, now: u64) {
         for ask in &mut self.asks {
             if ask.is_pending() && ask.answer_by.is_some_and(|at| now >= at) {
-                ask.decide(Counted::Missing);
+                ask.silent = true;
+                ask.due = None;
+                ask.answer_by = None;
             }
         }
         self.settle();
     }
 
+    /// Once nothing is pending, the silent fetches are decided and the
+    /// check is complete.
     fn settle(&mut self) {
-        if self.asks.iter().all(|ask| !ask.is_pending()) {
-            self.complete = true;
+        if self.complete || self.asks.iter().any(Ask::is_pending) {
+            return;
         }
+        let silence = self.silence_counts();
+        let asked_for = self.asked_for.clone();
+        for ask in &mut self.asks {
+            if !ask.silent || ask.counted.is_some() {
+                continue;
+            }
+            let counted = match &asked_for {
+                Some(asked_for) if *asked_for != ask.descriptor_id => {
+                    Counted::Excluded(Exclusion::OtherDescriptor)
+                }
+                _ if silence => Counted::Missing,
+                _ => Counted::Excluded(Exclusion::Silent),
+            };
+            ask.counted = Some(counted);
+        }
+        self.complete = true;
+    }
+
+    /// Whether a silent fetch counts as missing: more than half of this
+    /// check's fetches of confirmed uploads of the descriptor Tor's client
+    /// asks for were answered (Rick, 2026-11-16). Only Tor's own answer is
+    /// one: a copy, or a failure naming the descriptor. A fetch this node
+    /// failed to send is not in the group. Nothing is, before Tor has named
+    /// the descriptor it asks for.
+    fn silence_counts(&self) -> bool {
+        let Some(asked_for) = &self.asked_for else {
+            return false;
+        };
+        let (answered, fetched) = self
+            .asks
+            .iter()
+            .filter(|ask| {
+                ask.upload.confirmed()
+                    && ask.sent
+                    && ask.descriptor_id == *asked_for
+                    && ask.counted != Some(Counted::Excluded(Exclusion::NotAsked))
+            })
+            .fold((0usize, 0usize), |(answered, fetched), ask| {
+                (answered + usize::from(ask.answer.is_some()), fetched + 1)
+            });
+        answered * 2 > fetched
     }
 }

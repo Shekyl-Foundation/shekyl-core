@@ -449,6 +449,11 @@ impl super::Core {
                     if let Sent::FetchFrom { hsdir } = sent {
                         self.directory_fetch_sent(now, hsdir);
                     }
+                    // The driver starts this publication's rounds afresh,
+                    // with keys of their own: the rounds open now end there.
+                    if sent == Sent::AddOnion {
+                        self.forget_rounds();
+                    }
                     self.requests.sent(sent, now);
                     out.push(action);
                     break;

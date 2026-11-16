@@ -11,14 +11,15 @@
 //! nonce on this task first: a handshake that arrives after that is not
 //! this probe, and the next probe's nonce is never the one removed.
 //!
-//! A descriptor round's marks are one fold. The two ways an open round is
-//! ended here, a round stuck for five minutes and a sink that dropped
-//! events, share [`Drive::end_round`].
+//! A descriptor round's marks are one fold. An open round is ended here two
+//! ways: one descriptor's round stuck for five minutes
+//! ([`Drive::round_stuck`]), and every open round when the sink dropped
+//! events ([`Drive::round_resync`]).
 
 use shekyl_node::Network;
 use shekyl_p2p::ProbeHandshake;
 use shekyl_timing_engine::Tick;
-use shekyl_tor_control_client::control::{HsDescEvent, UploadRounds};
+use shekyl_tor_control_client::control::{DescriptorKey, HsDescEvent, UploadRounds};
 use shekyl_tor_control_client::supervisor::{
     directory_input_of, round_inputs, Inbound, InboundCause, Input,
 };
@@ -123,39 +124,42 @@ impl Drive {
         inputs
     }
 
-    /// A descriptor round has been open five minutes: uploads with neither
-    /// `UPLOADED` nor `FAILED`, no event lost on our side unless the sink
-    /// says so. Said once at debug (Status counts it), and ended in the
-    /// coalescer, so the next round's uploads start a round of their own
-    /// instead of joining one that will never end (§10).
-    pub(super) fn round_stuck(&mut self) -> Vec<Input> {
+    /// A descriptor's round has been open five minutes: uploads with
+    /// neither `UPLOADED` nor `FAILED`, no event lost on our side unless the
+    /// sink says so. Said once at debug (Status counts it), and ended in the
+    /// coalescer, so that descriptor's next uploads start a round of their
+    /// own instead of joining one that will never end (§10).
+    pub(super) fn round_stuck(&mut self, descriptor: DescriptorKey) -> Vec<Input> {
         tracing::debug!(
             target: "tor",
             events_dropped = self.events.dropped(),
             "a descriptor upload round has been open for five minutes; ending it"
         );
-        self.end_round()
+        let Some(mark) = self
+            .rounds
+            .as_mut()
+            .and_then(|rounds| rounds.end_round(descriptor))
+        else {
+            return Vec::new();
+        };
+        round_inputs(&[mark], || self.network.probe_delay_draw())
     }
 
     /// The sink dropped events since the last look: an open round's ends may
-    /// be among them, so it ends now and the next round can trigger.
+    /// be among them, so every open round ends now and the next can trigger.
+    /// The end is not said by [`say_round`]: a resync is not a round's own end.
     pub(super) fn round_resync(&mut self) -> Vec<Input> {
         let dropped = self.events.dropped();
         if dropped == self.dropped_seen {
             return Vec::new();
         }
         self.dropped_seen = dropped;
-        self.end_round()
-    }
-
-    /// End the open round in the coalescer. A stuck round and a dropped
-    /// sink share this. No mark when nothing is open. The end is not said
-    /// by [`say_round`]: the stuck path has its own line.
-    fn end_round(&mut self) -> Vec<Input> {
-        let Some(mark) = self.rounds.as_mut().and_then(UploadRounds::resync) else {
-            return Vec::new();
-        };
-        round_inputs(&[mark], || self.network.probe_delay_draw())
+        let marks = self
+            .rounds
+            .as_mut()
+            .map(UploadRounds::resync)
+            .unwrap_or_default();
+        round_inputs(&marks, || self.network.probe_delay_draw())
     }
 
     /// Publish the inbound facet on the managed route's link. Before a route

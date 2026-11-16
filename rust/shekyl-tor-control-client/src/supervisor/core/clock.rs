@@ -56,6 +56,7 @@ use std::time::Duration;
 use super::super::posture::{Cause, Inbound, InboundCause, ReportedSkew};
 use super::announce::Cadence;
 use super::{duration_ns, Action, Core, Duty, Phase};
+use crate::control::DescriptorKey;
 
 /// Whether Tor's skew report owns a bootstrap block.
 ///
@@ -216,7 +217,7 @@ impl Core {
         // report here would let Tor's next report say the same fault again.
         // Refused uploads still stand if they did; otherwise the facet is
         // unknown again until a probe judges it.
-        if self.uploads_refused {
+        if self.any_refused() {
             self.inbound_unreachable(now, InboundCause::UploadsRefused);
         } else {
             self.inbound = if self.onion_published_here() {
@@ -280,12 +281,15 @@ impl Core {
         ) || (self.cause == Cause::None && self.clock_is_behind())
     }
 
-    /// A round in which more than half of the directories refused the
-    /// upload. No republish; the facet says so unless the clock, the cause
-    /// behind it, already does.
-    pub(super) fn uploads_refused(&mut self, now: u64) -> Vec<Action> {
-        let newly = !self.uploads_refused;
-        self.uploads_refused = true;
+    /// A round of `descriptor` in which more than half of the directories
+    /// refused the upload. No republish; the facet says so unless the clock,
+    /// the cause behind it, already does. Either descriptor's refused round
+    /// stands until a round of that same descriptor is accepted.
+    pub(super) fn uploads_refused(&mut self, now: u64, descriptor: DescriptorKey) -> Vec<Action> {
+        let newly = !self.any_refused();
+        if !self.refused_descriptors.contains(&descriptor) {
+            self.refused_descriptors.push(descriptor);
+        }
         if self.republish.judging {
             self.republish_failed(now);
         }
@@ -298,10 +302,14 @@ impl Core {
         actions
     }
 
-    /// A round that was not refused clears refused uploads. The facet is
-    /// unknown again until its probe judges it.
-    pub(super) fn uploads_accepted(&mut self, now: u64) {
-        if !std::mem::take(&mut self.uploads_refused) {
+    /// A round of `descriptor` that was not refused clears that
+    /// descriptor's refusal. Once neither descriptor's stands, the facet is
+    /// unknown again until a probe judges it. A descriptor dropped at a
+    /// rotation is cleared the same way: Tor no longer uploads it.
+    pub(super) fn uploads_accepted(&mut self, now: u64, descriptor: DescriptorKey) {
+        let before = self.refused_descriptors.len();
+        self.refused_descriptors.retain(|held| *held != descriptor);
+        if before == self.refused_descriptors.len() || self.any_refused() {
             return;
         }
         if matches!(
@@ -315,10 +323,15 @@ impl Core {
         }
     }
 
-    /// While the clock is named, or the latest round was refused, a
-    /// republish cannot help.
+    /// Either descriptor's latest round was refused.
+    pub(super) fn any_refused(&self) -> bool {
+        !self.refused_descriptors.is_empty()
+    }
+
+    /// While the clock is named, or either descriptor's latest round was
+    /// refused, a republish cannot help.
     pub(super) fn republish_cannot_help(&self) -> bool {
-        self.clock_is_behind() || self.uploads_refused
+        self.clock_is_behind() || self.any_refused()
     }
 
     /// The republish is waiting on its own round's probe.

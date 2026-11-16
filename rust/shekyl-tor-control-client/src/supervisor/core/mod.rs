@@ -31,7 +31,7 @@ mod resume;
 mod running;
 
 use crate::binary::VerifiedTorBinary;
-use crate::control::{NetworkView, RelayFingerprint, ServiceDescriptor};
+use crate::control::{DescriptorKey, NetworkView, RelayFingerprint, ServiceDescriptor};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 use dials::Dials;
@@ -331,9 +331,11 @@ pub enum Action {
     /// Said at info. The [`Self::RepublishOnion`] that follows forces a
     /// fresh upload.
     DescriptorOverdue,
-    /// A probe's check began: give every upload of the latest round that
-    /// reached a directory, each with a CSPRNG draw for its own fetch delay
-    /// (§4.5, the directory check). The driver answers
+    /// A probe went out: give every upload of each descriptor's latest
+    /// round that reached a directory, each with a CSPRNG draw for its own
+    /// fetch delay (§4.5, the directory check). Asked when the probe fires,
+    /// once every open round is older than `Policy::round_wait`, so the list
+    /// holds what the rounds did. The driver answers
     /// [`Input::DirectoriesDrawn`].
     CheckDirectories,
     /// `HSFETCH` this node's onion from `hsdir` alone (`SERVER=`). Tor
@@ -355,9 +357,13 @@ pub enum Action {
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
     /// A descriptor round has been open for `Policy::round_stuck_after`:
-    /// say it once at debug, and end the coalescer's open round so the next
-    /// round's uploads start a round of their own. Counted in Status.
-    RoundStuck,
+    /// say it once at debug, and end that descriptor's open round in the
+    /// coalescer so its next uploads start a round of their own. Counted in
+    /// Status.
+    RoundStuck {
+        /// The descriptor whose round is stuck.
+        descriptor: DescriptorKey,
+    },
     /// A timer the driver was waiting on fired `late_by` late: the machine
     /// slept, and every window started again from the wake. Said once at info.
     Resumed {
@@ -497,12 +503,18 @@ pub enum Input {
         /// Sockets Tor reported open.
         open: u64,
     },
-    /// A descriptor round began: its first `HS_DESC UPLOAD`.
-    UploadRoundStarted,
+    /// A descriptor round began: its first `HS_DESC UPLOAD`. Each of the
+    /// service's two descriptors has its own rounds (`UploadRounds`).
+    UploadRoundStarted {
+        /// The descriptor the round uploads.
+        descriptor: DescriptorKey,
+    },
     /// A round's first upload reached a directory. The probe follows the
     /// round's end, or `Policy::round_wait` after this, whichever comes
     /// first; `draw` sets the delay if the wait runs out first.
     FirstUploaded {
+        /// The descriptor the round uploads.
+        descriptor: DescriptorKey,
         /// Uniform over `u64`.
         draw: u64,
     },
@@ -513,11 +525,21 @@ pub enum Input {
     /// uniform random number from the daemon's CSPRNG; the core maps it onto
     /// the probe's delay range.
     UploadRoundEnded {
+        /// The descriptor the round uploaded.
+        descriptor: DescriptorKey,
         /// How many reached a directory, how many of those that began were
         /// refused, and how many began.
         tally: RoundTally,
         /// Uniform over `u64`.
         draw: u64,
+    },
+    /// A descriptor was dropped with its round open: Tor freed it at a
+    /// time-period rotation. The round is forgotten, not judged: it is
+    /// neither a success nor a failure, and that descriptor's refusals no
+    /// longer stand.
+    UploadRoundForgotten {
+        /// The descriptor dropped.
+        descriptor: DescriptorKey,
     },
     /// The consensus's `valid-after` and this machine's wall time, both in
     /// Unix seconds, read at a liveness sample (§4.2). The core compares
@@ -542,7 +564,7 @@ pub enum Input {
     },
     /// The directories for the check [`Action::CheckDirectories`] asked for.
     DirectoriesDrawn {
-        /// One per directory, each with its own draw. Empty when the round
+        /// One per directory, each with its own draw. Empty when the rounds
         /// reached none: the probe alone decides. A list that was never
         /// folded is not this: the verdict waits.
         fetches: Vec<DirectoryFetch>,
@@ -552,9 +574,10 @@ pub enum Input {
         /// counts by being there. `None` when Tor gave none: the check
         /// counts nothing and the probe alone decides.
         ours: Option<ServiceDescriptor>,
-        /// How the round this list was read from treats uploads still open.
+        /// Which descriptors' rounds were still younger than
+        /// `Policy::round_wait`: their uploads still open are in flight.
         /// Read in the same turn as `fetches`. The check keeps this reading
-        /// and does not consult the live round.
+        /// and does not consult the live rounds.
         open_uploads: OpenUploads,
     },
     /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
@@ -778,8 +801,8 @@ pub struct Core {
     /// open. [`directories::DirectoryHalf::AwaitingDraw`] until the driver
     /// folds the list.
     directories: Option<directories::DirectoryHalf>,
-    /// The descriptor round open now, while one is.
-    round: Option<probe::RoundTrack>,
+    /// The descriptor rounds open now, at most one per descriptor.
+    rounds: Vec<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
     /// Where the descriptor's lifetime is counted from (§4.5, "Overdue"):
@@ -792,12 +815,17 @@ pub struct Core {
     /// The anchor and hold to restore if the remedial send in
     /// [`clock::QueuedSend`] is withheld before it is published.
     queued_send: Option<clock::QueuedSend>,
+    /// When the probe in hand was scheduled: its check's fetches count their
+    /// delays from here, though the list is drawn when the probe goes out.
+    check_from: u64,
     /// The probe in hand was scheduled from a republish's own upload round,
     /// so its Reachable confirms that republish. A clock-jump probe and a
     /// probe scheduled before the republish do not.
     probe_confirms: bool,
-    /// More than half of the latest round's directories refused its upload.
-    uploads_refused: bool,
+    /// The descriptors whose latest round had more than half of its uploads
+    /// refused. Either descriptor's refused round is the clock's evidence; a
+    /// round of the other descriptor does not clear it (§4.5).
+    refused_descriptors: Vec<DescriptorKey>,
     /// Whether Tor's standing skew report owns a bootstrap block.
     skew_hold: clock::SkewHold,
     /// The republish backoff (§4.5).
@@ -845,12 +873,13 @@ impl Core {
             outbound_since: None,
             probe: Probe::Idle,
             directories: None,
-            round: None,
+            rounds: Vec::new(),
             stuck_rounds: 0,
             lifetime_from: None,
             queued_send: None,
+            check_from: 0,
             probe_confirms: false,
-            uploads_refused: false,
+            refused_descriptors: Vec::new(),
             skew_hold: clock::SkewHold::Holding,
             republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
@@ -902,9 +931,14 @@ impl Core {
             Input::RouteInstalled => self.route_installed(now),
             Input::ForwardAbsent => self.forward_absent(),
             Input::OnionPublished => self.onion_published(now),
-            Input::UploadRoundStarted => self.round_started(now),
-            Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
-            Input::UploadRoundEnded { tally, draw } => self.round_ended(now, tally, draw),
+            Input::UploadRoundStarted { descriptor } => self.round_started(now, descriptor),
+            Input::FirstUploaded { descriptor, draw } => self.first_uploaded(now, descriptor, draw),
+            Input::UploadRoundEnded {
+                descriptor,
+                tally,
+                draw,
+            } => self.round_ended(now, descriptor, tally, draw),
+            Input::UploadRoundForgotten { descriptor } => self.round_forgotten(now, descriptor),
             Input::ConsensusClock { valid_after, wall } => {
                 self.consensus_clock(now, valid_after, wall)
             }
@@ -914,7 +948,7 @@ impl Core {
                 fetches,
                 ours,
                 open_uploads,
-            } => self.directories_drawn(now, fetches, ours, open_uploads),
+            } => self.directories_drawn(now, fetches, ours, &open_uploads),
             Input::DirectoryFetchAccepted { hsdir } => self.directory_fetch_accepted(now, hsdir),
             Input::DirectoryAsked {
                 hsdir,

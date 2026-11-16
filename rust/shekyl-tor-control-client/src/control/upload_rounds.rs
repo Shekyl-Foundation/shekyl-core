@@ -6,38 +6,72 @@
 //! Descriptor-upload rounds for one onion address (`TOR_SUPERVISOR.md` §4.2, `TSR-Q5`).
 //!
 //! [`super::events::parse_event`] reads one `HS_DESC` line. This module is the
-//! supervisor's policy on those lines: when a round ends early, which `FAILED`
-//! is an upload's, and how a consumer resynchronises after the event sink drops
-//! events. The driver asks [`UploadRounds::owns_line`] before it reads a line as
-//! a directory answer, then folds [`UploadRounds::observe`].
+//! supervisor's policy on those lines: which descriptor a round belongs to, when
+//! a round ends early, which `FAILED` is an upload's, and how a consumer
+//! resynchronises after the event sink drops events. The driver asks
+//! [`UploadRounds::owns_line`] before it reads a line as a directory answer,
+//! then folds [`UploadRounds::observe`].
 
 use super::events::{HsDescAction, HsDescEvent, HsDescFailure};
 use super::onion::ServiceId;
 use super::vanguards::RelayFingerprint;
 
-/// The descriptor upload rounds of one onion address, coalesced from its `HS_DESC`
-/// events (`TSR-Q5`).
+/// How many descriptors a service holds at once: its current one and its
+/// next one (tor 0.4.9.14 `hs_service.h`, `desc_current` and `desc_next`).
+const KEPT_DESCRIPTORS: usize = 2;
+
+/// The descriptor upload rounds of one onion address, one round at a time per
+/// descriptor, coalesced from its `HS_DESC` events (`TSR-Q5`).
 ///
-/// Tor uploads each of a service's descriptors to several HSDirs: `UPLOAD` when an
-/// upload to one HSDir begins, then `UPLOADED` or `FAILED` when it ends. The pinned
-/// tor's first round for a new service was sixteen uploads, two descriptors to eight
-/// HSDirs each. A round opens at the first `UPLOAD` while none is open, and ends when
-/// every upload it opened has ended. The two descriptors can share an HSDir, so the
-/// open uploads are a multiset, not a set.
+/// **A round belongs to one descriptor** (Rick, 2026-11-15). A service holds two
+/// descriptors, and Tor uploads each on its own clock: each has its own
+/// `next_upload_time` and its own introduction circuits, and the upload event
+/// walks the current one and then the next, uploading each that is ready
+/// (tor 0.4.9.14 `hs_service.c:3446-3490`, `3556-3594`, the walk's order at
+/// `89-96`). After an upload Tor draws that descriptor's next upload 60 to 120
+/// minutes ahead, alone (`3320-3322`). So the two can go up together or
+/// minutes apart (the floor device's runs of 2026-11-15 saw both), and a round
+/// that took both together cut the first pass short and could leave the check
+/// with only the descriptor clients were not asking for.
 ///
-/// [`RoundMark::FirstUploaded`] is the probe's one trigger per round. A round in which
-/// no upload succeeded ends with `uploaded == 0`, which is §4.4's Service-class
-/// evidence.
+/// One pass of one descriptor is an `UPLOAD` to each of its directories, all
+/// in one turn of Tor's main loop, before any directory can have answered, and
+/// never to the same directory twice (`upload_descriptor_to_all`,
+/// `hs_service.c:3306-3314`; `hs_common.c:1316`). A round opens at a
+/// descriptor's `UPLOAD` while none of that descriptor's is open, and ends when
+/// every upload it opened has ended. An `UPLOAD` of that descriptor ends the
+/// open round early when the round's uploads have begun to end, or when the
+/// round already holds an upload to that directory: either way it is a new
+/// pass. A new pass first closes the descriptor's pending uploads, and Tor
+/// reports nothing for those (`hs_service.c:792-812`, called at `3293`), so the
+/// ended round counts them in `unfinished`. An `UPLOAD` of one descriptor never
+/// ends the other's round. Every `UPLOAD` the pinned Tor sends names its
+/// descriptor (`control_events.c:2070`); a line that names none is not one of
+/// its uploads, and is ignored.
 ///
-/// **A round whose ends do not all arrive still ends.** Tor starts every upload of a
-/// round in one pass of its main loop, before any HSDir can have answered (tor
-/// 0.4.9.13 and 0.4.9.14, `run_upload_descriptor_event` → `upload_descriptor_to_all`), so an
-/// `UPLOAD` that arrives once the open round's uploads have begun to end belongs to the
-/// next round: the open one ends there, counting the uploads that never reported in
-/// `unfinished`, and the next one starts and can trigger again. An end that is lost
-/// (the bounded event sink drops events when its consumer falls behind) leaves the
-/// round open until then; a consumer that sees the sink drop events calls
-/// [`Self::resync`] to end it at once.
+/// [`RoundMark::FirstUploaded`] is a round's one trigger for the probe. A round
+/// in which no upload succeeded ends with `uploaded == 0`. An end that is lost
+/// (the bounded event sink drops events when its consumer falls behind) leaves
+/// the round open; a consumer that sees the sink drop events calls
+/// [`Self::resync`] to end every open round at once, and one that counts a
+/// round stuck calls [`Self::end_round`] for it.
+///
+/// **Which descriptors are kept.** At most two, in the order this tracker first
+/// saw them, a `CREATED` or an `UPLOAD`. Tor builds a new service's current
+/// descriptor before its next one (`hs_service.c:2138-2139`) and says `CREATED`
+/// for each as it builds it (`2082`); the driver starts the tracker before
+/// `ADD_ONION`, so both are seen in that order. At a time-period rotation Tor
+/// frees the current descriptor, promotes the next one without uploading it,
+/// and builds a new next one (`2860-2876`, `2169`). When a third descriptor is
+/// seen, the one seen first is dropped (Rick, 2026-11-16): that is the one Tor
+/// freed. Dropping the one whose latest upload is oldest would not do: each
+/// descriptor re-uploads on its own clock, so the freed one can have uploaded
+/// last, and the promoted one is the descriptor clients ask for until the next
+/// time period begins. A drop made in the wrong order heals itself: the
+/// dropped descriptor's next `UPLOAD` sees it again, and the one seen first is
+/// then dropped instead. A dropped descriptor's open round is
+/// [`RoundMark::Forgotten`], not ended: Tor no longer uploads it, and its tally
+/// says nothing.
 ///
 /// Only an upload's own end closes it. Tor 0.4.9.14 ends an upload in one place
 /// (`dirclient.c:2803-2827`, `handle_response_upload_hsdesc`): `UPLOADED` on 200,
@@ -50,35 +84,64 @@ use super::vanguards::RelayFingerprint;
 /// to that directory. A `FAILED` that names no descriptor is an upload's end.
 /// `NOT_FOUND`, and any other `FAILED` that names a descriptor, are a fetch's and
 /// never end a round. An end that names a directory with no open upload, as when
-/// the subscription began mid-round, closes nothing.
+/// the subscription began mid-round, closes nothing. An end that names no
+/// descriptor closes the upload to that directory that began first, across
+/// both descriptors' open rounds.
 ///
-/// **Where each descriptor went** ([`Self::directories`]): every directory a
-/// round sent an upload to, each with the descriptor id (the blinded key) its
-/// `UPLOAD` named and how that upload ended, for the probe's directory check
-/// (`TOR_SUPERVISOR.md` §4.5). The check asks all of them, not only those that
-/// confirmed: an upload whose connection failed reports nothing, and its
-/// directory is one a client may still ask (SO-D12's run 4, 2026-11-14). An
-/// `UPLOADED` names no descriptor, so it is paired with the earliest upload to
-/// that directory that has not ended. One record is that upload, from the
-/// `UPLOAD` to its end: the round does not keep a second list to pair against.
+/// **Where each descriptor went** ([`Self::directories`]): for each descriptor
+/// kept, every directory its latest round with a success sent an upload to,
+/// each with the descriptor id (the blinded key) and how that upload ended, for
+/// the probe's directory check (`TOR_SUPERVISOR.md` §4.5). The check asks all
+/// of them, not only those that confirmed: an upload whose connection failed
+/// reports nothing, and its directory is one a client may still ask (SO-D12's
+/// run 4, 2026-11-14). Because each descriptor keeps its own latest round, the
+/// check always has the descriptor clients ask for once Tor has uploaded it.
 pub struct UploadRounds {
     address: ServiceId,
+    /// The descriptors kept, in the order this tracker first saw them.
+    descriptors: Vec<Descriptor>,
+    /// The key the next descriptor seen is given.
+    next_key: u64,
+    /// The place the next `UPLOAD` takes in the order uploads began.
+    next_upload: u64,
+}
+
+/// Which of a service's descriptors a round belongs to: the order in which
+/// this tracker first saw it. It says nothing about the descriptor itself; the
+/// core keys its rounds by it, and the check reads the descriptor id from
+/// [`RoundUpload`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DescriptorKey(u64);
+
+impl DescriptorKey {
+    /// The key with this place in the order. Keys come from
+    /// [`UploadRounds::observe`]; this is for the core's tests.
+    #[cfg(test)]
+    pub(crate) const fn new(place: u64) -> Self {
+        Self(place)
+    }
+}
+
+/// One descriptor, its open round, and its latest round with a success.
+struct Descriptor {
+    /// Its id: the blinded key, as `HS_DESC` names it.
+    id: String,
+    key: DescriptorKey,
     /// The open round, in the order its uploads began. An upload stays here
     /// until the round ends. Empty when no round is open.
-    open_round: Vec<OpenUpload>,
-    /// This round's first success has been reported.
+    open: Vec<OpenUpload>,
+    /// The open round's first success has been reported.
     triggered: bool,
-    /// Descriptor-bearing uploads of the latest ended round that had a success.
+    /// The uploads of this descriptor's latest ended round that had a success.
     last: Vec<RoundUpload>,
 }
 
-/// One upload of the open round. The check's list is the projection that
-/// named a descriptor ([`UploadRounds::directories`]).
+/// One upload of an open round.
 struct OpenUpload {
     hsdir: RelayFingerprint,
-    /// The descriptor the `UPLOAD` named. `None` keeps the round open and is
-    /// not a directory the check can ask.
-    descriptor_id: Option<String>,
+    /// Its place in the order uploads began, across both descriptors: an end
+    /// that names no descriptor closes the one that began first.
+    began: u64,
     ended: UploadEnd,
 }
 
@@ -90,6 +153,8 @@ pub struct RoundUpload {
     pub hsdir: RelayFingerprint,
     /// The descriptor id its `UPLOAD` named: the blinded key.
     pub descriptor_id: String,
+    /// Which of the service's descriptors that is, as the rounds' marks name it.
+    pub descriptor: DescriptorKey,
     /// How the upload ended, as far as Tor said.
     pub ended: UploadEnd,
 }
@@ -121,16 +186,24 @@ impl UploadEnd {
     }
 }
 
-/// A boundary in a round of uploads, reported by [`UploadRounds::observe`].
+/// A boundary in a descriptor's rounds, reported by [`UploadRounds::observe`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoundMark {
     /// The first upload of a round began.
-    Started,
+    Started {
+        /// The descriptor the round uploads.
+        descriptor: DescriptorKey,
+    },
     /// The first upload of this round succeeded: the probe's trigger.
-    FirstUploaded,
-    /// The round ended: every upload it began has ended, the next round began, or the
-    /// consumer resynchronised.
+    FirstUploaded {
+        /// The descriptor the round uploads.
+        descriptor: DescriptorKey,
+    },
+    /// The round ended: every upload it began has ended, the descriptor's
+    /// next pass began, or the consumer ended it.
     Ended {
+        /// The descriptor the round uploaded.
+        descriptor: DescriptorKey,
         /// Uploads that succeeded.
         uploaded: u32,
         /// Uploads that failed.
@@ -142,73 +215,75 @@ pub enum RoundMark {
         /// Uploads that began and reported no end.
         unfinished: u32,
     },
+    /// The descriptor was dropped while its round was open: Tor freed it at a
+    /// rotation, and the round is neither a success nor a failure.
+    Forgotten {
+        /// The descriptor dropped.
+        descriptor: DescriptorKey,
+    },
 }
 
-impl UploadRounds {
-    /// Track the rounds of `address`'s descriptors.
-    #[must_use]
-    pub fn new(address: ServiceId) -> Self {
+impl Descriptor {
+    fn new(id: String, key: DescriptorKey) -> Self {
         Self {
-            address,
-            open_round: Vec::new(),
+            id,
+            key,
+            open: Vec::new(),
             triggered: false,
             last: Vec::new(),
         }
     }
 
-    /// Every upload of the latest round that named a descriptor, each with
-    /// its end: the open round's while it has a success, else the last ended
-    /// round's that had one. A round with no success yet says nothing about
-    /// where the descriptor is. Empty before any upload succeeded. An upload
-    /// whose `UPLOAD` named no descriptor is not here: the check cannot ask
-    /// a directory it does not know the descriptor of.
-    #[must_use]
-    pub fn directories(&self) -> Vec<RoundUpload> {
-        if self
-            .open_round
-            .iter()
-            .any(|upload| upload.ended.confirmed())
-        {
-            Self::project(&self.open_round)
+    /// The uploads to ask about: the open round's while it has a success,
+    /// else the latest ended round's that had one.
+    fn directories(&self) -> Vec<RoundUpload> {
+        if self.open.iter().any(|upload| upload.ended.confirmed()) {
+            self.project(&self.open)
         } else {
             self.last.clone()
         }
     }
 
-    /// Whether a round is open: an upload has begun and has not ended.
-    #[must_use]
-    pub fn in_round(&self) -> bool {
-        self.open_round
-            .iter()
-            .any(|upload| upload.ended == UploadEnd::Open)
-    }
-
-    /// The descriptor-bearing uploads, in the round's order.
-    fn project(round: &[OpenUpload]) -> Vec<RoundUpload> {
+    fn project(&self, round: &[OpenUpload]) -> Vec<RoundUpload> {
         round
             .iter()
-            .filter_map(|upload| {
-                upload
-                    .descriptor_id
-                    .as_ref()
-                    .map(|descriptor_id| RoundUpload {
-                        hsdir: upload.hsdir,
-                        descriptor_id: descriptor_id.clone(),
-                        ended: upload.ended,
-                    })
+            .map(|upload| RoundUpload {
+                hsdir: upload.hsdir,
+                descriptor_id: self.id.clone(),
+                descriptor: self.key,
+                ended: upload.ended,
             })
             .collect()
     }
 
-    /// How the open round ended, counted from its records. Uploads still
-    /// open are unfinished. Called before those are relabeled, so an `Open`
-    /// here is one that reported no end.
-    fn tally(&self) -> (u32, u32, u32, u32) {
+    /// An upload of this descriptor to `hsdir` that has not ended, the one
+    /// that began first.
+    fn earliest_open(&self, hsdir: RelayFingerprint) -> Option<u64> {
+        self.open
+            .iter()
+            .filter(|upload| upload.ended == UploadEnd::Open && upload.hsdir == hsdir)
+            .map(|upload| upload.began)
+            .min()
+    }
+
+    /// An `UPLOAD` to `hsdir` is this descriptor's next pass, not one of
+    /// the open round's: the round's uploads have begun to end, or it
+    /// already went to that directory.
+    fn new_pass(&self, hsdir: RelayFingerprint) -> bool {
+        self.open
+            .iter()
+            .any(|upload| upload.ended != UploadEnd::Open || upload.hsdir == hsdir)
+    }
+
+    /// Report the open round as ended and start the next from nothing. Its
+    /// uploads still open are kept as unfinished. A round with a success
+    /// becomes the latest round; one without leaves the latest standing.
+    fn end(&mut self) -> RoundMark {
         let mut uploaded = 0u32;
         let mut failed = 0u32;
         let mut refused = 0u32;
         let mut unfinished = 0u32;
-        for upload in &self.open_round {
+        for upload in &mut self.open {
             match upload.ended {
                 UploadEnd::Uploaded => uploaded = uploaded.saturating_add(1),
                 UploadEnd::Refused => {
@@ -217,11 +292,71 @@ impl UploadRounds {
                 }
                 UploadEnd::Failed => failed = failed.saturating_add(1),
                 UploadEnd::Open | UploadEnd::Unfinished => {
+                    upload.ended = UploadEnd::Unfinished;
                     unfinished = unfinished.saturating_add(1);
                 }
             }
         }
-        (uploaded, failed, refused, unfinished)
+        let round = std::mem::take(&mut self.open);
+        if uploaded > 0 {
+            self.last = self.project(&round);
+        }
+        self.triggered = false;
+        RoundMark::Ended {
+            descriptor: self.key,
+            uploaded,
+            failed,
+            refused,
+            unfinished,
+        }
+    }
+}
+
+impl UploadRounds {
+    /// Track the rounds of `address`'s descriptors.
+    #[must_use]
+    pub fn new(address: ServiceId) -> Self {
+        Self {
+            address,
+            descriptors: Vec::new(),
+            next_key: 0,
+            next_upload: 0,
+        }
+    }
+
+    /// The tracker for the next publication of `address`: no descriptor and
+    /// no round, with keys continuing from this one's. The driver starts one
+    /// at every `ADD_ONION`, and the core forgets the rounds open then; a key
+    /// is never reused, so no mark of one publication is read as another's.
+    #[must_use]
+    pub fn next_publication(&self, address: ServiceId) -> Self {
+        Self {
+            address,
+            descriptors: Vec::new(),
+            next_key: self.next_key,
+            next_upload: 0,
+        }
+    }
+
+    /// For each descriptor kept, in the order first seen, every upload of its
+    /// latest round with a success, each with its end: the open round's while
+    /// it has a success, else the latest ended round's. A round with no
+    /// success yet says nothing about where the descriptor is. Empty before
+    /// any upload succeeded.
+    #[must_use]
+    pub fn directories(&self) -> Vec<RoundUpload> {
+        self.descriptors
+            .iter()
+            .flat_map(Descriptor::directories)
+            .collect()
+    }
+
+    /// Whether a round is open: an upload has begun and has not ended.
+    #[must_use]
+    pub fn in_round(&self) -> bool {
+        self.descriptors
+            .iter()
+            .any(|descriptor| !descriptor.open.is_empty())
     }
 
     /// Whether this line is an upload's, so a directory check does not also
@@ -251,7 +386,9 @@ impl UploadRounds {
         match event.failure() {
             Some(HsDescFailure::UploadRejected) => Some(UploadEnd::Refused),
             Some(HsDescFailure::Unexpected)
-                if self.matches_open(hsdir, event.descriptor_id.as_deref()) =>
+                if self
+                    .open_upload(hsdir, event.descriptor_id.as_deref())
+                    .is_some() =>
             {
                 Some(UploadEnd::Failed)
             }
@@ -260,115 +397,150 @@ impl UploadRounds {
         }
     }
 
-    /// An upload to `hsdir` that has not ended, of `descriptor` when the end names one.
-    fn matches_open(&self, hsdir: RelayFingerprint, descriptor: Option<&str>) -> bool {
-        self.open_round.iter().any(|upload| {
-            upload.ended == UploadEnd::Open
-                && upload.hsdir == hsdir
-                && descriptor.is_none_or(|wanted| upload.descriptor_id.as_deref() == Some(wanted))
-        })
+    /// The descriptor holding the upload to `hsdir` that has not ended and
+    /// began first, of `descriptor` when the end names one.
+    fn open_upload(&self, hsdir: RelayFingerprint, descriptor: Option<&str>) -> Option<usize> {
+        self.descriptors
+            .iter()
+            .enumerate()
+            .filter(|(_, held)| descriptor.is_none_or(|wanted| held.id == wanted))
+            .filter_map(|(at, held)| held.earliest_open(hsdir).map(|began| (began, at)))
+            .min()
+            .map(|(_, at)| at)
     }
 
-    /// Fold one event in. Returns the boundaries it crossed, in order: an `UPLOADED`
-    /// that is both the round's first success and its last end returns
-    /// [`RoundMark::FirstUploaded`] then [`RoundMark::Ended`].
+    /// Fold one event in. Returns the boundaries it crossed, in order: an
+    /// `UPLOADED` that is both its round's first success and its last end
+    /// returns [`RoundMark::FirstUploaded`] then [`RoundMark::Ended`].
     pub fn observe(&mut self, event: &HsDescEvent) -> Vec<RoundMark> {
         if event.address.as_ref() != Some(&self.address) {
             return Vec::new();
         }
-        let Some(hsdir) = event.hsdir else {
-            return Vec::new();
-        };
         match event.action {
-            HsDescAction::Upload => {
-                let mut marks = Vec::new();
-                // The open round's uploads have begun to end, so this one is the next
-                // round's: tor starts a round's uploads before any of them ends.
-                if self.in_round()
-                    && self
-                        .open_round
-                        .iter()
-                        .any(|upload| upload.ended != UploadEnd::Open)
-                {
-                    marks.push(self.end());
-                }
-                if !self.in_round() {
-                    marks.push(RoundMark::Started);
-                }
-                self.open_round.push(OpenUpload {
-                    hsdir,
-                    descriptor_id: event.descriptor_id.clone(),
-                    ended: UploadEnd::Open,
-                });
-                marks
-            }
-            HsDescAction::Uploaded => self.close(hsdir, None, UploadEnd::Uploaded),
-            HsDescAction::Failed => match self.upload_close(event) {
-                Some(ended) => self.close(hsdir, event.descriptor_id.as_deref(), ended),
+            HsDescAction::Created => match &event.descriptor_id {
+                Some(id) => self.see(id).1,
                 None => Vec::new(),
+            },
+            HsDescAction::Upload => match (event.hsdir, &event.descriptor_id) {
+                (Some(hsdir), Some(id)) => self.upload(hsdir, id),
+                _ => Vec::new(),
+            },
+            HsDescAction::Uploaded => match event.hsdir {
+                Some(hsdir) => self.close(hsdir, None, UploadEnd::Uploaded),
+                None => Vec::new(),
+            },
+            HsDescAction::Failed => match (event.hsdir, self.upload_close(event)) {
+                (Some(hsdir), Some(ended)) => {
+                    self.close(hsdir, event.descriptor_id.as_deref(), ended)
+                }
+                _ => Vec::new(),
             },
             _ => Vec::new(),
         }
     }
 
-    /// End the earliest upload to `hsdir` that has not ended, of `descriptor`
-    /// when the end names one. The record that began that upload is the one
-    /// that ends: there is no second list to keep in step.
+    /// The descriptor `id`, kept. A descriptor not yet seen is added, and
+    /// when two are kept already, the one seen first is dropped; its open
+    /// round, if any, is forgotten.
+    fn see(&mut self, id: &str) -> (usize, Vec<RoundMark>) {
+        if let Some(at) = self.descriptors.iter().position(|held| held.id == id) {
+            return (at, Vec::new());
+        }
+        let mut marks = Vec::new();
+        if self.descriptors.len() >= KEPT_DESCRIPTORS {
+            let dropped = self.descriptors.remove(0);
+            if !dropped.open.is_empty() {
+                marks.push(RoundMark::Forgotten {
+                    descriptor: dropped.key,
+                });
+            }
+        }
+        let key = DescriptorKey(self.next_key);
+        self.next_key = self.next_key.saturating_add(1);
+        self.descriptors.push(Descriptor::new(id.to_owned(), key));
+        (self.descriptors.len() - 1, marks)
+    }
+
+    /// An upload of descriptor `id` to `hsdir` began.
+    fn upload(&mut self, hsdir: RelayFingerprint, id: &str) -> Vec<RoundMark> {
+        let (at, mut marks) = self.see(id);
+        let began = self.next_upload;
+        self.next_upload = self.next_upload.saturating_add(1);
+        let descriptor = &mut self.descriptors[at];
+        if descriptor.new_pass(hsdir) {
+            marks.push(descriptor.end());
+        }
+        if descriptor.open.is_empty() {
+            marks.push(RoundMark::Started {
+                descriptor: descriptor.key,
+            });
+        }
+        descriptor.open.push(OpenUpload {
+            hsdir,
+            began,
+            ended: UploadEnd::Open,
+        });
+        marks
+    }
+
+    /// End the upload to `hsdir` that has not ended and began first, of
+    /// `descriptor` when the end names one. The record that began that
+    /// upload is the one that ends.
     fn close(
         &mut self,
         hsdir: RelayFingerprint,
         descriptor: Option<&str>,
         ended: UploadEnd,
     ) -> Vec<RoundMark> {
-        let Some(upload) = self.open_round.iter_mut().find(|upload| {
-            upload.ended == UploadEnd::Open
-                && upload.hsdir == hsdir
-                && descriptor.is_none_or(|wanted| upload.descriptor_id.as_deref() == Some(wanted))
-        }) else {
+        let Some(at) = self.open_upload(hsdir, descriptor) else {
+            return Vec::new();
+        };
+        let held = &mut self.descriptors[at];
+        let Some(upload) = held
+            .open
+            .iter_mut()
+            .filter(|upload| upload.ended == UploadEnd::Open && upload.hsdir == hsdir)
+            .min_by_key(|upload| upload.began)
+        else {
             return Vec::new();
         };
         upload.ended = ended;
         let mut marks = Vec::new();
-        if ended.confirmed() && !self.triggered {
-            self.triggered = true;
-            marks.push(RoundMark::FirstUploaded);
+        if ended.confirmed() && !held.triggered {
+            held.triggered = true;
+            marks.push(RoundMark::FirstUploaded {
+                descriptor: held.key,
+            });
         }
-        if !self.in_round() {
-            marks.push(self.end());
+        if held
+            .open
+            .iter()
+            .all(|upload| upload.ended != UploadEnd::Open)
+        {
+            marks.push(held.end());
         }
         marks
     }
 
-    /// End the open round now. The driver does this when the sink dropped
-    /// events, and when the round has been open too long: the ends still
-    /// missing will not be waited on, and the next round must be able to
-    /// trigger. `None` when no round is open. An upload that has not ended
-    /// is counted unfinished, which is not a failed round.
-    pub fn resync(&mut self) -> Option<RoundMark> {
-        self.in_round().then(|| self.end())
+    /// End every open round now. The driver does this when the sink dropped
+    /// events: the ends still missing will not be waited on, and the next
+    /// rounds must be able to trigger. An upload that has not ended is
+    /// counted unfinished, which is not a failed round.
+    pub fn resync(&mut self) -> Vec<RoundMark> {
+        self.descriptors
+            .iter_mut()
+            .filter(|held| !held.open.is_empty())
+            .map(Descriptor::end)
+            .collect()
     }
 
-    /// Report the open round as ended and start the next from nothing. Its
-    /// uploads still open are kept as unfinished. A round with a success
-    /// becomes the last round; one without leaves the last round standing.
-    fn end(&mut self) -> RoundMark {
-        let (uploaded, failed, refused, unfinished) = self.tally();
-        for upload in &mut self.open_round {
-            if upload.ended == UploadEnd::Open {
-                upload.ended = UploadEnd::Unfinished;
-            }
-        }
-        let round = std::mem::take(&mut self.open_round);
-        if uploaded > 0 {
-            self.last = Self::project(&round);
-        }
-        self.triggered = false;
-        RoundMark::Ended {
-            uploaded,
-            failed,
-            refused,
-            unfinished,
-        }
+    /// End `descriptor`'s open round now: the core counted it stuck. `None`
+    /// when that descriptor has no round open, or is no longer kept.
+    pub fn end_round(&mut self, descriptor: DescriptorKey) -> Option<RoundMark> {
+        self.descriptors
+            .iter_mut()
+            .find(|held| held.key == descriptor && !held.open.is_empty())
+            .map(Descriptor::end)
     }
 }
 
@@ -378,14 +550,19 @@ mod tests {
     use super::super::framing::ReplyFramer;
     use super::super::onion::ServiceId;
     use super::super::vanguards::RelayFingerprint;
-    use super::{RoundMark, RoundUpload, UploadEnd, UploadRounds};
+    use super::{DescriptorKey, RoundMark, RoundUpload, UploadEnd, UploadRounds};
 
     /// The throwaway onion of the 2026-10-16 capture (`DiscardPK`; the key is gone).
     const CAPTURED_ONION: &str = "url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid";
 
-    /// The captured first round of a new service: sixteen `UPLOAD`s (two descriptors,
-    /// eight HSDirs each), then the twelve `UPLOADED`s that arrived within the capture.
+    /// The captured first round of a new service: both `CREATED`s, sixteen
+    /// `UPLOAD`s (two descriptors, eight HSDirs each), then the twelve
+    /// `UPLOADED`s that arrived within the capture.
     const CAPTURED_ROUND: &str = include_str!("testdata/hs_desc_round_tor_0_4_9_13.txt");
+
+    const FIRST: DescriptorKey = DescriptorKey(0);
+    const SECOND: DescriptorKey = DescriptorKey(1);
+    const THIRD: DescriptorKey = DescriptorKey(2);
 
     fn hs_desc_event(line: &str) -> HsDescEvent {
         let mut framer = ReplyFramer::default();
@@ -400,93 +577,214 @@ mod tests {
         }
     }
 
-    fn round_event(action: HsDescAction, hsdir: u8, descriptor: bool) -> HsDescEvent {
+    fn tracker() -> UploadRounds {
+        UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("the captured address"))
+    }
+
+    /// An event of `descriptor` at directory `hsdir`; `None` for an end that
+    /// names no descriptor, as `UPLOADED` does.
+    fn event(action: HsDescAction, hsdir: u8, descriptor: Option<&str>) -> HsDescEvent {
         HsDescEvent {
             action,
             address: ServiceId::parse(CAPTURED_ONION),
             hsdir: Some(RelayFingerprint::from_bytes([hsdir; 20])),
-            descriptor_id: descriptor.then(|| "d".to_owned()),
+            descriptor_id: descriptor.map(str::to_owned),
             reason: None,
         }
     }
 
+    fn upload(hsdir: u8, descriptor: &str) -> HsDescEvent {
+        event(HsDescAction::Upload, hsdir, Some(descriptor))
+    }
+
+    fn uploaded(hsdir: u8) -> HsDescEvent {
+        event(HsDescAction::Uploaded, hsdir, None)
+    }
+
+    /// A `FAILED` that names no descriptor: an upload's end.
+    fn failed(hsdir: u8) -> HsDescEvent {
+        event(HsDescAction::Failed, hsdir, None)
+    }
+
+    fn created(descriptor: &str) -> HsDescEvent {
+        HsDescEvent {
+            action: HsDescAction::Created,
+            address: ServiceId::parse(CAPTURED_ONION),
+            hsdir: None,
+            descriptor_id: Some(descriptor.to_owned()),
+            reason: None,
+        }
+    }
+
+    fn ended(
+        descriptor: DescriptorKey,
+        uploaded: u32,
+        failed: u32,
+        refused: u32,
+        unfinished: u32,
+    ) -> RoundMark {
+        RoundMark::Ended {
+            descriptor,
+            uploaded,
+            failed,
+            refused,
+            unfinished,
+        }
+    }
+
+    fn to(hsdir: u8, descriptor: &str, key: DescriptorKey, ended: UploadEnd) -> RoundUpload {
+        RoundUpload {
+            hsdir: RelayFingerprint::from_bytes([hsdir; 20]),
+            descriptor_id: descriptor.to_owned(),
+            descriptor: key,
+            ended,
+        }
+    }
+
+    /// **The captured first round is two rounds, one per descriptor.** Tor
+    /// built the current descriptor, then the next, and uploaded each to its
+    /// eight directories; six of each confirmed within the capture. Each
+    /// round triggers once and stays open for its two missing ends, and the
+    /// check's list holds both, the current descriptor's first. Fails if one
+    /// round holds both descriptors (one `Started`, one trigger), or if the
+    /// `CREATED` order does not set the keys.
     #[test]
-    fn the_captured_round_triggers_once_and_stays_open_for_the_missing_ends() {
-        let address = ServiceId::parse(CAPTURED_ONION).expect("the captured address");
-        let mut rounds = UploadRounds::new(address);
+    fn the_captured_first_round_is_one_round_per_descriptor() {
+        let mut rounds = tracker();
         let marks: Vec<RoundMark> = CAPTURED_ROUND
             .lines()
             .filter_map(|line| line.strip_prefix("650 "))
             .map(hs_desc_event)
             .flat_map(|desc| rounds.observe(&desc))
             .collect();
-        assert_eq!(marks, [RoundMark::Started, RoundMark::FirstUploaded]);
+        assert_eq!(
+            marks,
+            [
+                RoundMark::Started { descriptor: FIRST },
+                RoundMark::Started { descriptor: SECOND },
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                RoundMark::FirstUploaded { descriptor: SECOND },
+            ]
+        );
         assert!(
             rounds.in_round(),
-            "four of the sixteen uploads had not ended"
+            "two of each descriptor's uploads had not ended"
+        );
+        let list = rounds.directories();
+        assert_eq!(list.len(), 16);
+        assert!(
+            list[..8]
+                .iter()
+                .all(|upload| upload.descriptor == FIRST
+                    && upload.descriptor_id.starts_with("GOkbpj"))
+        );
+        assert!(list[8..].iter().all(|upload| upload.descriptor == SECOND));
+        for half in [&list[..8], &list[8..]] {
+            assert_eq!(
+                half.iter()
+                    .filter(|upload| upload.ended.confirmed())
+                    .count(),
+                6
+            );
+        }
+    }
+
+    /// **Split passes keep their own rounds** (the brief's test 1; the floor
+    /// device's runs of 2026-11-15). The current descriptor's pass begins
+    /// and one of its uploads ends; the next descriptor's pass begins after
+    /// that. Its `UPLOAD` neither ends nor joins the current one's round: the
+    /// current round's late `UPLOADED` closes its own upload, and the list
+    /// holds both descriptors. Fails if an `UPLOAD` of one descriptor ends
+    /// the other's round (the late end then closes nothing, and the current
+    /// descriptor's upload is unfinished).
+    #[test]
+    fn split_passes_keep_their_own_rounds() {
+        use UploadEnd::{Open, Uploaded as Done};
+        let mut rounds = tracker();
+        assert_eq!(
+            rounds.observe(&upload(1, "cur")),
+            [RoundMark::Started { descriptor: FIRST }]
+        );
+        rounds.observe(&upload(2, "cur"));
+        assert_eq!(
+            rounds.observe(&uploaded(1)),
+            [RoundMark::FirstUploaded { descriptor: FIRST }]
+        );
+        assert_eq!(
+            rounds.observe(&upload(3, "next")),
+            [RoundMark::Started { descriptor: SECOND }],
+            "the next descriptor's pass starts a round of its own"
+        );
+        rounds.observe(&upload(4, "next"));
+        assert_eq!(
+            rounds.directories(),
+            [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Open)],
+            "the next descriptor has no success yet"
+        );
+        assert_eq!(
+            rounds.observe(&uploaded(2)),
+            [ended(FIRST, 2, 0, 0, 0)],
+            "the late end closes the current descriptor's own upload"
+        );
+        assert_eq!(
+            rounds.observe(&uploaded(3)),
+            [RoundMark::FirstUploaded { descriptor: SECOND }]
+        );
+        assert_eq!(
+            rounds.directories(),
+            [
+                to(1, "cur", FIRST, Done),
+                to(2, "cur", FIRST, Done),
+                to(3, "next", SECOND, Done),
+                to(4, "next", SECOND, Open),
+            ]
         );
     }
 
+    /// A round ends when every upload it began has ended, and the next one
+    /// starts fresh. Both descriptors went to directory 1; its first end is
+    /// the upload that began first. Fails if a second success triggers
+    /// again, or the next round does not.
     #[test]
     fn a_round_ends_when_every_upload_has_ended_and_the_next_one_starts_fresh() {
-        use HsDescAction::{Failed, Upload, Uploaded};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        // Two descriptors share HSDir 1: the multiset needs both ends.
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&upload(1, "next"));
+        assert!(rounds.observe(&failed(2)).is_empty());
         assert_eq!(
-            rounds.observe(&round_event(Upload, 1, true)),
-            [RoundMark::Started]
+            rounds.observe(&uploaded(1)),
+            [
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                ended(FIRST, 1, 1, 0, 0)
+            ]
         );
-        assert!(rounds.observe(&round_event(Upload, 1, true)).is_empty());
-        assert!(rounds.observe(&round_event(Upload, 2, true)).is_empty());
-        assert!(rounds.observe(&round_event(Failed, 2, false)).is_empty());
         assert_eq!(
-            rounds.observe(&round_event(Uploaded, 1, false)),
-            [RoundMark::FirstUploaded]
-        );
-        // A second success in the round triggers nothing.
-        assert_eq!(
-            rounds.observe(&round_event(Uploaded, 1, false)),
-            [RoundMark::Ended {
-                uploaded: 2,
-                failed: 1,
-                refused: 0,
-                unfinished: 0
-            }]
+            rounds.observe(&uploaded(1)),
+            [
+                RoundMark::FirstUploaded { descriptor: SECOND },
+                ended(SECOND, 1, 0, 0, 0)
+            ]
         );
         assert!(!rounds.in_round());
-        // The next round counts from zero and triggers again.
         assert_eq!(
-            rounds.observe(&round_event(Upload, 3, true)),
-            [RoundMark::Started]
+            rounds.observe(&upload(3, "cur")),
+            [RoundMark::Started { descriptor: FIRST }]
         );
         assert_eq!(
-            rounds.observe(&round_event(Uploaded, 3, false)),
+            rounds.observe(&uploaded(3)),
             [
-                RoundMark::FirstUploaded,
-                RoundMark::Ended {
-                    uploaded: 1,
-                    failed: 0,
-                    refused: 0,
-                    unfinished: 0
-                }
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                ended(FIRST, 1, 0, 0, 0)
             ]
         );
     }
 
     #[test]
     fn a_round_with_no_success_ends_with_none_uploaded() {
-        use HsDescAction::{Failed, Upload};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        rounds.observe(&round_event(Upload, 1, true));
-        assert_eq!(
-            rounds.observe(&round_event(Failed, 1, false)),
-            [RoundMark::Ended {
-                uploaded: 0,
-                failed: 1,
-                refused: 0,
-                unfinished: 0
-            }]
-        );
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        assert_eq!(rounds.observe(&failed(1)), [ended(FIRST, 0, 1, 0, 0)]);
     }
 
     /// A fetch of our own descriptor (the probe's `HSFETCH` after a miss)
@@ -498,10 +796,9 @@ mod tests {
     /// and republish for nothing (Rick, 2026-10-29).
     #[test]
     fn a_fetch_of_our_own_descriptor_changes_no_round() {
-        let address = ServiceId::parse(CAPTURED_ONION).expect("address");
         let hsdir = "$9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor";
         let desc = "GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY";
-        let mut rounds = UploadRounds::new(address);
+        let mut rounds = tracker();
         // Nothing open: a fetch's events start nothing.
         for line in [
             format!("HS_DESC REQUESTED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
@@ -515,7 +812,7 @@ mod tests {
         let upload = format!("HS_DESC UPLOAD {CAPTURED_ONION} UNKNOWN {hsdir} {desc}");
         assert_eq!(
             rounds.observe(&hs_desc_event(&upload)),
-            [RoundMark::Started]
+            [RoundMark::Started { descriptor: FIRST }]
         );
         for line in [
             format!("HS_DESC REQUESTED {CAPTURED_ONION} NO_AUTH {hsdir} {desc}"),
@@ -529,174 +826,143 @@ mod tests {
         assert_eq!(
             rounds.observe(&hs_desc_event(&uploaded)),
             [
-                RoundMark::FirstUploaded,
-                RoundMark::Ended {
-                    uploaded: 1,
-                    failed: 0,
-                    refused: 0,
-                    unfinished: 0
-                }
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                ended(FIRST, 1, 0, 0, 0)
             ],
             "the round ends on its own upload, with nothing failed"
         );
     }
 
-    /// An upload whose end never arrives does not wedge the coalescer: the next batch
-    /// of uploads ends the incomplete round and can trigger again (Copilot on #1091).
+    /// An upload whose end never arrives does not wedge the coalescer: the
+    /// descriptor's next pass ends the incomplete round and can trigger again
+    /// (Copilot on #1091).
     #[test]
-    fn an_incomplete_round_ends_at_the_next_batch_and_the_next_round_triggers() {
-        use HsDescAction::{Upload, Uploaded};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+    fn an_incomplete_round_ends_at_the_next_pass_and_the_next_round_triggers() {
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&uploaded(1));
+        // HSDir 2 never reports. The next pass's first upload ends this one.
         assert_eq!(
-            rounds.observe(&round_event(Upload, 1, true)),
-            [RoundMark::Started]
-        );
-        assert!(rounds.observe(&round_event(Upload, 2, true)).is_empty());
-        assert_eq!(
-            rounds.observe(&round_event(Uploaded, 1, false)),
-            [RoundMark::FirstUploaded]
-        );
-        // HSDir 2 never reports. The next round's first upload ends this one.
-        assert_eq!(
-            rounds.observe(&round_event(Upload, 3, true)),
+            rounds.observe(&upload(3, "cur")),
             [
-                RoundMark::Ended {
-                    uploaded: 1,
-                    failed: 0,
-                    refused: 0,
-                    unfinished: 1
-                },
-                RoundMark::Started
+                ended(FIRST, 1, 0, 0, 1),
+                RoundMark::Started { descriptor: FIRST }
             ]
         );
         assert_eq!(
-            rounds.observe(&round_event(Uploaded, 3, false)),
+            rounds.observe(&uploaded(3)),
             [
-                RoundMark::FirstUploaded,
-                RoundMark::Ended {
-                    uploaded: 1,
-                    failed: 0,
-                    refused: 0,
-                    unfinished: 0
-                }
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                ended(FIRST, 1, 0, 0, 0)
             ]
+        );
+    }
+
+    /// **A second `UPLOAD` of a descriptor to a directory its open round
+    /// already sent to is its next pass.** One pass never names a directory
+    /// twice (tor 0.4.9.14 `hs_common.c:1316`), and a new pass first closes
+    /// the descriptor's pending uploads, unreported (`hs_service.c:3293`).
+    /// So a pass none of whose uploads ended is still told from the next:
+    /// the round ends with its uploads unfinished, and the next pass is a
+    /// round of its own. Fails if `new_pass` looks only at ended uploads
+    /// (the second pass joins the first, and its success lands in a round
+    /// that already counts the cancelled uploads).
+    #[test]
+    fn a_new_pass_to_the_same_directory_ends_the_round() {
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        assert_eq!(
+            rounds.observe(&upload(1, "cur")),
+            [
+                ended(FIRST, 0, 0, 0, 2),
+                RoundMark::Started { descriptor: FIRST }
+            ]
+        );
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&uploaded(1));
+        assert_eq!(
+            rounds.observe(&uploaded(2)),
+            [ended(FIRST, 2, 0, 0, 0)],
+            "the second pass is a whole round"
         );
     }
 
     /// **A round that never ends does not stall the next** (Rick,
-    /// 2026-10-29). One whose uploads partly ended is closed by the next
-    /// round's first `UPLOAD`. One in which no upload ever ended cannot be
-    /// told from its own late uploads by `UPLOAD` alone (tor starts a
-    /// round's uploads before any ends), so the next round's uploads join
-    /// it; the supervisor counts it as stuck at five minutes and the driver
-    /// calls `resync`, after which the next round's `UPLOAD` starts a round
-    /// of its own and its upload triggers. Dropping the stuck path's resync,
-    /// or the "uploads have begun to end" rule, fails this.
+    /// 2026-10-29). A pass none of whose uploads ended, to directories the
+    /// next pass does not repeat, cannot be told from its own late uploads by
+    /// `UPLOAD` alone, so those uploads join it; the supervisor counts it as
+    /// stuck at five minutes and the driver ends that descriptor's round,
+    /// after which the next `UPLOAD` starts a round of its own and triggers.
+    /// Fails if `end_round` ends nothing, or ends the other descriptor's.
     #[test]
     fn a_round_that_never_ends_does_not_stall_the_next() {
-        use HsDescAction::{Upload, Uploaded};
-        // Partly ended: HSDir 2 never reports; the next round's UPLOAD ends it.
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        rounds.observe(&round_event(Upload, 1, true));
-        rounds.observe(&round_event(Upload, 2, true));
-        rounds.observe(&round_event(Uploaded, 1, false));
-        assert_eq!(
-            rounds.observe(&round_event(Upload, 3, true)),
-            [
-                RoundMark::Ended {
-                    uploaded: 1,
-                    failed: 0,
-                    refused: 0,
-                    unfinished: 1
-                },
-                RoundMark::Started
-            ]
-        );
-
-        // Nothing ever ended: the next round's UPLOAD joins the open round.
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        rounds.observe(&round_event(Upload, 1, true));
-        rounds.observe(&round_event(Upload, 2, true));
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&upload(5, "next"));
         assert!(
-            rounds.observe(&round_event(Upload, 3, true)).is_empty(),
+            rounds.observe(&upload(3, "cur")).is_empty(),
             "indistinguishable from the round's own uploads"
         );
-        // The stuck path: the supervisor counts it, the driver resyncs.
+        // The stuck path: the supervisor counts it, the driver ends it.
+        assert_eq!(rounds.end_round(FIRST), Some(ended(FIRST, 0, 0, 0, 3)));
+        assert_eq!(rounds.end_round(FIRST), None, "nothing left open");
+        assert!(rounds.in_round(), "the other descriptor's round stands");
         assert_eq!(
-            rounds.resync(),
-            Some(RoundMark::Ended {
-                uploaded: 0,
-                failed: 0,
-                refused: 0,
-                unfinished: 3
-            })
-        );
-        assert_eq!(
-            rounds.observe(&round_event(Upload, 4, true)),
-            [RoundMark::Started],
+            rounds.observe(&upload(4, "cur")),
+            [RoundMark::Started { descriptor: FIRST }],
             "the next round is a round of its own"
         );
         assert_eq!(
-            rounds.observe(&round_event(Uploaded, 4, false)),
+            rounds.observe(&uploaded(4)),
             [
-                RoundMark::FirstUploaded,
-                RoundMark::Ended {
-                    uploaded: 1,
-                    failed: 0,
-                    refused: 0,
-                    unfinished: 0
-                }
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                ended(FIRST, 1, 0, 0, 0)
             ]
         );
     }
 
-    /// After the sink drops events, `resync` ends the open round at once, and the next
-    /// batch starts a round that triggers. Nothing is open after it.
+    /// After the sink drops events, `resync` ends every open round at once,
+    /// and the next pass starts a round that triggers.
     #[test]
-    fn resync_ends_a_round_whose_ends_were_lost() {
-        use HsDescAction::{Upload, Uploaded};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        assert_eq!(rounds.resync(), None, "nothing open");
-        rounds.observe(&round_event(Upload, 1, true));
-        rounds.observe(&round_event(Upload, 2, true));
+    fn resync_ends_every_round_whose_ends_were_lost() {
+        let mut rounds = tracker();
+        assert!(rounds.resync().is_empty(), "nothing open");
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&upload(3, "next"));
         assert_eq!(
             rounds.resync(),
-            Some(RoundMark::Ended {
-                uploaded: 0,
-                failed: 0,
-                refused: 0,
-                unfinished: 2
-            })
+            [ended(FIRST, 0, 0, 0, 2), ended(SECOND, 0, 0, 0, 1)]
         );
         assert!(!rounds.in_round());
         assert_eq!(
-            rounds.observe(&round_event(Upload, 1, true)),
-            [RoundMark::Started]
+            rounds.observe(&upload(1, "cur")),
+            [RoundMark::Started { descriptor: FIRST }]
         );
         assert_eq!(
-            rounds.observe(&round_event(Uploaded, 1, false)),
+            rounds.observe(&uploaded(1)),
             [
-                RoundMark::FirstUploaded,
-                RoundMark::Ended {
-                    uploaded: 1,
-                    failed: 0,
-                    refused: 0,
-                    unfinished: 0
-                }
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                ended(FIRST, 1, 0, 0, 0)
             ]
         );
     }
 
     /// A fetch's `FAILED` (a descriptor id and no upload's reason), another
-    /// address's events, and an end for an HSDir with no open upload close nothing.
+    /// address's events, and an end for an HSDir with no open upload close
+    /// nothing.
     #[test]
     fn only_an_uploads_own_end_closes_it() {
-        use HsDescAction::{Failed, Upload, Uploaded};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        assert!(rounds.observe(&round_event(Uploaded, 9, false)).is_empty());
-        rounds.observe(&round_event(Upload, 1, true));
-        assert!(rounds.observe(&round_event(Failed, 1, true)).is_empty());
-        let mut elsewhere = round_event(Uploaded, 1, false);
+        let mut rounds = tracker();
+        assert!(rounds.observe(&uploaded(9)).is_empty());
+        rounds.observe(&upload(1, "cur"));
+        assert!(rounds
+            .observe(&event(HsDescAction::Failed, 1, Some("cur")))
+            .is_empty());
+        let mut elsewhere = uploaded(1);
         elsewhere.address =
             ServiceId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         assert!(rounds.observe(&elsewhere).is_empty());
@@ -713,12 +979,11 @@ mod tests {
     /// ignores a `FAILED` that carries an id again, or `close` ignores the id.
     #[test]
     fn an_uploads_refusal_names_its_descriptor_and_ends_it() {
-        let address = ServiceId::parse(CAPTURED_ONION).expect("address");
         let one = "$C5F03E7A798CA237E7BDD44091BEFE35F2F59AE1~relay";
         let two = "$1C7BB0BBD04DF9B89FD3A95017355DE946B51279~relay";
         let desc = "6PZZop7jRpfFu0Wf1bew3nmlfJEewJOL4lg5nilPDNM";
         let other = "GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY";
-        let mut rounds = UploadRounds::new(address);
+        let mut rounds = tracker();
         for hsdir in [one, two] {
             rounds.observe(&hs_desc_event(&format!(
                 "HS_DESC UPLOAD {CAPTURED_ONION} UNKNOWN {hsdir} {desc}"
@@ -753,170 +1018,282 @@ mod tests {
             rounds.observe(&hs_desc_event(&format!(
                 "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH {one} {desc} REASON=UPLOAD_REJECTED"
             ))),
-            [RoundMark::Ended {
-                uploaded: 0,
-                failed: 2,
-                refused: 1,
-                unfinished: 0
-            }]
+            [ended(FIRST, 0, 2, 1, 0)]
         );
-    }
-
-    fn round_event_for(action: HsDescAction, hsdir: u8, descriptor: Option<&str>) -> HsDescEvent {
-        HsDescEvent {
-            action,
-            address: ServiceId::parse(CAPTURED_ONION),
-            hsdir: Some(RelayFingerprint::from_bytes([hsdir; 20])),
-            descriptor_id: descriptor.map(str::to_owned),
-            reason: None,
-        }
-    }
-
-    fn to(hsdir: u8, descriptor: &str, ended: UploadEnd) -> RoundUpload {
-        RoundUpload {
-            hsdir: RelayFingerprint::from_bytes([hsdir; 20]),
-            descriptor_id: descriptor.to_owned(),
-            ended,
-        }
     }
 
     /// **Every upload is kept with its descriptor and its end**, the failed
     /// and the still open among them: the directory check asks every
-    /// directory a round sent to (SO-D12's run 4). A directory that took both
-    /// descriptors pairs its ends with its uploads in order. The set is the
-    /// open round's once it has a success, and the last such round's after;
-    /// a later round with no success leaves it. Fails if a failed upload's
-    /// end is not recorded, or if `directories` shows a round with no
-    /// success.
+    /// directory a round sent to (SO-D12's run 4). Each descriptor's set is
+    /// its open round's once that has a success, and its latest such round's
+    /// after; a later round with no success leaves it. Fails if a failed
+    /// upload's end is not recorded, if `directories` shows a round with no
+    /// success, or if one descriptor's round with no success hides the
+    /// other's.
     #[test]
     fn every_upload_is_kept_with_its_descriptor_and_its_end() {
-        use HsDescAction::{Failed, Upload, Uploaded};
         use UploadEnd::{Failed as Fail, Open, Uploaded as Done};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        let mut rounds = tracker();
         assert!(rounds.directories().is_empty());
-        rounds.observe(&round_event_for(Upload, 1, Some("cur")));
-        rounds.observe(&round_event_for(Upload, 2, Some("cur")));
-        rounds.observe(&round_event_for(Upload, 3, Some("next")));
-        rounds.observe(&round_event_for(Upload, 2, Some("next")));
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&upload(3, "next"));
+        rounds.observe(&upload(2, "next"));
         assert!(
             rounds.directories().is_empty(),
             "a round with no success yet says nothing"
         );
-        rounds.observe(&round_event_for(Uploaded, 2, None));
+        rounds.observe(&uploaded(2));
         assert_eq!(
             rounds.directories(),
-            [
-                to(1, "cur", Open),
-                to(2, "cur", Done),
-                to(3, "next", Open),
-                to(2, "next", Open)
-            ],
-            "the open round's, once it has a success"
+            [to(1, "cur", FIRST, Open), to(2, "cur", FIRST, Done)],
+            "the current descriptor's round, once it has a success"
         );
-        rounds.observe(&round_event_for(Failed, 1, None));
-        rounds.observe(&round_event_for(Uploaded, 3, None));
-        rounds.observe(&round_event_for(Uploaded, 2, None));
+        rounds.observe(&failed(1));
+        rounds.observe(&uploaded(3));
+        rounds.observe(&uploaded(2));
         let ended = [
-            to(1, "cur", Fail),
-            to(2, "cur", Done),
-            to(3, "next", Done),
-            to(2, "next", Done),
+            to(1, "cur", FIRST, Fail),
+            to(2, "cur", FIRST, Done),
+            to(3, "next", SECOND, Done),
+            to(2, "next", SECOND, Done),
         ];
         assert_eq!(rounds.directories(), ended);
-        // A round with no success leaves the last round's set.
-        rounds.observe(&round_event_for(Upload, 4, Some("cur")));
-        rounds.observe(&round_event_for(Failed, 4, None));
+        // A round with no success leaves that descriptor's latest set.
+        rounds.observe(&upload(4, "cur"));
+        rounds.observe(&failed(4));
         assert_eq!(rounds.directories(), ended);
     }
 
-    /// **An end pairs with the earliest upload still open to its directory.**
-    /// An `UPLOADED` names no descriptor. Directory 2 took the current
-    /// descriptor, then the next one; once directory 1's upload has ended
-    /// ahead of them, directory 2's first `UPLOADED` is still the current
-    /// one's. Fails if `close` takes the open upload out with `swap_remove`,
-    /// which moves directory 2's later upload ahead of its earlier one.
+    /// **An end pairs with the earliest upload still open to its directory**,
+    /// across both descriptors' open rounds. An `UPLOADED` names no
+    /// descriptor. Directory 2 took the current descriptor, then the next
+    /// one, each in its own round; its first `UPLOADED` is the current
+    /// one's, and its second the next one's. Fails if `close` picks the
+    /// upload by descriptor order or position rather than the order uploads
+    /// began.
     #[test]
     fn an_end_pairs_with_the_earliest_open_upload_to_its_directory() {
-        use HsDescAction::{Failed, Upload, Uploaded};
         use UploadEnd::{Failed as Fail, Open, Uploaded as Done};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        rounds.observe(&round_event_for(Upload, 1, Some("cur")));
-        rounds.observe(&round_event_for(Upload, 2, Some("cur")));
-        rounds.observe(&round_event_for(Upload, 2, Some("next")));
-        rounds.observe(&round_event_for(Failed, 1, None));
-        rounds.observe(&round_event_for(Uploaded, 2, None));
+        let mut rounds = tracker();
+        // The next descriptor was seen first, so its key comes first; the
+        // current one's upload to directory 2 still began first.
+        rounds.observe(&created("next"));
+        rounds.observe(&created("cur"));
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&upload(2, "next"));
+        rounds.observe(&upload(7, "next"));
+        rounds.observe(&failed(1));
+        assert_eq!(
+            rounds.observe(&uploaded(2)),
+            [
+                RoundMark::FirstUploaded { descriptor: SECOND },
+                ended(SECOND, 1, 1, 0, 0)
+            ],
+            "the current descriptor's upload began first"
+        );
         assert_eq!(
             rounds.directories(),
-            [to(1, "cur", Fail), to(2, "cur", Done), to(2, "next", Open)]
+            [to(1, "cur", SECOND, Fail), to(2, "cur", SECOND, Done)]
+        );
+        rounds.observe(&uploaded(2));
+        assert_eq!(
+            rounds.directories(),
+            [
+                to(2, "next", FIRST, Done),
+                to(7, "next", FIRST, Open),
+                to(1, "cur", SECOND, Fail),
+                to(2, "cur", SECOND, Done),
+            ]
         );
     }
 
     /// **An upload still open when its round ends is kept as unfinished**,
-    /// whether the next round's `UPLOAD` ends it or the driver resyncs. Tor
+    /// whether the descriptor's next pass ends it or the driver resyncs. Tor
     /// sends nothing for an upload whose connection failed, so this is the
     /// directory a client may ask and find empty (run 4: four of C's eight
     /// current-period uploads). Fails if `end` drops the open records, or
     /// keeps them as open.
     #[test]
     fn an_ended_rounds_open_uploads_are_kept_as_unfinished() {
-        use HsDescAction::{Upload, Uploaded};
         use UploadEnd::{Open, Unfinished, Uploaded as Done};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        rounds.observe(&round_event_for(Upload, 1, Some("cur")));
-        rounds.observe(&round_event_for(Upload, 2, Some("cur")));
-        rounds.observe(&round_event_for(Uploaded, 1, None));
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&uploaded(1));
         assert_eq!(
             rounds.directories(),
-            [to(1, "cur", Done), to(2, "cur", Open)]
+            [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Open)]
         );
-        // The next round's first UPLOAD ends this one; it has no success yet,
+        // The next pass's first UPLOAD ends this one; it has no success yet,
         // so the ended round's set stands, its open upload now unfinished.
-        rounds.observe(&round_event_for(Upload, 3, Some("cur")));
+        rounds.observe(&upload(3, "cur"));
         assert_eq!(
             rounds.directories(),
-            [to(1, "cur", Done), to(2, "cur", Unfinished)]
+            [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Unfinished)]
         );
-        rounds.observe(&round_event_for(Uploaded, 3, None));
-        assert_eq!(rounds.directories(), [to(3, "cur", Done)]);
+        rounds.observe(&uploaded(3));
+        assert_eq!(rounds.directories(), [to(3, "cur", FIRST, Done)]);
 
         // The same through `resync`.
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        rounds.observe(&round_event_for(Upload, 1, Some("cur")));
-        rounds.observe(&round_event_for(Upload, 2, Some("cur")));
-        rounds.observe(&round_event_for(Uploaded, 1, None));
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "cur"));
+        rounds.observe(&uploaded(1));
         rounds.resync();
         assert_eq!(
             rounds.directories(),
-            [to(1, "cur", Done), to(2, "cur", Unfinished)]
+            [to(1, "cur", FIRST, Done), to(2, "cur", FIRST, Unfinished)]
         );
     }
 
-    /// **An upload that names no descriptor is not a directory the check asks.**
-    /// It still holds the round open. An `UPLOADED` names no descriptor either,
-    /// so it pairs with the earliest upload to that directory that has not
-    /// ended, which is the unnamed one, and the named upload stays open.
-    /// Fails if `directories` includes the unnamed upload, or if the named
-    /// one is closed in its place.
+    /// **An `UPLOAD` that names no descriptor is not one of Tor's.** The
+    /// pinned Tor names the descriptor on every `UPLOAD` and sends none
+    /// without one (`control_events.c:2070`). Such a line starts no round,
+    /// holds none open, and is not a directory the check asks. Fails if
+    /// `observe` keeps it.
     #[test]
-    fn an_upload_that_names_no_descriptor_is_not_asked() {
-        use HsDescAction::{Upload, Uploaded};
-        use UploadEnd::{Open, Uploaded as Done};
-        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
-        rounds.observe(&round_event_for(Upload, 2, None));
-        rounds.observe(&round_event_for(Upload, 2, Some("cur")));
-        rounds.observe(&round_event_for(Upload, 1, Some("cur")));
-        rounds.observe(&round_event_for(Uploaded, 1, None));
+    fn an_upload_that_names_no_descriptor_is_ignored() {
+        let mut rounds = tracker();
+        assert!(rounds
+            .observe(&event(HsDescAction::Upload, 2, None))
+            .is_empty());
+        assert!(!rounds.in_round());
+        rounds.observe(&upload(1, "cur"));
+        assert_eq!(
+            rounds.observe(&uploaded(1)),
+            [
+                RoundMark::FirstUploaded { descriptor: FIRST },
+                ended(FIRST, 1, 0, 0, 0)
+            ]
+        );
         assert_eq!(
             rounds.directories(),
-            [to(2, "cur", Open), to(1, "cur", Done)]
+            [to(1, "cur", FIRST, UploadEnd::Uploaded)]
         );
-        assert!(rounds.in_round(), "the unnamed upload holds the round open");
-        rounds.observe(&round_event_for(Uploaded, 2, None));
+    }
+
+    /// **The order descriptors are kept in is the order this tracker first
+    /// saw them** (Rick, 2026-11-16). The driver starts the tracker before
+    /// `ADD_ONION`, so it sees both `CREATED`s, the current descriptor's
+    /// first (`hs_service.c:2138-2139`), and that order stands even when the
+    /// next descriptor uploads first, as on the floor device's runs. Without
+    /// a `CREATED`, the first `UPLOAD` sets it. A repeated `CREATED` moves
+    /// nothing. Fails if `see` reorders a descriptor already kept, or keys by
+    /// first upload when a `CREATED` came first.
+    #[test]
+    fn descriptors_are_kept_in_the_order_first_seen() {
+        let mut rounds = tracker();
+        assert!(rounds.observe(&created("cur")).is_empty());
+        assert!(rounds.observe(&created("next")).is_empty());
+        assert_eq!(
+            rounds.observe(&upload(1, "next")),
+            [RoundMark::Started { descriptor: SECOND }],
+            "the next descriptor keeps the place its CREATED gave it"
+        );
+        assert!(rounds.observe(&created("cur")).is_empty());
+        assert_eq!(
+            rounds.observe(&upload(2, "cur")),
+            [RoundMark::Started { descriptor: FIRST }]
+        );
+
+        let mut rounds = tracker();
+        assert_eq!(
+            rounds.observe(&upload(1, "next")),
+            [RoundMark::Started { descriptor: FIRST }],
+            "without CREATED, the first upload is seen first"
+        );
+        assert_eq!(
+            rounds.observe(&upload(2, "cur")),
+            [RoundMark::Started { descriptor: SECOND }]
+        );
+    }
+
+    /// **At a rotation, a third descriptor drops the one seen first** (Rick,
+    /// 2026-11-16). Tor frees its current descriptor, promotes the next one,
+    /// and builds a new next one (`hs_service.c:2860-2876`, `2169`). The
+    /// freed one had uploaded last, so "the oldest latest upload" would drop
+    /// the promoted one, which clients ask for until the next time period.
+    /// The one seen first goes; its open round is forgotten, not ended. The
+    /// list keeps the promoted descriptor's latest round. Fails if `see`
+    /// keeps three, drops by upload time, or ends the dropped round.
+    #[test]
+    fn a_third_descriptor_drops_the_one_seen_first() {
+        let mut rounds = tracker();
+        rounds.observe(&created("cur"));
+        rounds.observe(&created("next"));
+        rounds.observe(&upload(2, "next"));
+        rounds.observe(&uploaded(2));
+        rounds.observe(&upload(1, "cur"));
+        assert_eq!(
+            rounds.observe(&created("new")),
+            [RoundMark::Forgotten { descriptor: FIRST }],
+            "the freed descriptor's open round is forgotten"
+        );
         assert_eq!(
             rounds.directories(),
-            [to(2, "cur", Open), to(1, "cur", Done)],
-            "the end paired with the unnamed upload"
+            [to(2, "next", SECOND, UploadEnd::Uploaded)],
+            "the promoted descriptor's round stands"
         );
-        assert!(rounds.in_round());
+        assert!(!rounds.in_round());
+        assert!(
+            rounds.observe(&uploaded(1)).is_empty(),
+            "the freed descriptor's late end closes nothing"
+        );
+        assert_eq!(
+            rounds.observe(&upload(3, "new")),
+            [RoundMark::Started { descriptor: THIRD }]
+        );
+    }
+
+    /// **A drop made in the wrong order heals on the dropped descriptor's
+    /// next upload** (Rick, 2026-11-16). Here the tracker saw the next
+    /// descriptor first (no `CREATED`, and it uploaded first), so at the
+    /// rotation the promoted one is dropped and the freed one kept. The
+    /// promoted descriptor's next pass sees it again, the freed one, now
+    /// seen first, is dropped, and the list holds the promoted descriptor's
+    /// round with no restart. Fails if a descriptor dropped once cannot be
+    /// seen again.
+    #[test]
+    fn a_wrong_drop_heals_on_the_dropped_descriptors_next_upload() {
+        let mut rounds = tracker();
+        rounds.observe(&upload(2, "next"));
+        rounds.observe(&uploaded(2));
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&uploaded(1));
+        rounds.observe(&created("new"));
+        assert_eq!(
+            rounds.directories(),
+            [to(1, "cur", SECOND, UploadEnd::Uploaded)],
+            "the wrong descriptor was dropped"
+        );
+        rounds.observe(&upload(4, "next"));
+        rounds.observe(&uploaded(4));
+        assert_eq!(
+            rounds.directories(),
+            [to(4, "next", DescriptorKey(3), UploadEnd::Uploaded)],
+            "the promoted descriptor is back, and the freed one is gone"
+        );
+    }
+
+    /// **Keys continue across publications.** The driver starts a tracker
+    /// at every `ADD_ONION`; the core forgets the rounds open then. A key is
+    /// never reused, so a stuck round of the old publication can never end a
+    /// round of the new one. Fails if `next_publication` restarts the keys.
+    #[test]
+    fn keys_continue_across_publications() {
+        let mut rounds = tracker();
+        rounds.observe(&upload(1, "cur"));
+        rounds.observe(&upload(2, "next"));
+        let mut next = rounds
+            .next_publication(ServiceId::parse(CAPTURED_ONION).expect("the captured address"));
+        assert!(!next.in_round());
+        assert!(next.directories().is_empty());
+        assert_eq!(next.end_round(FIRST), None);
+        assert_eq!(
+            next.observe(&upload(1, "cur")),
+            [RoundMark::Started { descriptor: THIRD }]
+        );
     }
 }

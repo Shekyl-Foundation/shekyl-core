@@ -30,14 +30,14 @@ impl Core {
         // republished onion is publishing until this Tor's probe arrives. A
         // named clock still stands: this Tor's uploads are numbered from the
         // same clock. The old Tor's refused rounds are not this one's.
-        self.uploads_refused = false;
+        self.refused_descriptors.clear();
         if !self.clock_is_behind() && self.inbound != Inbound::NotOffered {
             self.inbound = Inbound::Publishing { since: now };
         }
         self.probe = Probe::Idle;
         self.probe_confirms = false;
         self.directories = None;
-        self.round = None;
+        self.rounds.clear();
         self.service_republish = false;
         self.republish_new_tor();
         self.arm_sample(now);

@@ -168,7 +168,7 @@ async fn round_uploaded(received: &mut EventReceiver, service: &ServiceId, which
         };
         for mark in rounds.observe(&desc) {
             match mark {
-                RoundMark::FirstUploaded if wait_until.is_none() => {
+                RoundMark::FirstUploaded { .. } if wait_until.is_none() => {
                     wait_until = Some(Instant::now() + round_wait());
                 }
                 RoundMark::Ended { uploaded, .. } if uploaded > 0 => return,

@@ -434,7 +434,10 @@ impl Drive {
             return Some(vec![Input::ForwardAbsent]);
         };
         let service = self.onion.service_id().clone();
-        self.rounds = Some(UploadRounds::new(service.clone()));
+        self.rounds = Some(match &self.rounds {
+            Some(previous) => previous.next_publication(service.clone()),
+            None => UploadRounds::new(service.clone()),
+        });
         self.service = Some(service);
         let onion = Arc::clone(&self.onion);
         let virtual_port = self.virtual_port;
