@@ -26,7 +26,9 @@ on:
     # suppress the required check.
     branches: [dev, main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `ready_for_review`: the heavy jobs below skip a draft, and run when it
+    # is marked ready (ruled 2026-11-16).
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
@@ -116,7 +118,12 @@ jobs:
     # Skipped for a docs-only change, and for a change owned by other jobs
     # alone (a documentation gate, another workflow's job). It still
     # reports, as "skipped", so branch protection does not wait on it.
-    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.rust_job != 'skip'
+    # Skipped on a draft pull request too (ruled 2026-11-16): the
+    # `ready_for_review` run re-runs it on the same head, and its pending
+    # check replaces the draft's skipped one before the PR can merge.
+    if: >-
+      needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.rust_job != 'skip'
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     # The six green runs under nextest (2026-11-07) took 120, 179, 180,
     # 181, 183 and 236 min, so twice the p90 passes the 360 min platform

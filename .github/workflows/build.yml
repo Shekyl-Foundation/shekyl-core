@@ -10,7 +10,9 @@ on:
     # `.github/workflows/weekly-os.yml`.
     branches: [dev, main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `ready_for_review`: the heavy jobs below skip a draft, and run when it
+    # is marked ready (ruled 2026-11-16).
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Superseded-run cancellation (the house pattern the other workflows cite).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -177,7 +179,9 @@ jobs:
   build-macos:
     name: 'macOS (brew)'
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    # Skipped on a draft pull request (ruled 2026-11-16); runs when it is
+    # marked ready, and on every push to a ready one.
+    if: needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: macOS-latest
     timeout-minutes: 45  # p90 20.4 min over 13 runs
     steps:
@@ -233,30 +237,37 @@ jobs:
     needs: changes
     # NO JOB-LEVEL `if:` HERE, deliberately, and it is not an oversight.
     #
-    # `Ubuntu 22.04` and `Ubuntu 24.04` are required contexts and they come from
-    # `${{ matrix.name }}`. A job-level `if:` is evaluated BEFORE the matrix
-    # expands, so a skipped job has no `matrix.name` to interpolate and cannot
-    # emit checks under those names — protection would keep waiting, which is
-    # the very deadlock this workflow change exists to remove. The other jobs
-    # here carry literal names and gate at the job level safely; this one must
-    # run so the legs exist, and gates its WORK at the step level instead.
+    # `Ubuntu 24.04` is a required context and it comes from `${{ matrix.name }}`.
+    # A job-level `if:` is evaluated BEFORE the matrix expands, so a skipped
+    # job has no `matrix.name` to interpolate and cannot emit the check under
+    # that name: protection would keep waiting (`check_matrix_job_gating.py`).
+    # So the job runs, and gates its WORK at the step level instead, on
+    # `WORK`: nothing for a docs-only change, and nothing on a draft pull
+    # request (ruled 2026-11-16). Marking the draft ready
+    # (`ready_for_review`) runs the leg in full on the same head, and its
+    # pending check replaces the draft's empty one.
     #
-    # Cost on a docs-only PR: two runner allocations that finish in seconds.
+    # Cost on a docs-only change or a draft: one runner allocation that
+    # finishes in seconds.
+    env:
+      WORK: >-
+        ${{ needs.changes.outputs.docs_only != 'true'
+            && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90  # p90 44.7 min over 15 runs (the 24.04 leg)
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # The oldest supported Ubuntu LTS builds and checks the binaries;
-          # the live-daemon and symbol gates run on 24.04 alone.
-          - name: Ubuntu 22.04
-            container: ubuntu:22.04
-            live_gates: false
-
-          - name: Ubuntu 24.04
-            container: ubuntu:24.04
-            live_gates: true
+        # Ubuntu 24.04 builds every pull request. Ubuntu 22.04, the oldest
+        # supported LTS, builds and checks the binaries on a push to dev or
+        # main only (ruled 2026-11-16); it is not a pull request's check. The
+        # live-daemon and symbol gates run on 24.04 alone. A job's
+        # `strategy` reads no `env`, so the two lists are written here.
+        include: >-
+          ${{ fromJSON(github.event_name == 'pull_request'
+            && '[{"name": "Ubuntu 24.04", "container": "ubuntu:24.04", "live_gates": true}]'
+            || '[{"name": "Ubuntu 22.04", "container": "ubuntu:22.04", "live_gates": false},
+                 {"name": "Ubuntu 24.04", "container": "ubuntu:24.04", "live_gates": true}]') }}
     container:
       image: ${{ matrix.container }}
       env:
@@ -268,23 +279,23 @@ jobs:
       options: --tmpfs /mnt/shekyl-small-disk:rw,size=1m
     steps:
       - name: set apt conf
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         run: ${{env.APT_SET_CONF}}
       - name: update apt
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         run: apt update
       - name: install build dependencies
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         run: ${{env.APT_INSTALL_LINUX}}
       - name: configure git
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         with:
           submodules: recursive
       - name: install Rust
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         # Composite action (.github/actions/install-rust): the one
         # hardened download-then-run recipe, installing the
         # rust-toolchain.toml pin + components up front so the daemon
@@ -295,9 +306,9 @@ jobs:
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
       - uses: ./.github/actions/set-make-job-count
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
       - name: build
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: ${{env.BUILD_DEFAULT_LINUX}}
@@ -318,7 +329,7 @@ jobs:
       # reference of the PoW test setter cannot merge on a green source
       # grep alone. nm is binutils, pulled in by build-essential.
       - name: symbol isolation on linked daemon (nm)
-        if: matrix.live_gates && needs.changes.outputs.docs_only != 'true'
+        if: matrix.live_gates && env.WORK == 'true'
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       # The hardening the link flags claim, read off the staged ELF binaries
@@ -326,7 +337,7 @@ jobs:
       # Rust binaries built by one cargo invocation; no CMake flag list
       # reaches them, so the result is what is asserted. readelf is binutils.
       - name: binary hardening on the staged binaries (readelf)
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         shell: bash
         run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
       # The C++ removal's end state (Rick, 2026-11-06), on what this job
@@ -335,13 +346,13 @@ jobs:
       # target compiling any) runs in the grep gates. Selftest first, so a
       # gate that cannot fail is caught before it passes.
       - name: the daemon holds no C++ (no C++ runtime, no C++ symbol)
-        if: needs.changes.outputs.docs_only != 'true'
+        if: env.WORK == 'true'
         shell: bash
         run: |
           python3 scripts/ci/check_no_first_party_c.py --selftest
           python3 scripts/ci/check_no_first_party_c.py --binary build/bin/shekyld
       - name: live-daemon gates
-        if: matrix.live_gates && needs.changes.outputs.docs_only != 'true'
+        if: matrix.live_gates && env.WORK == 'true'
         # `shell: bash`: the job's default shell in this container is dash,
         # which rejects `set -o pipefail` outright — the script dies on line
         # 1 before running anything.
@@ -353,7 +364,8 @@ jobs:
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    # Skipped on a draft pull request (ruled 2026-11-16), as macOS.
+    if: needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: windows-2025-vs2026
     timeout-minutes: 180  # p90 89.2 min over 13 runs
     steps:

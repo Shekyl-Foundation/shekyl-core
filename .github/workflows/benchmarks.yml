@@ -60,7 +60,9 @@ name: ci/benchmarks
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `ready_for_review`: the capture skips a draft and runs when it is
+    # marked ready (ruled 2026-11-16).
+    types: [opened, synchronize, reopened, ready_for_review]
     # The whole Rust workspace, not a list of benched crates (BA-Q8, ruled
     # 2026-10-05). A bench's cost depends on its dependency closure, not on
     # its own crate: `relay_admission_verify_iai` lives in
@@ -149,12 +151,15 @@ jobs:
     #
     # `scope` is skipped on a dispatch, so its result is not required to be
     # success; a pull request whose scope is `none` skips this job, and the
-    # `compare` job with it. A skipped job is not a failed one.
+    # `compare` job with it. A skipped job is not a failed one. A draft pull
+    # request skips it too (ruled 2026-11-16): the capture runs when the
+    # draft is marked ready, and on every push to a ready one.
     needs: scope
     if: >-
       !cancelled() && (
         github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'pull_request' && needs.scope.result == 'success'
+        (github.event_name == 'pull_request' && !github.event.pull_request.draft
+          && needs.scope.result == 'success'
           && needs.scope.outputs.bench_rows != 'none')
       )
     runs-on: ubuntu-latest

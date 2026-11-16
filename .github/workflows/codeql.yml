@@ -1,17 +1,17 @@
 name: "CodeQL Analysis"
 
+# No pull request trigger (ruled 2026-11-16): a push to dev analyses what
+# merged, and the weekly schedule analyses the whole tree. A pull request's
+# alert arrives with its merge, on dev's push run.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches: [dev]
   schedule:
     - cron: "30 4 * * 1"   # Every Monday at 4:30 AM UTC
   workflow_dispatch:
 
-# Superseded-run cancellation (house pattern: build.yml).
-# Without a concurrency group, every push to an open PR stacks a full new
-# run behind the old one — with the shared runner pool, repeated pushes
-# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
-# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
+# Superseded-run cancellation: a newer push to dev supersedes the analysis
+# of an older one, whose changes the newer one's analysis covers.
 concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: true

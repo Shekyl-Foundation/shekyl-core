@@ -41,6 +41,17 @@ What a passing `pull_request` trigger is:
   reopened]`; naming `types` replaces the default set, so a list that
   drops one of the three is silent and is refused too, as is a `types`
   key with no list under it
+* or exactly `[opened, synchronize, reopened, ready_for_review]`, in a
+  workflow with a job skipped on a draft pull request (ruled 2026-11-16:
+  the heavy jobs skip drafts). An expression that reads
+  `github.event.pull_request.draft` needs that list, and that list needs
+  such an expression. A job skipped on a draft emits a `skipped` check
+  run, which satisfies a required status check; `ready_for_review` runs
+  it again on the same head when the draft is marked ready, and the
+  rollup's newest check run is then the real one, queued or running.
+  Without the type, the draft's `skipped` would stand as the PR's pass
+  until its next push. With the type and no draft condition, marking a
+  PR ready re-runs every job for nothing
 * no expression in the file that reads `github.event.changes`; that
   object exists only on `edited`, so a reader of it is a leftover of the
   condition this gate retired. An expression is an `if` value at any
@@ -66,14 +77,19 @@ WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 
 # The default activity types, in the order every workflow writes them.
 TYPES = ["opened", "synchronize", "reopened"]
+# The same, for a workflow whose jobs skip a draft pull request.
+READY_TYPES = TYPES + ["ready_for_review"]
+# What an expression reads to skip a draft.
+_DRAFT = "github.event.pull_request.draft"
 
 # The workflows whose pull_request trigger carried `branches:`. They are the
 # hole this gate was written for; each one still has to be a pull_request
 # workflow, or the hole is back and this file no longer sees it.
+# `codeql.yml` was one; it runs on a push to dev and weekly, with no pull
+# request trigger at all (ruled 2026-11-16), so it has no filter to carry.
 NAMED = (
     "benchmarks.yml",
     "cmake-gate-test.yml",
-    "codeql.yml",
     "doc-claims.yml",
     "docs-gates.yml",
     "gf7-no-emit-guard.yml",
@@ -156,15 +172,29 @@ def problems_in(filename: str, doc: object) -> list[str]:
             f"{filename}: `pull_request` carries a branches filter, so a PR "
             "whose base is another branch never runs it"
         )
-    if "types" in pr and pr["types"] != TYPES:
-        problems.append(
-            f"{filename}: `pull_request` types are {pr['types']!r}, want {TYPES} "
-            "or no `types` key; `edited` runs every job skipped on each body edit"
-        )
     group = _concurrency_group(doc)
     expressions = list(_expressions(doc))
     if isinstance(group, str):
         expressions.append(group)
+    skips_drafts = any(_DRAFT in text for text in expressions)
+    types = pr.get("types", TYPES) if "types" in pr else TYPES
+    if skips_drafts:
+        if types != READY_TYPES:
+            problems.append(
+                f"{filename}: a job skips a draft pull request, and `pull_request` types are "
+                f"{pr.get('types')!r}, not {READY_TYPES}: marking the draft ready runs nothing, "
+                "so the draft's skipped check stands as a pass"
+            )
+    elif types == READY_TYPES:
+        problems.append(
+            f"{filename}: `pull_request` types include `ready_for_review` and no job skips a "
+            "draft, so marking a pull request ready re-runs every job for nothing"
+        )
+    elif types != TYPES:
+        problems.append(
+            f"{filename}: `pull_request` types are {pr['types']!r}, want {TYPES} "
+            "or no `types` key; `edited` runs every job skipped on each body edit"
+        )
     if any(_EDITED_ONLY in text for text in expressions):
         problems.append(
             f"{filename}: an expression reads `{_EDITED_ONLY}`, which exists "
@@ -199,6 +229,30 @@ def selftest() -> int:
         ("types with edited", _doc(types=TYPES + ["edited"]), True),
         ("types drop reopened", _doc(types=["opened", "synchronize"]), True),
         ("types are the default set", _doc(types=TYPES), False),
+        (
+            "a job skips drafts, with ready_for_review",
+            _doc(types=READY_TYPES, job={**_job(), "if": "!github.event.pull_request.draft"}),
+            False,
+        ),
+        (
+            "a job skips drafts, without ready_for_review",
+            _doc(types=TYPES, job={**_job(), "if": "!github.event.pull_request.draft"}),
+            True,
+        ),
+        (
+            "a job skips drafts, types absent",
+            _doc(job={**_job(), "if": "!github.event.pull_request.draft"}),
+            True,
+        ),
+        (
+            "a step env skips drafts, without ready_for_review",
+            _doc(
+                types=TYPES,
+                job={**_job(), "env": {"WORK": "${{ !github.event.pull_request.draft }}"}},
+            ),
+            True,
+        ),
+        ("ready_for_review with no draft condition", _doc(types=READY_TYPES), True),
         ("types absent", _doc(), False),
         (
             "types present with nothing under it",
@@ -274,7 +328,9 @@ def selftest() -> int:
     print(
         "SELFTEST PASS: a branches filter, an `edited` type, a short or empty "
         "types list, and an expression reading github.event.changes all "
-        "fail; the default types, named or absent, and a prose mention pass"
+        "fail, as do a draft-skipping job without `ready_for_review` and "
+        "`ready_for_review` without one; the default types, named or absent, "
+        "the draft list with a draft-skipping job, and a prose mention pass"
     )
     return 0
 
@@ -325,7 +381,8 @@ def main() -> int:
         return 1
     print(
         f"pr triggers: {len(pull_request_files)} pull_request workflows, no "
-        f"branches filter, default activity types only, no reader of "
+        f"branches filter, default activity types (plus `ready_for_review` where a job "
+        f"skips drafts), no reader of "
         f"github.event.changes ({len(NAMED)} of them are the ones the "
         "branches filter used to silence)"
     )
