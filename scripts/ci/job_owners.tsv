@@ -68,12 +68,13 @@ scripts/ci/check_no_claim_era_spec.py	docs-gates:check-doc-links
 scripts/ci/check_no_first_party_c.py	build:build-ubuntu,grep-gates:grep-gates
 scripts/ci/check_no_orphan_tor.sh	tor-pin-verify:verify
 scripts/ci/check_no_stripe_engine.sh	grep-gates:grep-gates
-scripts/ci/check_p_fetch_dep_cut.py	grep-gates:grep-gates,rust-audit-test:rust-audit-and-test
+scripts/ci/check_p_fetch_dep_cut.py	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly,rust-audit-test:rust-audit-and-test
 scripts/ci/check_pending_post_write_path.sh	grep-gates:grep-gates
 scripts/ci/check_pinned_anchors.py	docs-gates:check-doc-links
 scripts/ci/check_pow_test_seam.sh	grep-gates:grep-gates
 scripts/ci/check_pr_event_triggers.py	grep-gates:grep-gates
 scripts/ci/check_probe_registry.py	rust-audit-test:rust-audit-and-test
+scripts/ci/check_production_graph.py	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/check_production_lint_lane.py	grep-gates:grep-gates,rust-audit-test:rust-audit-and-test
 scripts/ci/check_randomx_cache_owner.sh	grep-gates:grep-gates
 scripts/ci/check_randomx_crate_invariants.sh	build:lint-rust-debug-macros,randomx-v2-differential:structural-validate
@@ -84,6 +85,7 @@ scripts/ci/check_relay_connector_agnostic.py	docs-gates:check-doc-links
 scripts/ci/check_release_archive_docs.py	docs-gates:check-doc-links
 scripts/ci/check_rpc_route_liveness.sh	rpc-route-liveness:rpc-route-liveness
 scripts/ci/check_rt_p4_standing.py	grep-gates:grep-gates
+scripts/ci/check_seedable_rng.py	grep-gates:grep-gates
 scripts/ci/check_secret_byte_locality.py	docs-gates:check-doc-links
 scripts/ci/check_shard_fill_frozen.py	grep-gates:grep-gates
 scripts/ci/check_shell_gate_exits.py	docs-gates:check-doc-links
@@ -112,6 +114,7 @@ scripts/ci/domain_registry_gate.sh	grep-gates:grep-gates
 scripts/ci/drop_runner_chrome_apt_source.sh	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,grep-gates:grep-gates,nightly:bench-full
 scripts/ci/engine_decomposition_ratchet.conf	grep-gates:grep-gates
 scripts/ci/followups_owner_grandfather.txt	docs-gates:check-doc-links
+scripts/ci/gui_wallet_core_deps.toml	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/ignored_set_chain_ingest.sh	nightly:chain-ingest-ignored,nightly:report-red,rust-audit-test:rust-audit-and-test
 scripts/ci/ignored_set_chain_store.sh	nightly:store-ignored,rust-audit-test:rust-audit-and-test
 scripts/ci/ignored_set_economics_sim.sh	nightly:economics-sim-ignored,nightly:report-red,rust-audit-test:economics-sim-narrations,rust-audit-test:rust-audit-and-test
@@ -130,6 +133,7 @@ scripts/ci/push_scope_base.sh	build:changes,rust-audit-test:changes
 scripts/ci/require_live_tests.sh	tor-pin-verify:verify
 scripts/ci/run_live_daemon_gates.sh	build:build-ubuntu,nightly-live-daemon-slow:slow-gates
 scripts/ci/run_live_tor_tests.sh	grep-gates:grep-gates,tor-pin-verify:verify
+scripts/ci/shipped_graph.py	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/strip_c_comments.py	depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates
 scripts/ci/test_check_doc_code_citations.py	docs-gates:check-doc-links
 scripts/ci/test_check_frozen_tuple.py	grep-gates:grep-gates

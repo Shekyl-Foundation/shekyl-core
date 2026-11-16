@@ -129,7 +129,7 @@ pub(crate) async fn drive_support_trees(drive: &mut Driven, closed: ClosedShard)
     let persona = Persona::at(1);
     let released = Persona::at(2);
     let slashed = Persona::at(3);
-    let mut spender = Spender::over(&drive.chain);
+    let mut spender = Spender::on(drive.scenario.network_id(), &drive.chain);
     let mut seen = drive.chain.len();
     let (joins, backing_key, fee_key) = {
         let recipient = Recipient::persona(persona.keys());

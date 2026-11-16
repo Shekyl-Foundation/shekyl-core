@@ -356,7 +356,7 @@ mod tests {
         let cli = shekyl_options::read_cli(&TABLE, args).unwrap();
         let (network, mode) = choosers(&cli);
         let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
-        crate::build(&mut resolved, network, mode, &platform(None), None).unwrap()
+        crate::sections::build(&mut resolved, network, mode, &platform(None), None).unwrap()
     }
 
     fn platform(session: Option<&Path>) -> Platform {

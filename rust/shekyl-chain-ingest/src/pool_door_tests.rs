@@ -130,7 +130,7 @@ pub(crate) async fn paying_the_floor_at(
     connecting: BlockHeight,
 ) -> Transaction {
     let floor = scenario.connecting_relay_floor().await;
-    let spender = Spender::over(mined);
+    let spender = Spender::on(scenario.network_id(), mined);
     let wallet = scenario.wallet();
     let mut fee = Family::Main.fee();
     for _ in 0..RELAY_FEE_REPRICE_STEPS {
@@ -160,7 +160,7 @@ pub(crate) async fn matured(name: &str) -> (Scenario<FreeHash>, Vec<Mined>) {
 async fn the_door_and_a_block_of_one_agree_on_every_spend() {
     let (mut scenario, mut mined) = matured("pool-door-agree").await;
     let (good, flipped) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(0), h(AT), Family::Main.fee()),
@@ -186,7 +186,7 @@ async fn the_door_and_a_block_of_one_agree_on_every_spend() {
             .await
             .unwrap_or_else(|outcome| panic!("the spend connects: {outcome}")),
     );
-    let respend = Spender::over(&mined).spend_coinbase(
+    let respend = Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(AT + 1),
@@ -264,7 +264,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
     let (mut scenario, mined) = matured("pool-door-rows").await;
     let good = paying_the_floor(&mut scenario, &mined, 0).await;
     let (twin, cheap) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         let fee = match &good.ct {
             shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,

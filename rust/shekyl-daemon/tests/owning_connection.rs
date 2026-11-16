@@ -116,7 +116,7 @@ fn daemon(dir: &Path) -> i32 {
         args.extend(["--tor".to_owned(), "off".to_owned()]);
     }
     let args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
-    shekyl_daemon::run::main(
+    shekyl_daemon::run::main_loading(
         &args,
         &Platform {
             home: Some(dir.to_path_buf()),
@@ -124,6 +124,7 @@ fn daemon(dir: &Path) -> i32 {
             session_dir: None,
             service_rendezvous: None,
         },
+        shekyl_daemon_config::load_default_file_unread,
     )
 }
 

@@ -202,16 +202,18 @@ pub(crate) async fn priced_emission_claim(
     panic!("the claim's floor price did not settle");
 }
 
-/// A spender that owns `keys` before the block at `join_height` is scanned,
-/// then every later block. The outputs those keys name are paid in that
-/// block; scanning it first and owning them after misses them.
+/// A spender over `network`'s chain `chain` that owns `keys` before the
+/// block at `join_height` is scanned, then every later block. The outputs
+/// those keys name are paid in that block; scanning it first and owning
+/// them after misses them.
 pub(crate) fn spender_owning_before(
+    network: shekyl_network::NetworkId,
     chain: &[Mined],
     join_height: BlockHeight,
     keys: &[[u8; 32]],
 ) -> Spender {
     let split = usize::try_from(join_height.to_raw()).expect("a join height fits");
-    let mut spender = Spender::over(&chain[..split]);
+    let mut spender = Spender::on(network, &chain[..split]);
     for key in keys {
         spender.own(*key);
     }

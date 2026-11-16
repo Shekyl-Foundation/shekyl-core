@@ -112,6 +112,7 @@ rand_chacha = { workspace = true, optional = true }
 # can spend a fixture block's coinbase through a real prover rather than
 # asserting over a filler no wallet could scan.
 harness = [
+  "shekyl-network/harness",
   "dep:curve25519-dalek",
   "dep:shekyl-harness-wallet",
   "dep:shekyl-curve-primitives",
@@ -125,6 +126,10 @@ harness = [
 serde_json = "1"
 
 [dev-dependencies]
+# `HARNESS_NETWORK_ID`, which this crate's own tests judge harness chains
+# under (`Trust::UNPINNED`): TEST_ONLY, on this dev edge and through the
+# `harness` feature's forward only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 # The shared C2-R3 boundary vectors (`docs/test_vectors/MTP_BOUNDARY_V1.json`)
 # are driven through the 4.C rules as well as through `shekyl-difficulty`.
 # Already pinned in the workspace lockfile; test-only.

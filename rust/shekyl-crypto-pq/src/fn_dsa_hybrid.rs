@@ -391,8 +391,8 @@ impl HybridEd25519FnDsa {
     }
 }
 
-// Test-support surface, behind `test-utils` like its ML-DSA counterpart.
-#[cfg(any(test, feature = "test-utils"))]
+// Deterministic signing, behind `seeded-rng` like its ML-DSA counterpart.
+#[cfg(any(test, feature = "seeded-rng"))]
 impl HybridEd25519FnDsa {
     /// Deterministic nested sign for vectors and benches: FN-DSA's signer
     /// draws from a ChaCha20 stream over `rng_seed` instead of the OS.
