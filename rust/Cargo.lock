@@ -3826,6 +3826,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-bulletproofs",
+ "shekyl-chain-ingest",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",

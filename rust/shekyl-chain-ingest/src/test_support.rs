@@ -715,7 +715,7 @@ impl Source for Scripted {
 }
 
 /// The keys every scenario block's coinbase pays: the harness wallet's.
-pub(crate) fn harness_keys() -> shekyl_block_template::MinerKeys {
+pub fn harness_keys() -> shekyl_block_template::MinerKeys {
     let recipient = MinerWallet::harness().recipient();
     shekyl_block_template::MinerKeys {
         spend_public: recipient.spend_public,
@@ -728,7 +728,7 @@ pub(crate) fn harness_keys() -> shekyl_block_template::MinerKeys {
 /// reads; with the miner's sender, which a test keeps alive or drops, and
 /// the follower's posting.
 #[cfg(feature = "pipeline")]
-pub(crate) fn job_seat(
+pub fn job_seat(
     board: &std::sync::Arc<shekyl_miner::JobBoard>,
     keys: Option<shekyl_block_template::MinerKeys>,
     sync: tokio::sync::watch::Receiver<shekyl_chain_sync::SyncState>,

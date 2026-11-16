@@ -736,7 +736,6 @@ impl<P: Pow> Scenario<P> {
     /// the store has never held. Nothing is applied, and the ledger is not
     /// trimmed — the header is not in the store, and a later connected
     /// claim is what bounds the window.
-    #[cfg(test)]
     pub async fn assemble_unconnected(
         &mut self,
         facts: &ChainFacts,
@@ -780,7 +779,6 @@ impl<P: Pow> Scenario<P> {
 
     /// Offer `block` the way [`Self::offer`] offers a connected one: formed
     /// again here under empty reference claims, then [`OfferAlt`].
-    #[cfg(test)]
     pub async fn offer_unconnected(&self, block: &Unconnected) -> Result<Offered, RunFault> {
         let formed = self
             .job(block.seed, |job| {
@@ -1083,7 +1081,7 @@ struct Formed {
 /// the driver holds no witness key or seed for it, so the block's draws are
 /// never revealed.
 #[allow(clippy::too_many_arguments)] // the template's operands, and the commitment it may take
-pub(crate) fn build_template(
+pub fn build_template(
     rules: ChainRules,
     params: &EconomicParams,
     miner: &MinerKeys,

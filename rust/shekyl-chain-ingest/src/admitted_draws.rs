@@ -52,14 +52,14 @@ const WITNESS_SEED_MASK: u8 = 0x5A;
 /// and a seed per height. It stands in for the node's witness ring
 /// (`shekyl_bundle_producer::WitnessRing`), whose key never leaves it:
 /// these chains test settlement over admitted draws, not the producer.
-pub(crate) struct DriverWitness {
+pub struct DriverWitness {
     public: [u8; BUNDLE_WITNESS_KEY_LEN],
     secret: FnDsaHybridSecretKey,
     tag: u8,
 }
 
 impl DriverWitness {
-    pub(crate) fn new(tag: u8) -> Self {
+    pub fn new(tag: u8) -> Self {
         let (public, secret) =
             HybridEd25519FnDsa::keypair_from_seeds(&[tag; 32], &[tag ^ WITNESS_SEED_MASK; 32])
                 .expect("keygen");
@@ -90,10 +90,10 @@ impl DriverWitness {
 /// Whether the draw `target` of the block at `h` passes: its holder serves
 /// the read and its receipt is filed. `false` is a holder that withholds:
 /// the draw is filed with no record.
-pub(crate) type Passes<'a> = &'a dyn Fn(BlockHeight, &DrawTarget) -> bool;
+pub type Passes<'a> = &'a dyn Fn(BlockHeight, &DrawTarget) -> bool;
 
 /// Every draw passes.
-pub(crate) fn every_draw_passes(_: BlockHeight, _: &DrawTarget) -> bool {
+pub fn every_draw_passes(_: BlockHeight, _: &DrawTarget) -> bool {
     true
 }
 
@@ -132,7 +132,7 @@ fn serve_at(h: BlockHeight, until: BlockHeight, waiting: bool) -> ServeAt {
 /// If a block does not land, if the connector cannot derive a block's
 /// draws, if a passing draw's persona is not among `signers`, if a drawing
 /// block has no parent, or if the queue or the next block refuses a bundle.
-pub(crate) async fn serve_to(
+pub async fn serve_to(
     drive: &mut Driven,
     witness: &DriverWitness,
     signers: &[&Persona],
@@ -161,7 +161,7 @@ pub(crate) async fn serve_to(
 }
 
 /// [`serve_to`] over a straight scenario chain, every draw a pass.
-pub(crate) async fn mine_serving(
+pub async fn mine_serving(
     scenario: Scenario<FreeHash>,
     mined: Vec<Mined>,
     witness: &DriverWitness,
@@ -364,7 +364,7 @@ impl Filing<'_> {
 /// # Panics
 ///
 /// If the store does not read, or the index does not say that.
-pub(crate) fn assert_issued_pair(
+pub fn assert_issued_pair(
     scenario: &Scenario<FreeHash>,
     epoch: SettlementEpoch,
     pair: (PCanonicalId, ShardId),

@@ -107,7 +107,7 @@ impl ChainRules {
 
     /// A harness chain that mines its own genesis: these rules with block 0
     /// held to nothing. Test and harness builds only.
-    #[cfg(any(test, feature = "harness"))]
+    #[cfg(any(test, feature = "harness", feature = "forge"))]
     #[must_use]
     pub const fn unpinned(self) -> Self {
         Self {
@@ -123,7 +123,7 @@ impl ChainRules {
     /// # Panics
     ///
     /// Never: regtest's row permits every lever (NI-R6).
-    #[cfg(any(test, feature = "harness"))]
+    #[cfg(any(test, feature = "harness", feature = "forge"))]
     #[must_use]
     pub const fn harness_regtest(
         fixed_difficulty: Option<NonZeroU128>,

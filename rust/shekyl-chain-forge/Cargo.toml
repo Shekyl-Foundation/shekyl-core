@@ -30,6 +30,10 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 # primitives (`tests/primitives_across_architectures.rs`). `seeded-rng` is
 # TEST_ONLY (check_test_only_features.py); a dev edge enables it.
 [dev-dependencies]
+# The scenario driver, public under the TEST_ONLY `forge` feature (seam T5):
+# the executor builds every block through it. This edge is `forge`'s one
+# enabler.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", features = ["forge"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }

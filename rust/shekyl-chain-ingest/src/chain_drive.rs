@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::FAILURE_WINDOW_M;
 use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
-use shekyl_chain_store::codec::{PropertyCell, TotalBurnedCell, UndoLogFloorCell};
+use shekyl_chain_store::codec::{PropertyCell, UndoLogFloorCell};
 use shekyl_chain_store::store::RawRows;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_harness_spender::{Owner, Spender};
@@ -53,7 +53,7 @@ use shekyl_chain_rules::SettlementSchedule;
 /// How many times a relay fee is repriced before its varint width has
 /// settled. The fee is an input of the weight it pays for, so the price
 /// is a fixed point of that width.
-pub(crate) const RELAY_FEE_REPRICE_STEPS: u32 = 8;
+pub const RELAY_FEE_REPRICE_STEPS: u32 = 8;
 
 /// The tables a pruning boundary's batch retires rows from.
 const RETIRED_AT_A_BOUNDARY: &[&str] = &[
@@ -94,13 +94,13 @@ const FAMILIES_RETIRED_AT_A_BOUNDARY: &[SnapshotFamily] = &[
 ];
 
 /// Misses the levered slash waits for: [`FAILURE_WINDOW_M`].
-pub(crate) fn failure_window_epochs() -> u64 {
+pub fn failure_window_epochs() -> u64 {
     u64::from(FAILURE_WINDOW_M)
 }
 
 /// Whether the block at `height` runs the boundary batch under `schedule`:
 /// `E·SEB` with `E ≥ 2`.
-pub(crate) fn is_pruning_boundary(height: BlockHeight, schedule: SettlementSchedule) -> bool {
+pub fn is_pruning_boundary(height: BlockHeight, schedule: SettlementSchedule) -> bool {
     let h = height.to_raw();
     let seb = schedule.blocks().get();
     h.is_multiple_of(seb) && h >= 2 * seb
@@ -155,7 +155,7 @@ fn pop_keeps_the_floor(
 /// What an emission claim is priced from. The terms stay with the caller:
 /// one chain prices every epoch from one share, another recomputes the
 /// share per epoch.
-pub(crate) struct EmissionClaimParts<'a> {
+pub struct EmissionClaimParts<'a> {
     pub spender: &'a Spender,
     pub owner: &'a Owner<'a>,
     pub keys: &'a ArchivalPKeys,
@@ -168,7 +168,7 @@ pub(crate) struct EmissionClaimParts<'a> {
 
 /// Assemble `parts` at the chain's relay floor, repricing until the fee's
 /// varint covers the weight it pays for.
-pub(crate) async fn priced_emission_claim(
+pub async fn priced_emission_claim(
     scenario: &mut Scenario<FreeHash>,
     parts: EmissionClaimParts<'_>,
 ) -> Transaction {
@@ -206,7 +206,7 @@ pub(crate) async fn priced_emission_claim(
 /// block at `join_height` is scanned, then every later block. The outputs
 /// those keys name are paid in that block; scanning it first and owning
 /// them after misses them.
-pub(crate) fn spender_owning_before(
+pub fn spender_owning_before(
     network: shekyl_network::NetworkId,
     chain: &[Mined],
     join_height: BlockHeight,
@@ -224,7 +224,7 @@ pub(crate) fn spender_owning_before(
 }
 
 /// Feed `spender` every block of `chain` it has not seen.
-pub(crate) fn catch_up(spender: &mut Spender, chain: &[Mined], seen: &mut usize) {
+pub fn catch_up(spender: &mut Spender, chain: &[Mined], seen: &mut usize) {
     for block in &chain[*seen..] {
         spender.push(block);
     }
@@ -413,7 +413,7 @@ enum Recording {
 }
 
 /// A scenario and the blocks connected on it. See the module docs.
-pub(crate) struct Driven {
+pub struct Driven {
     pub scenario: Scenario<FreeHash>,
     pub chain: Vec<Mined>,
     recording: Recording,
@@ -421,7 +421,7 @@ pub(crate) struct Driven {
 
 impl Driven {
     /// A straight chain. Round-tripping starts at [`Self::round_trip_from_here`].
-    pub(crate) fn begin(scenario: Scenario<FreeHash>, chain: Vec<Mined>) -> Self {
+    pub fn begin(scenario: Scenario<FreeHash>, chain: Vec<Mined>) -> Self {
         Self {
             scenario,
             chain,
@@ -431,7 +431,7 @@ impl Driven {
 
     /// The height of the next block. Mined from genesis, the chain's length
     /// is that height.
-    pub(crate) fn height(&self) -> BlockHeight {
+    pub fn height(&self) -> BlockHeight {
         BlockHeight::from_raw(
             u64::try_from(self.chain.len()).expect("a test chain's length is a height"),
         )
@@ -440,7 +440,7 @@ impl Driven {
     /// The scenario and the chain back, for a caller that mines on past
     /// what it handed to the drive. A round trip's ledger goes with the
     /// drive.
-    pub(crate) fn into_parts(self) -> (Scenario<FreeHash>, Vec<Mined>) {
+    pub fn into_parts(self) -> (Scenario<FreeHash>, Vec<Mined>) {
         (self.scenario, self.chain)
     }
 
@@ -450,7 +450,7 @@ impl Driven {
     ///
     /// If round-tripping has started: a prefix connected beside the ledger
     /// would make the next pop compare against a stale parent.
-    pub(crate) fn parts_mut(&mut self) -> (&mut Scenario<FreeHash>, &mut Vec<Mined>) {
+    pub fn parts_mut(&mut self) -> (&mut Scenario<FreeHash>, &mut Vec<Mined>) {
         assert!(
             matches!(self.recording, Recording::Straight),
             "a straight prefix is not round-tripped"
@@ -459,7 +459,7 @@ impl Driven {
     }
 
     /// From the next block on, [`Self::connect`] pops and reconnects.
-    pub(crate) async fn round_trip_from_here(&mut self) {
+    pub async fn round_trip_from_here(&mut self) {
         assert!(
             matches!(self.recording, Recording::Straight),
             "round-tripping starts once"
@@ -474,7 +474,7 @@ impl Driven {
     }
 
     /// Blocks round-tripped. Zero on a straight chain.
-    pub(crate) fn trips(&self) -> u64 {
+    pub fn trips(&self) -> u64 {
         match &self.recording {
             Recording::RoundTrip(ledger) => ledger.trips,
             Recording::Straight => 0,
@@ -482,7 +482,7 @@ impl Driven {
     }
 
     /// Of [`Self::trips`], how many were pruning boundaries.
-    pub(crate) fn boundaries(&self) -> u64 {
+    pub fn boundaries(&self) -> u64 {
         match &self.recording {
             Recording::RoundTrip(ledger) => ledger.boundaries,
             Recording::Straight => 0,
@@ -490,7 +490,7 @@ impl Driven {
     }
 
     /// Round-tripped epoch closes: index 0 at a zero budget, index 1 with one.
-    pub(crate) fn closes(&self) -> [u64; 2] {
+    pub fn closes(&self) -> [u64; 2] {
         match &self.recording {
             Recording::RoundTrip(ledger) => ledger.closes,
             Recording::Straight => [0, 0],
@@ -500,7 +500,7 @@ impl Driven {
     /// Connect the next block listing `listed`. A refusal is returned and
     /// not popped: the block never landed. A connected block is popped and
     /// connected again when round-tripping.
-    pub(crate) async fn connect(&mut self, listed: Vec<Transaction>) -> Result<Mined, StepOutcome> {
+    pub async fn connect(&mut self, listed: Vec<Transaction>) -> Result<Mined, StepOutcome> {
         self.connect_admitting(listed).await.map(|(block, _)| block)
     }
 
@@ -510,7 +510,7 @@ impl Driven {
     /// round trip pops the block, which returns its bundles to the queue
     /// (the switch's C3), and reconnects it carrying them again, so the
     /// block it reconnects is the same block.
-    pub(crate) async fn connect_admitting(
+    pub async fn connect_admitting(
         &mut self,
         listed: Vec<Transaction>,
     ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
@@ -595,7 +595,7 @@ impl Driven {
 
     /// Empty blocks until `to` is the next height. Each goes through
     /// [`Self::connect`].
-    pub(crate) async fn advance_to(&mut self, to: BlockHeight) {
+    pub async fn advance_to(&mut self, to: BlockHeight) {
         while self.height() < to {
             self.connect(Vec::new()).await.expect("empty blocks land");
         }
@@ -603,7 +603,7 @@ impl Driven {
 
     /// Reread the trip's parent after a write beside a block (a filed
     /// bundle). A straight chain has no parent to reread.
-    pub(crate) async fn wrote_beside_a_block(&mut self) {
+    pub async fn wrote_beside_a_block(&mut self) {
         if matches!(self.recording, Recording::RoundTrip(_)) {
             let parent = tip_of(&self.scenario).await;
             if let Recording::RoundTrip(ledger) = &mut self.recording {
@@ -613,7 +613,7 @@ impl Driven {
     }
 
     /// Stop the connector and remove the store.
-    pub(crate) async fn close(self) {
+    pub async fn close(self) {
         self.scenario.close().await;
     }
 }
@@ -665,7 +665,9 @@ fn a_restored_prune_is_not_the_parent_the_connect_left() {
 #[test]
 fn a_boundary_pop_keeps_the_floor_and_restores_the_chain_state_cells() {
     let floor = UndoLogFloorCell::KEY.as_bytes().to_vec();
-    let burned = TotalBurnedCell::KEY.as_bytes().to_vec();
+    let burned = shekyl_chain_store::codec::TotalBurnedCell::KEY
+        .as_bytes()
+        .to_vec();
     let cells = |floor_at: Option<u8>, burned_at: u8| {
         let mut cells = BTreeMap::from([(burned.clone(), vec![burned_at])]);
         if let Some(at) = floor_at {

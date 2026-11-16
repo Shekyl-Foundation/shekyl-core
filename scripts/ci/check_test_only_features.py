@@ -260,6 +260,18 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
     (
+        "shekyl-chain-ingest",
+        "forge",
+    ): "the scenario driver as public library code for the chain forge "
+    "(CHAIN_FORGE.md §5.3, seam T5): scenario, scenario_shard, "
+    "scenario_archival, chain_drive, admitted_draws, archival_driver and "
+    "the store helpers, over optional edges to the harness crates and the "
+    "seeded entry points (it forwards `harness` and the TEST_ONLY "
+    "`seeded-rng` of shekyl-harness-spender, shekyl-tx-builder and "
+    "shekyl-crypto-pq). Enabled from shekyl-chain-forge's dev edge alone, "
+    "whose example and integration test are the forge; a driver in a "
+    "shipped build would be a second producer",
+    (
         "shekyl-p2p-session",
         "harness",
     ): "the in-memory peer and the scripted frames (Loopback, Wire, the "

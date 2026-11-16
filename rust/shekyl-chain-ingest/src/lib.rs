@@ -85,16 +85,16 @@ pub mod admission;
 /// Admitted draws on a scenario chain (`SO-D12` 4b preparation). The
 /// economy chains mine through here: a driver-held witness, every draw
 /// filed as a pass, the next block admitting the bundle.
-#[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod admitted_draws;
+#[cfg(all(feature = "pipeline", any(test, feature = "forge")))]
+pub mod admitted_draws;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2 (a)): the corpus's
 /// archival inputs, enumerated both ways.
 #[cfg(all(test, feature = "pipeline"))]
 mod archival_corpus_tests;
 /// The first spendable height and the refusal shape the archival driver
 /// tests share.
-#[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod archival_driver;
+#[cfg(all(feature = "pipeline", any(test, feature = "forge")))]
+pub mod archival_driver;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 4): a mismatched hint is
 /// CEN-J11, and a Release signed by the wrong key is CEN-J13.
 #[cfg(all(test, feature = "pipeline"))]
@@ -129,7 +129,11 @@ pub mod bundle_producer;
 mod bench_fixture_tests;
 #[cfg(all(
     feature = "pipeline",
-    any(test, all(feature = "bench-internals", feature = "harness"))
+    any(
+        test,
+        feature = "forge",
+        all(feature = "bench-internals", feature = "harness")
+    )
 ))]
 pub mod bench_support;
 #[cfg(all(test, feature = "producer"))]
@@ -142,8 +146,8 @@ mod bundle_producer_tests;
 mod cache_window;
 /// The scenario driver that round-trips a connect, and the prune a pop is
 /// held to. The pop tests and the levered slash chain connect through it.
-#[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod chain_drive;
+#[cfg(all(feature = "pipeline", any(test, feature = "forge")))]
+pub mod chain_drive;
 #[cfg(feature = "pipeline")]
 mod chain_facts;
 #[cfg(feature = "pipeline")]
@@ -152,7 +156,7 @@ pub mod corpus;
 /// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7, Q3): the driver's
 /// emission claim, assembled as the engine handler assembles it. Reachable
 /// under `harness` for the byte-identity pin alone (crate docs).
-#[cfg(any(test, feature = "harness"))]
+#[cfg(any(test, feature = "harness", feature = "forge"))]
 pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
@@ -211,10 +215,10 @@ mod rpc_store_facts_tests;
 /// PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
 #[cfg(all(test, feature = "pipeline"))]
 mod rpc_store_reads_tests;
-#[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod scenario;
-#[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod scenario_archival;
+#[cfg(all(feature = "pipeline", any(test, feature = "forge")))]
+pub mod scenario;
+#[cfg(all(feature = "pipeline", any(test, feature = "forge")))]
+pub mod scenario_archival;
 #[cfg(all(test, feature = "pipeline"))]
 mod scenario_archival_tests;
 /// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7): one emission claim
@@ -228,8 +232,8 @@ mod scenario_join_tests;
 /// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 6): the `close_shard()`
 /// step — real spends until a shard closes, then the wait for CEN-J15's
 /// finality and price. Live lane.
-#[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod scenario_shard;
+#[cfg(all(feature = "pipeline", any(test, feature = "forge")))]
+pub mod scenario_shard;
 /// Slice 6 row 6 (`CHAIN_RULES_SLICE_6.md` §5): real spends through the
 /// stack — the acceptances and the refusals behind an accepted body that
 /// the rules crate's fixtures cannot witness once CEN-I13 runs on the
@@ -272,8 +276,8 @@ pub mod target;
 /// The node's one block template, built by the tip follower on one snapshot.
 #[cfg(feature = "pipeline")]
 mod template;
-#[cfg(test)]
-pub(crate) mod test_support;
+#[cfg(any(test, feature = "forge"))]
+pub mod test_support;
 pub mod trace;
 #[cfg(all(test, feature = "pipeline"))]
 mod vectors_tests;
