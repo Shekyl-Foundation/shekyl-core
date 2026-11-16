@@ -506,7 +506,7 @@ impl Spender {
         let spend_auths = match seeds {
             #[cfg(feature = "seeded-rng")]
             Some(seeds) => shekyl_tx_builder::sign_pqc_auths_seeded(
-                &seeds.sign,
+                &seeds.slots,
                 &hashes[..n_spend],
                 &spend_inputs,
             ),
@@ -1085,7 +1085,7 @@ impl SpendShape<'_> {
         let mut signed = match &seeds {
             #[cfg(feature = "seeded-rng")]
             Some(seeds) => shekyl_tx_builder::sign_transaction_with_terms_seeded(
-                &seeds.sign,
+                &seeds.proofs,
                 &network,
                 tx_prefix_hash,
                 &spend_inputs,
@@ -1154,7 +1154,7 @@ impl SpendShape<'_> {
         let open = match &seeds {
             #[cfg(feature = "seeded-rng")]
             Some(seeds) => shekyl_tx_builder::open_spend_seeded(
-                &seeds.open,
+                &seeds.slots,
                 signed,
                 &spend_inputs,
                 layout,
