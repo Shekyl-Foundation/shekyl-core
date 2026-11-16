@@ -791,7 +791,7 @@ def selftest():
 RUST_SELFTEST = [
     ("rust/shekyl-units/src/lib.rs", "run", {"shekyl-units"}),
     ("rust/shekyl-wire/fuzz/Cargo.toml", "run", {"shekyl-wire"}),          # an excluded crate maps to the member above it
-    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "run", {"shekyl-fcmp"}),   # the job builds that harness in its own step
+    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "run", {"shekyl-fcmp"}),   # maps to the fuzzed crate; fuzz-harness.yml builds the harness
     ("rust/shekyl-mempool/Cargo.toml", "run", {"shekyl-mempool"}),         # a dependency edit: rdeps covers the consumers
     ("rust/Cargo.toml", "run", "all"),
     ("rust/Cargo.lock", "run", "all"),
