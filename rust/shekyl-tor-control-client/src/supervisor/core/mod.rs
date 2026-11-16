@@ -25,6 +25,7 @@ mod clock_jump;
 mod dials;
 mod directories;
 mod network_view;
+mod onion_path;
 mod probe;
 mod requests;
 mod resume;
@@ -39,6 +40,7 @@ pub use dials::{DialTally, TorCensus};
 pub use directories::{
     Counted, DirectoryAnswer, DirectoryFetch, DirectoryReport, Exclusion, OpenUploads,
 };
+pub use onion_path::{OnionPath, PathReading, CHECK_LONGEST, CHECK_SPACING, READING_WAIT};
 use probe::Probe;
 
 /// How long a respawn waits, and how often a failure is said again.
@@ -64,14 +66,6 @@ pub struct Policy {
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
     pub fresh_directory_after: u32,
-    /// How long nothing comes through Tor, with a Tor dial failed since and
-    /// Tor saying nothing about its network, before the posture line says
-    /// so (§4.2): a neutral fact, never a cause. The daemon passes Tor's
-    /// `SocksTimeout` plus the Tor connector's judging bracket δ
-    /// (`DIALER_OUTAGE_EVIDENCE.md` §6): by then a dial started at the last
-    /// sign of life has used Tor's own retries and its bracket has closed
-    /// empty, so the judge has excused it as the link's.
-    pub quiet_after: Duration,
     /// The probe's delay after a round's first upload is drawn uniformly
     /// from this to [`Self::probe_after_max`] (§4.5, §10): long enough for
     /// the descriptor to reach the directories, and spread so a directory
@@ -123,9 +117,9 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// The waits the driver uses, with the caller's quiet stretch.
+    /// The waits the driver uses.
     #[must_use]
-    pub const fn provisional(quiet_after: Duration) -> Self {
+    pub const fn provisional() -> Self {
         Self {
             base: Duration::from_secs(1),
             cap: Duration::from_secs(60),
@@ -134,10 +128,6 @@ impl Policy {
             // about a minute: the same order as `TSR-M2`'s 60 s bound.
             alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
-            // Time since the judge's last sign of life on Tor, or since this
-            // Tor reached Running, with a Tor dial failed since. Not a count
-            // of dials.
-            quiet_after,
             // Upload p50 4.6 s (`TSR-M7`); the descriptor then has to reach
             // the directories the probe's own fetch asks (§10).
             probe_after_min: Duration::from_secs(15),
@@ -184,12 +174,12 @@ pub const PROBE_AFTER_MAX: Duration = Duration::from_secs(60);
 /// The probe's bound, and one directory fetch's answer window (`TSR-M2`).
 pub const PROBE_WITHIN: Duration = Duration::from_secs(60);
 
-/// [`Policy::republish_after`] (`TSR-M14`): the round's wait, then a probe
-/// and the refetch's probe, each at its longest delay and its bound. A wait
-/// shorter than one judgment republishes inside the previous check.
 /// The reply bound the daemon uses ([`Policy::reply_bound`]).
 pub const REPLY_BOUND: Duration = Duration::from_secs(30);
 
+/// [`Policy::republish_after`] (`TSR-M14`): the round's wait, then a probe
+/// and the refetch's probe, each at its longest delay and its bound. A wait
+/// shorter than one judgment republishes inside the previous check.
 pub const REPUBLISH_AFTER: Duration = {
     let one_probe = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
     ROUND_WAIT
@@ -272,6 +262,9 @@ pub struct Launch {
 pub enum Action {
     /// Discover and pin. No spawn until this accepts.
     CheckPin,
+    /// Publish the onion-path reading on the Tor link for the connector's
+    /// path source (§4.5a): it changed.
+    PathReading(PathReading),
     /// Stop and reap the incarnation that ended, keeping its data
     /// directory for the next launch: the owning connection closes, Tor is
     /// given its grace to exit, and is killed past it. A request: the
@@ -617,6 +610,27 @@ pub enum Input {
     /// Tor says it reaches its network: `NETWORK_LIVENESS UP` or
     /// `CIRCUIT_ESTABLISHED`.
     ExternalCleared,
+    /// The Tor connector completed an outbound onion dial at `at`: the
+    /// onion path worked (§4.5a).
+    OnionDialOpened {
+        /// When the stream opened, on this core's clock.
+        at: u64,
+    },
+    /// A new inbound Tor session was established at `at`: a peer reached
+    /// this node's onion. The probe of this node's own onion is dropped in
+    /// its handshake, so it is never one (§4.5a).
+    InboundTorSession {
+        /// When the session's handshake finished, on this core's clock.
+        at: u64,
+    },
+    /// The Tor connector asks for a reading after `after`: a failed dial
+    /// waits on it (§4.5a). `draw` is a CSPRNG draw for a check's delay.
+    PathWanted {
+        /// The failure's instant, on this core's clock.
+        after: u64,
+        /// The draw for the check's delay.
+        draw: u64,
+    },
 }
 
 impl Input {
@@ -757,6 +771,8 @@ pub struct Core {
     progress: ProgressWindow,
     /// What this node's own Tor dials show (§4.2). Display only.
     dials: Dials,
+    /// Whether the onion path works (§4.5a).
+    path: onion_path::PathState,
     /// When the next pin check is due. Only while [`Phase::Absent`] is
     /// [`AbsentDuty::Retry`] or [`AbsentDuty::Held`].
     pin_at: Option<u64>,
@@ -837,6 +853,7 @@ impl Core {
             backoff: Backoff::new(),
             progress: ProgressWindow::start(now, policy.alive_every),
             dials: Dials::new(now),
+            path: onion_path::PathState::default(),
             pin_at: None,
             sample_at: None,
             alive_at: None,
@@ -948,14 +965,29 @@ impl Core {
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
             Input::AddressHidingOrigin(verdict) => self.origin_verdict(verdict, now),
-            Input::DialEvidence(tally) => self.dial_evidence(tally, now),
+            Input::DialEvidence(tally) => self.dial_evidence(tally),
             Input::Sessions(sessions) => {
                 self.sessions = sessions;
                 Vec::new()
             }
             Input::NetworkView(view) => self.network_view(now, view),
             Input::ExternalCleared => self.external_cleared(now),
+            Input::OnionDialOpened { at } | Input::InboundTorSession { at } => {
+                self.path_fact(OnionPath::Working, at)
+            }
+            Input::PathWanted { after, draw } => self.path_wanted(now, after, draw),
         };
+        let mut actions = actions;
+        // Tor's own statement that it cannot reach its network is an
+        // impaired reading, however it arrived (an event or a sample).
+        if self.tor_says_unreachable()
+            && self
+                .path
+                .latest()
+                .is_none_or(|reading| reading.path == OnionPath::Working)
+        {
+            actions.extend(self.path_fact(OnionPath::Impaired, now));
+        }
         self.step(now, actions)
     }
 
@@ -1045,7 +1077,7 @@ impl Core {
             match self.phase {
                 Phase::Running { .. } => {
                     actions.push(Action::Sample);
-                    actions.extend(self.quiet_line(now));
+                    actions.extend(self.quiet_line());
                     self.arm_alive(now);
                 }
                 Phase::Bootstrapping { .. } => {
@@ -1082,6 +1114,9 @@ impl Core {
         }
         if self.republish_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_republish_deadline(now));
+        }
+        if self.path_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_path_deadline(now));
         }
         self.step(now, actions)
     }
@@ -1142,6 +1177,7 @@ impl Core {
             self.overdue_due(),
             self.directories_due(),
             self.republish_due(),
+            self.path_due(),
             self.requests.due(duration_ns(self.policy.reply_bound)),
         ]
         .into_iter()

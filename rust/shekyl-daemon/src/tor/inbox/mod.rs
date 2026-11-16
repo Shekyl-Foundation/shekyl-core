@@ -44,7 +44,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use shekyl_p2p::{
-    OriginVerdict, PerConnector, ProbeArrival, ProbeSink, SupervisorFeeds, TorLinkTally,
+    LinkTally, OriginVerdict, PathFact, PerConnector, ProbeArrival, ProbeSink, SupervisorFeeds,
 };
 use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_tor_control_client::control::{
@@ -68,6 +68,10 @@ pub(super) enum Arrival {
     },
     /// A probe's nonce came back through this node's onion.
     Probe(ProbeArrival),
+    /// The Tor connector's fact about the onion path, or a failed dial's
+    /// want for a reading (`TOR_SUPERVISOR.md` §4.5a). Each is an event:
+    /// none replaces another.
+    Path(PathFact),
     /// The deadline the loop gave `generation` came due.
     Deadline { generation: u64 },
     /// The answer to the request the core numbered `number`, posted by the
@@ -90,8 +94,8 @@ pub(super) enum Arrival {
 /// The cells: each holds a value the loop has not taken yet, or nothing.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Changed {
-    /// The dialer's tally of this node's Tor dials.
-    pub(super) tally: Option<TorLinkTally>,
+    /// The Tor connector's copy of the dialer's tally.
+    pub(super) tally: Option<LinkTally>,
     /// The relay's hop-0 verdict for a local origin.
     pub(super) verdict: Option<OriginVerdict>,
     /// The sessions each connector holds.
@@ -256,10 +260,12 @@ impl Poster {
     /// The feeds the network publishes into.
     fn feeds(&self) -> SupervisorFeeds {
         let tally = self.clone();
+        let path = self.clone();
         let verdict = self.clone();
         let sessions = self.clone();
         SupervisorFeeds {
             tally: Arc::new(move |value| tally.set(|cells| cells.tally = Some(value))),
+            path: Arc::new(move |fact| path.post(Arrival::Path(fact))),
             probes: Arc::new(self.clone()),
             verdict: Arc::new(move |value| verdict.set(|cells| cells.verdict = Some(value))),
             sessions: Arc::new(move |value| sessions.set(|cells| cells.sessions = Some(value))),

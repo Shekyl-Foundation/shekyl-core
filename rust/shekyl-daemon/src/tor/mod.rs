@@ -33,8 +33,8 @@ use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_daemon_rpc::tor_facts::{TorFacts, TorFuture, TorHandle};
 use shekyl_node::Network;
 use shekyl_p2p::{
-    dial_profile, ConnectorId, DownCause, OriginVerdict, PerConnector, SupervisorFeeds, TorCensus,
-    TorLinkTally, TOR_SOCKS_TIMEOUT,
+    DownCause, LinkCensus, LinkTally, OriginVerdict, PathFact, PathReading as Reading,
+    PerConnector, SupervisorFeeds, TOR_SOCKS_TIMEOUT,
 };
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass};
 use shekyl_tor_control_client::binary::{
@@ -47,8 +47,8 @@ use shekyl_tor_control_client::control::{
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, input_of, wire_cause, Action, Cause, Connectors,
-    Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy,
-    Sessions, Space, Step, TorCensus as QuietCensus, TorSetting,
+    Core, DialTally, Input, ManagedRunning, NetworkView, OnionPath, OriginVerdict as FoldedOrigin,
+    PathReading, Policy, Sessions, Space, Step, TorCensus as QuietCensus, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
@@ -70,17 +70,9 @@ use self::inbox::{inbox, Arrival, Changed, Inbox, Owner, Timer, Wanted, Woken};
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
 /// that deadline (`TOR_SUPERVISOR.md` §4.2).
 const SOCKS_TIMEOUT: SocksTimeout = TOR_SOCKS_TIMEOUT;
-/// The supervisor's waits. Its quiet span is the managed Tor's
-/// `SocksTimeout` plus the Tor connector's judging bracket δ
-/// (`DIALER_OUTAGE_EVIDENCE.md` §6), both the Tor connector's own
-/// declarations: a dial started at the judge's last sign of life has then
-/// used Tor's retries, and its bracket has closed empty.
+/// The supervisor's waits.
 fn policy() -> Policy {
-    let window = SOCKS_TIMEOUT
-        .window()
-        .expect("the daemon sets the managed Tor's SocksTimeout");
-    let bracket = Duration::from_nanos(dial_profile(ConnectorId::Tor).judging.bracket_nanos);
-    Policy::provisional(window + bracket)
+    Policy::provisional()
 }
 /// The onion's stream cap.
 const MAX_STREAMS: u16 = 8;
@@ -407,16 +399,13 @@ fn say_retirement(retirement: &Retirement) {
     }
 }
 
-fn dial_tally(tally: TorLinkTally) -> DialTally {
+fn dial_tally(tally: LinkTally) -> DialTally {
     DialTally {
-        opened: tally.opened,
-        unopened: tally.unopened,
-        last_sign_of_life: tally.last_sign_of_life.map(|at| at.tick().get()),
         failed_attempt_began: tally.failed_attempt_began.map(|at| at.tick().get()),
         census: match tally.census {
-            TorCensus::Pending => QuietCensus::Pending,
-            TorCensus::Empty => QuietCensus::Empty,
-            TorCensus::Held { seats, since } => QuietCensus::Held {
+            LinkCensus::Pending => QuietCensus::Pending,
+            LinkCensus::Empty => QuietCensus::Empty,
+            LinkCensus::Held { seats, since } => QuietCensus::Held {
                 seats,
                 since: since.tick().get(),
             },
@@ -424,10 +413,27 @@ fn dial_tally(tally: TorLinkTally) -> DialTally {
     }
 }
 
-/// The dialer's tally as the core's input (§4.2). Counts only, and display
-/// only (`TSR-Q14`).
-fn tally_input(tally: TorLinkTally) -> Input {
+/// The Tor connector's tally as the core's input (§4.2). Display only
+/// (`TSR-Q14`).
+fn tally_input(tally: LinkTally) -> Input {
     Input::DialEvidence(dial_tally(tally))
+}
+
+/// The Tor connector's onion-path fact as the core's input (§4.5a). A want
+/// carries a CSPRNG draw for the check's delay, as a round's probe does.
+fn path_input(fact: PathFact, network: &Network) -> Input {
+    match fact {
+        PathFact::OnionDialOpened(at) => Input::OnionDialOpened {
+            at: at.tick().get(),
+        },
+        PathFact::InboundTorSession(at) => Input::InboundTorSession {
+            at: at.tick().get(),
+        },
+        PathFact::Wanted(after) => Input::PathWanted {
+            after: after.tick().get(),
+            draw: network.probe_delay_draw(),
+        },
+    }
 }
 
 /// The relay's published verdict as the core's input.
@@ -852,6 +858,15 @@ impl Drive {
                 self.publish_inbound(inbound);
                 Vec::new()
             }
+            Action::PathReading(PathReading { path, at }) => {
+                tracing::debug!(target: "tor", ?path, "the onion-path reading");
+                let reading = match path {
+                    OnionPath::Working => Reading::Working,
+                    OnionPath::Impaired => Reading::Impaired,
+                };
+                self.network.publish_onion_path(reading, at);
+                Vec::new()
+            }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
                 Vec::new()
@@ -910,6 +925,7 @@ impl Drive {
                     arrived_at: arrival.arrived_at.get(),
                 });
             }
+            Arrival::Path(fact) => inputs.push(path_input(fact, &self.network)),
             Arrival::Reply { number, answer } => inputs.extend(self.answered(number, *answer)),
             Arrival::Status(reply) => {
                 // Answered from the one place that holds the state, at once:
@@ -1241,20 +1257,6 @@ mod tests {
         );
     }
 
-    /// The posture line's `quiet_after` is Tor's window plus the Tor
-    /// connector's bracket (`DIALER_OUTAGE_EVIDENCE.md` §6), read from
-    /// their declarations, so it moves when either does: 105 s + 15 s. A
-    /// span of its own, or one read from elsewhere, fails this.
-    #[test]
-    fn the_posture_lines_quiet_span_is_tors_window_and_the_bracket() {
-        let bracket = dial_profile(ConnectorId::Tor).judging.bracket_nanos;
-        assert_eq!(
-            policy().quiet_after,
-            SOCKS_TIMEOUT.window().expect("set") + Duration::from_nanos(bracket)
-        );
-        assert_eq!(policy().quiet_after, Duration::from_secs(120));
-    }
-
     /// The managed Tor answers inside the Tor dial deadline: a blocked link
     /// is Tor's `0x06`, never a race with the deadline (case A, 2026-10-25:
     /// both were 120 s and the outcomes alternated). Launching with Tor's
@@ -1303,10 +1305,7 @@ mod tests {
         let due = secs(30);
         let woke = due + duration_ns_of(RESUMED_AFTER) + secs(1);
         let lead = slept(Some(due), 0, woke).map(|late_by| Input::Resumed { late_by });
-        let tally = tally_input(TorLinkTally {
-            unopened: 1,
-            ..TorLinkTally::default()
-        });
+        let tally = tally_input(LinkTally::default());
         let batch = led(lead, vec![tally]);
         assert!(
             matches!(

@@ -129,7 +129,7 @@ fn reached(round_at: u64) -> (Core, u64) {
 fn the_descriptor_lifetime_is_tors_three_hours() {
     assert_eq!(DESCRIPTOR_LIFETIME, Duration::from_secs(3 * 60 * 60));
     assert_eq!(
-        Policy::provisional(Duration::from_secs(1)).descriptor_lifetime,
+        Policy::provisional().descriptor_lifetime,
         DESCRIPTOR_LIFETIME
     );
 }

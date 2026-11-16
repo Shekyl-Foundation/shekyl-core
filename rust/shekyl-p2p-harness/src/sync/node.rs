@@ -303,6 +303,7 @@ impl Node {
                 relay: Arc::clone(&recorder) as Arc<dyn RelayOwner>,
                 probes: Some(Arc::clone(&recorder) as Arc<dyn ProbeSink>),
                 sessions: None,
+                established: None,
             },
             connectors: Arc::clone(&dial) as Arc<dyn shekyl_p2p_session::Dial>,
             timing: timing.clone(),

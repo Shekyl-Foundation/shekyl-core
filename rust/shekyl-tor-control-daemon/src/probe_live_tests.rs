@@ -50,7 +50,7 @@ const ROUND_HANG: Duration = Duration::from_secs(300);
 /// The supervisor's wait for a round after its first upload, read from its
 /// policy: one number for the daemon and this test.
 fn round_wait() -> Duration {
-    shekyl_tor_control_client::supervisor::Policy::provisional(Duration::ZERO).round_wait
+    shekyl_tor_control_client::supervisor::Policy::provisional().round_wait
 }
 
 /// The forward target: an accepted stream whose first bytes are the probe's
