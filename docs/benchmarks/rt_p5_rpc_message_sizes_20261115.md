@@ -1,6 +1,9 @@
 # `RT-P5`, sizes on the 4.x wire: HTTP message sizes per method on a generated wallet's traffic. Registration of 2026-11-15
 
-**State of this record: registered, not yet run.** The section
+**State of this record: measured.** Both registered runs passed every
+gate and the determinism check. Two of the three questions this record
+answers move against RT-O6, and come to the maintainer as findings
+("Findings", below). The section
 "Registered before the run" is committed before any run on the host and
 is not edited afterwards. An amendment made before any registered result
 is read is dated and says what changed. Results are added under
@@ -196,4 +199,127 @@ instrument, not data, and its sizes are not read here.
 
 ## Results
 
-Not yet measured.
+**Both registered runs passed every gate, and the determinism check
+passes.** The classes below are derived from the first run, by the
+registered rule, with the third amendment's script. **`K` and the
+classes are the maintainer's, and are not chosen here.** Captures, with
+checksums matched against the host's:
+[`rt_p5_rpc_message_sizes_20261115_captures/`](rt_p5_rpc_message_sizes_20261115_captures/)
+(the two registered runs, the second dry run, the run log and the host's
+state at each step).
+
+### Conditions, recorded as registered
+
+- **Host:** `skl-staker-test`, a testnet staker VM (x86-64, 8 vCPU,
+  15 GiB, Ubuntu 24.04), claimed shared on the estate ledger. Its testnet
+  daemon (`shekyld --network testnet`) was active at every check.
+- **Build:** a fresh clone of `3e0e2be4ad` (the second amendment, `dev`
+  at `d3f9e639c4` merged in), toolchain 1.94.0, with bindgen pointed at
+  gcc's header directory; nothing installed. The daemon in Release, the
+  engine's test binary in the test profile.
+- **Runs, 2026-11-16 (UTC):** second dry run 02:48 (662 s), passed; first
+  registered run 03:00 (708 s), passed; second 03:12 (607 s), passed.
+- **Load average** (1, 5, 15 min, against 8 vCPU): 5.30, 6.61, 6.68 at
+  the dry run's start; 2.98, 4.30, 5.52 at the first registered run's;
+  3.24, 4.26, 4.93 at the end.
+- **Chain:** height 117; curve tree at height 116, one layer, 125 leaves.
+
+**Determinism:** `rt_p5_classes.py compare` on the two registered runs:
+**PASS**, 26 groups (wallet, method and direction), the same message
+count in each and every matched message within tolerance. The two
+`transactions.csv` files are byte-identical.
+
+### HTTP message sizes per method (first registered run)
+
+788 messages; 797 records after splitting at 65,533 bytes.
+
+| Method | Direction | Count | Min | Median | Max | Records |
+|---|---|---:|---:|---:|---:|---:|
+| `json_rpc:block_show` | request | 325 | 195 | 196 | 197 | 325 |
+| `json_rpc:block_show` | response | 325 | 2,888 | 2,900 | 113,652 | 327 |
+| `json_rpc:chain_height` | request | 35 | 162 | 162 | 162 | 35 |
+| `json_rpc:chain_height` | response | 35 | 330 | 331 | 331 | 35 |
+| `json_rpc:fee` | request | 19 | 153 | 153 | 153 | 19 |
+| `json_rpc:fee` | response | 19 | 274 | 274 | 274 | 19 |
+| `json_rpc:tx_submit` | request | 12 | 17,819 | 70,031 | 102,544 | 19 |
+| `json_rpc:tx_submit` | response | 12 | 241 | 241 | 241 | 12 |
+| `json_rpc:version` | request | 3 | 157 | 157 | 157 | 3 |
+| `json_rpc:version` | response | 3 | 469 | 469 | 470 | 3 |
+
+### Candidate tables, by the registered rule
+
+| K | Classes | Padding | Padding / payload |
+|---:|---|---:|---:|
+| 1 | 65,535 | 49,980,724 | 2222.3% |
+| 2 | 2,905, 65,535 | 2,695,074 | 119.8% |
+| 3 | 333, 2,905, 65,535 | 1,542,818 | 68.6% |
+| 4 | 333, 2,905, 30,781, 65,535 | 604,460 | 26.9% |
+| 5 | 333, 2,905, 9,699, 30,781, 65,535 | 267,148 | 11.9% |
+| 6 | 333, 2,905, 9,699, 30,781, 48,121, 65,535 | 180,078 | 8.0% |
+| 7 | 199, 333, 2,905, 9,699, 30,781, 48,121, 65,535 | 128,890 | 5.7% |
+| 8 | 199, 333, 2,905, 7,088, 13,068, 30,781, 48,121, 65,535 | 87,341 | 3.9% |
+
+**What shares a submission's class:** for every `K` from 2 to 8 a
+submission's records share their classes only with `block_show`
+responses (23 records), the block reads larger than one record; at `K`
+= 1 with everything. In the request direction a submission shares no
+class with any other request at any `K` ≥ 2.
+
+### The three questions
+
+1. **The response classes: moved.** The `K` = 3 table's two lower
+   boundaries are 333 and 2,905; rounded up to the next power of two they
+   are **512 and 4,096**, against RT-O6's 512 and 16,384. The 3.x trace's
+   middle cluster was the `get_block` responses (median 11,104 bytes); on
+   the 4.x wire a block's read is `block_show`, whose responses are a
+   median 2,900 bytes. The ruled 16,384 still holds every one of them, at
+   more padding.
+2. **The request direction: holds.** The largest request other than a
+   submission is 197 bytes (`block_show`), at most 512.
+3. **The submission's encoding: changed.** Every submission body is
+   66 bytes plus its transaction base64-encoded, `66 + 4 × ⌈n / 3⌉`,
+   exactly, for all twelve: the `bytes` kind's one encoding (IG-6), where
+   the 3.x wire's was hex, twice the bytes. The 4.x submissions are
+   17,819 to 102,544 bytes, against 26,599 to 153,688 on 3.x.
+   `SUBMISSION_CAP` (`shekyl-rpc-stream`) already counts the largest
+   admissible transaction base64-encoded, four largest-class records, so
+   the padded submission's size is unchanged by this.
+
+### A submission at greater tree depth
+
+The registered script fits a submission body as `a + f × length` with
+whole `f`, which base64's rounding is not; it reports that no projection
+is made. The table below is computed for this record from the encoding
+found in question 3 (`66 + 4 × ⌈n / 3⌉`) and the weight crate's size at
+each depth (`transactions.csv`); the head is the smallest submission's,
+less `content-length`'s digits (100 bytes), plus the body's. At the built
+depth (2) it reproduces every measured submission. Message bytes:
+
+| Shape (in × out) | d=1 | d=2 | d=3 | d=4 | d=5 | d=6 | d=7 | d=8 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 × 2 | 16,967 | 17,819 | 18,331 | 19,183 | 19,695 | 20,551 | 19,783 | 20,635 |
+| 2 × 2 | 26,759 | 28,463 | 27,355 | 29,063 | 29,743 | 29,487 | 28,891 | 29,915 |
+| 4 × 2 | 42,671 | 46,087 | 45,319 | 46,087 | 47,111 | 47,195 | 46,939 | 48,303 |
+| 8 × 2 | 74,415 | 78,599 | 78,511 | 79,963 | 81,671 | 82,439 | 82,863 | 84,915 |
+| 1 × 16 | 40,911 | 41,767 | 42,279 | 43,131 | 43,643 | 44,495 | 43,727 | 44,583 |
+| 2 × 16 | 50,703 | 52,411 | 51,303 | 53,007 | 53,691 | 53,435 | 52,839 | 53,863 |
+| 4 × 16 | 66,619 | 70,031 | 69,263 | 70,031 | 71,055 | 71,143 | 70,887 | 72,251 |
+| 8 × 16 | 98,363 | 102,544 | 102,460 | 103,912 | 105,616 | 106,384 | 106,812 | 108,860 |
+
+The largest, 108,860 bytes at depth 8, is two largest-class records; a
+padded submission is four (`SUBMISSION_RECORDS`).
+
+## Findings, for the maintainer
+
+- **F1 — the middle response class.** RT-O6's `K` = 3 classes were
+  512, 16,384 and 65,535, from the 3.x trace. On the 4.x wire the same
+  rule gives 512, 4,096 and 65,535. Keeping 16,384 is safe (every
+  response it held still fits) and pads the block reads between 2,905 and
+  4,096 bytes up to 16,384; moving to 4,096 pads less. The classes are
+  `shekyl-rpc-stream`'s `CLASS_LENGTHS`; a change is a wire change of the
+  channel.
+- **F2 — the submission's encoding.** RT-O6 part 2's sentence "the
+  submission's body is the transaction hex-encoded in JSON, twice its
+  bytes" no longer describes the wire: it is base64. The padded
+  submission's size, `SUBMISSION_CAP`, already counts base64, so nothing
+  in code moves; the sentence in `RPC_CHANNEL.md` §4.4 does.
