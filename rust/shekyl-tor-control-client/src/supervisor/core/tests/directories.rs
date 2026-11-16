@@ -7,46 +7,66 @@
 //!
 //! Each probe asks the directories the latest upload round reached. A line
 //! counts only for a fetch this check has already sent, and the verdict
-//! waits until the driver's list is folded.
+//! waits until the driver's list is folded. What an upload's end counts
+//! for, and the captured rounds, are [`super::directory_uploads`].
 
 use super::super::super::posture::{Cause, Inbound, InboundCause};
-use super::super::{Action, Core, DirectoryAnswer, DirectoryFetch, Input, Step};
+use super::super::{Action, Core, DirectoryAnswer, DirectoryFetch, Input, OpenUploads, Step};
 use super::probe::{
     arrival, count, probes, published, publishes_inbound, refetches, republishes, secs, served,
     uploaded,
 };
 use super::replied;
-use crate::control::{RelayFingerprint, ServiceDescriptor};
+use crate::control::{RelayFingerprint, RoundUpload, ServiceDescriptor, UploadEnd};
 
 /// This service's revision counter in these tests: a directory's copy carrying it
 /// is the current one.
-const OURS: u64 = 7;
+pub(super) const OURS: u64 = 7;
 
 /// This service's `desc_current` in these tests: the descriptor `"cur"`,
 /// the one each check's fetches ask for, at [`OURS`].
-fn ours() -> ServiceDescriptor {
+pub(super) fn ours() -> ServiceDescriptor {
     ServiceDescriptor {
         descriptor_id: "cur".to_owned(),
         revision_counter: OURS,
     }
 }
 
-fn hsdir(n: u8) -> RelayFingerprint {
+pub(super) fn hsdir(n: u8) -> RelayFingerprint {
     RelayFingerprint::from_bytes([n; 20])
 }
 
-/// Directories `1..=n`, each sent `descriptor`, each drawing `draw`.
-fn sent(range: std::ops::RangeInclusive<u8>, descriptor: &str, draw: u64) -> Vec<DirectoryFetch> {
+/// Directories in `range`, each confirmed holding `descriptor`, each drawing
+/// `draw`.
+pub(super) fn sent(
+    range: std::ops::RangeInclusive<u8>,
+    descriptor: &str,
+    draw: u64,
+) -> Vec<DirectoryFetch> {
+    sent_ended(range, descriptor, UploadEnd::Uploaded, draw)
+}
+
+/// Directories in `range`, each sent `descriptor`, each upload ending as
+/// `ended`, each drawing `draw`.
+pub(super) fn sent_ended(
+    range: std::ops::RangeInclusive<u8>,
+    descriptor: &str,
+    ended: UploadEnd,
+    draw: u64,
+) -> Vec<DirectoryFetch> {
     range
         .map(|n| DirectoryFetch {
-            hsdir: hsdir(n),
-            descriptor_id: descriptor.to_owned(),
+            upload: RoundUpload {
+                hsdir: hsdir(n),
+                descriptor_id: descriptor.to_owned(),
+                ended,
+            },
             draw,
         })
         .collect()
 }
 
-fn fetched(step: &Step) -> Vec<RelayFingerprint> {
+pub(super) fn fetched(step: &Step) -> Vec<RelayFingerprint> {
     step.actions
         .iter()
         .filter_map(|action| match action {
@@ -56,7 +76,7 @@ fn fetched(step: &Step) -> Vec<RelayFingerprint> {
         .collect()
 }
 
-fn answered(n: u8, descriptor: &str, answer: DirectoryAnswer) -> Input {
+pub(super) fn answered(n: u8, descriptor: &str, answer: DirectoryAnswer) -> Input {
     Input::DirectoryAnswered {
         hsdir: hsdir(n),
         descriptor_id: Some(descriptor.to_owned()),
@@ -81,6 +101,7 @@ fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
         Input::DirectoriesDrawn {
             fetches,
             ours: Some(ours()),
+            open_uploads: OpenUploads::InFlight,
         },
         0,
     );
@@ -108,7 +129,7 @@ fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
 /// tests fold no acceptance, so each window runs from the send), and the
 /// probe in flight, minted at 15 s. Returns the core and the fetches asked
 /// at 15 s.
-fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
+pub(super) fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
     let (mut core, step) = checking_in_flight(fetches);
     // The sample is answered already: what is left in flight is fetches.
     let mut asked = fetched(&step);
@@ -212,6 +233,7 @@ fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
         Input::DirectoriesDrawn {
             fetches: sent(1..=8, "cur", 0),
             ours: Some(ours()),
+            open_uploads: OpenUploads::InFlight,
         },
         secs(20),
     );
@@ -431,6 +453,7 @@ fn each_directory_fetch_has_its_own_delay() {
         Input::DirectoriesDrawn {
             fetches,
             ours: Some(ours()),
+            open_uploads: OpenUploads::InFlight,
         },
         0,
     );
@@ -456,6 +479,7 @@ fn an_answer_before_the_send_is_not_evidence() {
         Input::DirectoriesDrawn {
             fetches: sent(1..=1, "cur", u64::MAX),
             ours: Some(ours()),
+            open_uploads: OpenUploads::InFlight,
         },
         0,
     );
@@ -543,6 +567,7 @@ fn a_draw_that_arrives_while_judging_still_installs() {
         Input::DirectoriesDrawn {
             fetches: Vec::new(),
             ours: Some(ours()),
+            open_uploads: OpenUploads::InFlight,
         },
         secs(19),
     );
@@ -731,6 +756,7 @@ fn a_copy_of_a_descriptor_ours_does_not_name_counts_by_being_there() {
                 descriptor_id: "prev".to_owned(),
                 revision_counter: OURS,
             }),
+            open_uploads: OpenUploads::InFlight,
         },
         0,
     );
@@ -780,6 +806,7 @@ fn without_our_counter_the_check_counts_nothing_and_the_probe_decides() {
         Input::DirectoriesDrawn {
             fetches: sent(1..=8, "cur", 0),
             ours: None,
+            open_uploads: OpenUploads::InFlight,
         },
         0,
     );
