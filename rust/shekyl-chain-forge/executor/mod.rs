@@ -189,6 +189,13 @@ pub enum BuiltKind {
     Claim {
         /// The persona.
         slot: u32,
+        /// The height its join connected at: its owned outputs are paid
+        /// there.
+        join_height: BlockHeight,
+        /// The claim's backing output.
+        backing_key: [u8; 32],
+        /// The claim's fee input.
+        fee_key: [u8; 32],
     },
 }
 
@@ -719,7 +726,12 @@ impl Forge {
         self.built.push(Built {
             body: claim.clone(),
             connecting,
-            kind: BuiltKind::Claim { slot },
+            kind: BuiltKind::Claim {
+                slot,
+                join_height,
+                backing_key,
+                fee_key,
+            },
         });
         let block = self
             .scenario()

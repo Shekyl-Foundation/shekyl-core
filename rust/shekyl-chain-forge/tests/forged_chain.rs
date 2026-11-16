@@ -13,7 +13,8 @@
 //!   production rules, beside that network's own genesis connecting. Lock
 //!   3: every body the chain lists is CEN-I18's refusal under every other
 //!   network's id, and a body re-signed under that id reaches the proof row
-//!   (CEN-I15 for a spend, CEN-J27 for a bond post). Lock 4, the wire, is
+//!   (CEN-I15 for a spend, CEN-J26 for an emission claim, CEN-J27 for a bond
+//!   post). Lock 4, the wire, is
 //!   the transport's, cited by path and function (`CF-R15`):
 //!   `shekyl-clearnet/src/tests.rs`,
 //!   `a_listener_refuses_every_other_networks_prefix_and_takes_its_own`.
@@ -39,6 +40,8 @@ use shekyl_archival_retention::{BundleBody, BundleRef, CHALLENGE_READS};
 use shekyl_chain_forge::Plan;
 use shekyl_chain_ingest::admitted_draws::{bundle_for, every_draw_passes, DrawnBundle};
 use shekyl_chain_ingest::archival_driver::ENDPOINT;
+use shekyl_chain_ingest::chain_drive::spender_owning_before;
+use shekyl_chain_ingest::emission_assembly::claim_signed_under;
 use shekyl_chain_ingest::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use shekyl_chain_ingest::scenario_archival::shard_set;
 use shekyl_chain_ingest::schedule::{ChainRules, LeverRefused};
@@ -46,7 +49,7 @@ use shekyl_chain_rules::{
     judge_lone_stateless, Candidate, CappedEpoch, CenRow, ReferenceClaim, ReferenceClaims,
     StatelessPass,
 };
-use shekyl_harness_spender::Spender;
+use shekyl_harness_spender::{Owner, Spender};
 use shekyl_network::{Lever, Network, NetworkId};
 use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::Transaction;
@@ -260,7 +263,50 @@ async fn identity_locks(forge: &mut Forge) {
                     }),
                 )
             }
-            _ => continue,
+            BuiltKind::Claim {
+                slot,
+                join_height,
+                backing_key,
+                fee_key,
+            } => {
+                let persona = forge.persona(*slot).expect("the plan joined it");
+                let owner = Owner::persona(persona.keys());
+                let owned = spender_owning_before(
+                    regtest,
+                    &chain[..usize::try_from(item.connecting.to_raw()).expect("fits")],
+                    *join_height,
+                    &[*backing_key, *fee_key],
+                );
+                let backing = owned
+                    .owned_input(&owner, *backing_key, item.connecting)
+                    .input;
+                let fee = owned.owned_input(&owner, *fee_key, item.connecting).input;
+                let bodies: Vec<(NetworkId, Transaction)> = OTHERS
+                    .iter()
+                    .map(|other| {
+                        let id = other.network_id();
+                        let signed = claim_signed_under(
+                            &item.body,
+                            persona.keys(),
+                            std::slice::from_ref(&fee),
+                            &backing,
+                            &id,
+                        );
+                        (id, signed)
+                    })
+                    .collect();
+                (
+                    CenRow::J26,
+                    Box::new(move |id| {
+                        bodies
+                            .iter()
+                            .find(|(signed_for, _)| signed_for == id)
+                            .map(|(_, body)| body.clone())
+                            .expect("one body per other network")
+                    }),
+                )
+            }
+            BuiltKind::Spend { .. } => continue,
         };
         for other in OTHERS {
             let id = other.network_id();
@@ -273,8 +319,8 @@ async fn identity_locks(forge: &mut Forge) {
     }
     assert_eq!(
         legs,
-        BTreeSet::from([CenRow::I15, CenRow::J27]),
-        "the proof row is reached for a spend and for a bond post"
+        BTreeSet::from([CenRow::I15, CenRow::J26, CenRow::J27]),
+        "the proof row is reached for a spend, an emission claim and a bond post"
     );
 }
 

@@ -253,6 +253,109 @@ pub fn assemble_emission_claim_breaking_fee_proof(
     )
 }
 
+/// `claim`, a claim listed on one network, with its authorizations signed
+/// again under `network`'s id: Auth-B and Auth-P over `network`'s binding
+/// messages, the fee spends' slots and the emission slot over `network`'s
+/// payloads of the re-signed body. The proofs stay as they were made, over
+/// the first network's `tx_signable`. Under `network`'s judgement every
+/// signature then holds and the proof row is the one that refuses: the
+/// claim's leg of the identity test's lock 3 (`CHAIN_FORGE.md` §6), as
+/// `Spender::signed_under` is a spend's and a post's.
+///
+/// `fee_inputs` and `backing` are the claim's own, as its assembly took them
+/// (their keys sign; their trees are not read).
+///
+/// # Panics
+///
+/// If `claim` carries no emission vin, or a key does not sign.
+#[must_use]
+pub fn claim_signed_under(
+    claim: &shekyl_wire::Transaction,
+    keys: &ArchivalPKeys,
+    fee_inputs: &[SpendInput],
+    backing: &SpendInput,
+    network: &NetworkId,
+) -> shekyl_wire::Transaction {
+    let mut body = claim.clone();
+    let at = body
+        .prefix
+        .inputs
+        .iter()
+        .position(|input| matches!(input, Input::ArchivalRewardEmission { .. }))
+        .expect("a claim carries an emission vin");
+    let Input::ArchivalRewardEmission { canonical_bytes } = &body.prefix.inputs[at] else {
+        unreachable!("the position found an emission vin");
+    };
+    let mut vin = ArchivalRewardEmissionVin::read(&mut canonical_bytes.as_slice())
+        .expect("the claim's vin decodes");
+    let shekyl_wire::Ct::Fcmp { base, .. } = &body.ct else {
+        panic!("a claim carries FCMP proofs");
+    };
+    // The reward commit set the verifier rebuilds (CEN-J24): every output
+    // with a loud amount.
+    let reward_commits: Vec<RewardCommit> = body
+        .prefix
+        .outputs
+        .iter()
+        .zip(&base.commitments)
+        .filter(|(output, _)| output.amount != 0)
+        .map(|(output, commitment)| RewardCommit {
+            commitment: *commitment,
+            amount_plain: output.amount,
+            one_time_key: output.key,
+        })
+        .collect();
+    let msgs = vin
+        .auth_msgs(network, &reward_commits, &body.tx_signable(network))
+        .expect("the auth binding messages derive");
+    vin.auth_backing =
+        sign_emission_backing_for_output(combined64(backing), backing.output_index, &msgs.backing)
+            .expect("Auth-B signs")
+            .signature;
+    vin.auth_claim = sign_emission_claim(&keys.hybrid_sign_sk, &msgs.claim)
+        .expect("Auth-P signs")
+        .to_canonical_bytes()
+        .expect("Auth-P encodes");
+    body.prefix.inputs[at] = Input::ArchivalRewardEmission {
+        canonical_bytes: vin.serialize().expect("the vin encodes"),
+    };
+
+    // The slots over the re-signed body: the fee spends' first, then the
+    // emission slot, the persona's identity key.
+    let hashes = body.pqc_signing_payload_hashes(network);
+    assert_eq!(
+        hashes.len(),
+        fee_inputs.len() + 1,
+        "one slot per fee input and the emission's"
+    );
+    let fee_auths = shekyl_tx_builder::sign_pqc_auths(&hashes[..fee_inputs.len()], fee_inputs)
+        .expect("the fee keys sign");
+    let emission = HybridEd25519MlDsa
+        .sign(
+            &keys.hybrid_sign_sk,
+            SCHEME_DOMAIN_PQC_AUTH_TX,
+            hashes[fee_inputs.len()].as_bytes(),
+        )
+        .expect("the emission slot signs")
+        .to_canonical_bytes()
+        .expect("the emission slot's signature encodes");
+    let shekyl_wire::Ct::Fcmp { pqc_auths, .. } = &mut body.ct else {
+        panic!("a claim carries FCMP authorizations");
+    };
+    for (slot, auth) in pqc_auths.iter_mut().zip(fee_auths) {
+        assert_eq!(
+            slot.hybrid_public_key, auth.public_key,
+            "the fee slot's key"
+        );
+        slot.hybrid_signature = auth.signature;
+    }
+    pqc_auths
+        .last_mut()
+        .expect("the emission slot")
+        .hybrid_signature = emission;
+    shekyl_wire::Transaction::from_bytes(&body.serialize()).expect("the re-signed claim parses")
+}
+
 /// The fee-input proof an assembly signs over.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FeeProof {
