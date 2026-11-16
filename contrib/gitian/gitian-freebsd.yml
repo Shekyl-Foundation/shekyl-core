@@ -139,8 +139,10 @@ script: |
     # is FreeBSD's only delivery, so the script travels in it.
     mkdir bin/rc.d
     cp ../contrib/packaging/freebsd/shekyld bin/rc.d/shekyld
+    # The tunnel's rc.d script (RPC_CHANNEL.md §8; Rick, 2026-11-16).
+    cp ../contrib/packaging/freebsd/shekyl-rpc-tunnel bin/rc.d/shekyl-rpc-tunnel
     chmod 755 bin/rc.d
-    chmod 555 bin/rc.d/shekyld
+    chmod 555 bin/rc.d/shekyld bin/rc.d/shekyl-rpc-tunnel
     DISTNAME=shekyl-${i}-${version}
     mv bin ${DISTNAME}
     find ${DISTNAME}/ | sort | tar --no-recursion --owner=0 --group=0 -c -T - | bzip2 -9 > ${OUTDIR}/${DISTNAME}.tar.bz2

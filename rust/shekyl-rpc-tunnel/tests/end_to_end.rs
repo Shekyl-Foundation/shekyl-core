@@ -179,7 +179,8 @@ fn consumer_call(listen: &str, method: &str) -> (u16, String) {
 /// with `rpc client add` over the channel; the tunnel reports its grant and
 /// serves a consumer's call; `rpc client remove` revokes it; the next call
 /// is refused, the tunnel exits naming the revocation, and `rpc client
-/// list` no longer lists it. Red edits: drop `changing.close` in
+/// list` no longer lists it. A second tunnel ends cleanly on SIGTERM, as a
+/// service manager stops one. Red edits: drop `changing.close` in
 /// `Channel::client_remove`, and the tunnel keeps being served after the
 /// revocation; make the pool report `NotEnrolled` after a held session
 /// (`Pool::open_session`), and the refusal does not name the revocation
@@ -291,6 +292,50 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
     let (status, body) = consumer_call(&listen, "version");
     assert_eq!(status, 200, "{body}");
     assert!(body.contains("\"result\""), "{body}");
+
+    // A service manager's stop: a second tunnel, as the unit and the rc.d
+    // script stop one, ends cleanly on SIGTERM.
+    let second_listen = format!("127.0.0.1:{}", free_port());
+    let mut second = {
+        let mut command = Command::new(tunnel);
+        command
+            .args(["--network", "regtest", "--daemon-endpoint"])
+            .arg(record.channel.to_string())
+            .arg("--daemon-bundle-file")
+            .arg(&bundle_file)
+            .arg("--rpc-key-file")
+            .arg(&key_file)
+            .args(["--listen", &second_listen, "--log-file"])
+            .arg(dir.path().join("tunnel2.log"))
+            .stdout(Stdio::piped());
+        spawn("second tunnel", command, dir.path().join("tunnel2.stderr"))
+    };
+    let mut out = second.child.stdout.take().expect("stdout");
+    let mut said2 = String::new();
+    while !said2.contains("Listening on") {
+        let mut buf = [0u8; 256];
+        let n = out.read(&mut buf).expect("the second tunnel's output");
+        assert!(
+            n > 0,
+            "the second tunnel ended: {said2}\n{}",
+            second.stderr()
+        );
+        said2.push_str(&String::from_utf8_lossy(&buf[..n]));
+    }
+    let killed = Command::new("kill")
+        .args(["-TERM", &second.child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(killed.success());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let stopped = loop {
+        if let Some(status) = second.child.try_wait().expect("the second tunnel") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "SIGTERM did not stop the tunnel");
+        std::thread::sleep(POLL);
+    };
+    assert!(stopped.success(), "a SIGTERM is a clean stop: {stopped}");
 
     // Revoke.
     enrol::run(

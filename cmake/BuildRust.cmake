@@ -245,7 +245,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_CROSSCOMPILING)
 endif()
 
 #
-# ── Rust binaries: shekyld, shekyl-cli, shekyl-wallet-rpc ───────────────────
+# ── Rust binaries: shekyld, shekyl-cli, shekyl-wallet-rpc, shekyl-rpc-tunnel ─
+#
+# `shekyl-rpc-tunnel` (RPC_CHANNEL.md §8) ships in every release archive,
+# beside shekyl-cli, Windows included (Rick, 2026-11-16): it is not the
+# wallet stack the Windows skip below is about, and on Windows and macOS it
+# runs as a user process until RT-W14 gives them service support. Linux's
+# systemd unit and FreeBSD's rc.d script are in contrib/packaging.
 #
 # `shekyld` is a Rust binary (DC-Q19) with no C++ in its link since the p2p
 # remnant cutover (P2P_3_REMNANT_CUTOVER_BRIEF.md §1): cargo builds it like
@@ -293,9 +299,9 @@ endif()
 # rationale was right to refuse. The daemon is built everywhere.
 if(NOT IOS)
     if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        set(_shekyl_rust_bins shekyld)
+        set(_shekyl_rust_bins shekyld shekyl-rpc-tunnel)
     else()
-        set(_shekyl_rust_bins shekyld shekyl-cli shekyl-wallet-rpc)
+        set(_shekyl_rust_bins shekyld shekyl-cli shekyl-wallet-rpc shekyl-rpc-tunnel)
     endif()
 
     # Staged in ${CMAKE_BINARY_DIR}/bin, which multi-config generators

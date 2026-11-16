@@ -220,7 +220,7 @@ jobs:
           staged=$(find build -type f -name shekyld -path '*/release/bin/*' -print -quit)
           if [ -z "$staged" ]; then echo "no staged shekyld under build/" >&2; exit 1; fi
           bindir=$(dirname "$staged")
-          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc"
+          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc" "$bindir/shekyl-rpc-tunnel"
 
   # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
   # PR Windows coverage is the MSVC daemon job below (the only runner that
@@ -328,7 +328,7 @@ jobs:
       - name: binary hardening on the staged binaries (readelf)
         if: needs.changes.outputs.docs_only != 'true'
         shell: bash
-        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
+        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc build/bin/shekyl-rpc-tunnel
       # The C++ removal's end state (Rick, 2026-11-06), on what this job
       # built: the staged shekyld needs no C++ runtime and holds no C++
       # symbol. The tree half (no first-party C or C++ tracked, no CMake
@@ -743,7 +743,7 @@ jobs:
       # developer shell. `/GS` leaves no header mark and is not read here.
       - name: binary hardening on the linked daemon (PE headers)
         shell: bash
-        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe
+        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe build/bin/Release/shekyl-rpc-tunnel.exe
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe

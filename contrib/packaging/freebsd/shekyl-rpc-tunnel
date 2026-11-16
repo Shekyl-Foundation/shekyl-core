@@ -1,0 +1,117 @@
+#!/bin/sh
+#
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# PROVIDE: shekyl_rpc_tunnel
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# The Shekyl RPC tunnel on FreeBSD (RPC_CHANNEL.md §8; Rick, 2026-11-16):
+# it serves a node's RPC to this host's consumers in plaintext on loopback,
+# and reaches the node over the channel as its own key.
+#
+# The release archive holds the binary at `shekyl-rpc-tunnel` and this
+# script at `rc.d/shekyl-rpc-tunnel`. Install both, as root:
+#
+#   install -m 0555 shekyl-rpc-tunnel /usr/local/bin/shekyl-rpc-tunnel
+#   pw useradd shekyl-tunnel -d /nonexistent -s /usr/sbin/nologin -c "Shekyl RPC tunnel"
+#   install -m 0555 rc.d/shekyl-rpc-tunnel /usr/local/etc/rc.d/shekyl-rpc-tunnel
+#   install -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/db/shekyl-tunnel
+#   su -m shekyl-tunnel -c "shekyl-rpc-tunnel --rpc-key-create \
+#       --rpc-key-file /var/db/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key"
+#     (prints the fingerprint; enrol it on the node with
+#      `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`)
+#   write /usr/local/etc/shekyl/shekyl-rpc-tunnel.toml: daemon-endpoint,
+#     daemon-bundle-file (the node's `rpc bundle show`), and listen, a
+#     loopback address and port
+#   sysrc shekyl_rpc_tunnel_enable=YES
+#   service shekyl-rpc-tunnel start
+#
+# Settings in /etc/rc.conf (sysrc):
+#
+#   shekyl_rpc_tunnel_enable (bool)  Start at boot. Default NO.
+#   shekyl_rpc_tunnel_args (str)     More options, e.g. "--network testnet".
+#
+# The tunnel runs as its own account `shekyl-tunnel`, never the daemon's
+# `shekyl` and never root. daemon(8) supervises the `supervise` branch
+# below and sends what the tunnel prints to syslog. As the daemon's script
+# does, the restart lives in `shekyl_rpc_tunnel_supervise`: a failure is
+# retried after restart_seconds (the Linux unit's RestartSec), and a clean
+# exit ends the supervisor. A revocation is a failure: the tunnel exits
+# naming it, and the retry is refused by the node until it is enrolled
+# again, each refusal in syslog.
+#
+# The tunnel creates none of the directories below; this script makes them
+# before every start:
+#
+#   /var/db/shekyl-tunnel   the tunnel's key, its account's alone (0700)
+#   /var/log/shekyl-tunnel  the tunnel's log directory
+
+shekyl_rpc_tunnel_supervise()
+{
+	# The packaged unit's RestartSec. The launch-recipe gate holds the
+	# two equal.
+	restart_seconds=30
+	child=0
+	on_stop() {
+		if [ "$child" -ne 0 ]; then
+			kill -TERM "$child" 2>/dev/null
+			wait "$child" 2>/dev/null
+		fi
+		exit 0
+	}
+	trap on_stop TERM
+	while :; do
+		/usr/local/bin/shekyl-rpc-tunnel "$@" &
+		child=$!
+		wait "$child"
+		status=$?
+		child=0
+		# The shell reports a death by signal N as 128+N.
+		case "$status" in
+		0 | 129 | 130 | 141 | 143) exit 0 ;;
+		esac
+		sleep "$restart_seconds" &
+		child=$!
+		wait "$child"
+		child=0
+	done
+}
+
+if [ "${1:-}" = "supervise" ]; then
+	shift
+	shekyl_rpc_tunnel_supervise "$@"
+fi
+
+. /etc/rc.subr
+
+name=shekyl_rpc_tunnel
+rcvar=shekyl_rpc_tunnel_enable
+desc="Shekyl RPC tunnel"
+
+load_rc_config $name
+
+: ${shekyl_rpc_tunnel_enable:=NO}
+: ${shekyl_rpc_tunnel_args:=}
+
+pidfile="/var/run/${name}.pid"
+procname=/usr/sbin/daemon
+command=/usr/sbin/daemon
+# No -r and no -R: those restart a clean exit; the supervise function is
+# the on-failure policy.
+command_args="-f -S -T shekyl-rpc-tunnel -P ${pidfile} -u shekyl-tunnel /bin/sh /usr/local/etc/rc.d/shekyl-rpc-tunnel supervise --config-file /usr/local/etc/shekyl/shekyl-rpc-tunnel.toml --rpc-key-file /var/db/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key --log-file /var/log/shekyl-tunnel/shekyl-rpc-tunnel.log ${shekyl_rpc_tunnel_args}"
+start_precmd="${name}_prestart"
+
+shekyl_rpc_tunnel_prestart()
+{
+	if ! pw usershow shekyl-tunnel >/dev/null 2>&1; then
+		err 1 "the account shekyl-tunnel does not exist; create it with: pw useradd shekyl-tunnel -d /nonexistent -s /usr/sbin/nologin -c \"Shekyl RPC tunnel\""
+	fi
+	install -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/db/shekyl-tunnel || return 1
+	install -d -o shekyl-tunnel -g shekyl-tunnel -m 0750 /var/log/shekyl-tunnel || return 1
+}
+
+run_rc_command "$1"

@@ -46,6 +46,16 @@ Five checks over an enumerated set of files:
    including a clean exit. The script's `restart_seconds` equals the
    shipped unit's `RestartSec`, and that unit is `Restart=on-failure`.
    The daemon creates none of these directories; it checks them.
+6. The RPC tunnel's unit and rc.d script (RPC_CHANNEL.md §8; Rick,
+   2026-11-16) run `shekyl-rpc-tunnel` with only command-line rows of its
+   own table (`rust/shekyl-rpc-tunnel/src/table.rs`), as its own account
+   `shekyl-tunnel`, never the daemon's `shekyl` and never root; name a
+   configuration file; keep its key (`--rpc-key-file`) in its own state
+   directory, `/var/lib/<StateDirectory>` at mode 0700 (`/var/db/...` made
+   0700 by the rc.d prestart), and its log in its own log directory; and
+   pass `--listen`, if they pass it, as a loopback address. The unit is
+   `Restart=on-failure`, and the rc.d script's restart loop and clean-exit
+   rule are the daemon script's, at the tunnel unit's `RestartSec`.
 
 Exit 0 when every check holds; 1 naming each failure; 2 on a subject that
 could not be read (rule 47: a gate asserts its own subject).
@@ -53,6 +63,7 @@ could not be read (rule 47: a gate asserts its own subject).
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import shlex
 import sys
@@ -95,6 +106,13 @@ SERVICE_ACCOUNT = "shekyl"
 # unit's RuntimeDirectoryMode, not a second number here.
 DATA_HOME_MODE = "0700"
 LOG_DIRECTORY_MODE = "0750"
+# The tunnel (check 6).
+TUNNEL_TABLE_RS = "rust/shekyl-rpc-tunnel/src/table.rs"
+TUNNEL_UNIT = "contrib/packaging/linux/shekyl-rpc-tunnel.service"
+TUNNEL_RC = "contrib/packaging/freebsd/shekyl-rpc-tunnel"
+TUNNEL_BINARY = "/usr/local/bin/shekyl-rpc-tunnel"
+# Its own account (Rick, 2026-11-16): never the daemon's, never root.
+TUNNEL_ACCOUNT = "shekyl-tunnel"
 # daemon(8) flags that restart a clean exit. The script's own loop is the
 # on-failure policy; these must not also be set.
 DAEMON_RESTART_FLAGS = ("-r", "-R", "--restart", "--restart-delay")
@@ -109,6 +127,15 @@ def rows(table_text: str) -> dict[str, str]:
     if dev:
         for name in re.findall(r"(?:^|; )([a-z][a-z0-9-]*) \(", dev.group(1)):
             out.setdefault(name, "both")
+    return out
+
+
+def tunnel_rows(table_rs: str) -> dict[str, str]:
+    """The tunnel's table, from its source: name -> where."""
+    where = {"Cli": "command line", "Both": "both", "File": "file"}
+    out: dict[str, str] = {}
+    for m in re.finditer(r'^\s*row\("([a-z][a-z0-9-]*)",.*\bSurface::(Cli|Both|File)\b', table_rs, flags=re.M):
+        out[m.group(1)] = where[m.group(2)]
     return out
 
 
@@ -139,13 +166,15 @@ def exec_flags(exec_start: str) -> tuple[list[str], dict[str, str]]:
     return flags, values
 
 
-def command_line_rows(rel: str, where: str, flags: list[str], live: dict[str, str]) -> list[str]:
-    """Flags that are not command-line rows of the daemon's table."""
+def command_line_rows(
+    rel: str, where: str, flags: list[str], live: dict[str, str], table: str = "the daemon's table"
+) -> list[str]:
+    """Flags that are not command-line rows of `table`."""
     errors: list[str] = []
     for flag in flags:
         place = live.get(flag)
         if place is None:
-            errors.append(f"{rel}: {where} passes `--{flag}`, which is not a row of the daemon's table")
+            errors.append(f"{rel}: {where} passes `--{flag}`, which is not a row of {table}")
         elif place == "file":
             errors.append(f"{rel}: {where} passes `--{flag}`, a file-only row")
     return errors
@@ -226,9 +255,9 @@ def function_body(text: str, name: str) -> str | None:
     return text[start : i - 1]
 
 
-def made_dirs(body: str) -> dict[str, str]:
+def made_dirs(body: str, account: str = SERVICE_ACCOUNT) -> dict[str, str]:
     """directory -> mode, for each `install -d -o ACCOUNT -g ACCOUNT -m MODE DIR`."""
-    pattern = rf"^\s*install -d -o {SERVICE_ACCOUNT} -g {SERVICE_ACCOUNT} -m (\d{{4}}) (/\S+)"
+    pattern = rf"^\s*install -d -o {re.escape(account)} -g {re.escape(account)} -m (\d{{4}}) (/\S+)"
     return dict((d, mode) for mode, d in re.findall(pattern, body, flags=re.M))
 
 
@@ -336,6 +365,108 @@ def check_rc_script(
     return errors
 
 
+def loopback_listen(rel: str, values: dict[str, str]) -> list[str]:
+    """A `--listen` is a loopback address and a port (RT-14)."""
+    if "listen" not in values:
+        return []
+    host = values["listen"].rsplit(":", 1)[0].strip("[]")
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return []
+    except ValueError:
+        pass
+    return [f"{rel}: --listen {values['listen']} is not a loopback address; the tunnel serves its consumers on this host only"]
+
+
+def check_tunnel_unit(rel: str, text: str, rows: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    fields = unit_fields(text)
+    exec_start = fields.get("ExecStart")
+    if not exec_start or TUNNEL_BINARY not in exec_start:
+        return [f"{rel}: no ExecStart that runs {TUNNEL_BINARY}"]
+    flags, values = exec_flags(exec_start)
+    errors.extend(command_line_rows(rel, "ExecStart", flags, rows, "the tunnel's table"))
+    for key in ("User", "Group"):
+        if fields.get(key) != TUNNEL_ACCOUNT:
+            errors.append(f"{rel}: {key}={fields.get(key)}; the tunnel runs as its own account {TUNNEL_ACCOUNT}, never {SERVICE_ACCOUNT} and never root")
+    if "config-file" not in values:
+        errors.append(f"{rel}: ExecStart names no --config-file; the tunnel's node, bundle and listener live there")
+    state = fields.get("StateDirectory")
+    if not state:
+        errors.append(f"{rel}: no StateDirectory for the tunnel's key")
+    else:
+        if fields.get("StateDirectoryMode") != DATA_HOME_MODE:
+            errors.append(f"{rel}: the tunnel's state directory /var/lib/{state} is not StateDirectoryMode={DATA_HOME_MODE}")
+        key = values.get("rpc-key-file")
+        if key is None:
+            errors.append(f"{rel}: ExecStart names no --rpc-key-file in the state directory")
+        elif str(Path(key).parent) != f"/var/lib/{state}":
+            errors.append(f"{rel}: --rpc-key-file {key} is not in /var/lib/{state} (StateDirectory)")
+    logs = fields.get("LogsDirectory")
+    if "log-file" in values and (not logs or str(Path(values["log-file"]).parent) != f"/var/log/{logs}"):
+        errors.append(f"{rel}: --log-file {values['log-file']} is not under /var/log/<LogsDirectory>")
+    errors.extend(loopback_listen(rel, values))
+    if fields.get("Restart") != "on-failure" or not fields.get("RestartSec"):
+        errors.append(f"{rel}: the tunnel's unit is not Restart=on-failure with RestartSec")
+    return errors
+
+
+def check_tunnel_rc(rel: str, text: str, rows: dict[str, str], unit: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    line = assignment(text, "command_args")
+    if line is None:
+        return [f"{rel}: no command_args line"]
+    words = line.split()
+    if "supervise" not in words:
+        return [f"{rel}: command_args does not run the supervise branch"]
+    at = words.index("supervise")
+    daemon_words = words[:at]
+    if "-u" not in daemon_words or daemon_words[daemon_words.index("-u") + 1 :][:1] != [TUNNEL_ACCOUNT]:
+        errors.append(f"{rel}: daemon(8) does not run the tunnel as {TUNNEL_ACCOUNT}; never {SERVICE_ACCOUNT} and never root")
+    for flag in DAEMON_RESTART_FLAGS:
+        if flag in daemon_words:
+            errors.append(f"{rel}: daemon(8) is passed {flag}; it restarts a clean exit")
+    called = supervise_call(text)
+    if called is None:
+        return errors + [f"{rel}: no supervise branch calls its function"]
+    body = function_body(text, called)
+    if body is None:
+        return errors + [f"{rel}: {called}() is called and not defined"]
+    if not re.search(rf'^\s*{re.escape(TUNNEL_BINARY)} "\$@" &', body, flags=re.M):
+        errors.append(f"{rel}: {called}() does not run {TUNNEL_BINARY}")
+    flags, values = exec_flags(" ".join(words[at + 1 :]))
+    errors.extend(command_line_rows(rel, "the command line", flags, rows, "the tunnel's table"))
+    if "config-file" not in values:
+        errors.append(f"{rel}: the command line names no --config-file")
+    errors.extend(loopback_listen(rel, values))
+    restart = re.search(r"^\s*restart_seconds=(\d+)\s*$", body, flags=re.M)
+    if restart is None or restart.group(1) != unit.get("RestartSec"):
+        errors.append(f"{rel}: restart_seconds is not the tunnel unit's RestartSec={unit.get('RestartSec')}")
+    if not re.search(r'case "\$status" in\n\s*0 \| 129 \| 130 \| 141 \| 143\) exit 0 ;;\n\s*esac\n', body):
+        errors.append(f"{rel}: {called}() retries a clean exit")
+    hook = assignment(text, "start_precmd")
+    rc_name = assignment(text, "name")
+    if hook is None or rc_name is None:
+        return errors + [f"{rel}: start_precmd does not name a function"]
+    prestart = hook.replace("${name}", rc_name)
+    pre_body = function_body(text, prestart)
+    if pre_body is None:
+        return errors + [f"{rel}: start_precmd names {prestart}(), which is not defined"]
+    made = made_dirs(pre_body, TUNNEL_ACCOUNT)
+    key = values.get("rpc-key-file")
+    if key is None:
+        errors.append(f"{rel}: the command line names no --rpc-key-file")
+    else:
+        key_dir = str(Path(key).parent)
+        if made.get(key_dir) != DATA_HOME_MODE:
+            errors.append(f"{rel}: the key's directory {key_dir} is not made at mode {DATA_HOME_MODE} as {TUNNEL_ACCOUNT} by {prestart}()")
+    if "log-file" in values:
+        parent = str(Path(values["log-file"]).parent)
+        if made.get(parent) != LOG_DIRECTORY_MODE:
+            errors.append(f"{rel}: the log directory {parent} is not made at mode {LOG_DIRECTORY_MODE} by {prestart}()")
+    return errors
+
+
 def check_generator(rel: str, text: str, live: dict[str, str], units: dict[str, dict[str, str]]) -> list[str]:
     errors: list[str] = []
     keys = re.findall(r'echo\s+\\?"([a-z][a-z0-9-]*) = ', text)
@@ -364,6 +495,7 @@ def check(
     generators: dict[str, list[str]],
     rc_scripts: list[str] | None = None,
     shipped_unit: str | None = None,
+    tunnel: tuple[str, str] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     try:
@@ -422,7 +554,22 @@ def check(
                 errors.append(f"cannot read {rel}: {e}")
                 continue
             errors.extend(check_rc_script(rel, text, live, rendezvous, freebsd_home, shipped))
-    if not units and not generators and not scripts:
+    if tunnel is not None:
+        try:
+            tunnel_live = tunnel_rows((repo / TUNNEL_TABLE_RS).read_text(encoding="utf-8"))
+        except OSError as e:
+            return errors + [f"cannot read {TUNNEL_TABLE_RS}: {e}"]
+        if len(tunnel_live) < 10:
+            return errors + [f"{TUNNEL_TABLE_RS} names {len(tunnel_live)} rows — the table or the pattern is wrong"]
+        unit_rel, rc_rel = tunnel
+        try:
+            unit_text = (repo / unit_rel).read_text(encoding="utf-8")
+            rc_text = (repo / rc_rel).read_text(encoding="utf-8")
+        except OSError as e:
+            return errors + [f"cannot read the tunnel's launchers: {e}"]
+        errors.extend(check_tunnel_unit(unit_rel, unit_text, tunnel_live))
+        errors.extend(check_tunnel_rc(rc_rel, rc_text, tunnel_live, unit_fields(unit_text)))
+    if not units and not generators and not scripts and tunnel is None:
         errors.append("no unit, rc.d script, or generator is listed — the gate has no subject")
     return errors
 
@@ -560,6 +707,60 @@ def selftest() -> int:
             ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
             print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
             failures += 0 if ok else 1
+        t_table = "".join(
+            f'    row("{name}", Kind::Path, Default::Unset, Surface::{where}, "x"),\n'
+            for name, where in (
+                ("help", "Cli"), ("version", "Cli"), ("network", "Cli"), ("config-file", "Cli"),
+                ("daemon-endpoint", "Both"), ("daemon-bundle-file", "Both"), ("rpc-key-file", "Both"),
+                ("rpc-grant", "Both"), ("listen", "Both"), ("log-file", "Both"), ("log-level", "Both"),
+                ("rpc-key-create", "Cli"),
+            )
+        )
+        t_unit = (
+            "[Service]\nExecStart=/usr/local/bin/shekyl-rpc-tunnel --config-file /etc/shekyl/t.toml"
+            " --rpc-key-file /var/lib/shekyl-tunnel/k.key --log-file /var/log/shekyl-tunnel/t.log\n"
+            "User=shekyl-tunnel\nGroup=shekyl-tunnel\nStateDirectory=shekyl-tunnel\nStateDirectoryMode=0700\n"
+            "LogsDirectory=shekyl-tunnel\nRestart=on-failure\nRestartSec=30\n"
+        )
+        t_rc = (
+            "name=shekyl_rpc_tunnel\n"
+            'start_precmd="${name}_prestart"\n'
+            'command_args="-f -S -T shekyl-rpc-tunnel -P ${pidfile} -u shekyl-tunnel /bin/sh /usr/local/etc/rc.d/shekyl-rpc-tunnel supervise'
+            ' --config-file /usr/local/etc/shekyl/t.toml --rpc-key-file /var/db/shekyl-tunnel/k.key'
+            ' --log-file /var/log/shekyl-tunnel/t.log ${shekyl_rpc_tunnel_args}"\n'
+            "shekyl_rpc_tunnel_supervise()\n{\n\trestart_seconds=30\n"
+            '\t/usr/local/bin/shekyl-rpc-tunnel "$@" &\n'
+            '\tcase "$status" in\n\t0 | 129 | 130 | 141 | 143) exit 0 ;;\n\tesac\n}\n'
+            'if [ "${1:-}" = "supervise" ]; then\n\tshift\n\tshekyl_rpc_tunnel_supervise "$@"\nfi\n'
+            "shekyl_rpc_tunnel_prestart()\n{\n"
+            "\tinstall -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/db/shekyl-tunnel || return 1\n"
+            "\tinstall -d -o shekyl-tunnel -g shekyl-tunnel -m 0750 /var/log/shekyl-tunnel || return 1\n}\n"
+        )
+        tunnel_cases = [
+            ("agreeing tunnel launchers pass", t_unit, t_rc, []),
+            ("a tunnel unit run as the daemon's account is named", t_unit.replace("User=shekyl-tunnel", "User=shekyl"), t_rc, ["User=shekyl; the tunnel runs as its own account"]),
+            ("a tunnel unit run as root is named", t_unit.replace("Group=shekyl-tunnel", "Group=root"), t_rc, ["Group=root"]),
+            ("a tunnel key outside the state directory is named", t_unit.replace("/var/lib/shekyl-tunnel/k.key", "/etc/k.key"), t_rc, ["is not in /var/lib/shekyl-tunnel (StateDirectory)"]),
+            ("a tunnel state directory not 0700 is named", t_unit.replace("StateDirectoryMode=0700", "StateDirectoryMode=0755"), t_rc, ["is not StateDirectoryMode=0700"]),
+            ("a dead flag on the tunnel unit is named", t_unit.replace("--config-file", "--detach --config-file"), t_rc, ["`--detach`, which is not a row of the tunnel's table"]),
+            ("a tunnel unit without a configuration file is named", t_unit.replace("--config-file /etc/shekyl/t.toml ", ""), t_rc, ["names no --config-file"]),
+            ("a tunnel listening off loopback is named", t_unit.replace("--log-file", "--listen 192.0.2.7:1 --log-file"), t_rc, ["is not a loopback address"]),
+            ("a loopback tunnel listener passes", t_unit.replace("--log-file", "--listen [::1]:1 --log-file"), t_rc, []),
+            ("a tunnel rc.d script run as the daemon's account is named", t_unit, t_rc.replace("-u shekyl-tunnel", "-u shekyl"), ["does not run the tunnel as shekyl-tunnel"]),
+            ("a tunnel key directory the prestart makes 0755 is named", t_unit, t_rc.replace("-m 0700 /var/db/shekyl-tunnel", "-m 0755 /var/db/shekyl-tunnel"), ["is not made at mode 0700 as shekyl-tunnel"]),
+            ("a tunnel rc.d restart delay off its unit is named", t_unit, t_rc.replace("restart_seconds=30", "restart_seconds=5"), ["restart_seconds is not the tunnel unit's RestartSec=30"]),
+            ("a tunnel rc.d script that runs another binary is named", t_unit, t_rc.replace('/usr/local/bin/shekyl-rpc-tunnel "$@"', '/usr/local/bin/shekyld "$@"'), ["does not run /usr/local/bin/shekyl-rpc-tunnel"]),
+        ]
+        (repo / "rust" / "shekyl-rpc-tunnel" / "src").mkdir(parents=True)
+        (repo / TUNNEL_TABLE_RS).write_text(t_table)
+        (repo / PLATFORM_RS).write_text(platform_ok)
+        for title, unit, rc, expect in tunnel_cases:
+            (repo / "u" / "tunnel.service").write_text(unit)
+            (repo / "u" / "tunnel-rc").write_text(rc)
+            errors = check(repo, [], {}, tunnel=("u/tunnel.service", "u/tunnel-rc"))
+            ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
+            print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
+            failures += 0 if ok else 1
         errors = check(repo, [], {})
         ok = bool(errors) and any("no subject" in e for e in errors)
         print(f"{'ok' if ok else 'FAIL'}: an empty subject is refused" + ("" if ok else f" — got {errors}"))
@@ -571,14 +772,14 @@ def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return selftest()
     repo = Path(__file__).resolve().parents[2]
-    errors = check(repo, UNITS, GENERATORS, RC_SCRIPTS, SHIPPED_UNIT)
+    errors = check(repo, UNITS, GENERATORS, RC_SCRIPTS, SHIPPED_UNIT, (TUNNEL_UNIT, TUNNEL_RC))
     if errors:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         return 2 if any("cannot read" in e or "pattern is wrong" in e or "no subject" in e or "not a string constant" in e for e in errors) else 1
     print(
         f"launch recipes: {len(UNITS)} unit(s), {len(RC_SCRIPTS)} rc.d script(s) and {len(GENERATORS)} generator(s) "
-        "say only what the daemon's table says"
+        "say only what the daemon's table says; the tunnel's unit and rc.d script only what its table says"
     )
     return 0
 

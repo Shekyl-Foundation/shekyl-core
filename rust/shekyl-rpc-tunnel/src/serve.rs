@@ -156,7 +156,7 @@ where
                 let fault = ended.ok().and_then(|value| value.clone());
                 break Err(fault.map_or_else(String::new, |fault| fault.to_string()));
             }
-            _ = tokio::signal::ctrl_c() => break Ok(()),
+            () = stop_signal() => break Ok(()),
             Some(_) = serving.join_next(), if !serving.is_empty() => {}
         }
     };
@@ -169,6 +169,30 @@ where
         .await,
     );
     ended
+}
+
+/// A clean stop: Ctrl-C, or on Unix the SIGTERM a service manager sends
+/// (systemd's stop, the rc.d supervisor's).
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        let terminate = async {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut stream) => {
+                    stream.recv().await;
+                }
+                Err(_) => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            () = terminate => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        drop(tokio::signal::ctrl_c().await);
+    }
 }
 
 /// One local request, carried whole to the node and its response back.

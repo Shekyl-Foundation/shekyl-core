@@ -2305,6 +2305,19 @@ tunnel answers the request that met it, drains the requests in flight
 within the handshake deadline, and exits naming the revocation. A socket
 another tunnel answers on is not taken over.
 
+**Packaged (Rick, 2026-11-16).** The binary ships in every release
+archive, beside `shekyl-cli` (`cmake/BuildRust.cmake`; Windows included).
+Linux gets a systemd unit and FreeBSD an rc.d script
+(`contrib/packaging/linux/shekyl-rpc-tunnel.service`,
+`contrib/packaging/freebsd/shekyl-rpc-tunnel`): the tunnel runs as its own
+account `shekyl-tunnel`, never `shekyl` and never root, with its key in its
+own 0700 state directory, its configuration in a named file, and its
+listener on loopback only. The `.deb` and `.rpm` install the unit without
+enabling it: a tunnel needs a configuration and a key before its first
+start. A stop (SIGTERM) is a clean exit. The launch-recipe gate holds both
+launchers to the tunnel's table (check 6). Windows and macOS run it as a
+user process; their service support is RT-W14's.
+
 ---
 
 ## 9. Probes (pre-registered)
