@@ -9,10 +9,19 @@
 # cases that matter are the two refusals: a rule change that moved the
 # captured chains with the genesis left alone, and the same for the digest.
 
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# Git exports GIT_DIR and its kin into hooks. A throwaway repository built
+# here must not inherit them, or `git init --bare` and `git config` act on the
+# caller's real repository (a pre-push hook's run once made it bare and gave
+# it a test author, 2026-11-15). Git finds a repository from the working
+# directory without them.
+for _name in [_k for _k in os.environ if _k.startswith("GIT_")]:
+    del os.environ[_name]
 
 GATE = Path(__file__).resolve().parents[1] / "release" / "check_frozen_tuple.py"
 

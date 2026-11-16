@@ -247,18 +247,26 @@ impl OptionsFacts for DaemonOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_daemon_config::{choosers, resolve};
+    use shekyl_daemon_config::{after_file, Platform};
     use shekyl_options::{read_cli, Grant};
 
     /// A handle whose link sink records what it was given.
     fn recording(args: &[&str]) -> (DaemonOptions, Arc<Mutex<Vec<LinkLimits>>>) {
         let cli = read_cli(&TABLE, args.iter().map(std::ffi::OsString::from)).unwrap();
-        let (network, _mode) = choosers(&cli);
+        // The values a start hands this handle: everything `load` does
+        // after its file step, with no file opened.
+        let platform = Platform {
+            home: Some(std::path::PathBuf::from("/srv/op")),
+            service_parent: None,
+            session_dir: None,
+            service_rendezvous: None,
+        };
+        let loaded = after_file(cli, &platform, None).unwrap();
         let given = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&given);
         let handle = DaemonOptions::new(
-            resolve(&TABLE, network, cli, Vec::new()).unwrap(),
-            network,
+            loaded.resolved,
+            loaded.config.network,
             Arc::new(move |limits| sink.lock().unwrap().push(limits)),
         );
         (handle, given)

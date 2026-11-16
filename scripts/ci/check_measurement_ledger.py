@@ -81,7 +81,16 @@ COMMITS_NAMED = 3
 # How much of an object id a finding shows.
 OID_SHOWN = 10
 
+# What `resolve` accepts, including a short lowercase id from a parent ledger.
 COMMIT_ID_RE = re.compile(rf"[0-9a-f]{{{MIN_COMMIT_ID_HEX},{MAX_COMMIT_ID_HEX}}}")
+# Either case, same length. The ledger under review stores the lowercase spelling.
+HEX_COMMIT_ID_RE = re.compile(
+    rf"[0-9a-fA-F]{{{MIN_COMMIT_ID_HEX},{MAX_COMMIT_ID_HEX}}}"
+)
+FULL_COMMIT_ID_RE = re.compile(rf"[0-9a-f]{{{MAX_COMMIT_ID_HEX}}}")
+FULL_ID_SAYS = (
+    f"is not a commit id written in full ({MAX_COMMIT_ID_HEX} lowercase hex)"
+)
 PATH_SET_ID_RE = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 T_ROW_RE = re.compile(r"^BA-T\d+$")
 CAPTURE_REV_RE = re.compile(r"git[_ ]rev(?:ision)?[\"'\s:=]+([0-9a-f]{7,40})", re.I)
@@ -180,6 +189,53 @@ class NeedleSite(enum.Enum):
     DEFINITION = "definition"
     COMMENT = "comment"
     ABSENT = "absent"
+
+
+@dataclass(frozen=True)
+class WrittenCommitId:
+    """A commit id the ledger under review wrote (Rick, 2026-11-15).
+
+    `stored` is lowercase hex, from the abbreviation floor through a full
+    object id, so a short or upper-case spelling still names its commit.
+    `full` is true only when the field was already 40 lowercase hex. A
+    prefix unique today can become ambiguous as the repository grows, and
+    the gate would then fail on a row nobody touched.
+
+    `parse` returns None when the field is not hex of that length. A parent
+    ledger does not use this type: `resolve` still accepts the shorter
+    lowercase form, which is what `HEAD^1` may hold.
+    """
+
+    stored: str
+    full: bool
+
+    @classmethod
+    def parse(cls, raw: object) -> WrittenCommitId | None:
+        if not isinstance(raw, str) or not HEX_COMMIT_ID_RE.fullmatch(raw):
+            return None
+        return cls(raw.lower(), FULL_COMMIT_ID_RE.fullmatch(raw) is not None)
+
+    def finding(self, where: str) -> str | None:
+        """Why `where` is not 40 lowercase hex, or None when it already is."""
+        if self.full:
+            return None
+        return f"{where} {FULL_ID_SAYS}"
+
+
+def take_written_id(raw: object, where: str, fails: list[str]) -> str | None:
+    """The lowercase id to store for `where`, recording any writing finding.
+
+    A short or upper-case id is returned, so the caller keeps the row. None
+    means the field is not a commit id, and that finding is recorded too.
+    """
+    written = WrittenCommitId.parse(raw)
+    if written is None:
+        fails.append(f"{where} is not a commit id")
+        return None
+    form = written.finding(where)
+    if form:
+        fails.append(form)
+    return written.stored
 
 
 @dataclass(frozen=True)
@@ -478,14 +534,14 @@ def parse_acks(
         if unknown:
             fails.append(f"{where} has unknown key {unknown[0]!r}")
         raw_id = item.get(id_key, "")
-        if not isinstance(raw_id, str) or not COMMIT_ID_RE.fullmatch(raw_id):
-            fails.append(f"{where}.{id_key} is not a commit id")
+        stored = take_written_id(raw_id, f"{where}.{id_key}", fails)
+        if stored is None:
             continue
         text = _sentence(item.get(text_key, ""))
         if text is None:
             fails.append(f"{where} says nothing about the cost")
             text = ""
-        acks.append(Ack(raw_id, text))
+        acks.append(Ack(stored, text))
     return tuple(acks), fails
 
 
@@ -611,7 +667,10 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     basis_captures: tuple[str, ...] = ()
     if status in (Status.CURRENT, Status.STALE):
         capture = _require_str(table, "capture", fails, name) or None
-        capture_rev = _require_str(table, "capture_rev", fails, name) or None
+        raw_rev = _require_str(table, "capture_rev", fails, name) or None
+        capture_rev = (
+            take_written_id(raw_rev, f"{name}: capture_rev", fails) if raw_rev else None
+        )
         rev_source = _require_str(table, "rev_source", fails, name) or None
     if status is not Status.CURRENT:
         carrier = _sentence(table.get("carrier", ""))
@@ -675,11 +734,9 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
                     "search finds every row the forge owes"
                 )
     if status is Status.STALE:
-        raw_since = table.get("stale_since", "")
-        if not isinstance(raw_since, str) or not COMMIT_ID_RE.fullmatch(raw_since):
-            fails.append(f"{name}: stale_since is not a commit id")
-        else:
-            stale_since = raw_since
+        stale_since = take_written_id(
+            table.get("stale_since", ""), f"{name}: stale_since", fails
+        )
     if fails and (not path_set or not needle or not defined_in):
         return None, fails
     return Constant(
@@ -1255,10 +1312,26 @@ def parse_retired(
         if not isinstance(capture, str) or not _is_tracked_file(root, capture):
             found.append(f"{label}: capture {capture!r} is not a tracked file")
         raw_rev = table.get("capture_rev")
-        if not isinstance(raw_rev, str) or resolve(root, raw_rev) is None:
-            if isinstance(raw_rev, str) and COMMIT_ID_RE.fullmatch(raw_rev) and shallow_boundary(root):
-                raise GateError(SHALLOW_MSG)
-            found.append(f"{label}: capture_rev {raw_rev!r} is not a commit in this repository")
+        written = WrittenCommitId.parse(raw_rev)
+        form: str | None = None
+        rev_stored: str | None = None
+        if written is None:
+            found.append(
+                f"{label}: capture_rev {raw_rev!r} is not a commit in this repository"
+            )
+        else:
+            form = written.finding(f"{label}: capture_rev")
+            if form:
+                found.append(form)
+            if resolve(root, written.stored) is None:
+                if COMMIT_ID_RE.fullmatch(written.stored) and shallow_boundary(root):
+                    raise GateError(SHALLOW_MSG)
+                found.append(
+                    f"{label}: capture_rev {written.stored!r} is not a commit "
+                    "in this repository"
+                )
+            else:
+                rev_stored = written.stored
         if _sentence(table.get("note", "")) is None:
             found.append(f"{label}: note says what the difference is put down to")
         verdict = table.get("verdict")
@@ -1270,10 +1343,16 @@ def parse_retired(
                     f"{band.shown()} is {expected}"
                 )
         fails.extend(found)
-        if found or band is None or measured is None:
+        # The writing-form finding still names a commit, so the row stands.
+        # `form` is None when the id was already full, and every other
+        # finding means this row is not a retirement.
+        others = [item for item in found if item != form]
+        if rev_stored is None or band is None or measured is None or others:
             continue
         seen.add(name)
-        retired.append(RetiredEstimate(name, band, measured, capture, raw_rev, verdict))
+        retired.append(
+            RetiredEstimate(name, band, measured, capture, rev_stored, verdict)
+        )
     return retired, fails
 
 

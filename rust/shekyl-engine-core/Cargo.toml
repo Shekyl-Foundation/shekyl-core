@@ -294,6 +294,12 @@ shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 # `TestReceiptKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
 # production graph.
 shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
+# `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests`, the undecodable
+# receipt key the serving tests refuse (`receipt_test_fixtures`,
+# `receipt_round_trip_tests`). Named here because the tests call it: it no
+# longer rides in on `shekyl-p-serve`'s `test-signer`, which forwarded
+# `test-utils` over a normal edge it never needed (F-7; CHAIN_FORGE.md CF-1b).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 # SH-2's proving test (`serving::receipt_round_trip_tests`): the persona's
 # resident receipt key behind a real `PServeEndpoint`, fetched by the
 # daemon's real `PFetchClient`, and the receipt verified against the

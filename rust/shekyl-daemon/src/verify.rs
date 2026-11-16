@@ -223,7 +223,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
-    use shekyl_daemon_config::{load, Platform};
+    use shekyl_daemon_config::{after_file, Platform};
     use shekyl_options::read_cli;
 
     use crate::EXIT_REFUSED;
@@ -243,6 +243,17 @@ mod tests {
             session_dir: crate::test_session_dir(home),
             service_rendezvous: None,
         }
+    }
+
+    /// The entry point as these tests start it: every step of
+    /// [`crate::run::main`], with the host's default configuration file
+    /// left unread.
+    fn start(args: &[OsString], platform: &Platform) -> i32 {
+        crate::run::main_loading(
+            args,
+            platform,
+            shekyl_daemon_config::load_default_file_unread,
+        )
     }
 
     fn args(list: &[&str]) -> Vec<OsString> {
@@ -279,7 +290,7 @@ mod tests {
         let data = d.path().join("deep").join("data");
         let log = d.path().join("logs").join("shekyld.log");
         let a = offline_regtest(&data, &log);
-        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert!(
             !d.path().join("deep").exists(),
             "no data directory was created"
@@ -293,7 +304,7 @@ mod tests {
         marker::check_or_write(&held, shekyl_daemon_config::Network::Regtest, regtest_id())
             .unwrap();
         let before = std::fs::read(data.join("shekyld.network")).unwrap();
-        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert_eq!(std::fs::read(data.join("shekyld.network")).unwrap(), before);
         assert!(!log.exists());
         drop(held);
@@ -310,7 +321,7 @@ mod tests {
         let other = marker::render(shekyl_daemon_config::Network::Testnet, [9u8; 16]);
         std::fs::write(data.join("shekyld.network"), &other).unwrap();
         let a = offline_regtest(&data, &log);
-        assert_eq!(crate::run::main(&a, &platform(d.path())), EXIT_REFUSED);
+        assert_eq!(start(&a, &platform(d.path())), EXIT_REFUSED);
         assert_eq!(
             std::fs::read_to_string(data.join("shekyld.network")).unwrap(),
             other
@@ -333,7 +344,7 @@ mod tests {
         let mut a = offline_regtest(&data, &log);
         a.extend(["--dev-pow-seed-epoch-blocks", "3"].map(OsString::from));
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &platform(d.path())).unwrap();
+        let loaded = after_file(cli, &platform(d.path()), None).unwrap();
         let ds = walk(&loaded.config, &loaded.resolved, &platform(d.path()))
             .err()
             .expect("a seed-epoch length of 3 is refused");
@@ -341,7 +352,7 @@ mod tests {
         assert_eq!(ds[0].code, Code::ValueRange);
         assert_eq!(ds[0].option.as_deref(), Some("dev-pow-seed-epoch-blocks"));
         assert_eq!(ds[0].get("value"), Some("3"));
-        assert_eq!(crate::run::main(&a, &platform(d.path())), EXIT_REFUSED);
+        assert_eq!(start(&a, &platform(d.path())), EXIT_REFUSED);
         assert!(!data.exists());
     }
 
@@ -371,7 +382,7 @@ mod tests {
             log.to_str().unwrap(),
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &platform(d.path())).unwrap();
+        let loaded = after_file(cli, &platform(d.path()), None).unwrap();
         let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
         assert_eq!(walked.network_id, regtest_id());
         assert_eq!(walked.warnings.len(), 1);
@@ -384,10 +395,12 @@ mod tests {
             warning.contains("It will not sync until Tor is up."),
             "clearnet is off, and a check holds no session: {warning}"
         );
+        // No file step ran, so the path the lines name is the test's own:
+        // an absent file, as a host with no default file has.
         let (out, err) = accepted_lines(
             &loaded.resolved,
             loaded.file_read.as_deref(),
-            &loaded.config_path,
+            &d.path().join("shekyld.toml"),
             &loaded.config,
             &walked.warnings,
         );
@@ -401,7 +414,7 @@ mod tests {
         );
         assert!(err.iter().any(|line| line.starts_with("shekyld: posture:")));
         assert!(err.iter().any(|line| line.contains("warning: managed Tor")));
-        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert!(!data.exists());
     }
 
@@ -438,12 +451,12 @@ mod tests {
             full.extend_from_slice(cli);
             let a = args(&full);
             let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-            let loaded = load(cli, &platform(d.path())).unwrap();
+            let loaded = after_file(cli, &platform(d.path()), None).unwrap();
             let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
             let (_, err) = accepted_lines(
                 &loaded.resolved,
                 loaded.file_read.as_deref(),
-                &loaded.config_path,
+                &d.path().join("shekyld.toml"),
                 &loaded.config,
                 &walked.warnings,
             );
@@ -527,7 +540,7 @@ mod tests {
         let mut a = offline_regtest(&d.path().join("data"), &d.path().join("shekyld.log"));
         a.push(OsString::from("--service"));
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &platform).unwrap();
+        let loaded = after_file(cli, &platform, None).unwrap();
         let ds = walk(&loaded.config, &loaded.resolved, &platform)
             .err()
             .expect("the service start is refused");
@@ -582,7 +595,7 @@ mod tests {
                 a.insert(1, OsString::from("--rpc-console-key-reset"));
             }
             let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-            load(cli, &platform).unwrap()
+            after_file(cli, &platform, None).unwrap()
         };
         let reset = load_at(true);
         walk(&reset.config, &reset.resolved, &platform).expect("the reset walks");

@@ -11,12 +11,15 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **The harness network id outlives the chains that need it unless `CF-5` deletes it.** `HARNESS_NETWORK_ID`, the all-zero id that chains which mine their own genesis sign under (`Trust::UNPINNED`), stays beside regtest's identity from `CF-1a` on. It is test-only: `CF-1b` puts it behind a `TEST_ONLY` `harness` feature on `shekyl-network` that the test-only feature gate holds, and `CF-5` deletes it, with `Trust::UNPINNED`, `GenesisPin::NONE` and `Persona::at`'s mainnet derivation, once every chain judged under `Trust::UNPINNED` is held to a genesis (`CHAIN_FORGE.md` §12.2). Falsify by: a build of the workspace at `CF-5`'s merge in which the name does not resolve.
+- **The harness network id outlives the chains that need it unless `CF-5` deletes it.** `HARNESS_NETWORK_ID`, the all-zero id that chains which mine their own genesis sign under (`Trust::UNPINNED`), stays beside regtest's identity from `CF-1a` on. It is test-only: since `CF-1b` it sits behind the `TEST_ONLY` `harness` feature on `shekyl-network`, which the test-only feature gate holds to dev edges and the production graph check holds off in every shipped build, and `Spender::over`, which signed under it implicitly, is gone. `CF-5` deletes it, with `Trust::UNPINNED`, `GenesisPin::NONE` and `Persona::at`'s mainnet derivation, once every chain judged under `Trust::UNPINNED` is held to a genesis (`CHAIN_FORGE.md` §12.2). Falsify by: a build of the workspace at `CF-5`'s merge in which the name does not resolve.
   - Owner: the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md) (`CF-R15`, `CF-5`)
   - Target: pre-genesis
 - **The frozen shard-fill chain stays in the tree unless `CF-4a` replaces and deletes it.** `shekyl-harness-spender/vectors/shard-fill.bin` (11.5 MB, signed under the harness id) is frozen at its pinned hash and closed to new consumers (`scripts/ci/check_shard_fill_frozen.py`). `CF-4a` (`CF-R23`) forges a chain that covers everything its listed readers test today, function by function, moves each of them, and deletes the file and its gate with the last. Falsify by: a checkout of `CF-4a`'s merge in which the file and the gate's reader list are both gone.
   - Owner: the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md) (`CF-R17`, `CF-R23`, `CF-4a`)
   - Target: pre-genesis
+- **`SalSigningParams::new` takes each input's rerandomization seed from its caller until multisig slice 4a-1 derives it.** The seed sets the input's rerandomization blinds (`r_o`, `r_i`, `r_r_i`), and two inputs sharing it would link inputs to outputs. The seedable-RNG gate lists the site as G1 under a provisional marker naming 4a-1 (`check_seedable_rng.py` `PROVISIONAL`; `CHAIN_FORGE.md` §5.5, `CF-R26`). When 4a-1 lands, the parameter becomes the derived type: the per-input HKDF expansion under `shekyl/multisig-intent-rerandomize-v1` of a `shekyl-crypto-pq` `kem_randomness_seed` type (`PQC_MULTISIG.md` §9.5; the 4a brief §2.2, §2.3, amendment B). The marker is removed, and a test shows two inputs of one intent never get the same blinds. The gate is red once that label is registered in `CRYPTO_DOMAIN_REGISTRY.tsv` with the marker still present. Falsify by: 4a-1's merge, in which `SalSigningParams::new` takes the derived type, the marker is gone, and the distinct-blinds test passes.
+  - Owner: the multisig lane — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§9.5, R-14; slice 4a-1)
+  - Target: pre-genesis (trigger: slice 4a-1 lands)
 - **The block path's gated benches have no multisig shape: nothing builds a scheme-2 spend a validator admits.** `DAEMON_REDB_STORE.md` §1.3a.7's shape 3 is the multisig container at its maximum signers, the heaviest post-quantum signature kind. `shekyl-harness-spender` signs single-signer inputs only, so `shekyl-chain-ingest`'s block-path fixtures (`bench_fixture_tests.rs`) cannot list one. Named blocker: a builder of a scheme-2 spend (the multisig completion's spend path). When it exists, the shape is one `Shape` entry and two regenerated fixtures.
   - Owner: the daemon benchmarks — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (BA-T2)
   - Target: pre-genesis (trigger: a scheme-2 spend builder lands)
@@ -328,7 +331,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`HEIGHT_SEMANTICS.md`](design/HEIGHT_SEMANTICS.md) §3 — the wire table and the inland/wire convention; it outlives each phase's PR
 
-- **Thirteen crates meet the feature-governance trigger ungoverned** (declare a Cargo feature another workspace crate enables, directly or by forwarding) and sit in the exact-hit, shrink-only grandfather list of [`scripts/ci/check_test_only_features.py`](../scripts/ci/check_test_only_features.py), whose docstring owns the detail; two are normal-edge test-feature findings that go first, and the fourteenth entry (`shekyl-crypto-pq`) is F-7's. (`shekyl-curve-tree` joined governance 2026-11-02, #1261, when a second crate enabled its `test-tamper`.) Falsify by the gate reporting `trigger met and grandfathered (shrink-only): 0`.
+- **Twelve crates meet the feature-governance trigger ungoverned** (declare a Cargo feature another workspace crate enables, directly or by forwarding) and sit in the exact-hit, shrink-only grandfather list of [`scripts/ci/check_test_only_features.py`](../scripts/ci/check_test_only_features.py), whose docstring owns the detail; two are normal-edge test-feature findings that go first (`shekyl-p-serve`'s `test-signer`, `shekyl-pow-randomx`'s `test-internals`). (`shekyl-crypto-pq` joined governance with `CF-1b`, `CHAIN_FORGE.md`, its `test-utils` and `seeded-rng` TEST_ONLY rows.) (`shekyl-curve-tree` joined governance 2026-11-02, #1261, when a second crate enabled its `test-tamper`.) Falsify by the gate reporting `trigger met and grandfathered (shrink-only): 0`.
   - Target: pre-genesis
 
 - **`PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.** A hash over the leaf field chosen on measured gates and published cryptanalysis, with generated parameters, pinned vectors, a registry row and one shared Rust implementation; it makes the leaf commitment binding beyond discrete log and is what a post-quantum-sound membership leg would prove over ([`design/FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §6.5). Ruled 2026-09-14: designed with the V4 lattice-only transition (itself gated on lattice threshold signatures or mature isogeny signatures such as PRISM) as one leaf-format cutover; until then `PL-D3a`'s record beside the point is the post-quantum ownership record for every v3 output.
@@ -717,9 +720,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm** [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
-  - Target: pre-genesis
-
-- **Single-sig address decode enforces the Bech32m variant** [`rust/shekyl-address/src/address.rs`](../rust/shekyl-address/src/address.rs)
   - Target: pre-genesis
 
 - **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,
@@ -1282,6 +1282,10 @@ Default. Lands before genesis if it should exist at launch.
 
 - **S interim: `block_weight_short_term_surge_factor` re-derived at BA-T10 (floor re-run of the batched Bp+ term); closes when the measured d24 `surge_max` is recorded and S re-signed.** The Bp+ term is measured (BA-Q9, #1319): with `Â` folded into the batch the floor device reads 3.659 ms per batched proof, so d24 is about 3.93, and the conservative bracket (the folded lone proof, 18.84 ms) is 3.67. S = 3, the integer below that bracket, is the signed value (C2-R2 Q3 re-signed 2026-11-08) and stays an Assumption: the rest of the composition is the 2026-09-05 capture's, BA-T10 re-runs the full sweep, and S is re-signed on its d24 value.
   - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
+  - Target: pre-genesis
+
+- **NetBSD does not build on `dev`, and nothing noticed: no CI job builds it.** `shekyl-daemon-config` `owner_socket.rs` `is_local` (the non-Linux arm, from RT-W10 step 3, 2026-11-12) calls `rustix::fs::statfs`, which rustix does not provide on NetBSD (NetBSD has `statvfs`), so `cargo clippy --target x86_64-unknown-netbsd -p shekyl-daemon-config` fails with E0425. The tree still names NetBSD (`group.rs`'s per-target account walk), and that arm is unverified for the same reason. The general point: a target no CI job builds is unverified code, however carefully its arm was written. Not fixed here (ruled 2026-11-15, #1394): the decision is whether NetBSD stays a target. If it stays, a CI job builds it and `is_local` reads `statvfs`'s flags there; if not, its arms are deleted and an unnamed target refuses to build.
+  - Owner: Rick (whether NetBSD stays a target); the fix is the owner socket's — [`RPC_CHANNEL.md`](design/RPC_CHANNEL.md) (RT-W10, the socket's directory on a local filesystem)
   - Target: pre-genesis
 
 
