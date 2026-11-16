@@ -807,7 +807,7 @@ impl Drive {
                 self.cancel_probe();
                 Vec::new()
             }
-            Action::RoundStuck => self.round_stuck(),
+            Action::RoundStuck { descriptor } => self.round_stuck(descriptor),
             Action::Resumed { late_by } => {
                 // Milliseconds, not whole seconds: a wake 10 s and a
                 // fraction late is past the threshold, and whole seconds

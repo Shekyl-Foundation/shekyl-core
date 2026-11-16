@@ -59,6 +59,7 @@ pub(super) fn sent_ended(
             upload: RoundUpload {
                 hsdir: hsdir(n),
                 descriptor_id: descriptor.to_owned(),
+                descriptor: super::D0,
                 ended,
             },
             draw,
@@ -84,28 +85,19 @@ pub(super) fn answered(n: u8, descriptor: &str, answer: DirectoryAnswer) -> Inpu
     }
 }
 
-/// A published core whose round just ended, its check's directories drawn
-/// (`fetches`) and the check's `Replied` folded, and the deadline at the
-/// delay's floor run: the probe and the fetches are due there. That step's
-/// liveness sample is answered, and its `Replied` sends the first fetch,
-/// which is left in flight. Returns the core and the 15 s step, with the
-/// sample's `Replied` step joined to it.
+/// A published core whose round just ended, run to the delay's floor: the
+/// liveness sample due there is answered, the probe goes out and asks for
+/// its check's list, the list (`fetches`) is folded, and the check's
+/// `Replied` sends the first fetch, which is left in flight. The fetches are
+/// due at the floor too: their delays count from the round's end. Returns
+/// the core and the 15 s step, every request's actions joined to it.
 fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
     let mut core = published();
     let ended = core.on(uploaded(0), 0);
     assert!(
-        ended.actions.contains(&Action::CheckDirectories),
-        "each probe's check asks for the directories"
+        !ended.actions.contains(&Action::CheckDirectories),
+        "the check's list waits for the probe"
     );
-    core.on(
-        Input::DirectoriesDrawn {
-            fetches,
-            ours: Some(ours()),
-            open_uploads: OpenUploads::InFlight,
-        },
-        0,
-    );
-    replied(&mut core, 0);
     let mut step = core.on_deadline(secs(15));
     assert!(
         step.actions.contains(&Action::Sample),
@@ -119,9 +111,74 @@ fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
         },
         secs(15),
     );
+    let fired = replied(&mut core, secs(15));
+    assert!(
+        fired.actions.contains(&Action::CheckDirectories),
+        "the probe asks for its check's list as it goes out"
+    );
+    step.actions.extend(fired.actions);
+    let drawn = core.on(
+        Input::DirectoriesDrawn {
+            fetches,
+            ours: Some(ours()),
+            open_uploads: OpenUploads::in_flight(vec![super::D0]),
+        },
+        secs(15),
+    );
+    step.actions.extend(drawn.actions);
     step.actions.extend(replied(&mut core, secs(15)).actions);
     assert_eq!(probes(&step), 1, "the probe at the delay's floor");
     (core, step)
+}
+
+/// Serve every deadline up to `until` as the driver does: each liveness
+/// sample answered with a full bootstrap, the first check asked folded with
+/// `list` and `ours`, and `Replied` after each request so the queue sends
+/// what waits. Returns every action taken.
+pub(super) fn drive(
+    core: &mut Core,
+    until: u64,
+    list: &mut Option<Vec<DirectoryFetch>>,
+    ours: &ServiceDescriptor,
+) -> Step {
+    let mut taken = Vec::new();
+    let mut served_at = None;
+    while let Some(due) = core.deadline().filter(|due| *due <= until) {
+        assert_ne!(served_at, Some(due), "the deadline at {due} did not move");
+        served_at = Some(due);
+        let mut actions = core.on_deadline(due).actions;
+        loop {
+            if actions.contains(&Action::Sample) {
+                core.on(
+                    Input::DirectorySample {
+                        progress: Some(100),
+                        socks: None,
+                        read: None,
+                    },
+                    due,
+                );
+            }
+            if actions.contains(&Action::CheckDirectories) {
+                core.on(
+                    Input::DirectoriesDrawn {
+                        fetches: list.take().expect("one check"),
+                        ours: Some(ours.clone()),
+                        open_uploads: core.open_uploads(due),
+                    },
+                    due,
+                );
+            }
+            taken.extend(actions);
+            if core.in_flight().is_none() {
+                break;
+            }
+            actions = replied(core, due).actions;
+        }
+    }
+    Step {
+        actions: taken,
+        deadline: core.deadline(),
+    }
 }
 
 /// [`checking_in_flight`], with every fetch sent and answered at 15 s, one
@@ -222,24 +279,20 @@ fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
         matches!(core.status().inbound, Inbound::Publishing { .. }),
         "one miss is not a verdict"
     );
-    // The refetch's reply, then its `Replied`, which sends the new check.
-    let mut again = core.on(Input::DescriptorRefetched { draw: 0 }, secs(20));
-    again.actions.extend(replied(&mut core, secs(20)).actions);
+    // The refetch's reply, then its `Replied`; the second probe draws a new
+    // check as it goes out.
+    core.on(Input::DescriptorRefetched { draw: 0 }, secs(20));
+    replied(&mut core, secs(20));
+    let launched = drive(
+        &mut core,
+        secs(35),
+        &mut Some(sent(1..=8, "cur", 0)),
+        &ours(),
+    );
     assert!(
-        again.actions.contains(&Action::CheckDirectories),
+        launched.actions.contains(&Action::CheckDirectories),
         "a new check"
     );
-    core.on(
-        Input::DirectoriesDrawn {
-            fetches: sent(1..=8, "cur", 0),
-            ours: Some(ours()),
-            open_uploads: OpenUploads::InFlight,
-        },
-        secs(20),
-    );
-    replied(&mut core, secs(20));
-    let launched = core.on_deadline(secs(35));
-    let launched = served(&mut core, launched, secs(35));
     assert_eq!(probes(&launched), 1);
     assert_eq!(fetched(&launched).len(), 8);
     core.on(
@@ -449,20 +502,9 @@ fn each_directory_fetch_has_its_own_delay() {
     core.on(uploaded(0), 0);
     let mut fetches = sent(1..=1, "cur", 0);
     fetches.extend(sent(2..=2, "cur", u64::MAX));
-    core.on(
-        Input::DirectoriesDrawn {
-            fetches,
-            ours: Some(ours()),
-            open_uploads: OpenUploads::InFlight,
-        },
-        0,
-    );
-    replied(&mut core, 0);
-    let at_floor = core.on_deadline(secs(15));
-    let at_floor = served(&mut core, at_floor, secs(15));
+    let at_floor = drive(&mut core, secs(15), &mut Some(fetches), &ours());
     assert_eq!(fetched(&at_floor), [hsdir(1)]);
-    let at_top = core.on_deadline(secs(60));
-    let at_top = served(&mut core, at_top, secs(60));
+    let at_top = drive(&mut core, secs(60), &mut None, &ours());
     assert_eq!(fetched(&at_top), [hsdir(2)]);
 }
 
@@ -475,29 +517,27 @@ fn each_directory_fetch_has_its_own_delay() {
 fn an_answer_before_the_send_is_not_evidence() {
     let mut core = published();
     core.on(uploaded(0), 0);
-    core.on(
-        Input::DirectoriesDrawn {
-            fetches: sent(1..=1, "cur", u64::MAX),
-            ours: Some(ours()),
-            open_uploads: OpenUploads::InFlight,
-        },
-        0,
+    let at_floor = drive(
+        &mut core,
+        secs(15),
+        &mut Some(sent(1..=1, "cur", u64::MAX)),
+        &ours(),
     );
-    replied(&mut core, 0);
-    core.on(answered(1, "cur", DirectoryAnswer::NotFound), secs(1));
+    assert!(fetched(&at_floor).is_empty(), "its delay has not come due");
+    core.on(answered(1, "cur", DirectoryAnswer::NotFound), secs(16));
     core.on(
         Input::DirectoryAsked {
             hsdir: hsdir(1),
             descriptor_id: "cur".to_owned(),
         },
-        secs(1),
+        secs(16),
     );
     core.on(
         Input::DirectoryAsked {
             hsdir: hsdir(9),
             descriptor_id: "other".to_owned(),
         },
-        secs(1),
+        secs(16),
     );
     core.on(
         answered(
@@ -507,13 +547,9 @@ fn an_answer_before_the_send_is_not_evidence() {
                 revision_counter: Some(OURS),
             },
         ),
-        secs(1),
+        secs(16),
     );
-    let at_floor = core.on_deadline(secs(15));
-    let at_floor = served(&mut core, at_floor, secs(15));
-    assert!(fetched(&at_floor).is_empty(), "its delay has not come due");
-    let at_top = core.on_deadline(secs(60));
-    let at_top = served(&mut core, at_top, secs(60));
+    let at_top = drive(&mut core, secs(60), &mut None, &ours());
     assert_eq!(fetched(&at_top), [hsdir(1)], "still asked, at its own time");
 }
 
@@ -567,7 +603,7 @@ fn a_draw_that_arrives_while_judging_still_installs() {
         Input::DirectoriesDrawn {
             fetches: Vec::new(),
             ours: Some(ours()),
-            open_uploads: OpenUploads::InFlight,
+            open_uploads: OpenUploads::in_flight(vec![super::D0]),
         },
         secs(19),
     );
@@ -608,8 +644,11 @@ fn a_check_open_when_outbound_drops_is_discarded() {
 /// Tor accepting a fetch starts that fetch's answer window from the
 /// acceptance. A sibling due in the same breath keeps the provisional window
 /// the check's deadline gave it, though the queue sends it only once the
-/// first fetch is answered. Fails if acceptance leaves the provisional
-/// window, or if it moves every open fetch.
+/// first fetch is answered. The check settles only when the accepted
+/// fetch's window ends; both were silent, and with no confirmed directory
+/// answering, their silence does not count: the probe, which arrived,
+/// decides. Fails if acceptance leaves the provisional window (the check
+/// settles at 75 s), or if it moves every open fetch.
 #[test]
 fn a_fetch_waits_from_when_tor_accepts_it() {
     // Both fetches come due at 15 s; the queue sends the first, and the
@@ -633,7 +672,13 @@ fn a_fetch_waits_from_when_tor_accepts_it() {
     replied(&mut core, secs(40));
     let early = core.on_deadline(secs(75));
     let early = served(&mut core, early, secs(75));
-    assert_eq!(refetches(&early), 0, "the accepted fetch is still out");
+    assert!(
+        !early
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::DirectoriesSettled(_))),
+        "the accepted fetch is still out"
+    );
     assert!(
         matches!(core.status().inbound, Inbound::Publishing { .. }),
         "{:?}",
@@ -641,7 +686,15 @@ fn a_fetch_waits_from_when_tor_accepts_it() {
     );
     let bound = core.on_deadline(secs(100));
     let bound = served(&mut core, bound, secs(100));
-    assert_eq!(refetches(&bound), 1, "both missing, and the probe arrived");
+    assert_eq!(
+        count(&bound, |action| matches!(
+            action,
+            Action::DirectoriesUnmatched
+        )),
+        1,
+        "both silent, and no confirmed directory answered"
+    );
+    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
 }
 
 /// **A fetch waiting in the queue is not sent yet.** Both fetches come due
@@ -749,21 +802,16 @@ fn a_stale_directory_copy_is_a_miss() {
 fn a_copy_of_a_descriptor_ours_does_not_name_counts_by_being_there() {
     let mut core = published();
     core.on(uploaded(0), 0);
-    core.on(
-        Input::DirectoriesDrawn {
-            fetches: sent(1..=8, "cur", 0),
-            ours: Some(ServiceDescriptor {
-                descriptor_id: "prev".to_owned(),
-                revision_counter: OURS,
-            }),
-            open_uploads: OpenUploads::InFlight,
-        },
-        0,
-    );
-    replied(&mut core, 0);
     // The probe and the fetches, sent as the queue sends them.
-    let due = core.on_deadline(secs(15));
-    let launched = served(&mut core, due, secs(15));
+    let launched = drive(
+        &mut core,
+        secs(15),
+        &mut Some(sent(1..=8, "cur", 0)),
+        &ServiceDescriptor {
+            descriptor_id: "prev".to_owned(),
+            revision_counter: OURS,
+        },
+    );
     assert_eq!(probes(&launched), 1);
     assert_eq!(fetched(&launched).len(), 8, "{launched:?}");
     core.on(
@@ -802,21 +850,7 @@ fn a_copy_of_a_descriptor_ours_does_not_name_counts_by_being_there() {
 fn without_our_counter_the_check_counts_nothing_and_the_probe_decides() {
     let mut core = published();
     core.on(uploaded(0), 0);
-    let drawn = core.on(
-        Input::DirectoriesDrawn {
-            fetches: sent(1..=8, "cur", 0),
-            ours: None,
-            open_uploads: OpenUploads::InFlight,
-        },
-        0,
-    );
-    assert!(fetched(&drawn).is_empty(), "no fetch goes out");
     let mut launched = core.on_deadline(secs(15));
-    if core.in_flight().is_some() {
-        launched
-            .actions
-            .extend(replied(&mut core, secs(15)).actions);
-    }
     if launched.actions.contains(&Action::Sample) {
         core.on(
             Input::DirectorySample {
@@ -830,6 +864,19 @@ fn without_our_counter_the_check_counts_nothing_and_the_probe_decides() {
             .actions
             .extend(replied(&mut core, secs(15)).actions);
     }
+    assert!(launched.actions.contains(&Action::CheckDirectories));
+    let drawn = core.on(
+        Input::DirectoriesDrawn {
+            fetches: sent(1..=8, "cur", 0),
+            ours: None,
+            open_uploads: OpenUploads::in_flight(vec![super::D0]),
+        },
+        secs(15),
+    );
+    launched.actions.extend(drawn.actions);
+    launched
+        .actions
+        .extend(replied(&mut core, secs(15)).actions);
     assert_eq!(
         probes(&launched),
         1,
@@ -837,7 +884,7 @@ fn without_our_counter_the_check_counts_nothing_and_the_probe_decides() {
     );
     assert!(
         fetched(&launched).is_empty(),
-        "the answer windows are not waited"
+        "no fetch goes out, and the answer windows are not waited"
     );
     core.on(
         Input::ProbeDialed {

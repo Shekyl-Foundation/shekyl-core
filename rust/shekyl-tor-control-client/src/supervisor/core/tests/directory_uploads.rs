@@ -14,7 +14,7 @@ use super::super::{
     Action, Core, Counted, DirectoryAnswer, DirectoryFetch, DirectoryReport, Exclusion, Input,
     OpenUploads, Step,
 };
-use super::directories::{answered, checking, fetched, hsdir, ours, sent, sent_ended, OURS};
+use super::directories::{answered, checking, drive, fetched, ours, sent, sent_ended, OURS};
 use super::probe::{arrival, probes, published, refetches, republishes, secs, served, uploaded};
 use super::replied;
 use crate::control::{
@@ -32,14 +32,14 @@ fn run_four() -> Vec<DirectoryFetch> {
     fetches
 }
 
-fn ours_held() -> DirectoryAnswer {
+pub(super) fn ours_held() -> DirectoryAnswer {
     DirectoryAnswer::Received {
         revision_counter: Some(OURS),
     }
 }
 
 /// The lines a judged check said, from the step that judged it.
-fn settled(step: &Step) -> Vec<DirectoryReport> {
+pub(super) fn settled(step: &Step) -> Vec<DirectoryReport> {
     step.actions
         .iter()
         .find_map(|action| match action {
@@ -155,117 +155,56 @@ fn our_failure_to_ask_is_not_counted_whatever_the_upload() {
         .all(|line| line.counted == Counted::Excluded(Exclusion::NotAsked)));
 }
 
-/// **A second probe drawn just after a new round began leaves that round's
-/// uploads in flight alone** (Rick, 2026-11-15). The first check misses and
-/// the descriptor is refetched; a round starts and its first upload lands a
-/// second before the second check is drawn. Its four uploads still open are
-/// neither asked nor counted, so they cannot read missing: the four that
-/// landed decide, and the node is Reachable. Fails if `directories_drawn`
-/// asks open uploads whatever the round's age (eight asked, a second miss,
-/// a republish).
+/// **A second probe waits out a new round's wait, then asks its uploads**
+/// (Rick, 2026-11-15; the brief's B1). The first check misses and the
+/// descriptor is refetched; a round starts, and its first upload lands, a
+/// second before the second probe is scheduled. That probe is due at 35 s,
+/// but it goes out only once the round is `Policy::round_wait` old, at 79 s,
+/// and only then is its list drawn: the round's four uploads still open are
+/// hung, and asked. Fails if `on_probe_deadline` sends a probe while a round
+/// is younger than its wait (the probe at 35 s), or draws the list when the
+/// probe is scheduled.
 #[test]
-fn a_second_probe_does_not_ask_a_new_rounds_uploads_in_flight() {
+fn a_second_probe_waits_out_a_new_rounds_wait() {
     let (mut core, _) = checking(sent(1..=8, "cur", 0));
     for n in 1..=8 {
         core.on(answered(n, "cur", DirectoryAnswer::NotFound), secs(16));
     }
     let first = core.on(arrival(secs(15), secs(18)), secs(18));
     assert_eq!(refetches(&first), 1, "a first miss refetches");
-    core.on(Input::UploadRoundStarted, secs(19));
-    core.on(Input::FirstUploaded { draw: 0 }, secs(19));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        secs(19),
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(19),
+    );
     let mut again = core.on(Input::DescriptorRefetched { draw: 0 }, secs(20));
     again.actions.extend(replied(&mut core, secs(20)).actions);
-    assert!(again.actions.contains(&Action::CheckDirectories));
+    assert!(
+        !again.actions.contains(&Action::CheckDirectories),
+        "the list waits for the probe"
+    );
     let mut fetches = sent(1..=4, "cur", 0);
     fetches.extend(sent_ended(5..=8, "cur", UploadEnd::Open, 0));
-    core.on(
-        Input::DirectoriesDrawn {
-            fetches,
-            ours: Some(ours()),
-            open_uploads: OpenUploads::InFlight,
-        },
-        secs(20),
-    );
-    replied(&mut core, secs(20));
-    let launched = core.on_deadline(secs(35));
-    let launched = served(&mut core, launched, secs(35));
+    let mut list = Some(fetches);
+    let held = drive(&mut core, secs(78), &mut list, &ours());
+    assert_eq!(probes(&held), 0, "held while the round is young: {held:?}");
+    assert!(list.is_some(), "no list drawn yet");
+    let launched = drive(&mut core, secs(79), &mut list, &ours());
+    assert!(list.is_none(), "the list is drawn as the probe goes out");
     assert_eq!(probes(&launched), 1);
     assert_eq!(
-        fetched(&launched),
-        (1..=4).map(hsdir).collect::<Vec<_>>(),
-        "the uploads in flight are not asked"
+        fetched(&launched).len(),
+        8,
+        "the round's wait has run: its open uploads are asked"
     );
-    core.on(
-        Input::ProbeDialed {
-            minted_at: secs(35),
-        },
-        secs(35),
-    );
-    for n in 1..=4 {
-        core.on(answered(n, "cur", ours_held()), secs(36));
-    }
-    let verdict = core.on(arrival(secs(35), secs(37)), secs(37));
-    assert_eq!(republishes(&verdict), 0);
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Reachable {
-            evidence_at: secs(37)
-        }
-    );
-    let report = settled(&verdict);
-    assert!(report[4..].iter().all(|line| line.upload == UploadEnd::Open
-        && line.answer.is_none()
-        && line.counted == Counted::Excluded(Exclusion::UploadInFlight)));
-}
-
-/// Serve every deadline up to `until` as the driver does: each liveness
-/// sample answered with a full bootstrap, the first check asked folded with
-/// `list` and `ours`, and `Replied` after each request so the queue sends
-/// what waits. Returns every action taken.
-fn drive(
-    core: &mut Core,
-    until: u64,
-    list: &mut Option<Vec<DirectoryFetch>>,
-    ours: &ServiceDescriptor,
-) -> Step {
-    let mut taken = Vec::new();
-    let mut served_at = None;
-    while let Some(due) = core.deadline().filter(|due| *due <= until) {
-        assert_ne!(served_at, Some(due), "the deadline at {due} did not move");
-        served_at = Some(due);
-        let mut actions = core.on_deadline(due).actions;
-        loop {
-            if actions.contains(&Action::Sample) {
-                core.on(
-                    Input::DirectorySample {
-                        progress: Some(100),
-                        socks: None,
-                        read: None,
-                    },
-                    due,
-                );
-            }
-            if actions.contains(&Action::CheckDirectories) {
-                core.on(
-                    Input::DirectoriesDrawn {
-                        fetches: list.take().expect("one check"),
-                        ours: Some(ours.clone()),
-                        open_uploads: core.open_uploads(due),
-                    },
-                    due,
-                );
-            }
-            taken.extend(actions);
-            if core.in_flight().is_none() {
-                break;
-            }
-            actions = replied(core, due).actions;
-        }
-    }
-    Step {
-        actions: taken,
-        deadline: core.deadline(),
-    }
 }
 
 /// **The round's own probe asks its uploads still open**: it goes ahead
@@ -276,8 +215,19 @@ fn drive(
 #[test]
 fn the_rounds_own_probe_asks_its_uploads_still_open() {
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, secs(5));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(5),
+    );
     let mut fetches = sent(1..=4, "cur", 0);
     fetches.extend(sent_ended(5..=8, "cur", UploadEnd::Open, 0));
     let mut list = Some(fetches);
@@ -301,8 +251,7 @@ fn the_rounds_own_probe_asks_its_uploads_still_open() {
 #[test]
 fn a_republish_the_check_drives_waits_out_the_backoff() {
     let mut core = published();
-    let first = core.on(uploaded(0), 0);
-    assert!(first.actions.contains(&Action::CheckDirectories));
+    core.on(uploaded(0), 0);
     let (at, verdict) = missed_twice_by_directories(&mut core, 0);
     assert_eq!(republishes(&verdict), 1, "the first republish goes out");
     let deleted = replied(&mut core, at);
@@ -312,8 +261,7 @@ fn a_republish_the_check_drives_waits_out_the_backoff() {
 
     // The republish's own round, judged the same way.
     let round = at + secs(10);
-    let ended = core.on(uploaded(0), round);
-    assert!(ended.actions.contains(&Action::CheckDirectories));
+    core.on(uploaded(0), round);
     let (judged_at, verdict) = missed_twice_by_directories(&mut core, round);
     assert_eq!(republishes(&verdict), 0, "held by the backoff");
     assert!(matches!(
@@ -330,23 +278,82 @@ fn a_republish_the_check_drives_waits_out_the_backoff() {
     assert_eq!(republishes(&step), 1, "runs when the hold ends");
 }
 
-/// From a step at `at` that asked for the check: two probes, each arriving,
-/// and two checks over [`run_four`] whose unconfirmed uploads say nothing,
-/// so each is a miss. Returns the verdict's time and step.
+/// **`ADD_ONION` forgets the rounds open then.** The driver starts the next
+/// publication's rounds afresh, so a round open when the add is sent never
+/// ends in this core: kept, it would hold the overdue rule off and be
+/// counted stuck. Fails if `route_requests` sends the add without
+/// forgetting the open rounds.
+#[test]
+fn an_add_onion_forgets_the_rounds_open_then() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    let (at, verdict) = missed_twice_by_directories(&mut core, 0);
+    assert_eq!(republishes(&verdict), 1);
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D1,
+        },
+        at,
+    );
+    assert!(!core.rounds.is_empty());
+    let deleted = replied(&mut core, at);
+    assert!(deleted.actions.contains(&Action::AddOnion));
+    assert!(core.rounds.is_empty());
+}
+
+/// **`ADD_ONION` retires the publication's refusals.** The delete is
+/// already in flight when a round of the publication being replaced ends
+/// refused. The add still goes out, and those keys will not be accepted
+/// by the next publication, so the refusal leaves with them. The facet
+/// is publishing again. A refused round of the new publication notes its
+/// own. Fails if `forget_publication` clears the open rounds and leaves
+/// the refusal set.
+#[test]
+fn an_add_onion_retires_the_publications_refusals() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    let (at, verdict) = missed_twice_by_directories(&mut core, 0);
+    assert_eq!(republishes(&verdict), 1);
+    core.on(
+        Input::UploadRoundEnded {
+            descriptor: super::D0,
+            tally: super::super::RoundTally {
+                uploaded: 1,
+                refused: 7,
+                begun: 8,
+            },
+            draw: 0,
+        },
+        at,
+    );
+    assert!(
+        matches!(
+            core.status().inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::UploadsRefused,
+                ..
+            }
+        ),
+        "the round being replaced was refused: {:?}",
+        core.status().inbound
+    );
+    let deleted = replied(&mut core, at);
+    assert!(deleted.actions.contains(&Action::AddOnion));
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "the publication's refusal left with its keys: {:?}",
+        core.status().inbound
+    );
+    assert!(core.rounds.is_empty());
+}
+
+/// From a round that ended at `at` with its probe scheduled: two probes,
+/// each arriving, and two checks over [`run_four`] whose unconfirmed uploads
+/// say nothing, so each is a miss. Returns the verdict's time and step.
 fn missed_twice_by_directories(core: &mut Core, at: u64) -> (u64, Step) {
     let check = |core: &mut Core, at: u64| {
-        core.on(
-            Input::DirectoriesDrawn {
-                fetches: run_four(),
-                ours: Some(ours()),
-                open_uploads: OpenUploads::InFlight,
-            },
-            at,
-        );
-        replied(core, at);
         let probe_at = at + secs(15);
-        let launched = core.on_deadline(probe_at);
-        let launched = served(core, launched, probe_at);
+        let launched = drive(core, probe_at, &mut Some(run_four()), &ours());
         assert_eq!(probes(&launched), 1);
         assert_eq!(fetched(&launched).len(), 8);
         core.on(
@@ -370,9 +377,8 @@ fn missed_twice_by_directories(core: &mut Core, at: u64) -> (u64, Step) {
     let (missed_at, first) = check(core, at);
     assert_eq!(refetches(&first), 1, "a first miss refetches");
     let refetched = missed_at + secs(1);
-    let mut again = core.on(Input::DescriptorRefetched { draw: 0 }, refetched);
-    again.actions.extend(replied(core, refetched).actions);
-    assert!(again.actions.contains(&Action::CheckDirectories));
+    core.on(Input::DescriptorRefetched { draw: 0 }, refetched);
+    replied(core, refetched);
     check(core, refetched)
 }
 
@@ -383,7 +389,7 @@ const RUN_FOUR: &str =
     include_str!("../../../control/testdata/so_d12_run4_onion_c_daemon_debug.txt");
 
 /// One line of [`RUN_FOUR`], read back from the daemon's Debug form.
-enum Logged {
+pub(super) enum Logged {
     Event(HsDescEvent),
     Ours(ServiceDescriptor),
     /// `HS_DESC_CONTENT`. After a `NOT_FOUND` Tor sends an empty one
@@ -411,7 +417,7 @@ fn logged_option(value: &str) -> Option<String> {
     Some(inner.trim_matches('"').to_owned())
 }
 
-fn logged(line: &str, address: &ServiceId) -> Option<Logged> {
+pub(super) fn logged(line: &str, address: &ServiceId) -> Option<Logged> {
     let relay = |value: &str| {
         logged_option(value).map(|hex| RelayFingerprint::parse(&hex).expect("a fingerprint"))
     };
@@ -502,7 +508,7 @@ fn run_four_replayed_from_its_own_lines_is_a_miss() {
         unreachable!("found above");
     };
     let unconfirmed: Vec<_> = rounds
-        .directories()
+        .directories(&[])
         .iter()
         .filter(|upload| upload.descriptor_id == ours.descriptor_id && !upload.ended.confirmed())
         .map(|upload| upload.hsdir)
@@ -512,10 +518,21 @@ fn run_four_replayed_from_its_own_lines_is_a_miss() {
     // The core: the round began at 0, its first upload landed at 2 s, and
     // its wait draws the check at 62 s, while the four are still open.
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, secs(2));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(2),
+    );
     let fetches = rounds
-        .directories()
+        .directories(&[])
         .into_iter()
         .map(|upload| DirectoryFetch { upload, draw: 0 })
         .collect();
@@ -634,17 +651,28 @@ fn a_cut_round_from_tors_own_bytes_is_a_miss() {
     }
     assert!(rounds.in_round(), "the cut uploads never report");
     let unconfirmed: Vec<_> = rounds
-        .directories()
+        .directories(&[])
         .into_iter()
         .filter(|upload| !upload.ended.confirmed())
         .collect();
     assert_eq!(unconfirmed.len(), 8, "four of each descriptor");
 
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, secs(2));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(2),
+    );
     let fetches = rounds
-        .directories()
+        .directories(&[])
         .into_iter()
         .map(|upload| DirectoryFetch { upload, draw: 0 })
         .collect();
@@ -701,17 +729,29 @@ fn a_cut_round_from_tors_own_bytes_is_a_miss() {
 }
 
 /// **An upload still open is asked from the reading taken with the list.**
-/// The round's wait asks for the check while four uploads are open, so they
-/// are hung. The round then ends, and the live track is gone, before the
-/// list is folded. The list still says those four are open, and it carries
-/// [`OpenUploads::Hung`] from the moment it was read. They are asked. Fails
-/// if `directories_drawn` reads the live round (the four are left in flight,
-/// and four directories are asked).
+/// The round's wait schedules the probe, which goes out with four uploads
+/// still open, so they are hung. The list's request can queue behind
+/// another, and here the descriptor's next pass begins before the list is
+/// folded: the live reading now has that descriptor in flight. The list
+/// still says those four are open, and it carries the reading taken when it
+/// was read. They are asked. Fails if `directories_drawn` reads the live
+/// rounds (the four are left in flight, and four directories are asked).
 #[test]
 fn an_open_upload_is_asked_from_the_reading_taken_with_the_list() {
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, secs(5));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(5),
+    );
     let mut fetches = sent(1..=4, "cur", 0);
     fetches.extend(sent_ended(5..=8, "cur", UploadEnd::Open, 0));
     let until = secs(5 + 60 + 15);
@@ -735,16 +775,24 @@ fn an_open_upload_is_asked_from_the_reading_taken_with_the_list() {
             }
             if actions.contains(&Action::CheckDirectories) {
                 let reading = core.open_uploads(due);
-                assert_eq!(reading, OpenUploads::Hung, "the round's wait has run");
-                // The descriptor read is still out. The round ends in that
-                // gap, and the live track is gone.
-                let ended = core.on(uploaded(0), due);
-                assert!(
-                    ended.actions.is_empty(),
-                    "ending the round sends nothing ahead of the list: {:?}",
-                    ended.actions
+                assert_eq!(reading, OpenUploads::default(), "the round's wait has run");
+                // The descriptor read is still out. The descriptor's next
+                // pass begins in that gap.
+                let next = core.on(
+                    Input::UploadRoundStarted {
+                        descriptor: super::D0,
+                    },
+                    due,
                 );
-                assert_eq!(core.open_uploads(due), OpenUploads::InFlight);
+                assert!(
+                    next.actions.is_empty(),
+                    "a round's start sends nothing ahead of the list: {:?}",
+                    next.actions
+                );
+                assert_eq!(
+                    core.open_uploads(due),
+                    OpenUploads::in_flight(vec![super::D0])
+                );
                 core.on(
                     Input::DirectoriesDrawn {
                         fetches: fetches.clone(),
