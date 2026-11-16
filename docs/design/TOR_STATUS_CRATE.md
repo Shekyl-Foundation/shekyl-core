@@ -24,7 +24,7 @@ consumer writes a sentence of its own (`TSR-Q13`; Rick, 2026-11-08).
 - **Time on the wire is an age or a reading's figure.** Every duration
   crosses as whole seconds of awake time, and no reading of any clock
   crosses (IG-Q93, IG-Q96). The ages, `tor.age`, `tor.onion.age` and
-  `tor_quiet`'s `failing.age`, are taken at the ask. The bootstrap's
+  `tor_quiet`'s `unreached.age`, are taken at the ask. The bootstrap's
   `unchanged` and `window` are not ages: with `download` they are one
   reading, taken at the last sample, and cross as they were taken (Rick,
   2026-11-12).
@@ -62,7 +62,7 @@ stay in `shekyl-tor-control-client` and are not on the wire.
 | `posture` | `{tor: managed \| operator \| off, clearnet: on \| off}` | the settings |
 | `origination` | `address-hiding \| connecting \| rebuilding \| clearnet-only \| offline` | the relay's verdict and the settings (`OwnTx`, with `Held` split by the verdict) |
 | `sync_connector` | list of `clearnet \| tor` | the sessions |
-| `tor_quiet` | null, `{empty}`, `{failing: {age}}` | the dialer's census (`TorQuiet`) |
+| `tor_quiet` | null, `{unreached: {age}}` | the Tor Manager's onion-path reading, the dialer's census and its latest failed launch (`TorQuiet`) |
 | `tor` | `ManagedTor` or null; null unless `posture.tor` is `managed` | the supervisor's core |
 
 `ManagedTor`: `state`, `cause`, `age`, `respawn_count`, `progress`, `flagged`,
@@ -141,7 +141,7 @@ with the move.
 6. **The path:** `unusable` names the directory only when the caller passes
    it.
 7. **Ages:** a status read twice, 10 s apart, reports `tor.age`, the
-   onion's age and `tor_quiet`'s `failing.age` 10 s larger, the onion in
+   onion's age and `tor_quiet`'s `unreached.age` 10 s larger, the onion in
    each state that has an age.
 8. **No percent without a sample:** a status with `state` bootstrapping
    and `progress` null prints no percent; an `impaired` bootstrap with
