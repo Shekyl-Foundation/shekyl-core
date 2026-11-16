@@ -1,0 +1,62 @@
+{
+  "format_version": 6,
+  "chain": "small",
+  "plan": {
+    "path": "rust/shekyl-chain-forge/plans/small.toml",
+    "sha256": "9b138377d8b732af550e7d655c2609e0fd1b2c8f2c05e216b0899bec666aeebb"
+  },
+  "seed": "4caafe22ad997dbcdf53d5a74394c7d9f594482231d080f2e43bb364170cdf9d",
+  "network": "regtest",
+  "genesis_hash": "5a6ab91ea03c27ccf27aef62a3a5b4552625a5a2def4bf2566f63f62fbd24fe9",
+  "schedule": {
+    "settlement_epoch_blocks": 300,
+    "reorg_cap_blocks": 10,
+    "fixed_difficulty": 1,
+    "block_seconds": 1
+  },
+  "corpus_format_version": 4,
+  "blocks": 1507,
+  "tip_height": 1504,
+  "transactions": 292,
+  "corpus_sha256": "0e027f5fc18f1f76d3e14639c47f296c3ccc58147be0eb7248a47e7d3d04ed78",
+  "trace_sha256": "c9789eb7d5a0c152dba0a38150f340207225f5f8ae01a6de02acea678c4dbbd7",
+  "events": [
+    {
+      "name": "first-spend-2in",
+      "height": 81,
+      "branch": "main",
+      "record": 81
+    },
+    {
+      "name": "shard-0-closed",
+      "height": 378,
+      "branch": "main",
+      "record": 378
+    },
+    {
+      "name": "first-compact-join",
+      "height": 600,
+      "branch": "main",
+      "record": 600
+    },
+    {
+      "name": "first-serve-credit",
+      "height": 1199,
+      "branch": "main",
+      "record": 1199
+    },
+    {
+      "name": "first-claim",
+      "height": 1500,
+      "branch": "main",
+      "record": 1500
+    },
+    {
+      "name": "rewound-depth-2",
+      "height": 1504,
+      "branch": "main",
+      "record": 1507
+    }
+  ],
+  "switches": []
+}
