@@ -15,15 +15,23 @@
 //!
 //! A blob has exactly one Bech32m string: the lowercase one
 //! [`encode_blob`] writes. [`decode_blob`] accepts that string and
-//! nothing else. Bech32m as specified also admits an all-uppercase
-//! spelling, and the `bech32` crate's own decoders admit the older Bech32
-//! checksum and non-zero padding bits; each would give one blob several
-//! strings, and so several things a user could compare, a hash could
-//! cover, or a wallet could store. They are refused by name
-//! ([`EncodingError::NotLowercase`]) or by re-encoding
-//! ([`EncodingError::NotCanonical`]): a string that decodes but is not
-//! what its contents encode to is not a Shekyl string, whatever the
-//! library would make of it.
+//! nothing else. It lowercases the input, decodes that spelling as
+//! Bech32m, re-encodes the bytes, and compares. The refusal names the
+//! step that failed:
+//!
+//! - [`EncodingError::Malformed`] — not a Bech32m string in any case.
+//! - [`EncodingError::Checksum`] — the checksum is not Bech32m's (the
+//!   older Bech32 checksum included). This fails before the re-encode.
+//! - [`EncodingError::NotCanonical`] — the string decodes, and the
+//!   re-encode differs (non-zero padding, or one more zero character
+//!   that still fits in the same bytes).
+//! - [`EncodingError::NotLowercase`] — the lowercased string is the
+//!   canonical one, and the original is not. A string that is not
+//!   Bech32m is named for that, not for its capitals.
+//!
+//! A looser library would give one blob several strings, and a
+//! comparison, a hash, or a wallet would then have several things to
+//! store.
 //!
 //! # Examples
 //!
@@ -38,6 +46,7 @@
 //! ```
 
 use bech32::primitives::decode::{CheckedHrpstring, CheckedHrpstringError};
+use bech32::primitives::hrp::Error as HrpError;
 use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 
 /// HRP for transaction proof encoding.
@@ -49,11 +58,10 @@ pub const HRP_RESERVE_PROOF: &str = "shekylreserveproof";
 /// Errors that can occur during Bech32m encoding or decoding.
 #[derive(Debug, thiserror::Error)]
 pub enum EncodingError {
-    #[error("invalid HRP '{hrp}': {source}")]
-    InvalidHrp {
-        hrp: String,
-        source: bech32::primitives::hrp::Error,
-    },
+    /// `hrp` is not a Bech32 human-readable part. `reason` is this
+    /// crate's word for why; the `bech32` error type stays private.
+    #[error("invalid HRP '{hrp}': {reason}")]
+    InvalidHrp { hrp: String, reason: &'static str },
 
     /// The string holds an uppercase letter. A Shekyl Bech32m string is
     /// written in lowercase, and that is its only form.
@@ -76,12 +84,26 @@ pub enum EncodingError {
     NotCanonical,
 }
 
-/// The library's refusal as this crate names it, so the `bech32` crate's
-/// error types stay out of this crate's public API.
+/// The library's decode refusal as this crate names it. The `bech32`
+/// error types stay out of the public API.
 fn named(e: CheckedHrpstringError) -> EncodingError {
     match e {
         CheckedHrpstringError::Checksum(_) => EncodingError::Checksum,
         other => EncodingError::Malformed(other.to_string()),
+    }
+}
+
+/// The library's HRP refusal as this crate names it.
+fn hrp_reason(err: &HrpError) -> &'static str {
+    match err {
+        HrpError::Empty => "an HRP needs at least one character",
+        HrpError::TooLong(_) => "an HRP is longer than Bech32 allows",
+        HrpError::NonAsciiChar(_) => "an HRP is ASCII",
+        HrpError::InvalidAsciiByte(_) => "an HRP byte is outside the Bech32 range",
+        HrpError::MixedCase => "an HRP is one case",
+        // `HrpError` is non-exhaustive. A variant this crate has not
+        // named yet is still a refusal, not a panic.
+        _ => "not a Bech32 HRP",
     }
 }
 
@@ -104,7 +126,7 @@ fn encode(hrp: &Hrp, data: &[u8]) -> String {
 pub fn encode_blob(hrp: &str, data: &[u8]) -> Result<String, EncodingError> {
     let parsed_hrp = Hrp::parse(hrp).map_err(|e| EncodingError::InvalidHrp {
         hrp: hrp.to_string(),
-        source: e,
+        reason: hrp_reason(&e),
     })?;
     Ok(encode(&parsed_hrp, data))
 }
@@ -189,7 +211,31 @@ mod tests {
 
     #[test]
     fn invalid_hrp_rejected() {
-        assert!(encode_blob("", &[0x01]).is_err());
+        assert!(matches!(
+            encode_blob("", &[0x01]),
+            Err(EncodingError::InvalidHrp {
+                reason: "an HRP needs at least one character",
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode_blob("Ab", &[0x01]),
+            Err(EncodingError::InvalidHrp {
+                reason: "an HRP is one case",
+                ..
+            })
+        ));
+    }
+
+    /// The writer lowercases the HRP, so `encode_blob` then `decode_blob`
+    /// round-trips a caller who passed capitals in the HRP argument.
+    #[test]
+    fn the_writer_lowercases_the_hrp() {
+        let encoded = encode_blob("CI", CASE_DATA).unwrap();
+        assert!(encoded.starts_with("ci1"), "{encoded}");
+        let (hrp, data) = decode_blob(&encoded).unwrap();
+        assert_eq!(hrp, "ci");
+        assert_eq!(data, CASE_DATA);
     }
 
     #[test]
