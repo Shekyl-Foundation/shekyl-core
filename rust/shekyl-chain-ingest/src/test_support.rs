@@ -72,9 +72,13 @@ use crate::trace::{Digest, Facts, Trace, TraceWriter};
 use shekyl_network::Network;
 
 mod growing;
+#[cfg(feature = "pipeline")]
+mod quiet;
 mod tree;
 
 pub use growing::Growing;
+#[cfg(feature = "pipeline")]
+pub use quiet::{held_seeds, named_seeds, quiet_resident, quiet_seeds};
 pub use tree::GrownTree;
 
 /// A settlement epoch for test stores.
@@ -766,73 +770,6 @@ pub struct OwnHasher {
     /// The hasher, for its `resident()` watch.
     pub hasher: shekyl_hasher::Hasher,
     _owner: shekyl_hasher::Owner,
-}
-
-/// How long a hasher may take to go quiet before a test that waits for it
-/// fails: the jobs in flight, and at most three derives. The loopback
-/// harness holds a stopping chain to the same bound
-/// (`shekyl-p2p-harness` `sync/chain.rs`).
-#[cfg(feature = "pipeline")]
-pub const QUIET_WITHIN: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// What `resident` shows once the hasher is quiet
-/// ([`shekyl_hasher::Resident::quiet`], the core's own fact). A job, a
-/// lease or a build in flight is waited out, for at most
-/// [`QUIET_WITHIN`].
-///
-/// # Panics
-///
-/// The hasher did not go quiet in that time, or stopped: the panic prints
-/// what it holds and `expected`, the caller's words for what it should
-/// come to rest on. A hang would say neither.
-#[cfg(feature = "pipeline")]
-pub async fn quiet_resident(
-    resident: tokio::sync::watch::Receiver<shekyl_hasher::Resident>,
-    expected: &(dyn std::fmt::Debug + Sync),
-) -> shekyl_hasher::Resident {
-    quiet_resident_within(QUIET_WITHIN, resident, expected).await
-}
-
-/// [`quiet_resident`] under `bound`, which the bound's own test shortens.
-#[cfg(feature = "pipeline")]
-pub async fn quiet_resident_within(
-    bound: std::time::Duration,
-    mut resident: tokio::sync::watch::Receiver<shekyl_hasher::Resident>,
-    expected: &(dyn std::fmt::Debug + Sync),
-) -> shekyl_hasher::Resident {
-    let rested = tokio::time::timeout(bound, resident.wait_for(|resident| resident.quiet))
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .map(|quiet| quiet.clone());
-    rested.unwrap_or_else(|| {
-        let now = resident.borrow().clone();
-        panic!(
-            "the hasher did not go quiet within {bound:?}: it holds {now:?}; expected: \
-             {expected:?}"
-        )
-    })
-}
-
-/// The seeds `hasher` holds once it is quiet ([`quiet_resident`]).
-#[cfg(feature = "pipeline")]
-pub async fn quiet_seeds(hasher: &shekyl_hasher::Hasher) -> std::collections::BTreeSet<[u8; 32]> {
-    quiet_resident(hasher.resident(), &"a quiet hasher, whatever it holds")
-        .await
-        .caches
-        .iter()
-        .map(|(seed, _)| *seed.as_bytes())
-        .collect()
-}
-
-/// What `list` names, as [`quiet_seeds`] reports what is held: none when
-/// there is no list.
-#[cfg(feature = "pipeline")]
-pub fn named_seeds(list: Option<&shekyl_hasher::Ranked>) -> std::collections::BTreeSet<[u8; 32]> {
-    list.into_iter()
-        .flat_map(shekyl_hasher::Ranked::seeds)
-        .map(|seed| *seed.as_bytes())
-        .collect()
 }
 
 /// [`OwnHasher`] over a budget of this host's parallelism.

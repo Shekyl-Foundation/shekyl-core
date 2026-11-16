@@ -1,4 +1,4 @@
 - **The hashing actor's close-out** (`RANDOMX_CACHE_ACTOR.md` §6 step 4).
-  - **A test's wait for a quiet hasher is bounded.** `shekyl-chain-ingest`'s test support waits at most 120 s for `Resident::quiet`, then panics with what the hasher holds beside what the caller expected. A hasher that never went quiet used to hang the test with no output.
+  - **A test's wait for a quiet hasher is bounded.** `shekyl-chain-ingest`'s test support waits at most 120 s for `Resident::quiet` and returns the resident, or `Unquiet`: the bound passed, or the hasher stopped, each carrying what it holds. A caller that knows what the hasher should rest on panics with that beside it. A hasher that never went quiet used to hang the test with no output.
   - **The memory capture with a fork case** is recorded in §5.10: three cache places with a held fork past its seed point, on a node with no peer and on one whose peer's run is the frontier, and 256 MiB returned with each place given up.
   - **PB-R1's note states the caches against the cap** (`DAEMON_REDB_STORE.md` §1.3a.4): up to three places, 768 MiB, and 1,946 MiB in all. The 2 GiB budget is unchanged.

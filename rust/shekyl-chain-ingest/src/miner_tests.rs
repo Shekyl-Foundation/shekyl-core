@@ -672,11 +672,15 @@ fn a_mining_job_whose_seed_leaves_the_list_is_cancelled_and_its_cache_freed() {
     }
     // The tip moves on: the list names another seed and not the job's.
     rank_alone(&own, &next_tip);
+    // The wait uses a timer. A current-thread runtime has none until asked.
     let quiet = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
         .expect("a runtime")
-        .block_on(crate::test_support::quiet_seeds(&own.hasher));
+        .block_on(crate::test_support::quiet_seeds(
+            &own.hasher,
+            format!("the list names {next_tip} and not the job's seed"),
+        ));
     assert_eq!(
         quiet,
         std::iter::once(*next_tip.as_bytes()).collect(),

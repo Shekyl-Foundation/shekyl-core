@@ -31,9 +31,10 @@ use crate::test_support::{
     named_seeds, open_store, open_store_under, own_hasher, quiet_seeds, tmp, OwnHasher,
 };
 
-/// The seeds resident once `own`'s hasher is quiet.
-async fn quiet(own: &OwnHasher) -> BTreeSet<[u8; 32]> {
-    quiet_seeds(&own.hasher).await
+/// The seeds resident once `own`'s hasher is quiet. `expected` is what
+/// this wait was for, printed when the hasher never rests.
+async fn quiet(own: &OwnHasher, expected: impl std::fmt::Debug) -> BTreeSet<[u8; 32]> {
+    quiet_seeds(&own.hasher, expected).await
 }
 
 fn seeds(of: &[BlockHash]) -> BTreeSet<[u8; 32]> {
@@ -100,7 +101,7 @@ async fn settled(
         let snap = service.store().begin_read().expect("read");
         crate::service::ranked_on(&snap, rules, None).expect("the store ranks")
     };
-    let held = quiet(own).await;
+    let held = quiet(own, &list).await;
     assert_eq!(
         held,
         named_seeds(list.as_ref()),
@@ -132,7 +133,9 @@ async fn a_fresh_store_derives_the_null_seed_and_block_zeros_and_keeps_one() {
         Follow::default(),
     );
     assert!(
-        quiet(&own).await.is_empty(),
+        quiet(&own, "nothing is ranked on an empty store")
+            .await
+            .is_empty(),
         "nothing is ranked on an empty store"
     );
     connect_all(&service, &own, &blocks).await;
@@ -182,7 +185,7 @@ async fn a_switch_whose_blocks_carry_recorded_hashes_builds_nothing() {
         panic!("the heavier tip did not name a switch");
     };
     // Settle first, so a refill in flight is not counted as the switch's.
-    let _resident = quiet(&own).await;
+    let _resident = quiet(&own, "the builds so far have settled").await;
     let (builds, hashes) = (own.pow.derives().builds, own.pow.artifact().hashes);
     let switched = x.reorganize(&plan).await.expect("switch");
     assert!(matches!(switched, Switched::Done(_)), "{switched:?}");
@@ -265,9 +268,10 @@ async fn a_held_fork_past_its_seed_point_is_warm_until_it_leaves_the_cap() {
             mined.height
         );
     }
+    let fork_held = seeds(&[main_seed, genesis, fork_seed]);
     assert_eq!(
-        quiet(&own).await,
-        seeds(&[main_seed, genesis, fork_seed]),
+        quiet(&own, &fork_held).await,
+        fork_held,
         "the window's two seeds and the held fork's own"
     );
     // A second span of the live fork: its seed is warm.
@@ -281,12 +285,13 @@ async fn a_held_fork_past_its_seed_point_is_warm_until_it_leaves_the_cap() {
         builds,
         "a second span of a live fork builds nothing"
     );
-    assert_eq!(quiet(&own).await, seeds(&[main_seed, genesis, fork_seed]));
+    assert_eq!(quiet(&own, &fork_held).await, fork_held);
     // The fork's root passes the cap.
     x.mine(ROOT + CAP_BLOCKS + 10 - MAIN_TIP).await;
+    let window = seeds(&[main_seed, genesis]);
     assert_eq!(
-        quiet(&own).await,
-        seeds(&[main_seed, genesis]),
+        quiet(&own, &window).await,
+        window,
         "the fork left the cap and its cache is gone"
     );
     assert_eq!(
@@ -359,58 +364,4 @@ async fn a_connect_past_the_windows_end_frees_the_previous_epochs_cache() {
     );
     service.stop().await.expect("stops");
     y.close().await;
-}
-
-/// A wait for quiet is bounded, and what it says when the bound passes is
-/// what the hasher holds and what the caller expected: a job that never
-/// returns its lease fails the test that waits, and does not hang it.
-///
-/// A job holds its lease on a seed until the test lets it go. The wait,
-/// under a bound of a quarter of a second, panics naming the leased place
-/// and the caller's words.
-///
-/// Red edit: in `test_support::quiet_resident_within`, wait without the
-/// timeout: this test hangs until the runner kills it.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_wait_for_quiet_is_bounded_and_says_what_is_held() {
-    use crate::test_support::quiet_resident_within;
-    use std::sync::atomic::AtomicBool;
-
-    static RUNNING: AtomicBool = AtomicBool::new(false);
-    let own = own_hasher();
-    let seed = shekyl_pow_randomx::Seedhash::from_bytes([0x5e; 32]);
-    let (leased_tx, leased) = std::sync::mpsc::channel();
-    let (release, released) = std::sync::mpsc::channel::<()>();
-    let job = {
-        let hasher = own.hasher.clone();
-        std::thread::spawn(move || {
-            hasher.lend(shekyl_hasher::Class::Chain, seed, &RUNNING, |_loan| {
-                leased_tx.send(()).expect("the test waits for the lease");
-                let _let_go = released.recv();
-            })
-        })
-    };
-    leased
-        .recv_timeout(crate::test_support::QUIET_WITHIN)
-        .expect("the job is lent its cache");
-    let waited = tokio::spawn(quiet_resident_within(
-        std::time::Duration::from_millis(250),
-        own.hasher.resident(),
-        &"the words of the caller",
-    ))
-    .await;
-    let panic = waited.expect_err("the wait panics at its bound");
-    let said = panic
-        .into_panic()
-        .downcast::<String>()
-        .map_or_else(|_| String::new(), |said| *said);
-    assert!(said.contains("did not go quiet within 250ms"), "{said}");
-    assert!(said.contains("Leased"), "it prints what is held: {said}");
-    assert!(
-        said.contains("the words of the caller"),
-        "it prints what was expected: {said}"
-    );
-    drop(release);
-    assert!(job.join().expect("the job returns").is_some());
-    assert!(quiet_seeds(&own.hasher).await.is_empty());
 }
