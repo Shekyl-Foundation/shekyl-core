@@ -1,6 +1,6 @@
 # One hashing actor owns the RandomX caches
 
-**Status:** OPEN — Round 0 RULED 2026-11-10 and 2026-11-11 (Rick): HA-R1…HA-R8, §4. §6 steps 2 and 3 BUILT (as of 2026-11-14): the crate `rust/shekyl-hasher`, and the cutover that moved every consumer onto it and deleted the cache store. Step 4, the close-out, is next.
+**Status:** OPEN — Round 0 RULED 2026-11-10 and 2026-11-11 (Rick): HA-R1…HA-R8, §4. §6 steps 2 and 3 BUILT (as of 2026-11-14): the crate `rust/shekyl-hasher`, and the cutover that moved every consumer onto it and deleted the cache store. Step 4, the close-out, is under way (as of 2026-11-16): the capture with a fork case is taken (§5.10); the floor device's reading is open.
 
 **Ground:** the cutover's own tree, branched from `dev` at `bfdc84a30e` (which includes #1327 and #1359). §2 and §5 describe that tree. §1 and §3 are the findings as they were read at `cf561f79d6`, before the cutover: each names the code it found, which the cutover deleted.
 
@@ -81,6 +81,7 @@ One actor owns every `PreparedCache` in the process. Nothing else builds, holds 
   1. the connecting height's seed;
   2. the window's other seed, when it names one;
   3. the seed of the most-work chain among the held forks and the frontier, when the window does not already name it. When it does there is no third: the next-heaviest chain does not take the place (HA-R2's one rule).
+- **A peer's run outranks a held fork.** A run a peer offers on this node's own chain outweighs every fork the node holds, and its seed is the window's. While such a run is the frontier there is no third, and a held fork's seed is not kept warm: the fork's next block is a job that builds its own cache (§5.2, an outside job). A held fork past its seed point is the third on a node with no frontier. Both were measured (§5.10).
 - **Equal work** is decided by a fixed order: a held fork before the frontier, and between forks the first in the alt table's key order.
 - **The third's class** is the class its jobs hash at: `HeaderPow` for the frontier, `Unsolicited` for a held fork, which is lighter than the main chain and reaches this node as announcements.
 - **A store with no block ranks nothing,** so the list never names the null seed. Genesis is still hashed under it: its form is a job, which builds the null seed's cache in an outside place, and refill frees it at the next quiescence. A fresh store therefore derives twice (the null seed, then block 0's id) and keeps one cache. A restart derives once.
@@ -215,12 +216,37 @@ The crate has no end of its own, so it has no `NodeEnd` variant: `PreparedCache:
 - **Accepted as the bound for now (Rick, 2026-11-11).**
 - **What closes it:** the clearnet reconnect throttle, `P2P_TRANSPORT_LAYER.md` § "Clearnet reconnect throttle — REGISTERED 2026-10-09, not built" (ruling D-S1; owner: the transport layer, that document). Its `N` handshakes per `T` gives the rate, and this section then states `N / T × 4.2 s`. It is on the mainnet launch checklist (`docs/RELEASE_CHECKLIST.md`) and has a `docs/FOLLOWUPS.md` row.
 
+### 5.10 Measured: places and memory with a held fork
+
+**Measured 2026-11-16 on a second machine** (x86-64 virtual machine, 8 cores; `dev` at `03a55de0f1`, a release `shekyld`; two regtest daemons at `--dev-difficulty 1`, driven over the admin RPC). The machine's own testnet miner ran throughout, so these are memory readings and no timing is taken from them. Each row is the daemon's `RssAnon` beside `daemon_status`'s `randomx_cache_places` and `alt_count`.
+
+The two daemons share 2,000 blocks and then mine apart, each past its own branch's seed point (block 2,048 is each branch's own, and names every height from 2,113): A to tip 2,125, B to 2,120. Peered, B switches to A's chain and holds its own 120 blocks as an alternative.
+
+| B is | tip | places | held alternatives | `RssAnon` |
+| --- | --- | --- | --- | --- |
+| peered with A, after the switch | 2,125 | 2 | 120 | 580,080 kB |
+| peered with A | 2,200 | 2 | 120 | 588,016 kB |
+| alone, same store | 2,200 | 3 | 120 | 806,320 kB |
+| alone | 2,700 | 3 | 120 | 873,912 kB |
+| alone, the last tip with the fork's root in reach | 2,720 | 3 | 120 | 876,444 kB |
+| alone | 2,730 | 2 | 0 | 613,736 kB |
+| alone | 2,820 | 2 | 0 | 614,248 kB |
+| alone | 2,840 | 1 | 0 | 352,364 kB |
+
+- **Peered, the held fork is not the third** (§5.1): A's run is the frontier, it outweighs the fork B left, and its seed is the window's. Alone, with no frontier, the same store names the fork's seed third.
+- **The list changes where the arithmetic says.** Three at tip 2,720 and two at 2,723: the fork's root, block 2,000, left the 720-block reach at tip 2,721, and the store retired the alternatives. Two at 2,831 and one at 2,834: the window names one seed from tip 2,832.
+- **A place given up returns 256 MiB.** 876,444 kB to 614,296 kB is 262,148 kB; 614,984 kB to 352,840 kB is 262,144 kB.
+- **The process outside the caches is about 88 MiB on regtest** with one cache (352,364 kB) and with three (876,444 kB). HA-F7's 90 MiB stands, and so does its sum for three caches against PB-R1, 1,946 MiB of 2,048. It is still a regtest reading: the store cache there holds a few megabytes of its 1 GiB.
+- **Three places were also resident during the switch itself** (811,216 kB, one sample), while A's branch arrived as alternatives. That is not the held-fork case: A's branch then stood below height 2,113 and its next block's seed was block 0's.
+
+The record is kept with the Foundation's internal captures, dated 2026-11-16: the two scripts, the daemons' logs and a sample every 2 s.
+
 ## 6. The PR sequence — RULED (HA-R6)
 
 1. **This document.**
 2. **`shekyl-hasher`, with no consumer** (rule 26: a new crate is its own PR) — BUILT (as of 2026-11-12). The actor, the cap, leases, builds, refill and the metric. Its tests are the invariant tests of §8, written against the crate's own API.
 3. **The cutover, one PR, driven by the deletion** — BUILT (as of 2026-11-14). The cache store's slots were shared by every consumer in §2, so any split would have left two owners of caches in one process. The PR deleted the slot API and moved the ingest, chain sync's executor, the miner, `pow`, the node, the replay binary, the pipeline and the test harnesses onto the actor, with `ranked_seeds` and its tests.
-4. **Close-out.** The live RSS capture repeated with a fork case, the floor device's `RssAnon` with three caches resident during a real initial sync, PB-R1's cache rows restated against the cap, and this document moved or made a contract (rule 95).
+4. **Close-out** — under way (as of 2026-11-16): the fork-case capture is taken (§5.10) and PB-R1's cache rows are restated; the floor device's reading is open. The live RSS capture repeated with a fork case, the floor device's `RssAnon` with three caches resident during a real initial sync, PB-R1's cache rows restated against the cap, and this document moved or made a contract (rule 95).
 
 ## 7. What holds the deletion
 
