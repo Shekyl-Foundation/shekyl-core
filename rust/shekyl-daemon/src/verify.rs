@@ -245,6 +245,17 @@ mod tests {
         }
     }
 
+    /// The entry point as these tests start it: every step of
+    /// [`crate::run::main`], with the host's default configuration file
+    /// left unread.
+    fn start(args: &[OsString], platform: &Platform) -> i32 {
+        crate::run::main_loading(
+            args,
+            platform,
+            shekyl_daemon_config::load_default_file_unread,
+        )
+    }
+
     fn args(list: &[&str]) -> Vec<OsString> {
         std::iter::once("shekyld")
             .chain(list.iter().copied())
@@ -279,7 +290,7 @@ mod tests {
         let data = d.path().join("deep").join("data");
         let log = d.path().join("logs").join("shekyld.log");
         let a = offline_regtest(&data, &log);
-        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert!(
             !d.path().join("deep").exists(),
             "no data directory was created"
@@ -293,7 +304,7 @@ mod tests {
         marker::check_or_write(&held, shekyl_daemon_config::Network::Regtest, regtest_id())
             .unwrap();
         let before = std::fs::read(data.join("shekyld.network")).unwrap();
-        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert_eq!(std::fs::read(data.join("shekyld.network")).unwrap(), before);
         assert!(!log.exists());
         drop(held);
@@ -310,7 +321,7 @@ mod tests {
         let other = marker::render(shekyl_daemon_config::Network::Testnet, [9u8; 16]);
         std::fs::write(data.join("shekyld.network"), &other).unwrap();
         let a = offline_regtest(&data, &log);
-        assert_eq!(crate::run::main(&a, &platform(d.path())), EXIT_REFUSED);
+        assert_eq!(start(&a, &platform(d.path())), EXIT_REFUSED);
         assert_eq!(
             std::fs::read_to_string(data.join("shekyld.network")).unwrap(),
             other
@@ -341,7 +352,7 @@ mod tests {
         assert_eq!(ds[0].code, Code::ValueRange);
         assert_eq!(ds[0].option.as_deref(), Some("dev-pow-seed-epoch-blocks"));
         assert_eq!(ds[0].get("value"), Some("3"));
-        assert_eq!(crate::run::main(&a, &platform(d.path())), EXIT_REFUSED);
+        assert_eq!(start(&a, &platform(d.path())), EXIT_REFUSED);
         assert!(!data.exists());
     }
 
@@ -403,7 +414,7 @@ mod tests {
         );
         assert!(err.iter().any(|line| line.starts_with("shekyld: posture:")));
         assert!(err.iter().any(|line| line.contains("warning: managed Tor")));
-        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert!(!data.exists());
     }
 

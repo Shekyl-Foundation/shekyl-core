@@ -58,7 +58,36 @@ pub struct AfterFile {
 ///
 /// The refusals, typed (IG-11); the caller renders them.
 pub fn load(cli: Cli, platform: &Platform) -> Result<Loaded, Vec<Diagnostic>> {
-    let (config_path, opened) = config_file(&cli, platform).map_err(|d| vec![d])?;
+    load_with(cli, platform, DefaultFile::Read)
+}
+
+/// [`load`], with the default file left unread: a file `cli` names is read
+/// as [`load`] reads it, and when it names none the result is what a host
+/// with no default file gives. On Unix the default path is the machine's
+/// (`/etc/shekyl`), whatever `platform` says, so a test that starts the
+/// daemon through its entry point loads with this and reads nothing from
+/// the host it runs on.
+///
+/// # Errors
+///
+/// As [`load`].
+pub fn load_default_file_unread(cli: Cli, platform: &Platform) -> Result<Loaded, Vec<Diagnostic>> {
+    load_with(cli, platform, DefaultFile::Unread)
+}
+
+/// Whether the file step opens the default file when `cli` names none.
+#[derive(Clone, Copy)]
+enum DefaultFile {
+    Read,
+    Unread,
+}
+
+fn load_with(
+    cli: Cli,
+    platform: &Platform,
+    default_file: DefaultFile,
+) -> Result<Loaded, Vec<Diagnostic>> {
+    let (config_path, opened) = config_file(&cli, platform, default_file).map_err(|d| vec![d])?;
     let AfterFile {
         file_read,
         resolved,
@@ -74,11 +103,12 @@ pub fn load(cli: Cli, platform: &Platform) -> Result<Loaded, Vec<Diagnostic>> {
 
 /// [`load`]'s file step: the path `cli` names, or the run mode's default
 /// for the chosen network, and that file opened and permission-checked.
-/// `None` when the default file is absent; a named file that is absent is
-/// refused.
+/// `None` when the default file is absent or left unread; a named file
+/// that is absent is refused.
 fn config_file(
     cli: &Cli,
     platform: &Platform,
+    default_file: DefaultFile,
 ) -> Result<(PathBuf, Option<ConfigFile>), Diagnostic> {
     let (network, mode) = choosers(cli);
     let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
@@ -88,7 +118,10 @@ fn config_file(
         },
         None => (paths::config_file_default(platform, mode, network)?, false),
     };
-    let opened = file::open(&config_path, named)?;
+    let opened = match (named, default_file) {
+        (false, DefaultFile::Unread) => None,
+        (true, _) | (false, DefaultFile::Read) => file::open(&config_path, named)?,
+    };
     Ok((config_path, opened))
 }
 
