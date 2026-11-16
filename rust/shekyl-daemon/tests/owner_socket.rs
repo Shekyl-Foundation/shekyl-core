@@ -14,10 +14,11 @@
 //! start while the first answers.
 //!
 //! Each test re-executes this binary as the daemon child, which runs
-//! `shekyl_daemon::run::main` with a private `--rpc-socket-dir`, as every
-//! harness does. On Windows that directory does not exist yet: the daemon
-//! creates it with its owner, protections and label, and refuses one that
-//! lacks them.
+//! `shekyl_daemon::run::main`. On Unix it names a private
+//! `--rpc-socket-dir`, as every harness does. Windows refuses that row (its
+//! rendezvous directory is fixed), so there the child's account root is the
+//! test's own directory and the rendezvous goes in `Shekyl\rendezvous` under
+//! it, which the daemon creates with its owner, protections and label.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -52,8 +53,8 @@ fn run_child_if_requested() {
     let dir = PathBuf::from(dir);
     let data_dir = dir.join(data);
     let log_file = data_dir.join("shekyld.log");
-    let socket_dir = dir.join("s");
-    let args: Vec<std::ffi::OsString> = [
+    let socket_dir = rendezvous_dir(&dir);
+    let mut args: Vec<&str> = vec![
         "shekyld",
         "--network",
         "regtest",
@@ -63,26 +64,45 @@ fn run_child_if_requested() {
         "off",
         "--rpc-admin-listen",
         "none",
-        "--rpc-socket-dir",
-        socket_dir.to_str().expect("a UTF-8 path"),
         "--data-dir",
         data_dir.to_str().expect("a UTF-8 path"),
         "--log-file",
         log_file.to_str().expect("a UTF-8 path"),
-    ]
-    .iter()
-    .map(std::ffi::OsString::from)
-    .collect();
+    ];
+    // Unix: a private socket directory, as every harness names. Windows
+    // refuses one (its rendezvous directory is fixed); this run's account
+    // root is the test's own directory, so the rendezvous is under it.
+    if cfg!(unix) {
+        args.extend([
+            "--rpc-socket-dir",
+            socket_dir.to_str().expect("a UTF-8 path"),
+        ]);
+    }
+    let args: Vec<std::ffi::OsString> = args.iter().map(std::ffi::OsString::from).collect();
     let status = shekyl_daemon::run::main(
         &args,
         &Platform {
             home: Some(dir),
-            program_data: None,
+            service_parent: None,
             session_dir: None,
             service_rendezvous: None,
         },
     );
     std::process::exit(status);
+}
+
+/// Where the child's rendezvous goes: on Unix the private socket directory
+/// the harness names, on Windows `Shekyl\rendezvous` under the account root
+/// the child is given, the test's directory (`RPC_CHANNEL.md` §7.1).
+#[cfg(unix)]
+fn rendezvous_dir(dir: &Path) -> PathBuf {
+    dir.join("s")
+}
+
+/// Windows: see the Unix arm.
+#[cfg(windows)]
+fn rendezvous_dir(dir: &Path) -> PathBuf {
+    shekyl_rpc_rendezvous::account_dir(dir)
 }
 
 /// A daemon child and its directory.
@@ -220,19 +240,25 @@ impl Drop for Node {
     }
 }
 
-/// "This computer"'s client, told the harness's socket directory: the
+/// "This computer"'s client, told the child's rendezvous directory: the
 /// rendezvous by the daemon's own naming (`RPC_CHANNEL.md` RT-15, §7.1).
 fn target(dir: &Path) -> LocalTarget {
-    LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(&dir.join("s")))
-        .expect("a named directory")
+    LocalTarget::resolve(
+        Network::Regtest,
+        &Instance::Default,
+        Some(&rendezvous_dir(dir)),
+    )
+    .expect("a named directory")
 }
 
 /// One JSON-RPC call over the owner's leg at `rendezvous`, through the
-/// client; the reply's body, or `None` while nothing serves it.
+/// client resolved in the rendezvous's own directory; the reply's body, or
+/// `None` while nothing serves it.
 fn post(rendezvous: &Path, method: &str) -> Option<String> {
-    let dir = rendezvous.parent()?.parent()?;
+    let target =
+        LocalTarget::resolve(Network::Regtest, &Instance::Default, rendezvous.parent()).ok()?;
     let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}"}}"#);
-    let reply = target(dir)
+    let reply = target
         .post(JSON_RPC_ROUTE, body.as_bytes(), Duration::from_secs(10))
         .ok()?;
     String::from_utf8(reply.to_vec()).ok()

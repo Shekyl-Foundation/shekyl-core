@@ -411,6 +411,17 @@ constant and its golden vector.
    - **A wallet without its own node** still reaches its daemon over
      clearnet by default (§2), and that daemon sees the submission.
 
+   **TRC-1 reported 2026-11-15** (`TOR_COVER_POSTURE.md` banner, REOPENED):
+   the operator-relay posture does not hide originated cells either. An
+   observer of the guard connections of a node using its own relay's Tor
+   picked out the node's sends: in 100 ms windows, a window holding a send
+   ranks above a random other window 93 % of the time (AUC 0.928). So the
+   operator-relay branch above, and its "residue" below, no longer hold.
+   The reading measured a node with a relay. For the default client-only
+   Tor, whose guard connections carry only its own traffic, the anchor
+   follows by reasoning, not by measurement. That is BD-Q4's TRC-1 input;
+   this round has not yet read it into the window.
+
    So, under the default posture, the network-origin observer is the
    ISP's burst-timing vantage plus the remote-daemon case, not an IP link
    at the first stem edge; under the operator-relay posture it is

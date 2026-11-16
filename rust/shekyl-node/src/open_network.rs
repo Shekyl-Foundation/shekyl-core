@@ -277,21 +277,28 @@ fn facts_origin(
 /// The stem entry: a transaction this node offers is handed to the relay
 /// owner, which plans it as a local origin.
 fn stem_entry(relay: RelayHandle, door: Arc<NodePoolDoor>, offline: bool) -> RelayNudge {
+    if offline {
+        return offline_stem_entry(door);
+    }
     Arc::new(move |txid: &TxHash, blob: &[u8]| {
-        // An offline node has no network to hide from, so the
-        // transaction is shown at once (RX-2, Rick 2026-10-29).
-        // With one, the relay owner takes it before the zone plans
-        // on its strand, so `NoOwnEdge` and `AwaitSync` never reach
-        // this branch: the zone holds those (`hold_origin`),
-        // neither fluffed nor shown. The owner refuses only once it
-        // has stopped. An empty blob is nothing to relay.
-        let taken = !offline
-            && !blob.is_empty()
-            && relay.relay_local(TxId::from_bytes(txid.to_bytes()), blob.to_vec());
+        // The relay owner takes it before the zone plans on its strand,
+        // so `NoOwnEdge` and `AwaitSync` never reach this branch: the
+        // zone holds those (`hold_origin`), neither fluffed nor shown.
+        // The owner refuses only once it has stopped. An empty blob is
+        // nothing to relay.
+        let taken =
+            !blob.is_empty() && relay.relay_local(TxId::from_bytes(txid.to_bytes()), blob.to_vec());
         if !taken {
             door.note_shown(*txid);
         }
     })
+}
+
+/// The stem entry of a node with no network: it has nothing to hide from,
+/// so every transaction it offers is shown at once (RX-2, Rick
+/// 2026-10-29).
+pub(crate) fn offline_stem_entry(door: Arc<NodePoolDoor>) -> RelayNudge {
+    Arc::new(move |txid: &TxHash, _: &[u8]| door.note_shown(*txid))
 }
 
 fn install_submit(submit: Submit) {

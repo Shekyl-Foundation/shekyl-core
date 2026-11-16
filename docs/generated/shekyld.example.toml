@@ -112,6 +112,11 @@
 # The mining thread count, or `auto`.
 # mine-threads = "auto"
 
+# The authenticated channel's listeners: enrolled clients reach the node
+# here over the Noise channel, from this host or another. Any address, a
+# wildcard included; `none` is no channel listener.
+# rpc-listen = "none"
+
 # The directory for the owner's socket, where the account has no session
 # directory (a test host). It must be local, owned by this account, with
 # mode 0700. Unset uses the session directory.

@@ -63,7 +63,9 @@ const BENCH_NETWORK_ID: NetworkId = [0x29; 16];
 
 /// Message 3's and message 4's payloads, and the first record's: 64 bytes,
 /// as RT-P6 registered (RT-W10's encodings are fixed-length, §6.2).
-const PAYLOAD: [u8; 64] = [0x5a; 64];
+/// RT-O31's payload: one length for every grant set.
+const PAYLOAD: [u8; shekyl_rpc_channel::handshake::PAYLOAD_LEN] =
+    [0x5a; shekyl_rpc_channel::handshake::PAYLOAD_LEN];
 
 const MESSAGE3_LEN: usize = MESSAGE3_OVERHEAD + PAYLOAD.len();
 const MESSAGE4_LEN: usize = MESSAGE4_OVERHEAD + PAYLOAD.len();
@@ -160,9 +162,9 @@ fn serve(listen: &str, bundle_out: &str, out: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The first record's payload: the sample's number, then [`PAYLOAD`]'s bytes.
+/// The first record's payload: the sample's number, then filler.
 fn numbered(sample: u64) -> [u8; 64] {
-    let mut payload = PAYLOAD;
+    let mut payload = [0x5a; 64];
     payload[..8].copy_from_slice(&sample.to_le_bytes());
     payload
 }

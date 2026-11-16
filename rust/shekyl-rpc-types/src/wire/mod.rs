@@ -20,6 +20,7 @@ pub mod chain;
 pub mod daemon;
 pub mod node;
 pub mod p2p;
+pub mod rpc;
 pub mod shared;
 pub mod tor;
 pub mod tx;
@@ -29,7 +30,7 @@ use crate::method::Policy;
 use crate::nullable::Nullable;
 use shared::{OrArchived, Slot};
 use shekyl_rpc_grants::Grant::{
-    Bans, Chain, Health, MiningControl, MiningWork, Node, Peers, Pool, Status, Submit,
+    Bans, Chain, Enrol, Health, MiningControl, MiningWork, Node, Peers, Pool, Status, Submit,
 };
 
 const fn g(grant: shekyl_rpc_grants::Grant) -> Policy {
@@ -116,6 +117,16 @@ crate::rpc_methods! {
     BanList = "ban_list": NoParams => Vec<node::Ban>, g(Bans);
     /// One host's ban; `null` when it is not banned (§18).
     BanShow = "ban_show": node::BanHost => Nullable<node::Ban>, g(Bans);
+    /// Enrol a client under a ceiling (IG-Q87).
+    RpcClientAdd = "rpc_client_add": rpc::ClientCeiling => Done, g(Enrol);
+    /// Change an enrolled client's ceiling.
+    RpcClientSet = "rpc_client_set": rpc::ClientCeiling => Done, g(Enrol);
+    /// Revoke an enrolment.
+    RpcClientRemove = "rpc_client_remove": rpc::ClientFingerprint => Done, g(Enrol);
+    /// The enrolments within the caller's grant.
+    RpcClientList = "rpc_client_list": NoParams => Vec<rpc::Client>, g(Enrol);
+    /// This daemon's public bundle.
+    RpcBundleShow = "rpc_bundle_show": NoParams => rpc::Bundle, g(Enrol);
     /// The relay's floor and stem tallies (host-only, RT-O9.3).
     RelayStats = "relay_stats": NoParams => p2p::RelayStats, Policy::HostOnly;
     /// Mine blocks (an armed lever, RT-O9.2).
@@ -129,12 +140,12 @@ mod tests {
     use super::*;
     use crate::schema::{kind_faults, names, NameKind};
 
-    /// Part C's 42 methods, and no other (§17 as Part F and IG-Q94 amend
-    /// it).
+    /// Part C's 42 methods and IG-Q87's five, and no other (§17 as Part F
+    /// and IG-Q94 amend it; §25.3).
     #[test]
-    fn the_table_is_the_42_methods() {
-        assert_eq!(TABLE.len(), 42);
-        assert_eq!(Id::ALL.len(), 42);
+    fn the_table_is_the_47_methods() {
+        assert_eq!(TABLE.len(), 47);
+        assert_eq!(Id::ALL.len(), 47);
     }
 
     /// Every name in the table holds the kind its last term requires, and

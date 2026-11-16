@@ -279,6 +279,11 @@ it: keep the daemon's group a local group.
 # The mining thread count, or `auto`.
 # mine-threads = "auto"
 
+# The authenticated channel's listeners: enrolled clients reach the node
+# here over the Noise channel, from this host or another. Any address, a
+# wildcard included; `none` is no channel listener.
+# rpc-listen = "none"
+
 # The directory for the owner's socket, where the account has no session
 # directory (a test host). It must be local, owned by this account, with
 # mode 0700. Unset uses the session directory.
@@ -313,6 +318,7 @@ whether `option_set` changes it while the daemon runs.
 |--------|------|---------|-------|---------|-------------|
 | `help` | switch | — | command line | no | Print the options and exit. |
 | `version` | switch | — | command line | no | Print the version and the operating system, and exit. |
+| `rpc-console-key-reset` | switch | — | command line | no | Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrolment. Service mode only; refused while the daemon runs. |
 | `config-verify` | switch | — | command line | no | Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own. |
 | `network` | `mainnet` / `testnet` / `stagenet` / `regtest` | `mainnet` | command line | no | The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file. |
 | `service` | switch | — | command line | no | Run as this machine's service instance, started by the service manager under the daemon's own account. Serves no owner socket. On Windows it arrives with the service-manager dispatcher (RT-W14). |
@@ -350,6 +356,7 @@ whether `option_set` changes it while the daemon runs.
 | `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
 | `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
+| `rpc-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The authenticated channel's listeners: enrolled clients reach the node here over the Noise channel, from this host or another. Any address, a wildcard included; `none` is no channel listener. |
 | `rpc-socket-dir` | absolute path | — | both | no | The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
@@ -958,17 +965,14 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 > **Status: Experimental.** There are known metadata leak vectors. See
 > [ANONYMITY_NETWORKS.md](ANONYMITY_NETWORKS.md) for the full threat matrix.
 
-> **Tor-zone cover is an operator choice, not a protocol default (TRC,
-> recorded 2026-09-12).** Wire-observer resistance on Tor comes from running a
-> **non-exit** Tor relay in a **separate process** from `shekyld`, with the
-> node's Tor **client that same process** (originated cells on the relay's OR
-> connections). A sidecar client Tor — including the default managed
-> ephemeral instance — is uncovered. See [TOR_RELAY.md](TOR_RELAY.md). The
-> daemon does not check, warn, or refuse on that basis. The contract is
-> [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md).
+> **Tor hides your IP address from peers, not when you send.** Someone
+> watching your connection to the Tor network can tell when your node sends
+> its own transaction. Running a Tor relay does not change that
+> ([TOR_RELAY.md](TOR_RELAY.md)). Cover traffic is being redesigned
+> ([design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md)).
 
-Shekyl can broadcast transactions over Tor so that observers cannot
-link your IP address to your transactions. I2P is not a network this
+Shekyl can broadcast transactions over Tor so that peers do not learn
+your IP address from your transactions. I2P is not a network this
 daemon dials. Regular block sync and peer communication still uses IPv4
 to resist Sybil attacks.
 
@@ -984,9 +988,7 @@ endpoint it forwards to:
     --tor-onion <your-onion>.onion:11021 --tor-onion-listen 127.0.0.1:11021
 ```
 
-`--tor off` is clearnet only. For Tor-zone *cover*, that SocksPort must be
-the non-exit relay process — see [TOR_RELAY.md](TOR_RELAY.md) — not a
-second client Tor.
+`--tor off` is clearnet only.
 
 ### Wallet through Tor
 
@@ -1007,10 +1009,9 @@ operator sees what it asks for — true of your own node too; see
   **only** sent to peers on anonymity networks.
 - If no anonymity peers are available, the transaction is **held** -- it will
   never be broadcast over a public connection.
-- V3 transactions are larger (~7-8 KB vs ~2-3 KB pre-PQC), creating a more
-  distinctive traffic burst. On Tor that burst is mixed by operator relay
-  volume ([TOR_RELAY.md](TOR_RELAY.md)), not by dummy traffic. Tor is the
-  only encrypted network, so dummy traffic is not a second network's cover.
+- A transaction's send is a burst on your node's Tor connection, and today
+  nothing hides it, a relay included (see the note at the top of this
+  section).
 
 ---
 
