@@ -2314,8 +2314,14 @@ account `shekyl-tunnel`, never `shekyl` and never root, with its key in its
 own 0700 state directory, its configuration in a named file, and its
 listener on loopback only. The `.deb` and `.rpm` install the unit without
 enabling it: a tunnel needs a configuration and a key before its first
-start. A stop (SIGTERM) is a clean exit. The launch-recipe gate holds both
-launchers to the tunnel's table (check 6). Windows and macOS run it as a
+start. A stop (SIGTERM) is a clean exit. The unit carries a hardening set
+(Rick, 2026-11-16): no capabilities, IP and local sockets only, W^X kept
+(`MemoryDenyWriteExecute`; the tunnel runs no JIT), the `@system-service`
+system calls, native architecture only, and `UMask=0077`, besides the
+kernel, clock, hostname, namespace, real-time and SUID protections.
+shekyld's unit does not carry it: RandomX's JIT needs W^X off. The
+launch-recipe gate holds both launchers to the tunnel's table, and the unit
+to the hardening set at each directive's value (check 6). Windows and macOS run it as a
 user process; their service support is RT-W14's.
 
 ---

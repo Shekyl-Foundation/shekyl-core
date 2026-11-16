@@ -55,7 +55,9 @@ Five checks over an enumerated set of files:
    0700 by the rc.d prestart), and its log in its own log directory; and
    pass `--listen`, if they pass it, as a loopback address. The unit is
    `Restart=on-failure`, and the rc.d script's restart loop and clean-exit
-   rule are the daemon script's, at the tunnel unit's `RestartSec`.
+   rule are the daemon script's, at the tunnel unit's `RestartSec`. The
+   unit carries the hardening set (Rick, 2026-11-16), each directive at its
+   ruled value (`TUNNEL_HARDENING`).
 
 Exit 0 when every check holds; 1 naming each failure; 2 on a subject that
 could not be read (rule 47: a gate asserts its own subject).
@@ -113,6 +115,32 @@ TUNNEL_RC = "contrib/packaging/freebsd/shekyl-rpc-tunnel"
 TUNNEL_BINARY = "/usr/local/bin/shekyl-rpc-tunnel"
 # Its own account (Rick, 2026-11-16): never the daemon's, never root.
 TUNNEL_ACCOUNT = "shekyl-tunnel"
+# The tunnel unit's hardening set, each at its ruled value (Rick,
+# 2026-11-16). shekyld's unit is not held to it: RandomX's JIT needs W^X
+# off.
+TUNNEL_HARDENING = {
+    "NoNewPrivileges": "true",
+    "ProtectSystem": "strict",
+    "ProtectHome": "true",
+    "PrivateTmp": "true",
+    "CapabilityBoundingSet": "",
+    "RestrictAddressFamilies": "AF_INET AF_INET6 AF_UNIX",
+    "PrivateDevices": "true",
+    "ProtectKernelTunables": "true",
+    "ProtectKernelModules": "true",
+    "ProtectKernelLogs": "true",
+    "ProtectControlGroups": "true",
+    "ProtectClock": "true",
+    "ProtectHostname": "true",
+    "RestrictNamespaces": "true",
+    "RestrictRealtime": "true",
+    "RestrictSUIDSGID": "true",
+    "LockPersonality": "true",
+    "MemoryDenyWriteExecute": "true",
+    "SystemCallFilter": "@system-service",
+    "SystemCallArchitectures": "native",
+    "UMask": "0077",
+}
 # daemon(8) flags that restart a clean exit. The script's own loop is the
 # on-failure policy; these must not also be set.
 DAEMON_RESTART_FLAGS = ("-r", "-R", "--restart", "--restart-delay")
@@ -408,6 +436,9 @@ def check_tunnel_unit(rel: str, text: str, rows: dict[str, str]) -> list[str]:
     errors.extend(loopback_listen(rel, values))
     if fields.get("Restart") != "on-failure" or not fields.get("RestartSec"):
         errors.append(f"{rel}: the tunnel's unit is not Restart=on-failure with RestartSec")
+    for key, value in TUNNEL_HARDENING.items():
+        if fields.get(key) != value:
+            errors.append(f"{rel}: {key}={fields.get(key)}; the hardening set is {key}={value}")
     return errors
 
 
@@ -721,6 +752,7 @@ def selftest() -> int:
             " --rpc-key-file /var/lib/shekyl-tunnel/k.key --log-file /var/log/shekyl-tunnel/t.log\n"
             "User=shekyl-tunnel\nGroup=shekyl-tunnel\nStateDirectory=shekyl-tunnel\nStateDirectoryMode=0700\n"
             "LogsDirectory=shekyl-tunnel\nRestart=on-failure\nRestartSec=30\n"
+            + "".join(f"{key}={value}\n" for key, value in TUNNEL_HARDENING.items())
         )
         t_rc = (
             "name=shekyl_rpc_tunnel\n"
@@ -749,6 +781,9 @@ def selftest() -> int:
             ("a tunnel rc.d script run as the daemon's account is named", t_unit, t_rc.replace("-u shekyl-tunnel", "-u shekyl"), ["does not run the tunnel as shekyl-tunnel"]),
             ("a tunnel key directory the prestart makes 0755 is named", t_unit, t_rc.replace("-m 0700 /var/db/shekyl-tunnel", "-m 0755 /var/db/shekyl-tunnel"), ["is not made at mode 0700 as shekyl-tunnel"]),
             ("a tunnel rc.d restart delay off its unit is named", t_unit, t_rc.replace("restart_seconds=30", "restart_seconds=5"), ["restart_seconds is not the tunnel unit's RestartSec=30"]),
+            ("a tunnel unit with W^X off is named", t_unit.replace("MemoryDenyWriteExecute=true", "MemoryDenyWriteExecute=false"), t_rc, ["MemoryDenyWriteExecute=false; the hardening set is MemoryDenyWriteExecute=true"]),
+            ("a tunnel unit without a capability bound is named", t_unit.replace("CapabilityBoundingSet=\n", ""), t_rc, ["CapabilityBoundingSet=None; the hardening set is CapabilityBoundingSet="]),
+            ("a tunnel unit with a wider address set is named", t_unit.replace("AF_INET AF_INET6 AF_UNIX", "AF_INET AF_INET6 AF_UNIX AF_NETLINK"), t_rc, ["the hardening set is RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"]),
             ("a tunnel rc.d script that runs another binary is named", t_unit, t_rc.replace('/usr/local/bin/shekyl-rpc-tunnel "$@"', '/usr/local/bin/shekyld "$@"'), ["does not run /usr/local/bin/shekyl-rpc-tunnel"]),
         ]
         (repo / "rust" / "shekyl-rpc-tunnel" / "src").mkdir(parents=True)

@@ -46,5 +46,27 @@ ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/shekyl-tunnel /var/log/shekyl-tunnel
 
+# The hardening set (Rick, 2026-11-16); the launch-recipe gate holds the
+# unit to it. The tunnel needs no capability, opens IP and local sockets
+# only, and runs no JIT, so W^X stays on (shekyld's unit cannot set
+# MemoryDenyWriteExecute: RandomX's JIT writes code).
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+UMask=0077
+
 [Install]
 WantedBy=multi-user.target
