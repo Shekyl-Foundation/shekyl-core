@@ -116,6 +116,7 @@ jobs:
           key: fuzz-harnesses
           save-if: ${{ github.event_name == 'push' }}
       - name: cargo check --locked, every crate reached
+        shell: bash
         env:
           CRATES: ${{ needs.scope.outputs.crates }}
           CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target-fuzz
@@ -125,8 +126,16 @@ jobs:
           # are regenerated from the workspace's, and committed. Every
           # crate is checked, and every failure is named, before the
           # verdict.
+          listed=$(jq -r '.[]' <<<"$CRATES")
+          mapfile -t crates <<<"$listed"
+          # The job runs only when the scope listed a crate (rule 47: an
+          # empty list here would check nothing and pass).
+          if [ -z "$listed" ] || [ "${#crates[@]}" -eq 0 ]; then
+            echo "::error::no fuzz crate to check in ${CRATES} — missing subject"
+            exit 1
+          fi
           failed=()
-          for crate in $(python3 -c 'import json, os; print(" ".join(json.loads(os.environ["CRATES"])))'); do
+          for crate in "${crates[@]}"; do
             echo "::group::rust/$crate/fuzz"
             if cargo check --locked --manifest-path "rust/$crate/fuzz/Cargo.toml"; then
               echo "::endgroup::"
@@ -136,6 +145,7 @@ jobs:
               failed+=("$crate")
             fi
           done
+          echo "checked ${#crates[@]} fuzz crate(s): ${crates[*]}"
           if [ "${#failed[@]}" -ne 0 ]; then
             echo "did not type-check: ${failed[*]}"
             exit 1

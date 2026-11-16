@@ -252,6 +252,10 @@ jobs:
     # step is skipped on the cron, so this fits with margin — measure
     # the first crons before tightening.
     timeout-minutes: 120
+    # The daily cron, a push, a dispatch, or a pull request that is not a
+    # draft (ruled 2026-11-16: a draft skips this lane, and marking it ready
+    # runs it). The verdict ratchet and native-arm carry the same condition,
+    # written out: actionlint cannot check an expression behind a YAML alias.
     if: (github.event_name != 'schedule' || github.event.schedule == '0 5 * * *') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     env:
       # Runtime-mode sizing: per-PR/push/dispatch events run the R1-D4

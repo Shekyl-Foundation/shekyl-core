@@ -177,12 +177,15 @@ def problems_in(filename: str, doc: object) -> list[str]:
     if isinstance(group, str):
         expressions.append(group)
     skips_drafts = any(_DRAFT in text for text in expressions)
-    types = pr.get("types", TYPES) if "types" in pr else TYPES
+    # An absent `types` key is the default set, which the message says in
+    # words: `None` would read as a key with nothing under it.
+    types = pr["types"] if "types" in pr else TYPES
+    written = repr(pr["types"]) if "types" in pr else "absent (the default set)"
     if skips_drafts:
         if types != READY_TYPES:
             problems.append(
                 f"{filename}: a job skips a draft pull request, and `pull_request` types are "
-                f"{pr.get('types')!r}, not {READY_TYPES}: marking the draft ready runs nothing, "
+                f"{written}, not {READY_TYPES}: marking the draft ready runs nothing, "
                 "so the draft's skipped check stands as a pass"
             )
     elif types == READY_TYPES:
@@ -323,6 +326,11 @@ def selftest() -> int:
         if want_problem != bool(got):
             print(f"SELFTEST FAIL: {label}: want problem={want_problem}, got {got}")
             failed += 1
+    # The message names an absent `types` key as the default set, not None.
+    absent = problems_in("fixture.yml", _doc(job={**_job(), "if": "!github.event.pull_request.draft"}))
+    if not absent or "absent (the default set)" not in absent[0] or "None" in absent[0]:
+        print(f"SELFTEST FAIL: an absent types key is named as such: got {absent}")
+        failed += 1
     if failed:
         return 1
     print(

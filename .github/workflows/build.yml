@@ -75,6 +75,11 @@ jobs:
     timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      # Whether the OS builds do their work: not for a docs-only change, and
+      # not on a draft pull request (ruled 2026-11-16). One decision, read by
+      # macOS, Windows and Ubuntu as `!= 'false'`, so a missing value runs
+      # them.
+      work: ${{ steps.work.outputs.work }}
     # `actions: read` lists this workflow's earlier runs for a push's base.
     permissions:
       contents: read
@@ -105,6 +110,20 @@ jobs:
           # rather than skipping the jobs that need this one.
           python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
             || echo "docs_only=false" >> "$GITHUB_OUTPUT"
+      - id: work
+        name: whether the OS builds do their work
+        shell: bash
+        env:
+          DOCS_ONLY: ${{ steps.scope.outputs.docs_only }}
+          # A draft skips them; marking it ready (`ready_for_review`) runs
+          # them on the same head, replacing the draft's skipped checks.
+          DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
+        run: |
+          if [ "$DOCS_ONLY" = "true" ] || [ "$DRAFT" = "true" ]; then
+            echo "work=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "work=true" >> "$GITHUB_OUTPUT"
+          fi
 
   lint-rust-debug-macros:
     name: 'Lint: no debug macros in production Rust'
@@ -179,9 +198,9 @@ jobs:
   build-macos:
     name: 'macOS (brew)'
     needs: changes
-    # Skipped on a draft pull request (ruled 2026-11-16); runs when it is
-    # marked ready, and on every push to a ready one.
-    if: needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    # Skipped for a docs-only change and on a draft pull request
+    # (`changes.work`).
+    if: needs.changes.outputs.work != 'false'
     runs-on: macOS-latest
     timeout-minutes: 45  # p90 20.4 min over 13 runs
     steps:
@@ -242,17 +261,13 @@ jobs:
     # job has no `matrix.name` to interpolate and cannot emit the check under
     # that name: protection would keep waiting (`check_matrix_job_gating.py`).
     # So the job runs, and gates its WORK at the step level instead, on
-    # `WORK`: nothing for a docs-only change, and nothing on a draft pull
-    # request (ruled 2026-11-16). Marking the draft ready
-    # (`ready_for_review`) runs the leg in full on the same head, and its
-    # pending check replaces the draft's empty one.
+    # `changes.work`: nothing for a docs-only change, and nothing on a draft
+    # pull request. Marking the draft ready (`ready_for_review`) runs the
+    # leg in full on the same head, and its pending check replaces the
+    # draft's empty one.
     #
     # Cost on a docs-only change or a draft: one runner allocation that
     # finishes in seconds.
-    env:
-      WORK: >-
-        ${{ needs.changes.outputs.docs_only != 'true'
-            && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90  # p90 44.7 min over 15 runs (the 24.04 leg)
     strategy:
@@ -279,23 +294,23 @@ jobs:
       options: --tmpfs /mnt/shekyl-small-disk:rw,size=1m
     steps:
       - name: set apt conf
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         run: ${{env.APT_SET_CONF}}
       - name: update apt
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         run: apt update
       - name: install build dependencies
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         run: ${{env.APT_INSTALL_LINUX}}
       - name: configure git
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         with:
           submodules: recursive
       - name: install Rust
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         # Composite action (.github/actions/install-rust): the one
         # hardened download-then-run recipe, installing the
         # rust-toolchain.toml pin + components up front so the daemon
@@ -306,9 +321,9 @@ jobs:
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
       - uses: ./.github/actions/set-make-job-count
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
       - name: build
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: ${{env.BUILD_DEFAULT_LINUX}}
@@ -329,7 +344,7 @@ jobs:
       # reference of the PoW test setter cannot merge on a green source
       # grep alone. nm is binutils, pulled in by build-essential.
       - name: symbol isolation on linked daemon (nm)
-        if: matrix.live_gates && env.WORK == 'true'
+        if: matrix.live_gates && needs.changes.outputs.work != 'false'
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       # The hardening the link flags claim, read off the staged ELF binaries
@@ -337,7 +352,7 @@ jobs:
       # Rust binaries built by one cargo invocation; no CMake flag list
       # reaches them, so the result is what is asserted. readelf is binutils.
       - name: binary hardening on the staged binaries (readelf)
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         shell: bash
         run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
       # The C++ removal's end state (Rick, 2026-11-06), on what this job
@@ -346,13 +361,13 @@ jobs:
       # target compiling any) runs in the grep gates. Selftest first, so a
       # gate that cannot fail is caught before it passes.
       - name: the daemon holds no C++ (no C++ runtime, no C++ symbol)
-        if: env.WORK == 'true'
+        if: needs.changes.outputs.work != 'false'
         shell: bash
         run: |
           python3 scripts/ci/check_no_first_party_c.py --selftest
           python3 scripts/ci/check_no_first_party_c.py --binary build/bin/shekyld
       - name: live-daemon gates
-        if: matrix.live_gates && env.WORK == 'true'
+        if: matrix.live_gates && needs.changes.outputs.work != 'false'
         # `shell: bash`: the job's default shell in this container is dash,
         # which rejects `set -o pipefail` outright — the script dies on line
         # 1 before running anything.
@@ -364,8 +379,9 @@ jobs:
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
     needs: changes
-    # Skipped on a draft pull request (ruled 2026-11-16), as macOS.
-    if: needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    # Skipped for a docs-only change and on a draft pull request
+    # (`changes.work`).
+    if: needs.changes.outputs.work != 'false'
     runs-on: windows-2025-vs2026
     timeout-minutes: 180  # p90 89.2 min over 13 runs
     steps:
