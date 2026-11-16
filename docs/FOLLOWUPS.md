@@ -722,9 +722,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm** [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
   - Target: pre-genesis
 
-- **Single-sig address decode enforces the Bech32m variant** [`rust/shekyl-address/src/address.rs`](../rust/shekyl-address/src/address.rs)
-  - Target: pre-genesis
-
 - **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,
   - Target: pre-genesis
 
@@ -1285,6 +1282,10 @@ Default. Lands before genesis if it should exist at launch.
 
 - **S interim: `block_weight_short_term_surge_factor` re-derived at BA-T10 (floor re-run of the batched Bp+ term); closes when the measured d24 `surge_max` is recorded and S re-signed.** The Bp+ term is measured (BA-Q9, #1319): with `Â` folded into the batch the floor device reads 3.659 ms per batched proof, so d24 is about 3.93, and the conservative bracket (the folded lone proof, 18.84 ms) is 3.67. S = 3, the integer below that bracket, is the signed value (C2-R2 Q3 re-signed 2026-11-08) and stays an Assumption: the rest of the composition is the 2026-09-05 capture's, BA-T10 re-runs the full sweep, and S is re-signed on its d24 value.
   - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
+  - Target: pre-genesis
+
+- **NetBSD does not build on `dev`, and nothing noticed: no CI job builds it.** `shekyl-daemon-config` `owner_socket.rs` `is_local` (the non-Linux arm, from RT-W10 step 3, 2026-11-12) calls `rustix::fs::statfs`, which rustix does not provide on NetBSD (NetBSD has `statvfs`), so `cargo clippy --target x86_64-unknown-netbsd -p shekyl-daemon-config` fails with E0425. The tree still names NetBSD (`group.rs`'s per-target account walk), and that arm is unverified for the same reason. The general point: a target no CI job builds is unverified code, however carefully its arm was written. Not fixed here (ruled 2026-11-15, #1394): the decision is whether NetBSD stays a target. If it stays, a CI job builds it and `is_local` reads `statvfs`'s flags there; if not, its arms are deleted and an unnamed target refuses to build.
+  - Owner: Rick (whether NetBSD stays a target); the fix is the owner socket's — [`RPC_CHANNEL.md`](design/RPC_CHANNEL.md) (RT-W10, the socket's directory on a local filesystem)
   - Target: pre-genesis
 
 
