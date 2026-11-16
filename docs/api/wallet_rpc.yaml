@@ -1100,8 +1100,8 @@ components:
                                           bulletproof, fcmp-prove, pqc-sign,
                                           wire, balance-self-check — or the
                                           wallet state signing reads —
-                                          primitive, fee-variant-shortfall,
-                                          handle-mismatch, missing-key-image,
+                                          primitive, handle-mismatch,
+                                          missing-key-image,
                                           source-decapsulation,
                                           rid-not-encodable, proof,
                                           bulletproof-parse, wire-encode).

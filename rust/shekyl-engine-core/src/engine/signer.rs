@@ -411,7 +411,7 @@ impl Signer for LocalSigner {
             &mut signatures.bulletproof_plus.as_slice(),
         )
         .map_err(|_| SignerError::Internal {
-            fault: "bulletproof-parse",
+            fault: super::error::SignerFault::BulletproofParse,
         })?;
 
         let wire_input = shekyl_tx_builder::WireEncodeInput {
@@ -445,7 +445,7 @@ impl Signer for LocalSigner {
 
         let tx_bytes =
             shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| SignerError::Internal {
-                fault: "wire-encode",
+                fault: super::error::SignerFault::WireEncode,
             })?;
 
         Ok(SignedTransfer {
@@ -555,6 +555,11 @@ mod tests {
             .sign_transfer(context)
             .await
             .expect_err("empty TxToSign cannot be signed");
-        assert!(matches!(err, SignerError::Internal { fault: "primitive" }));
+        assert!(matches!(
+            err,
+            SignerError::Internal {
+                fault: super::super::error::SignerFault::Primitive
+            }
+        ));
     }
 }

@@ -1676,8 +1676,8 @@ raised: `IoError::Daemon { fault, .. }` on every path and
 |---------|-------|
 | Daemon fee RPC down | `SendError::Io` / `FeeEstimatorError::Daemon(DaemonFault::Unreachable)` |
 | Daemon is not one this wallet can use (`VC-4`) | `IoError::Daemon` / `FeeEstimatorError::Daemon` with `DaemonFault::Identity(IdentityMismatch)` — one wallet-RPC code per axis |
-| Absurd priority fee | `SendError::Tx(TxError::DaemonFeeUnreasonable { ... })` |
-| Signer / builder failure | `SendError::Tx` (proof or signature construction), `SendError::SignerUnavailable` (no spend-key material in scope), or `SendError::SignerFailed { reason }` (a downstream signer failure) |
+| Absurd priority fee | `SendError::Fee(FeeEstimatorError::DaemonFeeUnreasonable(_))` |
+| Signer / builder failure | `SendError::Sign(SignFault)` (the builder's fault, by identity), `SendError::SignerUnavailable` (no spend-key material in scope), or `SendError::SignerFailed { fault: SignerFault }` (a wallet-side signing fault) |
 | Output not yet spendable at reference block (`eligible_height >= reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
 | Locally-assembled path malformed (length/shape) | `SendError::BuildInvariant` via the C3 precondition (§3.7.6) — distinguishes local-assembly bug from prover bug **before** committing prover effort |
 | Malformed tx at submit (incl. generic daemon `Failed`) | `TxSubmitOutcome::DaemonRejectedTerminal { Malformed }` → `SubmitError::DaemonRejectedTerminal` (§3.6 honest-subset mapping) |

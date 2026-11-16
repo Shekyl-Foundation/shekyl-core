@@ -19,11 +19,8 @@ use std::collections::HashSet;
 use shekyl_engine_state::{OutputState, SpendHorizon, WalletLedger};
 use shekyl_types::BlockHeight;
 
-use shekyl_units::AtomicUnits;
-
 use super::super::error::SendError;
 use super::super::output_selector::OutputCandidate;
-use super::super::sign_bridge::MIN_CHANGE;
 use super::support::TreeSpendGate;
 use super::types::OutputId;
 
@@ -75,7 +72,7 @@ impl CandidatePartition {
                         partition.pending_rebuild = partition.pending_rebuild.saturating_add(raw);
                     }
                 }
-                OutputState::Incoming { .. } => {
+                OutputState::Incoming => {
                     partition.incoming_total = partition.incoming_total.saturating_add(raw);
                     partition.incoming.push((td.eligible_height, raw));
                 }
@@ -101,10 +98,10 @@ impl CandidatePartition {
     ///    leaves out the change of in-flight sends, which is not an output
     ///    yet.
     ///
-    /// `reference` is the reference block the build anchors to; arm 2 is
-    /// reached only when it is set, since incoming outputs exist only
-    /// relative to a reference.
-    pub fn refusal(&self, needed: u64, reference: Option<BlockHeight>) -> SendError {
+    /// Arm 2 is reached only when `horizon` anchors a reference, since
+    /// incoming outputs exist only relative to one. The wait is
+    /// [`SpendHorizon::wait`] at the eligible height that closes the gap.
+    pub fn refusal(&self, needed: u64, horizon: SpendHorizon) -> SendError {
         let with_rebuild = self.spendable_now.saturating_add(self.pending_rebuild);
         let available = with_rebuild.saturating_add(self.incoming_total);
         if self.pending_rebuild > 0 && self.spendable_now < needed && with_rebuild >= needed {
@@ -114,7 +111,7 @@ impl CandidatePartition {
                 pending_rebuild: self.pending_rebuild,
             };
         }
-        if let Some(reference_block_height) = reference {
+        if let Some(reference_block_height) = horizon.reference() {
             if self.incoming_total > 0 && with_rebuild < needed && available >= needed {
                 // Report the height by which *enough* incoming outputs are
                 // spendable — accumulate soonest first until the shortfall is
@@ -134,30 +131,10 @@ impl CandidatePartition {
                 return SendError::OutputNotYetSpendable {
                     eligible_height,
                     reference_block_height,
-                    wait_blocks: shekyl_curve_tree::blocks_until_in_tree(
-                        eligible_height,
-                        reference_block_height,
-                    ),
+                    wait_blocks: horizon.wait(eligible_height),
                 };
             }
         }
         SendError::InsufficientFunds { needed, available }
     }
-}
-
-/// What a selection must cover: the payments, the with-change fee and the
-/// least change ([`MIN_CHANGE`]). A leftover that is exactly the with-change
-/// fee would leave a change of zero, which the signer refuses
-/// (`sign_bridge::fee_and_change`): the fee would be sized for an output
-/// the transaction does not carry.
-pub(super) fn selection_target(
-    payments: AtomicUnits,
-    fee_with_change: AtomicUnits,
-) -> Result<AtomicUnits, SendError> {
-    payments
-        .checked_add(fee_with_change)
-        .and_then(|v| v.checked_add(AtomicUnits::from_raw(MIN_CHANGE.get())))
-        .ok_or(SendError::InvalidRecipient {
-            reason: "amount + fee overflowed u64",
-        })
 }

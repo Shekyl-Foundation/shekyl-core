@@ -22,16 +22,17 @@ use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
-    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SignFault, SignedProofs, SpendInput,
-    WireEncodeInput, MAX_OUTPUTS,
+    tx_prefix_hash_from_parts, InternalSignFault, LeafEntry, OutputInfo, PqcAuth, SignFault,
+    SignedProofs, SpendInput, WireEncodeInput,
 };
 use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
+use super::fee_variant::{fee_and_change, FeeVariantFault};
 use super::local_keys::LocalKeys;
 use super::pending::TxDestination;
 use super::traits::key::{
-    FeeDirective, TxInputSignature, TxInputSigningContext, TxOutputContext, TxSignatures, TxToSign,
+    TxInputSignature, TxInputSigningContext, TxOutputContext, TxSignatures, TxToSign,
 };
 use crate::outbound_label::label_plaintext_for_recipient;
 
@@ -305,58 +306,21 @@ fn payment_outputs_of(
     Ok((total, payments))
 }
 
-/// The least change a with-change transaction carries: one atomic unit.
-/// A change of zero would drop the output while the fee stays sized for
-/// it (see [`fee_and_change`]); the build's selection covers the payments,
-/// the with-change fee and this unit.
-pub(crate) const MIN_CHANGE: NonZeroU64 = NonZeroU64::MIN;
-
-/// The fee and the change a signing pass carries for `leftover` (the
-/// inputs less the payments), from the build's two ladder fees.
-///
-/// The fee is always one of the directive's two, never the leftover:
-/// the fee is cleartext on chain, and a wallet paying a ladder value hides
-/// in that rung's cohort where one paying its leftover marks itself
-/// (`FEE_LADDER_DERIVATION.md` W3). So every leftover above the
-/// with-change fee gets a change output of at least one atomic unit,
-/// however small, and the no-change variant is taken only when the
-/// leftover is exactly its fee. A leftover equal to the with-change fee
-/// would leave a change of zero: the output is not built, and the fee,
-/// sized for one more output than the transaction has, would be off the
-/// ladder for its real shape. It is refused, one unit short, as is any
-/// leftover between the two fees. The build's selection covers the
-/// payments plus the with-change fee plus one unit, so it never produces
-/// either.
-///
-/// A leftover inside one dust threshold of the with-change fee used to take
-/// the no-change fee and leave the rest unaccounted, so the transaction did
-/// not balance and the builder's self-check refused it (A16: the TRC-1
-/// wallet's intermittent `BalanceSelfCheck`).
-fn fee_and_change(
-    leftover: u64,
-    directive: &FeeDirective,
-) -> Result<(u64, Option<NonZeroU64>), KeyEngineError> {
-    if leftover == directive.fee_no_change {
-        return Ok((directive.fee_no_change, None));
-    }
-    let short_of = |fee: u64| KeyEngineError::InsufficientFunds {
-        shortfall: fee.saturating_sub(leftover),
-    };
-    if leftover < directive.fee_no_change {
-        return Err(short_of(directive.fee_no_change));
-    }
-    match directive.fee_with_change {
-        Some(fee_with_change) => match NonZeroU64::new(leftover.saturating_sub(fee_with_change)) {
-            Some(change) => Ok((fee_with_change, Some(change))),
-            None => Err(short_of(fee_with_change.saturating_add(MIN_CHANGE.get()))),
-        },
-        // The payments fill the output limit, so the leftover above the fee
-        // would need a change output the transaction cannot carry. The send
-        // path refuses such a request before selection
-        // (`TxRequest::check_recipients`); this names the same fault.
-        None => Err(KeyEngineError::Sign(SignFault::TooManyOutputs {
-            count: MAX_OUTPUTS + 1,
-        })),
+impl From<FeeVariantFault> for KeyEngineError {
+    fn from(fault: FeeVariantFault) -> Self {
+        match fault {
+            // The build's selection covers the with-change fee and the least
+            // change, so a short leftover is a bug. It keeps the builder's
+            // insufficient-funds fault: the amounts do not balance at a
+            // ladder fee. The shortfall stays in the local log.
+            FeeVariantFault::Short { shortfall } => {
+                tracing::debug!(shortfall, "a leftover no ladder fee balances");
+                Self::Sign(SignFault::Internal(InternalSignFault::InsufficientFunds))
+            }
+            FeeVariantFault::TooManyOutputs { count } => {
+                Self::Sign(SignFault::TooManyOutputs { count })
+            }
+        }
     }
 }
 
@@ -389,7 +353,9 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                 shortfall: payment_total.saturating_sub(input_amounts),
             })?;
 
-    let (fee, change) = fee_and_change(leftover, &fee_directive)?;
+    let priced = fee_and_change(leftover, &fee_directive)?;
+    let fee = priced.fee;
+    let change = priced.change;
 
     // `r` is minted canonical by the crypto crate: it is retained for the
     // OUTBOUND proof, which signs with it as a scalar (A19).
@@ -432,8 +398,8 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         output_index += 1;
     }
 
-    // A change is at least one unit (`fee_and_change`): when the fee is the
-    // with-change fee, the change output is always built.
+    // A change is at least one unit (`fee_variant::fee_and_change`): when the
+    // fee is the with-change fee, the change output is always built.
     if let Some(change_amount) = change.map(NonZeroU64::get) {
         let change_pk = derived.change_spend_pk();
         let built = build_output(
@@ -1009,74 +975,22 @@ mod tests {
         );
     }
 
-    fn directive(fee_no_change: u64, fee_with_change: Option<u64>) -> FeeDirective {
-        FeeDirective {
-            fee_no_change,
-            fee_with_change,
-        }
-    }
-
-    /// The A16 window: a leftover from the with-change fee up to one dust
-    /// threshold above it. It used to take the no-change fee and leave the
-    /// rest unaccounted (the builder's `BalanceSelfCheck` refused the
-    /// transaction); it now carries the with-change fee and the rest as
-    /// change, so inputs = payments + fee + change for every leftover the
-    /// rule accepts. Bites if the choice falls back to the no-change fee
-    /// for a leftover it does not equal.
+    /// A leftover the ladder does not balance keeps the builder's
+    /// insufficient-funds fault. The shortfall stays in the log; the variant
+    /// that leaves is the closed one.
     #[test]
-    fn every_accepted_leftover_balances_at_a_ladder_fee() {
-        let d = directive(700, Some(900));
-        for leftover in [901, 950, 1_000, 5_000, u64::MAX / 2] {
-            let (fee, change) = fee_and_change(leftover, &d).expect("covered");
-            assert_eq!(fee, 900, "leftover {leftover}");
-            let change = change.expect("a change output").get();
-            assert!(change >= 1, "leftover {leftover}");
-            assert_eq!(fee + change, leftover);
-        }
-        assert_eq!(fee_and_change(700, &d).expect("exact"), (700, None));
-    }
+    fn a_short_leftover_keeps_the_insufficient_funds_fault() {
+        use super::super::traits::key::FeeDirective;
+        use shekyl_tx_builder::InternalSignFault;
 
-    /// A leftover that no ladder fee balances is refused, never paid as a
-    /// fee of its own (`FEE_LADDER_DERIVATION.md` W3), and so is a leftover
-    /// equal to the with-change fee, one unit short of a change output.
-    #[test]
-    fn a_leftover_no_ladder_fee_balances_is_refused() {
-        let d = directive(700, Some(900));
-        // 900: the with-change fee with a change of zero, which would pay a
-        // fee sized for an output the transaction does not carry.
-        for leftover in [0, 699, 701, 899, 900] {
-            assert!(
-                matches!(
-                    fee_and_change(leftover, &d),
-                    Err(KeyEngineError::InsufficientFunds { .. })
-                ),
-                "leftover {leftover}"
-            );
-        }
-    }
-
-    /// At the output limit no change output fits: only the exact no-change
-    /// leftover signs. A leftover above it would need a change output the
-    /// transaction cannot carry, refused as the signer's output-limit fault;
-    /// one below it is short of the fee. The send path never builds this
-    /// directive: `too_many_recipients_are_refused_at_the_request` holds it.
-    #[test]
-    fn at_the_output_limit_only_the_exact_leftover_signs() {
-        let d = directive(700, None);
-        assert_eq!(fee_and_change(700, &d).expect("exact"), (700, None));
-        for leftover in [701, 900, 5_000, u64::MAX] {
-            assert!(
-                matches!(
-                    fee_and_change(leftover, &d),
-                    Err(KeyEngineError::Sign(SignFault::TooManyOutputs { count }))
-                        if count == MAX_OUTPUTS + 1
-                ),
-                "leftover {leftover}"
-            );
-        }
+        let directive = FeeDirective {
+            fee_no_change: 700,
+            fee_with_change: Some(900),
+        };
+        let err = KeyEngineError::from(fee_and_change(900, &directive).expect_err("short"));
         assert!(matches!(
-            fee_and_change(699, &d),
-            Err(KeyEngineError::InsufficientFunds { shortfall: 1 })
+            err,
+            KeyEngineError::Sign(SignFault::Internal(InternalSignFault::InsufficientFunds))
         ));
     }
 }

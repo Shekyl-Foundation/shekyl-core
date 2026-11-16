@@ -583,7 +583,7 @@ fn reserve_candidates(
         .filter(|td| {
             matches!(
                 td.state(horizon, locks),
-                OutputState::Spendable | OutputState::Incoming { .. }
+                OutputState::Spendable | OutputState::Incoming
             )
         })
         .filter_map(|td| {

@@ -1746,7 +1746,9 @@ impl From<SendError> for WalletRpcError {
             // No spend-key material in scope: the session's signer is gone,
             // which is what `-29006` names — reopen the wallet.
             SendError::SignerUnavailable => Self::WalletSessionEnded,
-            SendError::SignerFailed { fault } => Self::SignerFailed { fault },
+            SendError::SignerFailed { fault } => Self::SignerFailed {
+                fault: fault.keyword(),
+            },
             SendError::BuildInvariant { reason } => internal_detail("build invariant", reason),
             SendError::SpendUnavailableRebuilding { .. } => Self::SpendUnavailableRebuilding,
             SendError::CurveTreeUnavailable { detail } => {
@@ -3571,7 +3573,7 @@ mod tests {
             ),
             (
                 SendError::SignerFailed {
-                    fault: "handle-mismatch",
+                    fault: shekyl_engine_core::SignerFault::HandleMismatch,
                 },
                 WalletRpcErrorCode::SignerFailed,
             ),

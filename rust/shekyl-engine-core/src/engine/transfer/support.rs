@@ -17,7 +17,7 @@ use super::super::curve_tree_actor::CurveTreeHandleError;
 use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, DiagnosticSink, PendingTxDiagnostic,
 };
-use super::super::error::{FeeEstimatorError, OutputSelectorError, SendError, SignerError};
+use super::super::error::{FeeEstimatorError, SendError, SignerError};
 use super::super::pending::ReservationId;
 
 use super::types::{PendingTxState, ReanchorError};
@@ -264,18 +264,13 @@ pub(super) fn fail_build_after_attempted(sink: &dyn DiagnosticSink, err: SendErr
     err
 }
 
-pub(super) fn map_output_selector_error(err: &OutputSelectorError) -> SendError {
-    match *err {
-        OutputSelectorError::InsufficientFunds { needed, available } => {
-            SendError::InsufficientFunds { needed, available }
-        }
-        OutputSelectorError::NoEligibleOutputs => SendError::InsufficientFunds {
-            needed: 0,
-            available: 0,
-        },
-        OutputSelectorError::ReturnedIndicesNotSubset { .. } => SendError::InvalidRecipient {
-            reason: "output selector returned indices outside candidate set",
-        },
+/// The selector returned an index that was not in the candidate set it was
+/// given. The diagnostic for this error is
+/// [`BuildErrorKind::SelectorContractViolation`]. A short or empty candidate
+/// set is not this error: that goes through [`super::candidates::CandidatePartition::refusal`].
+pub(super) fn selector_subset_violation() -> SendError {
+    SendError::InvalidRecipient {
+        reason: "output selector returned indices outside candidate set",
     }
 }
 
@@ -287,7 +282,7 @@ pub(super) fn map_signer_error(err: &SignerError) -> SendError {
     match err {
         SignerError::Unavailable => SendError::SignerUnavailable,
         SignerError::Sign(fault) => SendError::Sign(*fault),
-        SignerError::Internal { fault } => SendError::SignerFailed { fault },
+        SignerError::Internal { fault } => SendError::SignerFailed { fault: *fault },
     }
 }
 

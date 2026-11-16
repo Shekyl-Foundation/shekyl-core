@@ -10,7 +10,7 @@ use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::engine::pending::ReservationId;
 
-use super::{FeeEstimatorError, IoError, TerminalErrorKind};
+use super::{FeeEstimatorError, IoError, SignerFault, TerminalErrorKind};
 
 // --- Send / build / submit / discard --------------------------------------
 
@@ -81,11 +81,11 @@ pub enum SendError {
     /// its state did not hold what signing needs (a key image, an output
     /// handle, a source ciphertext that decapsulates), or encoding the
     /// signed transaction failed. A bug, never a state the request put the
-    /// wallet in; `fault` names which, one keyword.
+    /// wallet in; [`SignerFault`] names which.
     #[error("the signer failed: {fault}")]
     SignerFailed {
-        /// The fault, one keyword from a closed set.
-        fault: &'static str,
+        /// The fault.
+        fault: SignerFault,
     },
 
     /// A precondition the build relies on did not hold: wallet state

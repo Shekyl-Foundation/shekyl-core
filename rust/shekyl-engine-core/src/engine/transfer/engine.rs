@@ -42,12 +42,13 @@ use super::super::transaction_submitter::{SubmitSuccess, SubmitterError, Transac
 use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::build_fee_directive;
 
-use super::candidates::{selection_target, CandidatePartition};
+use super::super::fee_variant::selection_target;
+use super::candidates::CandidatePartition;
 use super::dispatch::DispatchFacts;
 use super::support::{
     assemble_input, build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
-    map_handle_err_to_reanchor, map_output_selector_error, map_signer_error,
-    release_output_locks_for, with_pending_tx_state_mut, TreeSpendGate,
+    map_handle_err_to_reanchor, map_signer_error, release_output_locks_for,
+    selector_subset_violation, with_pending_tx_state_mut, TreeSpendGate,
 };
 use super::types::{
     ConsumerHeldEntry, ContentFingerprint, OutputId, PendingTxState, ReanchorError,
@@ -431,23 +432,25 @@ where
 
         // CT-5 §3.2.1 D3 + C2: an insufficiency names what is in the way
         // (`CandidatePartition::refusal`), never a bare `InsufficientFunds`
-        // when waiting would cover it.
+        // when waiting would cover it. A returned index outside the
+        // candidate set is a selector-contract violation.
         let resolve_insufficiency =
-            |needed_raw: u64| -> SendError { partition.refusal(needed_raw, reference_height) };
-        // Selector-error projection: an insufficiency (empty/short candidate
-        // set) routes through `resolve_insufficiency`; a returned-subset
-        // violation stays an `InvalidRecipient` contract failure.
-        let map_select_err = |err: OutputSelectorError, needed_raw: u64| -> SendError {
-            match err {
-                OutputSelectorError::ReturnedIndicesNotSubset { .. } => {
-                    SendError::InvalidRecipient {
-                        reason: "output selector returned indices outside candidate set",
+            |needed_raw: u64| -> SendError { partition.refusal(needed_raw, horizon) };
+        let map_select_err =
+            |err: OutputSelectorError, needed_raw: u64| -> (SendError, BuildErrorKind) {
+                match err {
+                    OutputSelectorError::ReturnedIndicesNotSubset { .. } => (
+                        selector_subset_violation(),
+                        BuildErrorKind::SelectorContractViolation,
+                    ),
+                    OutputSelectorError::InsufficientFunds { .. }
+                    | OutputSelectorError::NoEligibleOutputs => {
+                        let mapped = resolve_insufficiency(needed_raw);
+                        let kind = build_error_kind(&mapped);
+                        (mapped, kind)
                     }
                 }
-                OutputSelectorError::InsufficientFunds { .. }
-                | OutputSelectorError::NoEligibleOutputs => resolve_insufficiency(needed_raw),
-            }
-        };
+            };
 
         let mut total_amount = AtomicUnits::ZERO;
         for recipient in &request.recipients {
@@ -493,12 +496,10 @@ where
             .output_selector
             .select_outputs(candidates, needed)
             .map_err(|err| {
-                let mapped = map_select_err(err.into(), needed.to_raw());
+                let (mapped, kind) = map_select_err(err.into(), needed.to_raw());
                 emit_pending_tx_diagnostic(
                     self.sink.as_ref(),
-                    PendingTxDiagnostic::BuildFailed {
-                        kind: build_error_kind(&mapped),
-                    },
+                    PendingTxDiagnostic::BuildFailed { kind },
                 );
                 mapped
             })?;
@@ -512,12 +513,10 @@ where
                 .output_selector
                 .select_outputs(candidates, needed_b)
                 .map_err(|err| {
-                    let mapped = map_select_err(err.into(), needed_b.to_raw());
+                    let (mapped, kind) = map_select_err(err.into(), needed_b.to_raw());
                     emit_pending_tx_diagnostic(
                         self.sink.as_ref(),
-                        PendingTxDiagnostic::BuildFailed {
-                            kind: build_error_kind(&mapped),
-                        },
+                        PendingTxDiagnostic::BuildFailed { kind },
                     );
                     mapped
                 })?;
@@ -551,10 +550,7 @@ where
         let candidate_indices: HashSet<OutputId> = candidates.iter().map(|c| c.index).collect();
         for index in &selected.indices {
             if !candidate_indices.contains(index) {
-                let err =
-                    map_output_selector_error(&OutputSelectorError::ReturnedIndicesNotSubset {
-                        offending_index: *index,
-                    });
+                let err = selector_subset_violation();
                 emit_pending_tx_diagnostic(
                     self.sink.as_ref(),
                     PendingTxDiagnostic::BuildFailed {

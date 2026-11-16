@@ -64,7 +64,7 @@ pub use error::WalletLedgerError;
 pub use ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks, LEDGER_BLOCK_VERSION};
 pub use ledger_indexes::LedgerIndexes;
 pub use local_label::{LocalLabel, SecretStr};
-pub use output_state::{OutputState, SpendHorizon};
+pub use output_state::{OutputStanding, OutputState, SpendHorizon};
 pub use payment_id::PaymentId;
 pub use payment_request::{
     DisputeReason, ParsePaymentRequestIdError, PaymentRequest, PaymentRequestId,

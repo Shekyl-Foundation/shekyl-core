@@ -31,10 +31,11 @@ pub use engine::{
     PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
     RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
     RefreshReorgEvent, RefreshSummary, ReportedOutcome, ReservationId, ScannableBlock, SendError,
-    SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput, StakingLedgerSnapshot,
-    StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SubmitReceipt, SuppressedClass,
-    TracingDiagnosticSink, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial, DAEMON_METHODS,
+    SignerFault, SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput,
+    StakingLedgerSnapshot, StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome,
+    SubmitReceipt, SuppressedClass, TracingDiagnosticSink, TxDestination, TxHash, TxRecipient,
+    TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
+    DAEMON_METHODS,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The signing pass's fault, bounded, that [`SendError::Sign`] carries, and

@@ -17,10 +17,13 @@
 //! ([`TransferDetails::is_spendable`], `LedgerBlock::spendable_outputs`) and
 //! the send path's candidate partition (`shekyl-engine-core`) all call
 //! [`TransferDetails::state`], so the balance says spendable exactly when a
-//! build can select the output. The send path applies its tree gate (is the
-//! wallet's copy of the tree built to the reference yet?) after the
-//! classifier: that is the wallet's state, not the money's, and an output
-//! spendable by the rule stays spendable while the tree catches up.
+//! build can select the output. The transfer list calls
+//! [`TransferDetails::standing`]: confirmed on chain is spendable or
+//! incoming, and that split needs the horizon the list does not have. The
+//! send path applies its tree gate (is the wallet's copy of the tree built
+//! to the reference yet?) after the classifier: that is the wallet's state,
+//! not the money's, and an output spendable by the rule stays spendable
+//! while the tree catches up.
 //!
 //! **Placement (rule 18).** An output's state is transform-shaped: a function
 //! of its row ([`TransferDetails`], defined here), the journal's locks
@@ -99,8 +102,8 @@ impl SpendHorizon {
 ///    wallet's keys; no send can ever use it.
 /// 3. **InFlight** — an in-flight send of this wallet carries it (the F14
 ///    lock); its value is that send's outgoing and change.
-/// 4. **Incoming** — received and not yet in the reference block's tree,
-///    with the blocks until it is.
+/// 4. **Incoming** — received and not yet in the reference block's tree.
+///    [`SpendHorizon::wait`] is how many blocks until it is.
 /// 5. **Spendable** — a send could use it now.
 ///
 /// There is no user-set hold: FCMP++ hides which outputs a spend uses, and
@@ -114,34 +117,61 @@ pub enum OutputState {
     Unspendable,
     /// Carried by an in-flight send of this wallet.
     InFlight,
-    /// Received; spendable once the tip advances `wait` blocks.
-    Incoming {
-        /// Blocks until the output is in the reference block's tree.
-        wait: BlockCount,
-    },
+    /// Received; spendable once [`SpendHorizon::wait`] reaches zero.
+    Incoming,
     /// A send could use it at this tip.
     Spendable,
 }
 
+/// What keeps an output out of the reference rule, or that nothing does.
+///
+/// [`TransferDetails::state`] is this plus the horizon. The transfer list
+/// stops here: an [`Self::OnChain`] row is confirmed, whether or not it is
+/// spendable yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputStanding {
+    /// Spent on chain.
+    Spent,
+    /// Received but never spendable by this wallet.
+    Unspendable,
+    /// Carried by an in-flight send of this wallet.
+    InFlight,
+    /// Received, not spent, not locked, not unspendable. The horizon splits
+    /// this into [`OutputState::Spendable`] or [`OutputState::Incoming`].
+    OnChain,
+}
+
 impl TransferDetails {
+    /// This output's standing given the journal's in-flight locks: the
+    /// horizon-free half of the classifier (see [`OutputStanding`]).
+    #[inline]
+    #[must_use]
+    pub fn standing(&self, locks: &InFlightSpendLocks) -> OutputStanding {
+        if self.spent {
+            OutputStanding::Spent
+        } else if self.unspendable.is_some() {
+            OutputStanding::Unspendable
+        } else if locks.contains(self.global_output_index) {
+            OutputStanding::InFlight
+        } else {
+            OutputStanding::OnChain
+        }
+    }
+
     /// This output's state at `horizon`, given the journal's in-flight
-    /// locks: the one classifier (see the module docs and
-    /// [`OutputState`] for the precedence).
+    /// locks: [`Self::standing`] plus the reference rule (see the module
+    /// docs and [`OutputState`] for the precedence).
     #[inline]
     #[must_use]
     pub fn state(&self, horizon: SpendHorizon, locks: &InFlightSpendLocks) -> OutputState {
-        if self.spent {
-            OutputState::Spent
-        } else if self.unspendable.is_some() {
-            OutputState::Unspendable
-        } else if locks.contains(self.global_output_index) {
-            OutputState::InFlight
-        } else if horizon.holds(self.eligible_height) {
-            OutputState::Spendable
-        } else {
-            OutputState::Incoming {
-                wait: horizon.wait(self.eligible_height),
+        match self.standing(locks) {
+            OutputStanding::Spent => OutputState::Spent,
+            OutputStanding::Unspendable => OutputState::Unspendable,
+            OutputStanding::InFlight => OutputState::InFlight,
+            OutputStanding::OnChain if horizon.holds(self.eligible_height) => {
+                OutputState::Spendable
             }
+            OutputStanding::OnChain => OutputState::Incoming,
         }
     }
 }

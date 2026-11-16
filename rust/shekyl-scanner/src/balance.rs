@@ -109,7 +109,7 @@ impl BalanceSummary {
             match td.state(horizon, &locks) {
                 OutputState::Spent | OutputState::InFlight => {}
                 OutputState::Unspendable => unspendable = accumulate(unspendable, amount),
-                OutputState::Incoming { .. } => {
+                OutputState::Incoming => {
                     incoming = accumulate(incoming, amount);
                     first_incoming = Some(
                         first_incoming.map_or(td.eligible_height, |h| h.min(td.eligible_height)),

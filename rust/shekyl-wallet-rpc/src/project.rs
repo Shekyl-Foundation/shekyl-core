@@ -66,17 +66,14 @@ pub fn transfer_state(
     td: &TransferDetails,
     spend_locks: &shekyl_engine_state::InFlightSpendLocks,
 ) -> TransferState {
-    if td.spent {
-        TransferState::Spent
-    } else if td.unspendable.is_some() {
-        // PL-D3 §6.2: the scan-time verdict outranks the lock (an
-        // unspendable row is never selected, so a lock on it would itself be
-        // a defect) and CONFIRMED (which promises spendability).
-        TransferState::Unspendable
-    } else if spend_locks.contains(td.global_output_index) {
-        TransferState::Pending
-    } else {
-        TransferState::Confirmed
+    // The list has no horizon: confirmed is on chain, spendable or not.
+    // The standing's precedence is the classifier's, so an unspendable row
+    // is never CONFIRMED (PL-D3 §6.2).
+    match td.standing(spend_locks) {
+        shekyl_engine_state::OutputStanding::Spent => TransferState::Spent,
+        shekyl_engine_state::OutputStanding::Unspendable => TransferState::Unspendable,
+        shekyl_engine_state::OutputStanding::InFlight => TransferState::Pending,
+        shekyl_engine_state::OutputStanding::OnChain => TransferState::Confirmed,
     }
 }
 

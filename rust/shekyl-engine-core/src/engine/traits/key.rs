@@ -543,7 +543,7 @@ pub(crate) struct OutputDestination {
 
 /// Public fee variant directive (§3.9): the two ladder fees a signing
 /// pass may carry, both network-derived. Which one it carries is
-/// `sign_bridge::fee_and_change`'s rule; the fee is always one of these,
+/// `fee_variant::fee_and_change`'s rule; the fee is always one of these,
 /// never the leftover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

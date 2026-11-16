@@ -59,12 +59,12 @@ fn none() -> InFlightSpendLocks {
     SendJournalBlock::empty().spend_locks()
 }
 
-/// The wait counts down one block per tip block and reaches zero exactly
-/// at the first tip whose state is `Spendable`; one tip earlier the state
-/// is `Incoming { wait: 1 }`. That tip is where a build first selects the
-/// output: the balance and the send path decide by the same predicate.
-/// Bites if the balance's rule drifts from the reference rule (the
-/// pre-A17 `tip >= eligible` read spendable 7 blocks early here).
+/// [`SpendHorizon::wait`] counts down one block per tip block and reaches
+/// zero exactly at the first tip whose state is `Spendable`. That tip is
+/// where a build first selects the output: the balance and the send path
+/// decide by the same predicate. Bites if the balance's rule drifts from
+/// the reference rule (the pre-A17 `tip >= eligible` read spendable 7
+/// blocks early here).
 #[test]
 fn the_wait_counts_down_to_the_tip_that_spends() {
     let eligible = 120;
@@ -72,8 +72,10 @@ fn the_wait_counts_down_to_the_tip_that_spends() {
     let mut spendable_at = None;
     let mut last_wait = None;
     for tip in 0..200u64 {
-        match td.state(SpendHorizon::at_tip(BlockHeight::from_raw(tip)), &none()) {
-            OutputState::Incoming { wait } => {
+        let horizon = SpendHorizon::at_tip(BlockHeight::from_raw(tip));
+        match td.state(horizon, &none()) {
+            OutputState::Incoming => {
+                let wait = horizon.wait(td.eligible_height);
                 assert!(spendable_at.is_none(), "incoming again at {tip}");
                 if let Some(prev) = last_wait {
                     assert_eq!(wait, prev - BlockCount::ONE, "tip {tip}");
@@ -83,6 +85,7 @@ fn the_wait_counts_down_to_the_tip_that_spends() {
             OutputState::Spendable => {
                 if spendable_at.is_none() {
                     assert_eq!(last_wait, Some(BlockCount::ONE), "one block before, wait 1");
+                    assert_eq!(horizon.wait(td.eligible_height), BlockCount::ZERO);
                     spendable_at = Some(tip);
                 }
             }
@@ -102,10 +105,8 @@ fn below_the_anchoring_floor_nothing_is_spendable() {
     let td = row(5, 1);
     let at = SpendHorizon::at_tip(BlockHeight::ZERO);
     assert_eq!(at.reference(), None);
-    assert!(matches!(
-        td.state(at, &none()),
-        OutputState::Incoming { wait } if wait > BlockCount::ZERO
-    ));
+    assert_eq!(td.state(at, &none()), OutputState::Incoming);
+    assert!(at.wait(td.eligible_height) > BlockCount::ZERO);
 }
 
 /// The precedence: spent, unspendable, in flight, incoming, spendable.
@@ -117,10 +118,7 @@ fn each_state_outranks_the_ones_below_it() {
     let immature = 499;
 
     let mut td = row(5, immature);
-    assert!(matches!(
-        td.state(at, &none()),
-        OutputState::Incoming { .. }
-    ));
+    assert!(matches!(td.state(at, &none()), OutputState::Incoming));
     assert_eq!(td.state(at, &locked(5)), OutputState::InFlight);
     td.unspendable = Some(UnspendableReason::PqcLeafMismatch);
     assert_eq!(td.state(at, &locked(5)), OutputState::Unspendable);

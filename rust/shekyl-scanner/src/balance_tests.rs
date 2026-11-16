@@ -340,8 +340,9 @@ proptest! {
             match row.state(horizon, &locks) {
                 OutputState::Spent => {}
                 OutputState::Spendable => by_state[0] += amount,
-                OutputState::Incoming { wait } => {
+                OutputState::Incoming => {
                     by_state[1] += amount;
+                    let wait = horizon.wait(row.eligible_height);
                     soonest = Some(soonest.map_or(wait, |w| w.min(wait)));
                 }
                 OutputState::InFlight => by_state[2] += amount,

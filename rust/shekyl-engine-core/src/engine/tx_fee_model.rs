@@ -79,7 +79,7 @@ pub(crate) fn build_fee_directive(
     // With-change adds one output. At the output limit a change output would exceed
     // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
     // `TooManyOutputs`): it has no fee, and the signer's choice
-    // (`sign_bridge::fee_and_change`) has only the no-change fee to match. `clamped`
+    // (`fee_variant::fee_and_change`) has only the no-change fee to match. `clamped`
     // returning a value below the requested `+1` is exactly the "at the limit"
     // signal. The send path never reaches it: `TxRequest::check_recipients` refuses
     // more payments than leave room for a change output.

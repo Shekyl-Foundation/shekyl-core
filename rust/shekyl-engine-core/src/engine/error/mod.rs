@@ -78,7 +78,7 @@ pub use refresh::{CurveTreeIngestFault, FinalityBreach, FinalityStop, RefreshErr
 pub use send::{PendingTxError, SendError};
 pub use submit::{
     AmbiguousErrorKind, CenRowName, OutputSelectorError, RetryableRejectCause, SignerError,
-    SubmitError, TerminalErrorKind,
+    SignerFault, SubmitError, TerminalErrorKind,
 };
 
 pub use super::fee_policy::{CeilingViolation, FeeEstimatorError};
