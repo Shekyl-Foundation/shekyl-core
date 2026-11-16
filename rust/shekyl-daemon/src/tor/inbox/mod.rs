@@ -50,6 +50,7 @@ use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_tor_control_client::control::{
     BootstrapState, ControlReply, EventSink, Fed, EVENT_QUEUE_EVENTS,
 };
+use shekyl_tor_control_client::supervisor::READING_WAIT;
 use shekyl_tor_control_daemon::TorDeath;
 use shekyl_tor_status::TorStatus;
 use tokio::sync::{mpsc, oneshot, watch, Notify};
@@ -266,6 +267,7 @@ impl Poster {
         SupervisorFeeds {
             tally: Arc::new(move |value| tally.set(|cells| cells.tally = Some(value))),
             path: Arc::new(move |fact| path.post(Arrival::Path(fact))),
+            reading_wait: READING_WAIT,
             probes: Arc::new(self.clone()),
             verdict: Arc::new(move |value| verdict.set(|cells| cells.verdict = Some(value))),
             sessions: Arc::new(move |value| sessions.set(|cells| cells.sessions = Some(value))),

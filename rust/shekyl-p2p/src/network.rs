@@ -84,6 +84,8 @@ pub struct NetworkParts {
 struct SupervisorParts {
     tally: Option<shekyl_dialer::TallySink>,
     path: Option<PathFactsSink>,
+    /// The Tor Manager's declared wait for a reading; zero when none runs.
+    reading_wait: Duration,
     probes: Option<Arc<dyn shekyl_p2p_session::ProbeSink>>,
     verdict: Option<shekyl_relay::owner::VerdictSink>,
     sessions: Option<shekyl_p2p_session::SessionsSink>,
@@ -95,12 +97,14 @@ impl SupervisorParts {
             Some(SupervisorFeeds {
                 tally,
                 path,
+                reading_wait,
                 probes,
                 verdict,
                 sessions,
             }) => Self {
                 tally: Some(tally),
                 path: Some(path),
+                reading_wait,
                 probes: Some(probes),
                 verdict: Some(verdict),
                 sessions: Some(sessions),
@@ -108,6 +112,7 @@ impl SupervisorParts {
             None => Self {
                 tally: None,
                 path: None,
+                reading_wait: Duration::ZERO,
                 probes: None,
                 verdict: None,
                 sessions: None,
@@ -212,6 +217,7 @@ impl Network {
         let SupervisorParts {
             tally,
             path,
+            reading_wait,
             probes,
             verdict,
             sessions,
@@ -351,8 +357,7 @@ impl Network {
         // sessions.
         let onion_path = Arc::new(OnionPathSource::new(
             path,
-            u64::try_from(shekyl_tor_control_client::supervisor::READING_WAIT.as_nanos())
-                .unwrap_or(u64::MAX),
+            u64::try_from(reading_wait.as_nanos()).unwrap_or(u64::MAX),
         ));
         dialer.set_path_source(
             ConnectorId::Tor,

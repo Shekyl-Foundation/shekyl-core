@@ -51,6 +51,10 @@ pub struct SupervisorFeeds {
     /// The Tor connector's facts about the onion path, and the dialer's
     /// wants for a reading (§4.5a).
     pub path: PathFactsSink,
+    /// How long the judge waits for the Tor Manager's reading after a
+    /// failure (§4.5a, `READING_WAIT`): the manager's own value, which the
+    /// Tor connector's source declares and this crate only carries.
+    pub reading_wait: Duration,
     /// Each probe of this node's onion that arrived (§4.5).
     pub probes: Arc<dyn ProbeSink>,
     /// The relay's hop-0 verdict for a local origin (`GS-Q3`): the value at

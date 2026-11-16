@@ -134,6 +134,7 @@ fn the_supervisor_feeds_hear_each_value_at_start() {
             let heard = Arc::clone(&heard);
             Arc::new(move |fact| heard.facts.lock().expect("facts").push(fact))
         },
+        reading_wait: Duration::from_secs(60),
         probes: Arc::clone(&heard) as Arc<dyn ProbeSink>,
         verdict: {
             let heard = Arc::clone(&heard);
