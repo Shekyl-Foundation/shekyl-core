@@ -828,6 +828,19 @@ impl Drive {
                 );
                 Vec::new()
             }
+            Action::DirectoriesSettled(report) => {
+                for line in report {
+                    tracing::debug!(
+                        target: "tor",
+                        hsdir = ?line.hsdir,
+                        upload = ?line.upload,
+                        answer = ?line.answer,
+                        counted = ?line.counted,
+                        "this onion's descriptor at one directory, as the directory check counted it"
+                    );
+                }
+                Vec::new()
+            }
             Action::DescriptorOverdue => {
                 tracing::info!(
                     target: "tor",

@@ -169,6 +169,7 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
         Input::DirectoriesDrawn {
             fetches: Vec::new(),
             ours: None,
+            open_uploads: core.open_uploads(0),
         },
         0,
     );

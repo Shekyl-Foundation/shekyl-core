@@ -18,6 +18,9 @@ docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023_captures/laptop_x86_disasm_ex
 docs/design/refs/zawy12_issue_24_history.md -text
 docs/design/refs/zawy12_issue_3_lwma1.md -text
 docs/design/refs/zawy12_issue_3_lwma3.md -text
+# A control-port capture: tor writes CRLF, and the test frames the bytes as
+# tor sent them (the header lines above them are LF).
+rust/shekyl-tor-control-client/src/control/testdata/hs_desc_upload_cut_tor_0_4_9_14.txt -text
 # KAT corpora are byte-load-bearing fixtures (ADDRESS_DERIVATION_V1 is
 # hash-pinned via include_str! in address_derivation_freeze.rs). Never
 # apply EOL conversion: working-tree bytes must equal committed bytes.
