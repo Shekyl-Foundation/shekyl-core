@@ -4096,7 +4096,7 @@ the depth question the umbrella's §4.3 records. The family is
     draw above the room is delayed, not lost.
   - **Seeds:** 1, 2 and 3 (`rng::HONEST_SEEDS`); 1 is canonical. `steady`
     stays the control and the default, and no fold outside the grid draws.
-- **The draw departs from the brief, for Rick to rule.** The brief named
+- **The draw departs from the brief; Rick's ruling is in §5.34.1.** The brief named
   the existing `PoissonTrace` with a mean of λ·T and T exponential.
   - The distribution is the same: Poisson over an exponential interval is
     the geometric count above, the form the brief's own baseline
@@ -4266,6 +4266,136 @@ three seeds of six, 23 arm runs against #1387's four. That is about 5.75
 times its 4 061 s: about 23 000 s, six and a half hours on an
 eight-thread fleet host, on demand. The nightly slice runs five arm runs
 against two, about 290 s, within the per-PR narrations job's 55 minutes.
+
+#### 5.34.1 What the run measured (2026-11-16)
+
+Run at `3066f51832` on a fleet host's eight threads at `nice 10`, beside
+its testnet node. The steps ran in this order:
+1. the other narrations' pins, unregenerated;
+2. the `--jg-grid` regeneration;
+3. the slice's pin;
+4. the sim's tests.
+
+Measures, not verdicts: J and G are Rick's.
+
+**The draw that ran.** The direct geometric count of §5.34, "What is
+built": one `below(mean + 1)` draw per trial, counted until a draw comes
+up zero.
+- **Distribution:** the total's distribution is that of Poisson arrivals
+  over an exponential interval.
+- **Limit and cost:** it has no limit, and its cost grows with the mean.
+- **The assert:** no fold reached `PoissonTrace::poisson`. Its only
+  caller is the fee floor's slew (`fee_floor.rs`), which the grid does not
+  run, so its mean assert could not fire. Every step exited 0.
+- **Rick's ruling (2026-11-16):** these numbers stand. The PR that makes
+  variable traffic the standard draws the block interval explicitly, then
+  each rung's Poisson arrivals over it. A mean above the sampler's limit is
+  split into chunks below it, which are drawn and summed; a sum of
+  independent Poissons is Poisson, so this is exact. The interval is the
+  quantity G's propagation and orphan columns need.
+
+**Outcomes, graded against §5.34.** A variable figure is the median
+across seeds 1, 2 and 3, with [its range].
+
+| Prediction | Outcome |
+| --- | --- |
+| **JG-6.** SMA 1.0 ± 0.04 with room. Median's ratio 1.22 / 1.03 / 0.84 / 0.78 / 0.72 at N = 45 / 60 / 75 / 90 / 150. Variable within 0.05 of steady without room | **Held at `w_ref` 3 000, within the band; N = 45 at its edge.** SMA 1.004 [1.004, 1.017] at every zone with room. Median 1.260 [1.240, 1.260], 1.053, 0.877, 0.799 [0.798, 0.808], 0.723 [0.717, 0.732]; `median-r` 1.800, 1.504, 1.252, 1.142, 1.033. Without room (N ≤ 35) variable is within 0.04 of steady. **Not predicted:** at `w_ref′` the median reads 1.33 from N = 14 to 45. There blocks grow past the zone to clear the pool, and the window's median count is about 65. It reads 1.04 at N = 60 and matches `w_ref` 3 000 within 0.02 from the re-derived zone up |
+| **JG-7.** `M_r` at rest, N = 90, `w_ref` 3 000, year 5, at 10 / 20 / 33 / 51 % / every miner: SMA 1.16 / 1.28 / 1.30…; median ratio 0.94 / 1.11 / 1.56 / 2.44 / rail; `median-r` 1.30 throughout; median+floor as the median; arm 5 1.00 | **Held; the median at 10 % lower.** SMA 1.142, 1.282, then 1.30. Median ratio 0.900 [0.887, 0.919], 1.086 [1.052, 1.113], 1.558, 2.440, 2.440; its `M_r` 0.900, 1.086, then 1.30. `median-r` 1.280 [1.261, 1.293] at 10 %, then 1.30. Median+floor's `M_r` equals the median's in every cell. Decoupled and rails-only: 1.00 |
+| **JG-8.** Gain at 20 %, N = 90, `w_ref` 3 000, year 5: SMA ~74 600; median within 15 %; `median-r` ~50 000. N = 150 median ~0.7 of SMA; N = 60 median above SMA; floor under 1 % less | **Held at N = 90 and N = 60; at N = 150 the median gains less than predicted; `median-r` gains more.** N = 90: SMA 74 129 [73 081, 75 508] SKL; median 71 053 [65 096, 83 428] (0.96 of the SMA); `median-r` 59 182 [52 229, 64 166]. N = 60: median 74 856 against the SMA's 34 192 (2.19×). N = 150: median 45 854 against 89 908 (0.51×). Median+floor: 34 SKL (0.05 %) less at N = 90 |
+| **JG-9.** Decoupled: gain 0.00 in every cell, burn and `C` the unstuffed fold's, step still. Rails-only on steady reproduces §5.33.1's decoupled | **Held but for the gain on variable traffic where honest blocks reach the zone.** In every decoupled cell, `M_r` is 1.0, the burn and `C` at the last block are the same at every share, and the step does not move it. The gain is 0.00 in all 280 steady cells, and on variable traffic from N = 75. It is non-zero on variable traffic where honest blocks reach the zone: within ±67 SKL at `w_ref` 3 000 up to N = 45; down to −1 897 SKL (every miner, year 5) at `w_ref′` up to N = 45; under 72 SKL at N = 60 and the re-derived zone. The volume operand is the baseline in all of them, so this gain comes through the pool and the blocks' weights. It is not isolated further. Rails-only on steady reproduces §5.33.1's decoupled field for field |
+| **JG-10.** Other narrations byte-identical; steady rows reproduce §5.33.1; variable year-1 fee, day's fill and design load within 2 % of steady where blocks have room | **Held for the first two. The third held for the fee and the design load, and missed for the day's fill.** The stage2, ESR-10 and EUP-4 pins (6) passed unregenerated. The steady rows reproduce #1387's fixture field for field: 1 120 campaign rows and 84 honest rows, 8 344 fields, 0 differences (the slice: 160 fields). Where blocks have room (N ≥ 60), the SMA's year-1 fee on variable traffic is within 0.1 % of steady and the design-load year is unchanged. A day's fill is 4.0–4.2 % higher; this was not traced. The median arms differ by their honest reading (fee 0.80× steady from N = 105). Where blocks grow (`w_ref′`, N ≤ 35), variable traffic lowers the year-1 fee to 0.58–0.62× steady (0.757 against 1.223 SKL at the inherited zone), and to 0.87× at N = 45. That fits the pool's carry lifting the blocks' median weight (the median arm's window count is about 65 there), but it was not traced further |
+| **JG-11.** Break-even at 20 %, N = 90, `w_ref` 3 000, year 5: SMA ~22 000 %, median the same, ~5 000 % at `w_ref′`; no cell with free room under 100 % | **Missed by about a fifth; the order held. One exception where the honest median already sits at the cap.** SMA 17 385 % [16 645, 17 691] (steady 17 328); median 19 577 [18 344, 22 047]; `median-r` 13 479 [11 545, 14 130]. At `w_ref′`: SMA 4 171, median 4 658. The floor fees on the bodies are about 430 SKL, not the predicted 340. Of the 1 151 cells where a stuffer gains over 100 SKL, all break even above 100 % except 8: `median-r` at N = 60, both `w_ref` levels, year 5. Its honest reading there (1.50) is already over the cap, so stuffing moves no `M_r`: gains are 144–2 126 SKL, break-even 18–25 % [0, 302]. At year 30 (N = 90, 20 %): SMA 9 929 %, median 15 719 % |
+| **JG-12.** Measured median lifted above 35 to N = 90 (about 39), 34 and 35 under half; N = 150 mean 35–37, 34 and 35 each over 10 % | **Held.** The window median's count, over year 1 at demand 50, at `w_ref` 3 000 (`w_ref′` within 0.7 from N = 60 and 0.2 from N = 90), in the table below. Where blocks are full the count is the cap: 21–29 up to N = 20, 36–64 from N = 25 to 45, about 65 at `w_ref′` up to N = 45. At N = 150 the measured median agrees with the closed form's 35 |
+
+| N | Mean count, seeds 1 / 2 / 3 | Blocks at 34 | Blocks at 35 |
+| --- | --- | --- | --- |
+| 75 | 42.42 / 42.47 / 42.44 | 0.0–0.1 % | 0.2–0.4 % |
+| 90 | 38.77 / 38.81 / 38.74 | 1.3–2.1 % | 3.8–4.8 % |
+| 105 | 37.05 / 37.00 / 36.93 | 6.4–8.0 % | 11.7–13.5 % |
+| 120 | 36.07 / 36.01 / 35.99 | 11.0–13.5 % | 16.1–19.0 % |
+| 150 | 35.13 / 35.08 / 35.06 | 17.3–18.9 % | 19.6–22.5 % |
+
+**The cap at N = 90: a one-off probe.** The JG-12 reading at N = 90 was
+checked by a test added locally to the tree at `3066f51832` and not
+committed. The test ran the honest chain of the median arm on variable
+traffic at seed 1, N = 90, blocks 720 to 262 800 of year 1, at both
+`w_ref` levels.
+
+| Reading (`w_ref` 3 000; `w_ref′` beside where it differs) | Measured |
+| --- | --- |
+| Demand offered, and carried, a block | mean 49.92 |
+| What caps a block | the effective median, which is the zone (1 795 896 B) all year, less the 1 386 B coinbase reserve |
+| The honest Standard 1-in/2-out | 13 618 B at block 720, heavier as the tree deepens (not the 12 595 B `w_ref′` assumes) |
+| The cap, in those transactions | 122–131 (not 142); a block takes at most 132 (133), a step into the penalty |
+| Blocks whose arrivals alone overflow the cap | 8.3 % |
+| Blocks that leave work in the pool | 10.7 % (10.4 %) |
+| Median count offered, against carried | 35, against 39 |
+| Blocks carrying 34 or fewer, offered against carried | 49.9 %, against 46.0 % (46.1 %) |
+
+Near the middle a geometric count of mean 50 puts about 1 % of blocks at
+each value. So the 3.9 points the backlog moves above 34 lift the median
+by four counts, at the same demand. The SMA reads 49.92 either way. The
+13 618 B weight and the 122–131 cap feed G's capacity column. The PR that
+makes variable traffic the standard adds four columns to the honest rows,
+measured every run: the cap in transactions, the share of blocks whose
+arrivals overflow it, the share that leave a backlog, and the median
+count offered against the median carried.
+
+**What the grid says.** Measures only, on variable traffic, `w_ref`
+3 000, year 5 unless named.
+
+- **Where blocks have room, every share moves the median.**
+  - At N = 150 its ratio goes from 0.723 to 0.829, 0.995 and 1.409 at
+    10, 20 and 33 %: +15 %, +38 % and +95 %. Rick's blind estimate was
+    +17 %, +41 % and +97 %.
+  - At N = 90 a 20 % stuffer adds about 0.29 to `M_r` under the SMA
+    (1.00 to 1.28) and under the median (0.80 to 1.09).
+  - §5.33.1's minority resistance does not hold on this traffic.
+- **The median's honest reading follows the zone; the SMA's does not.**
+  - At the same demand, the median's ratio is:
+
+    | N | 45 | 60 | re-derived | 75 | 90 | 105 | 120 | 150 |
+    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+    | Ratio | 1.26 | 1.05 | 1.00 | 0.88 | 0.80 | 0.76 | 0.74 | 0.72 |
+  - The SMA reads 1.004 at every one.
+  - `median-r` reads 1.80 down to 1.03 over the same range.
+- **On variable traffic the median follows an honest step within a
+  window.**
+  - Where there is room it covers 95 % of the step in 55 blocks at
+    N = 60, 99 at the re-derived zone, 175 at N = 90 and 226 at N = 150.
+  - The SMA takes 299, 266, 120 and 71.
+  - The median's 361 blocks in §5.33.1 came from traffic that never
+    varies.
+- **The break-even burn on the stuffer's own floor fees is above 100 %
+  wherever honest traffic leaves `M_r` below its cap.**
+  - Across the 993 cells where a stuffer gains over 100 SKL and the honest
+    reading is under the cap, it runs from 259 % to 39 851 %. No seed
+    goes under 124 %.
+  - In the 158 such cells where honest traffic already holds `M_r` at its
+    cap, it runs from 18 % to 644 %, because the stuffer has nothing left
+    to move. These are the median at `w_ref′` up to N = 45, and
+    `median-r` from N = 35 to the re-derived zone (from N = 14 at
+    `w_ref′`).
+- **Arm 5, full, takes `M_r`, the burn and `C` off volume in every
+  cell.** What is left of a stuffer's gain on variable traffic comes
+  through the pool and the blocks' weights, at N ≤ 60.
+
+**Cost.**
+- **The regeneration:** 32 904 s, about 9.1 h, against the predicted
+  23 000 s.
+- **The slice's pin:** 329 s, against the predicted 290 s. It stays in
+  the per-PR narrations job.
+- **The six unregenerated pins:** 4 217 s.
+- **The sim's tests:** 238 passed, 15 ignored, none failed.
+
+**Regenerated** on the fleet host at `3066f51832`. The `--jg-grid`
+narrations were regenerated under
+`SHEKYL_PINNED_REGEN_DECISION="2026-11-15 J x G follow-up: the --jg-grid
+narrations gain the traffic axis (steady, variable), arm 5 read at the
+baseline (Fixed) beside the rails-only arm, and the ratio and window-mean
+readings; predicted in ECONOMICS_SIM_PRODUCTION_REBASE.md §5.34 and read
+in §5.34.1 (the variable arm at seeds 1, 2 and 3, the restated median,
+the break-even burn)"`. No other fixture moved.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
