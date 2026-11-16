@@ -1135,9 +1135,9 @@ pub fn sign_pqc_auth_for_output(
 /// instruction count taken over it moves with the nonce. This entry passes
 /// `ml_dsa_seed` through [`crate::signature::HybridEd25519MlDsa::sign_with_ml_dsa_seed`].
 ///
-/// Test-support only (`test-utils`, or this crate's own tests). Production
-/// signatures stay on [`sign_pqc_auth_for_output`].
-#[cfg(any(test, feature = "test-utils"))]
+/// Deterministic signing only (the TEST_ONLY `seeded-rng` feature, or this
+/// crate's own tests). Production signatures stay on [`sign_pqc_auth_for_output`].
+#[cfg(any(test, feature = "seeded-rng"))]
 pub fn sign_pqc_auth_for_output_with_ml_dsa_seed(
     combined_ss: &[u8; SHARED_SECRET_LEN],
     output_index: u64,

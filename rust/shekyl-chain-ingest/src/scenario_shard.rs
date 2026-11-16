@@ -419,7 +419,7 @@ pub async fn close_shards(
         BlockHeight::from_raw(first_coinbase + maturity),
     )
     .await;
-    let mut spender = Spender::over(chain);
+    let mut spender = Spender::on(scenario.network_id(), chain);
     let per_spend = spender
         .spend_coinbase(
             scenario.wallet(),

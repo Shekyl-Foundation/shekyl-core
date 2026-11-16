@@ -306,7 +306,7 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
         shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
     };
     let (paid, cheap) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(0), h(AT), fee + 1_000),

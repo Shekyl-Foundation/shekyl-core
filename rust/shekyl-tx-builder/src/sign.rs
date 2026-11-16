@@ -18,17 +18,17 @@
 //! includes the serialized proofs, so the proofs must exist before signing.
 
 use curve25519_dalek::scalar::Scalar;
-use rand_core::OsRng;
+use rand_core::{CryptoRng, OsRng, RngCore};
 use zeroize::Zeroizing;
 
 use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
-use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
+use shekyl_fcmp::proof::{self, BranchLayer, ProveError, ProveInput, ProveResult};
 use shekyl_fcmp::PqcLeafScalar;
 use shekyl_network::NetworkId;
-use shekyl_types::{BlockHash, PrefixHash, SigningPayloadHash, TxSignableHash};
+use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash, TxSignableHash};
 use shekyl_wire::CtBase;
 
 use crate::error::TxBuilderError;
@@ -112,6 +112,104 @@ pub fn sign_transaction_with_terms(
     extra_outputs: &[OutputTerm],
     tree: &TreeContext,
 ) -> Result<SignedProofs, TxBuilderError> {
+    sign_with(
+        &mut OsRng,
+        proof::prove,
+        &SignRequest {
+            network_id,
+            tx_prefix_hash,
+            inputs,
+            outputs,
+            fee,
+            extra_inputs,
+            extra_outputs,
+            tree,
+        },
+    )
+}
+
+/// [`sign_transaction_with_terms`] with every random value drawn from `seed`:
+/// the range proof, the pseudo-out blinds and the membership proof. One seed
+/// gives the same proofs byte for byte. For the chain forge's reproducible
+/// chains (`CHAIN_FORGE.md` §5.3, seam T2); only under the TEST_ONLY
+/// `seeded-rng` feature, which no build that ships enables (`CF-R9`).
+///
+/// # Errors
+///
+/// As [`sign_transaction_with_terms`].
+#[cfg(feature = "seeded-rng")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "sign_transaction_with_terms's signing boundary, plus the seed"
+)]
+pub fn sign_transaction_with_terms_seeded(
+    seed: &[u8; 32],
+    network_id: &NetworkId,
+    tx_prefix_hash: PrefixHash,
+    inputs: &[SpendInput],
+    outputs: &[OutputInfo],
+    fee: shekyl_units::AtomicUnits,
+    extra_inputs: &[InputTerm],
+    extra_outputs: &[OutputTerm],
+    tree: &TreeContext,
+) -> Result<SignedProofs, TxBuilderError> {
+    let (mut rng, mut prover_rng) = seeded::streams(seed);
+    sign_with(
+        &mut rng,
+        |inputs, root, depth, hash| {
+            proof::prove_with_rng(&mut prover_rng, inputs, root, depth, hash)
+        },
+        &SignRequest {
+            network_id,
+            tx_prefix_hash,
+            inputs,
+            outputs,
+            fee,
+            extra_inputs,
+            extra_outputs,
+            tree,
+        },
+    )
+}
+
+/// The parts of a spend [`sign_transaction_with_terms`] signs, as one value
+/// for the signing body its production and seeded entry points share.
+struct SignRequest<'a> {
+    network_id: &'a NetworkId,
+    tx_prefix_hash: PrefixHash,
+    inputs: &'a [SpendInput],
+    outputs: &'a [OutputInfo],
+    fee: shekyl_units::AtomicUnits,
+    extra_inputs: &'a [InputTerm],
+    extra_outputs: &'a [OutputTerm],
+    tree: &'a TreeContext,
+}
+
+/// [`sign_transaction_with_terms`]'s body. `rng` draws the range proof's and
+/// the pseudo-out blinds' randomness; `prove` makes the membership proof
+/// (production's [`proof::prove`], over the OS, or the seeded prover). Private:
+/// no build that ships has a signer that takes its caller's randomness
+/// (`CHAIN_FORGE.md` `CF-R9`).
+fn sign_with<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    prove: impl FnOnce(
+        &[ProveInput],
+        &CurveTreeRoot,
+        u8,
+        TxSignableHash,
+    ) -> Result<ProveResult, ProveError>,
+    req: &SignRequest<'_>,
+) -> Result<SignedProofs, TxBuilderError> {
+    let SignRequest {
+        network_id,
+        tx_prefix_hash,
+        inputs,
+        outputs,
+        fee,
+        extra_inputs,
+        extra_outputs,
+        tree,
+    } = *req;
     // ── 1. Validate ──────────────────────────────────────────────────
     validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
 
@@ -132,7 +230,7 @@ pub fn sign_transaction_with_terms(
         })
         .collect();
 
-    let bp = shekyl_bulletproofs::Bulletproof::prove_plus(&mut OsRng, commitments_for_bp)
+    let bp = shekyl_bulletproofs::Bulletproof::prove_plus(&mut *rng, commitments_for_bp)
         .map_err(|e| TxBuilderError::BulletproofError(e.to_string()))?;
 
     let mut bp_bytes = Vec::new();
@@ -168,7 +266,7 @@ pub fn sign_transaction_with_terms(
 
     for i in 0..n_in {
         if i < n_in - 1 {
-            pseudo_masks.push(Scalar::random(&mut OsRng));
+            pseudo_masks.push(Scalar::random(&mut *rng));
         } else {
             let sum_pseudo: Scalar = pseudo_masks.iter().copied().sum();
             pseudo_masks.push(sum_out_masks - sum_pseudo);
@@ -195,7 +293,7 @@ pub fn sign_transaction_with_terms(
         &enc_amounts,
         &enc_labels,
     );
-    let prove_result = proof::prove(&prove_inputs, &tree.tree_root, tree.tree_depth, tx_signable)
+    let prove_result = prove(&prove_inputs, &tree.tree_root, tree.tree_depth, tx_signable)
         .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
     // ── 8. Construct-side balance self-verify ────────────────────────
@@ -319,8 +417,59 @@ pub fn sign_pqc_auths(
     payload_hashes: &[SigningPayloadHash],
     inputs: &[SpendInput],
 ) -> Result<Vec<PqcAuth>, TxBuilderError> {
-    use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
+    sign_pqc_auths_with(payload_hashes, inputs, |ss, output_index, message| {
+        shekyl_crypto_pq::output::sign_pqc_auth_for_output(
+            ss,
+            output_index,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+            message,
+        )
+    })
+}
 
+/// [`sign_pqc_auths`] with each signature's ML-DSA randomness drawn from
+/// `seed`, one 32-byte nonce seed per input in input order, so one seed gives
+/// the same signatures byte for byte (`CHAIN_FORGE.md` §5.3, seams T2 and T3).
+/// Only under the TEST_ONLY `seeded-rng` feature.
+///
+/// # Errors
+///
+/// As [`sign_pqc_auths`].
+#[cfg(feature = "seeded-rng")]
+pub fn sign_pqc_auths_seeded(
+    seed: &[u8; 32],
+    payload_hashes: &[SigningPayloadHash],
+    inputs: &[SpendInput],
+) -> Result<Vec<PqcAuth>, TxBuilderError> {
+    let mut nonces = seeded::stream(seed);
+    sign_pqc_auths_with(payload_hashes, inputs, |ss, output_index, message| {
+        let mut ml_dsa_seed =
+            Zeroizing::new([0u8; shekyl_crypto_pq::signature::ML_DSA_SIGNING_SEED_LEN]);
+        nonces.fill_bytes(&mut *ml_dsa_seed);
+        shekyl_crypto_pq::output::sign_pqc_auth_for_output_with_ml_dsa_seed(
+            ss,
+            output_index,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+            message,
+            &ml_dsa_seed,
+        )
+    })
+}
+
+/// [`sign_pqc_auths`]'s body, over `sign` (production's OS-drawn signer, or
+/// the seeded one).
+fn sign_pqc_auths_with(
+    payload_hashes: &[SigningPayloadHash],
+    inputs: &[SpendInput],
+    mut sign: impl FnMut(
+        &[u8; 64],
+        u64,
+        &[u8],
+    ) -> Result<
+        shekyl_crypto_pq::output::PqcAuthSignature,
+        shekyl_crypto_pq::CryptoError,
+    >,
+) -> Result<Vec<PqcAuth>, TxBuilderError> {
     if payload_hashes.len() != inputs.len() {
         return Err(TxBuilderError::PqcSignError {
             index: 0,
@@ -345,18 +494,16 @@ pub fn sign_pqc_auths(
                 ),
             });
         }
-        let mut ss = [0u8; 64];
+        // The combined shared secret, copied once into memory that wipes on
+        // drop (rule 35).
+        let mut ss = Zeroizing::new([0u8; 64]);
         ss.copy_from_slice(&inp.combined_ss);
 
-        let auth_sig = sign_pqc_auth_for_output(
-            &ss,
-            inp.output_index,
-            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            hash.as_bytes(),
-        )
-        .map_err(|e| TxBuilderError::PqcSignError {
-            index: i,
-            reason: format!("sign_pqc_auth_for_output failed: {e}"),
+        let auth_sig = sign(&ss, inp.output_index, hash.as_bytes()).map_err(|e| {
+            TxBuilderError::PqcSignError {
+                index: i,
+                reason: format!("sign_pqc_auth_for_output failed: {e}"),
+            }
         })?;
 
         auths.push(PqcAuth {
@@ -410,12 +557,55 @@ pub fn prove_backing_membership(
     tree: &TreeContext,
     tx_signable: TxSignableHash,
 ) -> Result<MembershipOnlyProof, TxBuilderError> {
+    prove_backing_membership_with(input, tree, tx_signable, proof::prove_membership_only)
+}
+
+/// [`prove_backing_membership`] with the prover's randomness drawn from
+/// `seed`, so one seed gives the same backing proof byte for byte
+/// (`CHAIN_FORGE.md` §5.3, seam T2). Only under the TEST_ONLY `seeded-rng`
+/// feature.
+///
+/// # Errors
+///
+/// As [`prove_backing_membership`].
+#[cfg(feature = "seeded-rng")]
+pub fn prove_backing_membership_seeded(
+    seed: &[u8; 32],
+    input: &SpendInput,
+    tree: &TreeContext,
+    tx_signable: TxSignableHash,
+) -> Result<MembershipOnlyProof, TxBuilderError> {
+    let mut rng = seeded::stream(seed);
+    prove_backing_membership_with(
+        input,
+        tree,
+        tx_signable,
+        |inputs, root, depth, hash, context| {
+            proof::prove_membership_only_with_rng(&mut rng, inputs, root, depth, hash, context)
+        },
+    )
+}
+
+/// [`prove_backing_membership`]'s body, over `prove` (production's prover
+/// over the OS, or the seeded one).
+fn prove_backing_membership_with(
+    input: &SpendInput,
+    tree: &TreeContext,
+    tx_signable: TxSignableHash,
+    prove: impl FnOnce(
+        &[ProveInput],
+        &CurveTreeRoot,
+        u8,
+        TxSignableHash,
+        &[u8],
+    ) -> Result<ProveResult, ProveError>,
+) -> Result<MembershipOnlyProof, TxBuilderError> {
     // The blind is not read on the membership-only path: pseudo-out blinds
     // are a full-path (key-image) concern; the membership-only pseudo-out
     // comes from the context-bound rerandomization inside the prover.
     let prove_input = prove_input_from_spend(0, input, [0u8; 32])?;
 
-    let result = proof::prove_membership_only(
+    let result = prove(
         &[prove_input],
         &tree.tree_root,
         tree.tree_depth,
@@ -550,4 +740,29 @@ fn compute_key_image_gen(output_key: &[u8; 32]) -> [u8; 32] {
     shekyl_curve_generators::biased_hash_to_point(*output_key)
         .compress()
         .to_bytes()
+}
+
+/// The generators the seeded entry points draw from (`seeded-rng` only).
+#[cfg(feature = "seeded-rng")]
+pub(crate) mod seeded {
+    use rand_chacha::rand_core::{RngCore, SeedableRng};
+    use rand_chacha::ChaCha20Rng;
+    use zeroize::Zeroizing;
+
+    /// One ChaCha20 stream over `seed`.
+    pub(crate) fn stream(seed: &[u8; 32]) -> ChaCha20Rng {
+        ChaCha20Rng::from_seed(*seed)
+    }
+
+    /// Two independent streams over `seed`: the second's seed is the first
+    /// 32 bytes of the first, drawn before anything else reads it, so a
+    /// caller that needs one generator for itself and one to hand on (the
+    /// signer and its membership prover) gets both from one seed.
+    pub(crate) fn streams(seed: &[u8; 32]) -> (ChaCha20Rng, ChaCha20Rng) {
+        let mut first = stream(seed);
+        let mut second_seed = Zeroizing::new([0u8; 32]);
+        first.fill_bytes(&mut *second_seed);
+        let second = ChaCha20Rng::from_seed(*second_seed);
+        (first, second)
+    }
 }
