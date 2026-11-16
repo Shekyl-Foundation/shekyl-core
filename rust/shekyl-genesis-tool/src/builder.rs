@@ -21,6 +21,7 @@
 use shekyl_address::Network;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
+use shekyl_network::GenesisTimestamp;
 use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use shekyl_wire::tx_extra::{
@@ -190,16 +191,20 @@ pub fn build_genesis_tx(
 pub const GENESIS_HEADER_NONCE: u32 = 0;
 
 /// Assemble the genesis block around a built coinbase tx: major
-/// [`GENESIS_BLOCK_MAJOR_VERSION`], minor [`HEADER_MINOR_VERSION`],
-/// timestamp 0, zero previous hash, the empty curve-tree root, the empty
-/// section root (genesis admits no bundle), and nonce
-/// [`GENESIS_HEADER_NONCE`]. The same header on every network.
-pub fn genesis_block(tx: Transaction) -> Result<Block, GenesisToolError> {
+/// [`GENESIS_BLOCK_MAJOR_VERSION`], minor [`HEADER_MINOR_VERSION`], the
+/// network's mint time (`NETWORK_IDENTITY.md` NI-R18), zero previous hash,
+/// the empty curve-tree root, the empty section root (genesis admits no
+/// bundle), and nonce [`GENESIS_HEADER_NONCE`]. Every header field but the
+/// mint time is the same on every network; the coinbase is that network's.
+pub fn genesis_block(
+    tx: Transaction,
+    timestamp: GenesisTimestamp,
+) -> Result<Block, GenesisToolError> {
     Ok(Block {
         header: BlockHeader {
             major_version: GENESIS_BLOCK_MAJOR_VERSION,
             minor_version: HEADER_MINOR_VERSION,
-            timestamp: 0,
+            timestamp: timestamp.get(),
             previous: BlockHash::NULL,
             nonce: GENESIS_HEADER_NONCE,
             curve_tree_root: CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
@@ -211,7 +216,7 @@ pub fn genesis_block(tx: Transaction) -> Result<Block, GenesisToolError> {
 }
 
 /// `network`'s genesis block as the node connects it: the table's coinbase
-/// under [`genesis_block`]'s header, refused when that block is not the one
+/// under [`genesis_block`]'s header at the table's mint time, refused when that block is not the one
 /// the table pins (`NETWORK_IDENTITY.md` NI-Q3).
 ///
 /// # Errors
@@ -232,7 +237,7 @@ pub fn pinned_genesis(network: Network) -> Result<Block, GenesisToolError> {
             "{network}'s genesis transaction did not decode: {error}"
         ))
     })?;
-    let block = genesis_block(tx)?;
+    let block = genesis_block(tx, genesis.timestamp())?;
     let pinned = BlockHash::from_bytes(genesis.hash());
     if block.hash() != pinned {
         return Err(invalid(format!(

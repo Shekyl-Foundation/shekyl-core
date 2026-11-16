@@ -8,8 +8,9 @@
 //!
 //! Each network's genesis rebuilds from its recipients file to the table's
 //! pin, its coinbase's transaction key recomputes from the row's name, and
-//! no two networks share a genesis hash, a network id or a wire prefix. A
-//! regenesis moves the pins with `geblock pin`; this test fails until it
+//! no two networks share a genesis hash, a network id or a wire prefix. The
+//! table's mint time is the one recorded beside the pins (NI-R18). A
+//! regenesis moves the pins with `geblock mint`; this test fails until it
 //! does.
 
 use std::collections::HashSet;
@@ -19,7 +20,8 @@ use shekyl_address::Network;
 use shekyl_genesis_tool::builder::GENESIS_DRAW_COMMITMENT;
 use shekyl_genesis_tool::recipients::load_and_validate;
 use shekyl_genesis_tool::table::{
-    rebuild, recipients_path, regtest_recipients, REGTEST_GENESIS_SEEDS,
+    rebuild, recipients_path, recorded_timestamp, regtest_recipients, MINT_FLOOR,
+    REGTEST_GENESIS_SEEDS,
 };
 use shekyl_genesis_tool::txkey::{derive_genesis_tx_secret, tx_pubkey};
 use shekyl_network::{network_id_from_genesis, prefix_for};
@@ -35,7 +37,19 @@ fn repo_root() -> PathBuf {
 #[test]
 fn every_genesis_rebuilds_to_the_tables_pin() {
     for net in Network::ALL {
-        let rebuilt = rebuild(net, &recipients_path(&repo_root(), net))
+        let recorded =
+            recorded_timestamp(&repo_root(), net).unwrap_or_else(|e| panic!("{net}: {e}"));
+        assert_eq!(
+            net.genesis().timestamp(),
+            recorded,
+            "{net}: the table's mint time is not the recorded one (rebuild)"
+        );
+        assert!(
+            recorded.get() >= MINT_FLOOR,
+            "{net}: minted at {}, before the mint floor",
+            recorded.get()
+        );
+        let rebuilt = rebuild(net, &recipients_path(&repo_root(), net), recorded)
             .unwrap_or_else(|e| panic!("{net}: {e}"));
         assert_eq!(
             net.genesis().tx_hex(),

@@ -37,7 +37,7 @@ use shekyl_crypto_hash::cshake256_32;
 
 pub mod envelope;
 mod genesis;
-pub use genesis::Genesis;
+pub use genesis::{Genesis, GenesisTimestamp};
 
 /// A Shekyl network. The discriminant is the network's one code: the
 /// wallet file's network byte, the FFI's network argument and the C++

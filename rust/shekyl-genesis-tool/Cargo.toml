@@ -48,6 +48,9 @@ curve25519-dalek = { version = "4", features = ["zeroize"] }
 # Golden-KAT blob digest (tests/golden_kat.rs) — a compact pin over the full
 # serialized genesis tx, so any wire-level drift fails on one line.
 sha2 = { workspace = true }
+# The timestamp pin's read-back tests (`table.rs`) write a pin into a scratch
+# repository root.
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
