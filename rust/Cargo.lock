@@ -4512,6 +4512,7 @@ dependencies = [
  "shekyl-consensus",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
+ "shekyl-curve-tree",
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",

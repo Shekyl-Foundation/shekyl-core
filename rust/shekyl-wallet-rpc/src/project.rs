@@ -11,7 +11,8 @@ use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_core::{SubmitOutcome, SubmitReceipt};
 use shekyl_engine_state::{
-    DisputeReason, LedgerBlock, ReceiveAttribution, SendRecord, SendState, TransferDetails,
+    DisputeReason, InFlightSpendLocks, LedgerBlock, OutputStanding, ReceiveAttribution, SendRecord,
+    SendState, TransferDetails,
 };
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
@@ -24,19 +25,22 @@ use crate::types::{
 };
 
 /// Serialize the engine's one-glance balance ([`BalanceView`]) as the
-/// contract's `get_balance` result. Pure wire shaping: which leg is liquid,
+/// contract's `get_balance` result. Pure wire shaping: the ledger's legs,
 /// how the bonded legs sum, and what an unreadable staking seal does to the
 /// staking fields are decided by [`shekyl_engine_core::StakeFacade::balance_view`],
 /// once, for every consumer. This function spells the decimal strings and
 /// carries the engine's absence onto the wire as absence.
 pub fn get_balance_result(view: &BalanceView) -> GetBalanceResult {
+    let legs = &view.legs;
     GetBalanceResult {
-        liquid: view.liquid.into(),
+        balance: legs.balance().into(),
+        spendable: legs.spendable.into(),
+        incoming: legs.incoming.into(),
+        incoming_wait: legs.incoming_wait.map(shekyl_types::BlockCount::to_raw),
+        outgoing: legs.outgoing.into(),
+        unspendable: legs.unspendable.into(),
         staked: view.staking.map(|s| s.staked.into()),
-        unlocked: view.unlocked.into(),
-        unspendable: view.unspendable.into(),
         claimable_rewards: view.staking.map(|s| s.claimable_rewards.into()),
-        pending: view.pending.into(),
     }
 }
 
@@ -59,21 +63,15 @@ pub use shekyl_wallet_contract::transfer_id::{
 /// how a row maps to [`TransferState`] without re-projecting the whole row.
 /// `spend_locks` is the journal-derived lock map (PR-SJ-1b): a locked,
 /// unspent receive row is a spend in flight, so it reads `PENDING`.
-pub fn transfer_state(
-    td: &TransferDetails,
-    spend_locks: &shekyl_engine_state::InFlightSpendLocks,
-) -> TransferState {
-    if td.spent {
-        TransferState::Spent
-    } else if td.unspendable.is_some() {
-        // PL-D3 §6.2: the scan-time verdict outranks the lock (an
-        // unspendable row is never selected, so a lock on it would itself be
-        // a defect) and CONFIRMED (which promises spendability).
-        TransferState::Unspendable
-    } else if spend_locks.contains(td.global_output_index) {
-        TransferState::Pending
-    } else {
-        TransferState::Confirmed
+pub fn transfer_state(td: &TransferDetails, spend_locks: &InFlightSpendLocks) -> TransferState {
+    // The list has no horizon: confirmed is on chain, spendable or not.
+    // The standing's precedence is the classifier's, so an unspendable row
+    // is never CONFIRMED (PL-D3 §6.2).
+    match td.standing(spend_locks) {
+        OutputStanding::Spent => TransferState::Spent,
+        OutputStanding::Unspendable => TransferState::Unspendable,
+        OutputStanding::InFlight => TransferState::Pending,
+        OutputStanding::OnChain => TransferState::Confirmed,
     }
 }
 
@@ -149,7 +147,7 @@ pub fn attribution_matches(
 /// every call site shares the same projection.
 pub fn transfer_view(
     td: &TransferDetails,
-    spend_locks: &shekyl_engine_state::InFlightSpendLocks,
+    spend_locks: &InFlightSpendLocks,
     tx_notes: &std::collections::BTreeMap<[u8; 32], String>,
 ) -> TransferView {
     TransferView {
@@ -637,19 +635,24 @@ mod tests {
     fn balance_result_spells_the_engine_view_and_keeps_absence_absent() {
         use shekyl_engine_core::StakedTotals;
         let view = BalanceView {
-            liquid: AtomicUnits::from_raw(40),
-            unlocked: AtomicUnits::from_raw(40),
-            pending: AtomicUnits::from_raw(5),
-            unspendable: AtomicUnits::from_raw(7),
+            legs: shekyl_scanner::BalanceSummary {
+                spendable: AtomicUnits::from_raw(40),
+                incoming: AtomicUnits::from_raw(9),
+                incoming_wait: Some(shekyl_types::BlockCount::from_raw(3)),
+                outgoing: AtomicUnits::from_raw(5),
+                unspendable: AtomicUnits::from_raw(7),
+            },
             staking: Some(StakedTotals {
                 staked: AtomicUnits::from_raw(100_000),
                 claimable_rewards: AtomicUnits::from_raw(1_234),
             }),
         };
         let r = get_balance_result(&view);
-        assert_eq!(r.liquid.to_string(), "40");
-        assert_eq!(r.unlocked.to_string(), "40");
-        assert_eq!(r.pending.to_string(), "5");
+        assert_eq!(r.balance.to_string(), "49", "spendable + incoming");
+        assert_eq!(r.spendable.to_string(), "40");
+        assert_eq!(r.incoming.to_string(), "9");
+        assert_eq!(r.incoming_wait, Some(3));
+        assert_eq!(r.outgoing.to_string(), "5");
         assert_eq!(r.unspendable.to_string(), "7");
         assert_eq!(r.staked.map(|s| s.to_string()).as_deref(), Some("100000"));
         assert_eq!(
@@ -657,21 +660,29 @@ mod tests {
             Some("1234")
         );
 
-        // The degrade arm: absence crosses the wire as absence, never "0".
+        // The degrade arm: absence crosses the wire as absence, never "0";
+        // and a wait with no on-chain incoming output is absent too.
         let degraded = BalanceView {
+            legs: shekyl_scanner::BalanceSummary {
+                incoming_wait: None,
+                ..view.legs
+            },
             staking: None,
-            ..view
         };
         let r = get_balance_result(&degraded);
         assert_eq!(r.staked, None);
         assert_eq!(r.claimable_rewards, None);
         assert_eq!(
-            r.liquid.to_string(),
+            r.spendable.to_string(),
             "40",
-            "liquid fields stay authoritative"
+            "the ledger legs stay authoritative"
         );
         let json = serde_json::to_value(&r).unwrap();
         assert!(json.get("staked").is_none() && json.get("claimable_rewards").is_none());
+        assert!(json.get("incoming_wait").is_none(), "absent, not 0");
+        for gone in ["liquid", "unlocked", "pending"] {
+            assert!(json.get(gone).is_none(), "{gone} is deleted");
+        }
     }
 
     fn sample_send_record(state: SendState) -> SendRecord {

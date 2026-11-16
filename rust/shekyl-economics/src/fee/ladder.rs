@@ -4,9 +4,9 @@
 // BSD-3-Clause
 
 //! Three-tier ladder. Economy is the relay floor; standard is the policy's
-//! [`RelayPolicy::standard_over_economy`] times that floor; priority is
+//! [`RelayPolicy::standard_over_economy`] times that floor; high is
 //! `max(f·RC/M, standard)`, `f` the policy's
-//! [`RelayPolicy::priority_factor`], so the slots are monotone by
+//! [`RelayPolicy::high_factor`], so the slots are monotone by
 //! construction. At the shipped policy these are 4 and 2.
 
 use super::correction::FeeCorrection;
@@ -31,12 +31,12 @@ pub const EMISSION_CLAIM_FEE_FLOOR: u64 = crate::params::GENERATED_EMISSION_CLAI
 pub const STANDARD_RUNG_OVER_ECONOMY: u64 = crate::params::GENERATED_STANDARD_RUNG_OVER_ECONOMY;
 
 /// The three priced rungs. [`Self::as_slots`] is the wire projection:
-/// `[economy, standard, priority]`.
+/// `[economy, standard, high]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeLadder {
     pub economy: u64,
     pub standard: u64,
-    pub priority: u64,
+    pub high: u64,
 }
 
 impl FeeLadder {
@@ -45,18 +45,93 @@ impl FeeLadder {
     pub const SATURATED: Self = Self {
         economy: u64::MAX,
         standard: u64::MAX,
-        priority: u64::MAX,
+        high: u64::MAX,
     };
 
-    /// Wire shape `[economy, standard, priority]`.
+    /// Wire shape `[economy, standard, high]`.
     #[must_use]
     pub const fn as_slots(self) -> [u64; 3] {
-        [self.economy, self.standard, self.priority]
+        [self.economy, self.standard, self.high]
+    }
+
+    /// The rung a payer at `priority` pays.
+    #[must_use]
+    pub const fn rung(self, priority: FeePriority) -> u64 {
+        match priority {
+            FeePriority::Economy => self.economy,
+            FeePriority::Standard => self.standard,
+            FeePriority::High => self.high,
+        }
+    }
+}
+
+/// Which of the ladder's three rungs a payer pays: the one fee tier set
+/// (IG-Q52). Every wallet surface, the engine, the preferences file, the
+/// wallet RPC and the CLI, names a tier by this type; the wire and the
+/// preferences file spell it lowercase.
+///
+/// There is no per-wallet rate. The fee is cleartext on chain, and a
+/// wallet that pays one of three values every conforming wallet derives
+/// from chain state hides in that tier's cohort; a rate of its own choosing
+/// marks it (`FEE_LADDER_DERIVATION.md` W3, ruled 2026-11-15). If `High`
+/// misses its confirmation target under measured congestion, the fix is in
+/// the derivation of the top rung, so every wallet still pays the same rate.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum FeePriority {
+    /// The relay floor: the cheapest rung.
+    Economy,
+    /// [`STANDARD_RUNG_OVER_ECONOMY`] times the floor. The default.
+    #[default]
+    Standard,
+    /// The top rung, `max(f·R·C/M, standard)`.
+    High,
+}
+
+impl FeePriority {
+    /// Every tier, cheapest first: the order [`FeeLadder::as_slots`] holds
+    /// the rungs in.
+    pub const ALL: [Self; 3] = [Self::Economy, Self::Standard, Self::High];
+
+    /// Every tier's name, in [`Self::ALL`]'s order: the closed keyword set
+    /// the wire, the preferences file and the CLI accept.
+    pub const NAMES: [&'static str; 3] = ["economy", "standard", "high"];
+
+    /// The tier's name, as the wire, the preferences file and the CLI
+    /// spell it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        Self::NAMES[self as usize]
+    }
+
+    /// The tier a name spells, or `None`. Lowercase only: the grammar's
+    /// keywords have one spelling (IG-1).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tier| tier.name() == name)
+    }
+}
+
+impl core::fmt::Display for FeePriority {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.name())
     }
 }
 
 /// Three-tier ladder: economy = [`super::relay_fee_floor`], standard =
-/// `policy`'s ratio times that floor, priority = `max(f·RC/M, standard)`.
+/// `policy`'s ratio times that floor, high = `max(f·RC/M, standard)`.
 ///
 /// `base_reward` is the M_r-neutral total (`max(curve(remaining), TAIL)`);
 /// `median` is the long-term fee median; `c` is raw [`FeeCorrection`].
@@ -102,10 +177,10 @@ pub(super) fn checked_corrected_fee_ladder(
     // Raised to `standard` so the ladder is monotone by construction. At a
     // reward small enough to truncate every quotient to zero, economy is
     // `max(1)` = 1, standard is that times the policy's ratio, and an
-    // unfloored priority is 0.
-    let priority = u64::try_from(
+    // unfloored high is 0.
+    let high = u64::try_from(
         base.checked_mul(cq)?
-            .checked_mul(u128::from(policy.priority_factor))?
+            .checked_mul(u128::from(policy.high_factor))?
             / ms,
     )
     .unwrap_or(u64::MAX)
@@ -113,7 +188,7 @@ pub(super) fn checked_corrected_fee_ladder(
     Some(FeeLadder {
         economy,
         standard,
-        priority,
+        high,
     })
 }
 
@@ -266,8 +341,23 @@ mod tests {
         assert_eq!(13 * 16, 208, "the rescale-after value this rung must beat");
         assert_eq!(
             ladder.as_slots(),
-            [ladder.economy, ladder.standard, ladder.priority]
+            [ladder.economy, ladder.standard, ladder.high]
         );
+    }
+
+    /// One spelling per tier: [`FeePriority::name`], the serde form the
+    /// wire and the preferences file carry, and [`FeePriority::from_name`]
+    /// agree, and a name in any other case is no tier.
+    #[test]
+    fn a_tier_has_one_spelling() {
+        for tier in FeePriority::ALL {
+            let json = serde_json::to_string(&tier).expect("serialize");
+            assert_eq!(json, format!("\"{}\"", tier.name()));
+            assert_eq!(FeePriority::from_name(tier.name()), Some(tier));
+            assert_eq!(FeePriority::from_name(&tier.name().to_uppercase()), None);
+        }
+        assert_eq!(FeePriority::from_name("priority"), None);
+        assert_eq!(FeePriority::default(), FeePriority::Standard);
     }
 
     #[test]
@@ -284,7 +374,7 @@ mod tests {
                 &p,
                 &crate::RelayPolicy::SHIPPED
             )
-            .priority,
+            .high,
             6_826_666
         );
         assert_eq!(
@@ -296,7 +386,7 @@ mod tests {
                 &p,
                 &crate::RelayPolicy::SHIPPED
             )
-            .priority,
+            .high,
             13_653_333
         );
     }
@@ -365,10 +455,10 @@ mod tests {
                         ladder.standard
                     );
                     assert!(
-                        ladder.standard <= ladder.priority,
-                        "standard {} above priority {} at reward={reward} m={m} c={c}",
+                        ladder.standard <= ladder.high,
+                        "standard {} above high {} at reward={reward} m={m} c={c}",
                         ladder.standard,
-                        ladder.priority
+                        ladder.high
                     );
                 }
             }
@@ -416,12 +506,12 @@ mod tests {
         };
         assert_eq!(ladder(&standard).standard, 5 * at.economy);
 
-        let priority = crate::RelayPolicy {
-            priority_factor: 3,
+        let high = crate::RelayPolicy {
+            high_factor: 3,
             ..shipped_policy
         };
         // One floor of 3·R·C/M (2·R·C/M is 66 666.6…), not 3 × ⌊R·C/M⌋.
-        assert_eq!(ladder(&priority).priority, 100_000);
+        assert_eq!(ladder(&high).high, 100_000);
 
         let heavier = crate::RelayPolicy {
             ref_tx_weight: 6_000,

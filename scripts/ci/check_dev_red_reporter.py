@@ -6,8 +6,11 @@
 """A red push run on `dev` reaches the dev-red reporter from every job.
 
 `dev` has no merge queue, so the push runs of `build.yml`,
-`rust-audit-test.yml`, and `benchmarks.yml` on `dev` are the first to
-test what the merges made (06-branching.mdc). Each ends in a job that
+`rust-audit-test.yml`, `benchmarks.yml` and `fuzz-harness.yml` on `dev`
+are the first to test what the merges made (06-branching.mdc). A pull
+request whose last run predates a workflow merges untested by it: #1399
+merged with no fuzz-harness run, and the push run on `dev` that went red
+after it reported to no one. Each ends in a job that
 calls `report-dev-red.yml`, which opens or threads an issue. That job
 reads only the results of the jobs it `needs`: a job added to the
 workflow and left out of that list could go red on `dev` with no issue.
@@ -61,6 +64,7 @@ SUBJECTS = {
     "build.yml": CONDITION,
     "rust-audit-test.yml": CONDITION,
     "benchmarks.yml": CONDITION,
+    "fuzz-harness.yml": CONDITION,
     "gui-drift.yml": SCHEDULE_CONDITION,
 }
 

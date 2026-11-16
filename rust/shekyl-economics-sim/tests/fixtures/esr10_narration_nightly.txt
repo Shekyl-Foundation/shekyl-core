@@ -8,9 +8,9 @@ ARMS:
               (a fixed point: 2 pass(es) from the zero-fee weight); zone' = 100 x w_ref' = 1259500 B,
               the inherited ratio. --set relay.ref_tx_weight=12595 --set economic.full_reward_zone=1259500
 CELLS: x1.000 all-Standard, x1.250 all-Standard, x1.352 all-Standard (m*), x1.500 all-Standard, x2.000 all-Standard, x3.000 all-Standard, 15/80/5 x1.000, 15/85/0 x1.000.
-  m* = ceil(1000 theta(y1)/rho(y1)) on the inherited arm's year 1. Mixes are Economy/Standard/Priority
+  m* = ceil(1000 theta(y1)/rho(y1)) on the inherited arm's year 1. Mixes are Economy/Standard/High
   percent; demand splits by largest remainder on the cumulative target, and one block's arrivals are
-  admitted Priority, Standard, Economy: a declared order, which can move the pool (§5.29).
+  admitted High, Standard, Economy: a declared order, which can move the pool (§5.29).
 CEILING (umbrella §4, ratified 2026-11-06): the year-1 Standard fee <= 0.05% of the year-1 mean block
   reward on the design curve = 496289839 atomic (0.4963 SKL). The year-1 Standard fee is the Standard
   fees carried in year 1 over the Standard transactions carried.
@@ -72,9 +72,9 @@ SUMMARY, every cell and scenario.
   re-derived  15/85/0 x1.000             baseline_steady_stat      -      y1      100.0%     y27     y31     0.3944    0.79
   re-derived  15/85/0 x1.000             stuffing_attack           -      y1       99.9%     y27     y31     0.2604    0.52
 
-PER CELL, at y1/4/8/10/12/15/20/30/40/60. Per block, Economy/Standard/Priority: carried; dropped as refused, evicted
+PER CELL, at y1/4/8/10/12/15/20/30/40/60. Per block, Economy/Standard/High: carried; dropped as refused, evicted
 (CEN-M10) and expired (reference out of CEN-I11's window); age at inclusion in blocks, median/p95 per
-rung ('-' when none listed); fees (SKL); Priority's share of the block's fees. Then the long-term median
+rung ('-' when none listed); fees (SKL); High's share of the block's fees. Then the long-term median
 at year end (KB) and the paid block reward, miner and staker, per block (SKL).
 
 == inherited | x1.000 all-Standard
