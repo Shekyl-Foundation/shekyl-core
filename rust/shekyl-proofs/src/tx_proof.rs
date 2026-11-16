@@ -277,7 +277,9 @@ pub fn generate_outbound_proof_with_secrets(
         // `ps` drops here; `ProofSecrets` is `ZeroizeOnDrop`.
     }
 
-    let message = assemble_proof_message(
+    // Typed so the domain-binding gate sees `OUTBOUND_DOMAIN` held to a
+    // `Framed32` here; the key's signing method takes one across the crate.
+    let message: Framed32 = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -372,7 +374,9 @@ pub fn verify_outbound_proof(
 
     let per_output_blob = &proof_bytes[OUTBOUND_HEADER_SIZE..];
 
-    let message = assemble_proof_message(
+    // Typed so the domain-binding gate sees `OUTBOUND_DOMAIN` held to a
+    // `Framed32` here; the key's signing method takes one across the crate.
+    let message: Framed32 = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,

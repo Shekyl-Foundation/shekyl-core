@@ -182,11 +182,15 @@ async fn sweep_accumulates_funding_and_advances_the_cursor() {
 #[tokio::test]
 async fn resume_from_the_store_does_not_double_count() {
     let p = persona(0);
+    // The chain grows, so its block 0 is the one block both sweeps see. A
+    // fixture block is new bytes on every build (a fresh transaction key),
+    // so it is built once and held.
+    let block0 = funding_block(&p);
     // First sweep: tip = 5, horizon = 1 → scan [0, 1). Funding in block 0.
     let store = MemStore::default();
     let stake = spawn_stake(&[0]);
     {
-        let src = source(chain(5, &[(0, funding_block(&p))]));
+        let src = source(chain(5, &[(0, block0.clone())]));
         let mut accrual = PScanAccrual::genesis();
         let mut retired = BTreeSet::new();
         pscan_sweep(
@@ -212,7 +216,7 @@ async fn resume_from_the_store_does_not_double_count() {
     // "Crash + restart": reload the accrual from the store, grow the chain.
     let mut accrual = PScanAccrual::from_state(&store.load().await.unwrap().unwrap());
     assert_eq!(accrual.next_height(), BlockHeight::from_raw(1));
-    let src = source(chain(6, &[(0, funding_block(&p)), (1, funding_block(&p))]));
+    let src = source(chain(6, &[(0, block0), (1, funding_block(&p))]));
     let mut retired = BTreeSet::new();
     // tip = 6, horizon = 2 → scan [1, 2) only (block 0 already counted).
     pscan_sweep(

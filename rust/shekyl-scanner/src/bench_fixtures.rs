@@ -260,8 +260,9 @@ fn assemble_scannable_block(
     let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut per_output_kem_cts: Vec<Vec<u8>> = Vec::with_capacity(n_outputs);
     let mut leaf_entries: Vec<u8> = Vec::with_capacity(n_outputs * PQC_LEAF_ENTRY_LEN);
-    // A fresh key, as a real transaction has: the wallet keypair is drawn
-    // per call too, so no two fixture blocks were ever byte-identical.
+    // A fresh key, as a real transaction has, so every call is new bytes,
+    // whoever the recipient is. A test that needs one block twice (a chain
+    // that grows past it) builds it once and holds it.
     let tx_key = TxKey::random().expect("the OS draws a key");
 
     for output_index in 0..n_outputs {
