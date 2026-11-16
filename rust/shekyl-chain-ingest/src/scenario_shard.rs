@@ -43,7 +43,7 @@ use shekyl_wire::Transaction;
 use crate::archival_driver::{first_spending_height, FEE};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::schedule::ChainRules;
-use shekyl_harness_spender::Spender;
+use shekyl_harness_spender::{SpendSeeds, Spender};
 
 /// The levered settlement epoch, in blocks. The production epoch (10,000
 /// blocks) never prices a shard inside what a test mines; under this one
@@ -402,6 +402,27 @@ pub async fn close_shards(
     first_coinbase: u64,
     want: u64,
 ) -> Filled {
+    close_shards_drawing(scenario, chain, first_coinbase, want, || None).await
+}
+
+/// [`close_shards`] with each fill spend's randomness from `draw`: `None`
+/// is the OS's, as [`close_shards`] draws it; `Some` is that one spend's
+/// seeds (`CHAIN_FORGE.md` §5.2, S9). `draw` is called once per listed
+/// spend on this thread, in the order the block lists them, before the
+/// spend's thread starts, so which spend gets which seeds is the fill's
+/// order and never the threads' (§5.3, seam T4). The sizing spend, which
+/// is measured and never listed, draws from the OS.
+///
+/// # Panics
+///
+/// As [`close_shards`].
+pub async fn close_shards_drawing(
+    scenario: &mut Scenario<FreeHash>,
+    chain: &mut Vec<Mined>,
+    first_coinbase: u64,
+    want: u64,
+    mut draw: impl FnMut() -> Option<SpendSeeds>,
+) -> Filled {
     let have = closed_shards(scenario).await;
     assert!(
         have < want,
@@ -476,15 +497,24 @@ pub async fn close_shards(
         }
         let coinbases: Vec<u64> = (next_coinbase..next_coinbase + batch as u64).collect();
         next_coinbase += batch as u64;
+        // Every spend's seeds, in listing order, before any thread starts.
+        let seeds: Vec<Option<SpendSeeds>> = coinbases.iter().map(|_| draw()).collect();
         // The proofs are the cost; build the batch across the cores.
         let built: Vec<Transaction> = std::thread::scope(|s| {
             let handles: Vec<_> = coinbases
                 .iter()
-                .map(|&c| {
+                .zip(seeds)
+                .map(|(&c, seeds)| {
                     let spender = &spender;
                     let wallet = scenario.wallet();
                     s.spawn(move || {
-                        spender.spend_coinbase(wallet, BlockHeight::from_raw(c), connecting, FEE)
+                        let height = BlockHeight::from_raw(c);
+                        match seeds {
+                            Some(seeds) => spender
+                                .drawing(seeds)
+                                .spend_coinbase(wallet, height, connecting, FEE),
+                            None => spender.spend_coinbase(wallet, height, connecting, FEE),
+                        }
                     })
                 })
                 .collect();

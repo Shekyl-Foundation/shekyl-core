@@ -81,6 +81,34 @@ pub struct ClaimTerms {
     pub reward_amount_plain: Vec<u64>,
 }
 
+/// One claim's seeds, one per draw of randomness (`CHAIN_FORGE.md` §5.2):
+/// the fee side's range proof, blinds and membership proof (S1–S3), the
+/// backing's membership-only proof (S4), Auth-B under the backing output's
+/// key and the fee slots under theirs, and Auth-P and the emission slot
+/// under the persona's identity key (S5). Apart, so no two signatures or
+/// proofs share randomness and the forge's controls can swap one source.
+/// Only under the TEST_ONLY `forge` feature; elsewhere the type has no
+/// value, so the only claim is the OS-drawn one.
+#[cfg(feature = "forge")]
+pub struct EmissionSeeds {
+    /// The fee side's proofs.
+    pub proofs: shekyl_tx_builder::ProofSeeds,
+    /// The backing's membership-only proof.
+    pub backing: Zeroizing<[u8; 32]>,
+    /// Auth-B.
+    pub backing_auth: Zeroizing<[u8; 32]>,
+    /// The fee spends' slots.
+    pub fee_slots: Zeroizing<[u8; 32]>,
+    /// Auth-P.
+    pub claim_auth: Zeroizing<[u8; 32]>,
+    /// The emission slot.
+    pub emission_slot: Zeroizing<[u8; 32]>,
+}
+
+/// A build without `forge` has no seeded claim.
+#[cfg(not(feature = "forge"))]
+pub enum EmissionSeeds {}
+
 /// The assembled claim: the wire bytes, and the facts a caller verifies
 /// them with.
 pub struct AssembledClaim {
@@ -143,6 +171,37 @@ pub fn assemble_emission_claim(
     network: &NetworkId,
     tree: &TreeContext,
 ) -> AssembledClaim {
+    assemble_emission_claim_drawing(
+        None,
+        keys,
+        tx_key_secret,
+        fee_inputs,
+        backing,
+        terms,
+        fee,
+        network,
+        tree,
+    )
+}
+
+/// [`assemble_emission_claim`] with every proof and signature drawing from
+/// `seeds` when it is `Some` (the chain forge, `forge` only), the OS's
+/// otherwise, as the engine handler draws them.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the claim; the seeds are the claim's randomness"
+)]
+pub fn assemble_emission_claim_drawing(
+    seeds: Option<&EmissionSeeds>,
+    keys: &ArchivalPKeys,
+    tx_key_secret: &Zeroizing<[u8; 32]>,
+    fee_inputs: Vec<SpendInput>,
+    backing: SpendInput,
+    terms: ClaimTerms,
+    fee: u64,
+    network: &NetworkId,
+    tree: &TreeContext,
+) -> AssembledClaim {
     assemble(
         network,
         keys,
@@ -153,6 +212,7 @@ pub fn assemble_emission_claim(
         fee,
         tree,
         FeeProof::AsProved,
+        seeds,
     )
 }
 
@@ -189,6 +249,7 @@ pub fn assemble_emission_claim_breaking_fee_proof(
         fee,
         tree,
         FeeProof::FlippedBeforeSigning,
+        None,
     )
 }
 
@@ -212,6 +273,7 @@ fn assemble(
     fee: u64,
     tree: &TreeContext,
     fee_proof: FeeProof,
+    seeds: Option<&EmissionSeeds>,
 ) -> AssembledClaim {
     // Step 5: the mint is the sum of the per-epoch plain rewards; the fee
     // spends fund the fee and return the rest as two confidential vouts.
@@ -337,8 +399,17 @@ fn assemble(
     let backing_index = backing.output_index;
     let backing_pubkey = derive_pqc_public_key(&backing_combined, backing_index)
         .expect("the backing's hybrid key derives");
-    let membership = prove_backing_membership(&backing, tree, tx_signable)
-        .expect("the backing proves membership");
+    let membership = match seeds {
+        #[cfg(feature = "forge")]
+        Some(seeds) => shekyl_tx_builder::prove_backing_membership_seeded(
+            &seeds.backing,
+            &backing,
+            tree,
+            tx_signable,
+        ),
+        _ => prove_backing_membership(&backing, tree, tx_signable),
+    }
+    .expect("the backing proves membership");
     drop(backing);
 
     // Steps 12–13: the vin with placeholder auths at canonical length, then
@@ -367,18 +438,34 @@ fn assemble(
     let auth_msgs = vin
         .auth_msgs(network, &reward_commits, &tx_signable)
         .expect("the auth binding messages derive");
-    let auth_b =
-        sign_emission_backing_for_output(&backing_combined, backing_index, &auth_msgs.backing)
-            .expect("Auth-B signs");
+    let auth_b = match seeds {
+        #[cfg(feature = "forge")]
+        Some(seeds) => shekyl_crypto_pq::output::sign_emission_backing_for_output_with_ml_dsa_seed(
+            &backing_combined,
+            backing_index,
+            &auth_msgs.backing,
+            &seeds.backing_auth,
+        ),
+        _ => sign_emission_backing_for_output(&backing_combined, backing_index, &auth_msgs.backing),
+    }
+    .expect("Auth-B signs");
     assert_eq!(
         auth_b.hybrid_public_key, backing_pubkey,
         "Auth-B's key is the vin's backing_pubkey"
     );
     vin.auth_backing = auth_b.signature;
-    vin.auth_claim = sign_emission_claim(&keys.hybrid_sign_sk, &auth_msgs.claim)
-        .expect("Auth-P signs")
-        .to_canonical_bytes()
-        .expect("Auth-P encodes");
+    vin.auth_claim = match seeds {
+        #[cfg(feature = "forge")]
+        Some(seeds) => shekyl_crypto_pq::signature::sign_emission_claim_with_ml_dsa_seed(
+            &keys.hybrid_sign_sk,
+            &auth_msgs.claim,
+            &seeds.claim_auth,
+        ),
+        _ => sign_emission_claim(&keys.hybrid_sign_sk, &auth_msgs.claim),
+    }
+    .expect("Auth-P signs")
+    .to_canonical_bytes()
+    .expect("Auth-P encodes");
 
     // Step 14: the completed vin joins the prefix.
     let extra_inputs = vec![Input::ArchivalRewardEmission {
@@ -387,18 +474,33 @@ fn assemble(
 
     // Step 15: the fee-side proving, the mint as the input-side cleartext
     // term — `Σ pseudoOuts + total_reward·H = Σ masks + fee·H` (CEN-H22).
-    let mut signed = sign_transaction_with_terms(
-        network,
-        // J22's prefix: the signer frames the tx_signable the backing proof
-        // and the auths were made over.
-        signable,
-        &spend_inputs,
-        &output_infos,
-        AtomicUnits::from_raw(fee),
-        &[InputTerm::new(AtomicUnits::from_raw(total_reward))],
-        &[],
-        tree,
-    )
+    // J22's prefix: the signer frames the tx_signable the backing proof and
+    // the auths were made over.
+    let mint = [InputTerm::new(AtomicUnits::from_raw(total_reward))];
+    let mut signed = match seeds {
+        #[cfg(feature = "forge")]
+        Some(seeds) => shekyl_tx_builder::sign_transaction_with_terms_seeded(
+            &seeds.proofs,
+            network,
+            signable,
+            &spend_inputs,
+            &output_infos,
+            AtomicUnits::from_raw(fee),
+            &mint,
+            &[],
+            tree,
+        ),
+        _ => sign_transaction_with_terms(
+            network,
+            signable,
+            &spend_inputs,
+            &output_infos,
+            AtomicUnits::from_raw(fee),
+            &mint,
+            &[],
+            tree,
+        ),
+    }
     .expect("the fee side proves");
     assert_eq!(
         signed.commitments.first(),
@@ -411,37 +513,51 @@ fn assemble(
 
     // Steps 16–17: fee slots sign inside `open_spend`; the emission slot
     // signs with the persona's identity key over its own payload.
-    let open = open_spend(
-        signed,
-        &spend_inputs,
-        SpendLayout {
-            key_images: key_images.clone(),
-            extra_inputs,
-            output_amounts,
-            output_keys,
-            view_tags,
-            tx_extra,
-            fee,
-            slots: AuthSlots {
-                spend: fee_pubkeys.clone(),
-                extra: vec![hybrid_pk_bytes],
-            },
+    let layout = SpendLayout {
+        key_images: key_images.clone(),
+        extra_inputs,
+        output_amounts,
+        output_keys,
+        view_tags,
+        tx_extra,
+        fee,
+        slots: AuthSlots {
+            spend: fee_pubkeys.clone(),
+            extra: vec![hybrid_pk_bytes],
         },
-        network,
-    )
+    };
+    let open = match seeds {
+        #[cfg(feature = "forge")]
+        Some(seeds) => shekyl_tx_builder::open_spend_seeded(
+            &seeds.fee_slots,
+            signed,
+            &spend_inputs,
+            layout,
+            network,
+        ),
+        _ => open_spend(signed, &spend_inputs, layout, network),
+    }
     .expect("the fee side opens");
     drop(spend_inputs);
     let emission_sig = {
         let payload: &SigningPayloadHash = open
             .sole_extra_payload()
             .expect("the emission slot has a payload");
-        HybridEd25519MlDsa
-            .sign(
+        match seeds {
+            #[cfg(feature = "forge")]
+            Some(seeds) => HybridEd25519MlDsa.sign_with_ml_dsa_seed(
                 &keys.hybrid_sign_sk,
                 SCHEME_DOMAIN_PQC_AUTH_TX,
                 payload.as_bytes(),
-            )
-            .expect("the emission slot signs")
+                &seeds.emission_slot,
+            ),
+            _ => HybridEd25519MlDsa.sign(
+                &keys.hybrid_sign_sk,
+                SCHEME_DOMAIN_PQC_AUTH_TX,
+                payload.as_bytes(),
+            ),
+        }
+        .expect("the emission slot signs")
     };
     let pseudo_outs = open.pseudo_outs().to_vec();
     let fcmp_proof = open.fcmp_proof().to_vec();

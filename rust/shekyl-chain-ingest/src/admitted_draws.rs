@@ -23,13 +23,19 @@ use std::collections::BTreeSet;
 
 use shekyl_archival_retention::{
     assemble_bundle, challenge_nonce, draw_commit, sign_bundle_commitment, support_challenge_nonce,
-    BundleKept, BundleRecord, PassBitmap, PassStream, BUNDLE_WITNESS_KEY_LEN, CHALLENGE_READS,
+    BundleKept, BundleRecord, PassBitmap, PassStream, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    CHALLENGE_READS,
 };
 use shekyl_bundle_producer::DrawTarget;
-use shekyl_chain_rules::harness::bundle::{signed_record, Anchor};
+use shekyl_chain_rules::harness::bundle::{signed_record_by, Anchor};
 use shekyl_chain_rules::EpochFloor;
-use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridSecretKey, FnDsaHybridSignature, HybridEd25519FnDsa,
+};
+use shekyl_crypto_pq::signature::SignatureScheme as _;
+use shekyl_crypto_pq::CryptoError;
 use shekyl_harness_spender::Persona;
+use shekyl_network::envelope::Framed64;
 use shekyl_types::archival::{DrawCommitment, COUNTED_DRAWS};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use zeroize::Zeroizing;
@@ -48,38 +54,126 @@ const _: () = assert!(FIRST_READ_ATTEMPT < CHALLENGE_READS);
 /// differ for every tag.
 const WITNESS_SEED_MASK: u8 = 0x5A;
 
+/// Where a driver witness's randomness comes from (`CHAIN_FORGE.md` §5.2):
+/// the seed each block's draws come from, which its coinbase commits to and
+/// its bundle reveals (S7), and the bundle's witness signature and each
+/// record's receipt (S8). [`DriverWitness::new`]'s tag gives the driver's
+/// tests theirs; the chain forge derives every one from its plan's seed, so
+/// a forged chain's bundles come out the same every forging.
+pub trait WitnessDraws: Send + Sync {
+    /// The seed of the block at `h`: distinct per height, so each block's
+    /// draws are its own.
+    fn draw_seed(&self, h: BlockHeight) -> [u8; 32];
+
+    /// The witness signature over the bundle of block `h`.
+    ///
+    /// # Errors
+    ///
+    /// The signer's refusal.
+    fn sign_bundle(
+        &self,
+        h: BlockHeight,
+        secret: &FnDsaHybridSecretKey,
+        commitment: &Framed64,
+    ) -> Result<[u8; BUNDLE_SIGNATURE_LEN], CryptoError>;
+
+    /// The receipt of the `record`-th record of block `h`'s bundle (the
+    /// economy records first, then the support records, the bitmaps'
+    /// order), over `message` under `domain`, by its holder's `secret`.
+    ///
+    /// # Errors
+    ///
+    /// The signer's refusal.
+    fn sign_receipt(
+        &self,
+        h: BlockHeight,
+        record: usize,
+        secret: &FnDsaHybridSecretKey,
+        domain: &[u8],
+        message: &[u8],
+    ) -> Result<FnDsaHybridSignature, CryptoError>;
+}
+
+/// The driver's own draws: a tag names the seeds, and both signatures draw
+/// the OS's randomness as the production signers do.
+struct Tagged(u8);
+
+impl WitnessDraws for Tagged {
+    fn draw_seed(&self, h: BlockHeight) -> [u8; 32] {
+        let mut seed = [self.0; 32];
+        let height = h.to_raw().to_le_bytes();
+        seed[..height.len()].copy_from_slice(&height);
+        seed
+    }
+
+    fn sign_bundle(
+        &self,
+        _: BlockHeight,
+        secret: &FnDsaHybridSecretKey,
+        commitment: &Framed64,
+    ) -> Result<[u8; BUNDLE_SIGNATURE_LEN], CryptoError> {
+        sign_bundle_commitment(secret, commitment)
+    }
+
+    fn sign_receipt(
+        &self,
+        _: BlockHeight,
+        _: usize,
+        secret: &FnDsaHybridSecretKey,
+        domain: &[u8],
+        message: &[u8],
+    ) -> Result<FnDsaHybridSignature, CryptoError> {
+        HybridEd25519FnDsa.sign(secret, domain, message)
+    }
+}
+
 /// A witness this driver holds: the key every block it mines commits to,
-/// and a seed per height. It stands in for the node's witness ring
+/// and its draws. It stands in for the node's witness ring
 /// (`shekyl_bundle_producer::WitnessRing`), whose key never leaves it:
 /// these chains test settlement over admitted draws, not the producer.
 pub struct DriverWitness {
     public: [u8; BUNDLE_WITNESS_KEY_LEN],
     secret: FnDsaHybridSecretKey,
-    tag: u8,
+    draws: Box<dyn WitnessDraws>,
 }
 
 impl DriverWitness {
+    /// The witness `tag` names: its key from `tag`'s two keygen seeds, its
+    /// block seeds from `tag` and the height, its signatures the OS's.
     pub fn new(tag: u8) -> Self {
+        Self::keyed(
+            &[tag; 32],
+            &[tag ^ WITNESS_SEED_MASK; 32],
+            Box::new(Tagged(tag)),
+        )
+    }
+
+    /// The witness whose key `ed25519_seed` and `fn_dsa_seed` derive, its
+    /// randomness from `draws`.
+    ///
+    /// # Panics
+    ///
+    /// If key generation fails.
+    pub fn keyed(
+        ed25519_seed: &[u8; 32],
+        fn_dsa_seed: &[u8; 32],
+        draws: Box<dyn WitnessDraws>,
+    ) -> Self {
         let (public, secret) =
-            HybridEd25519FnDsa::keypair_from_seeds(&[tag; 32], &[tag ^ WITNESS_SEED_MASK; 32])
-                .expect("keygen");
+            HybridEd25519FnDsa::keypair_from_seeds(ed25519_seed, fn_dsa_seed).expect("keygen");
         Self {
             public: public
                 .to_canonical_bytes()
                 .try_into()
                 .expect("the canonical key width"),
             secret,
-            tag,
+            draws,
         }
     }
 
-    /// The seed of the block at `h`: distinct per height, so each block's
-    /// draws are its own.
+    /// The seed of the block at `h`.
     fn seed(&self, h: BlockHeight) -> [u8; 32] {
-        let mut seed = [self.tag; 32];
-        let height = h.to_raw().to_le_bytes();
-        seed[..height.len()].copy_from_slice(&height);
-        seed
+        self.draws.draw_seed(h)
     }
 
     fn commitment(&self, h: BlockHeight) -> DrawCommitment {
@@ -230,7 +324,16 @@ async fn file_draws(
         height: parent,
         hash: mined[usize::try_from(parent.to_raw()).expect("a test chain's length")].hash,
     };
-    let filed = file_passes(h, &targets.draws, &seed, &hash, anchor, signers, passes);
+    let filed = file_passes(
+        h,
+        &targets.draws,
+        &seed,
+        &hash,
+        anchor,
+        signers,
+        passes,
+        &*witness.draws,
+    );
     let kept = BundleKept {
         h,
         seed,
@@ -242,7 +345,7 @@ async fn file_draws(
         &kept,
         &filed.records,
         &witness.public,
-        |commitment| sign_bundle_commitment(&witness.secret, commitment),
+        |commitment| witness.draws.sign_bundle(h, &witness.secret, commitment),
     )
     .expect("the witness signs");
     let offered = scenario
@@ -265,6 +368,10 @@ struct FiledPasses {
     records: Vec<BundleRecord>,
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is one input of the block's filing; Filing is their one value"
+)]
 fn file_passes(
     h: BlockHeight,
     targets: &[DrawTarget],
@@ -273,6 +380,7 @@ fn file_passes(
     anchor: Anchor,
     signers: &[&Persona],
     passes: Passes<'_>,
+    draws: &dyn WitnessDraws,
 ) -> FiledPasses {
     let filing = Filing {
         h,
@@ -281,9 +389,10 @@ fn file_passes(
         anchor,
         signers,
         passes,
+        draws,
     };
-    let (economy, mut records) = filing.stream(PassStream::Economy, targets);
-    let (support, support_records) = filing.stream(PassStream::Support, targets);
+    let (economy, mut records) = filing.stream(PassStream::Economy, targets, 0);
+    let (support, support_records) = filing.stream(PassStream::Support, targets, records.len());
     records.extend(support_records);
     FiledPasses {
         economy,
@@ -300,15 +409,18 @@ struct Filing<'a> {
     anchor: Anchor,
     signers: &'a [&'a Persona],
     passes: Passes<'a>,
+    draws: &'a dyn WitnessDraws,
 }
 
 impl Filing<'_> {
     /// One stream's bitmap and records: a record for each draw that
-    /// passes, none for one withheld.
+    /// passes, none for one withheld. `first_record` is the bundle-wide
+    /// index of this stream's first record, which keys its receipt's draw.
     fn stream(
         &self,
         stream: PassStream,
         targets: &[DrawTarget],
+        first_record: usize,
     ) -> (PassBitmap, Vec<BundleRecord>) {
         let drawn: Vec<&DrawTarget> = targets
             .iter()
@@ -338,13 +450,18 @@ impl Filing<'_> {
                     FIRST_READ_ATTEMPT,
                 ),
             };
-            records.push(signed_record(
-                &signer.keys().receipt_sign_sk,
+            let record = first_record + records.len();
+            let secret = &signer.keys().receipt_sign_sk;
+            records.push(signed_record_by(
                 stream,
                 &nonce,
                 self.anchor,
                 target.shard.to_raw(),
                 FIRST_READ_ATTEMPT,
+                |domain, message| {
+                    self.draws
+                        .sign_receipt(self.h, record, secret, domain, message)
+                },
             ));
             passed.push(target.draw);
         }

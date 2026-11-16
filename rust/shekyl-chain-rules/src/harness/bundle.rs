@@ -296,6 +296,41 @@ pub fn signed_record(
     shard_id: u64,
     attempt: u8,
 ) -> BundleRecord {
+    signed_record_by(
+        stream,
+        nonce,
+        anchor,
+        shard_id,
+        attempt,
+        |domain, message| HybridEd25519FnDsa.sign(secret_key, domain, message),
+    )
+}
+
+/// [`signed_record`] with the receipt made by `sign`, handed the receipt's
+/// domain and message: the chain forge signs with a seed its plan derives
+/// (`CHAIN_FORGE.md` §5.2, S8), so a forged chain's receipts come out the
+/// same every forging. The transcript, the domain and the record's shape
+/// stay here, so the two forms cannot drift apart. Test-only like its
+/// sibling (`harness`, a TEST_ONLY feature).
+///
+/// # Panics
+///
+/// If `sign` fails, or its signature is not the canonical width.
+#[must_use]
+pub fn signed_record_by(
+    stream: shekyl_archival_retention::PassStream,
+    nonce: &[u8; 32],
+    anchor: Anchor,
+    shard_id: u64,
+    attempt: u8,
+    sign: impl FnOnce(
+        &[u8],
+        &[u8],
+    ) -> Result<
+        shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature,
+        shekyl_crypto_pq::CryptoError,
+    >,
+) -> BundleRecord {
     let delivery_digest = [0xDD; 32];
     let transcript: shekyl_archival_retention::PassTranscript =
         shekyl_archival_retention::PassRequestHeader::from_parts(
@@ -305,8 +340,7 @@ pub fn signed_record(
             anchor.hash,
         )
         .transcript(shard_id, delivery_digest);
-    let receipt: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
-        .sign(secret_key, SCHEME_DOMAIN_RECEIPT, &transcript.message())
+    let receipt: [u8; BUNDLE_SIGNATURE_LEN] = sign(SCHEME_DOMAIN_RECEIPT, &transcript.message())
         .expect("fixture receipt signing")
         .to_canonical_bytes()
         .try_into()

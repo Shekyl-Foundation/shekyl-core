@@ -46,7 +46,7 @@ use zeroize::Zeroizing;
 
 use crate::archival_driver::FEE;
 use crate::connector::{ArchivalState, Rewound};
-use crate::emission_assembly::{assemble_emission_claim, ClaimTerms};
+use crate::emission_assembly::{assemble_emission_claim_drawing, ClaimTerms, EmissionSeeds};
 use crate::scenario::{FreeHash, Mined, NextBlock, Scenario, StepOutcome};
 use shekyl_chain_rules::SettlementSchedule;
 
@@ -164,6 +164,9 @@ pub struct EmissionClaimParts<'a> {
     pub terms: ClaimTerms,
     pub connecting: BlockHeight,
     pub tx_key: [u8; 32],
+    /// The claim's randomness: `None` is the OS's; `Some` the forge's
+    /// seeds (`forge` only).
+    pub seeds: Option<&'a EmissionSeeds>,
 }
 
 /// Assemble `parts` at the chain's relay floor, repricing until the fee's
@@ -181,7 +184,8 @@ pub async fn priced_emission_claim(
         let fee_input = parts
             .spender
             .owned_input(parts.owner, parts.fee_key, parts.connecting);
-        let claim = assemble_emission_claim(
+        let claim = assemble_emission_claim_drawing(
+            parts.seeds,
             parts.keys,
             &Zeroizing::new(parts.tx_key),
             vec![fee_input.input],
