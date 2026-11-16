@@ -282,7 +282,7 @@ async fn the_claim_window_is_the_same_for_a_persona_with_a_bond() {
     let mut mined = s
         .mine(ChainCount::from_next_height(connecting).to_raw())
         .await;
-    let spender = Spender::over(&mined);
+    let spender = Spender::on(s.network_id(), &mined);
     let persona = Persona::at(1);
     let join = persona.join(complete_tree(), ENDPOINT);
     let joined = s
@@ -623,7 +623,7 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
     let mut s = Scenario::open("rpc-reads-coinbase-sum");
     let mut mined = s.mine(AT).await;
     let (a, b) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(s.network_id(), &mined);
         let wallet = s.wallet();
         (
             spender.spend_coinbase(wallet, h(0), h(AT), Family::Main.fee()),

@@ -365,7 +365,7 @@ async fn a_produced_bundle_is_admitted_and_connects() {
     let admissible = first_admissible_compact_join(&rules, close);
     mine_to(&mut scenario, &mut chain, admissible).await;
     let persona = Persona::at(SLOT);
-    let joining = Spender::over(&chain).spend_coinbase_posting(
+    let joining = Spender::on(scenario.network_id(), &chain).spend_coinbase_posting(
         scenario.wallet(),
         BlockHeight::ZERO,
         admissible,
@@ -581,7 +581,7 @@ async fn a_produced_support_bundle_is_admitted_and_connects() {
     )
     .await;
     let tree = Persona::at(SLOT);
-    let joining = Spender::over(&chain).spend_coinbase_posting(
+    let joining = Spender::on(scenario.network_id(), &chain).spend_coinbase_posting(
         scenario.wallet(),
         BlockHeight::ZERO,
         tip_of(&chain).saturating_add(BlockCount::ONE),
