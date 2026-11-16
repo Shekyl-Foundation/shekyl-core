@@ -4,59 +4,192 @@
 
 #![no_main]
 
-// A membership proof over a tree the fuzz input builds, checked against the
-// root a block header would carry.
+// The verifier against the root a block header carries: one valid proof,
+// and every way the verify-time inputs can differ from what it proved.
 //
-// The spent output is real and fixed: its secrets come from the production
-// per-output derivation (`derive_output_secrets`, `derive_pqc_leaf`,
-// `derive_pqc_public_key`) over a fixed combined secret, and the spend key
-// `b` from a fixed seed, so `O = (ho + b)·G + y·T` opens. Everything around
-// it is fuzz input: the output's amount, how many sibling outputs share its
-// leaf chunk and where it sits among them, each sibling's points and leaf
-// scalar, the tree's depth, every upper layer's siblings and the position of
-// the path's node among them, the signable hash, and a second root and hash
-// to verify against. Missing input bytes read as zero, so every input builds
-// a tree; the empty input is a one-leaf tree at depth 1.
+// The proof is built once, before the first input, over a small real tree
+// and from a seeded generator, so every run fuzzes the same proof. The
+// spent output is real: its secrets come from the production per-output
+// derivation (`derive_output_secrets`, `derive_pqc_leaf`,
+// `derive_pqc_public_key`) over a fixed combined secret, and its spend key
+// `b` from a fixed seed, so `O = (ho + b)·G + y·T` opens. Its leaf chunk
+// holds three sibling outputs, and the tree is two layers deep, the
+// shallowest a live chain presents.
 //
-// The oracle:
-// - a tree the hashes accept is a tree the prover proves over, and its
-//   proof verifies against that root, at that depth, over that hash;
-// - the same proof never verifies against another root or another hash.
+// The fuzz input chooses which of the verify-time inputs to replace, and
+// with what: the root, the depth, the signable hash, the key image, and
+// the proof's bytes (cut short, extended, or with bytes flipped).
 //
-// The harness it replaces handed the prover an output key of `[1; 32]`,
-// which is not a point, so every input stopped at the prover's first check.
+// The oracle: the proof verifies when every one of those equals what was
+// proved, and never otherwise.
+//
+// The harness this replaces proved a fresh tree on every input, about 9 s
+// an input under the address sanitizer, a few dozen inputs in the nightly
+// run's five minutes. The harness before that handed the prover an output
+// key of `[1; 32]`, which is not a point, and so proved nothing.
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::Scalar;
 use libfuzzer_sys::fuzz_target;
+use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use shekyl_crypto_pq::derivation::{derive_output_secrets, derive_pqc_public_key};
 use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
 use shekyl_curve_generators::{biased_hash_to_point, H, T};
 use shekyl_fcmp::leaf::{PqcKeyScalar, PqcLeafScalar};
-use shekyl_fcmp::proof::{prove, verify, BranchLayer, KeyImage, ProveInput};
+use shekyl_fcmp::proof::{
+    prove_with_rng, verify, BranchLayer, KeyImage, ProveInput, ShekylFcmpProof,
+};
 use shekyl_fcmp::tree::{
-    chunk_width, hash_grow_helios, hash_grow_selene,
-    helios_hash_init, helios_point_to_selene_scalar, key_image_generator, layer_is_selene,
-    leaf_from_chunk_entry, selene_hash_init, selene_point_to_helios_scalar, SELENE_CHUNK_WIDTH,
+    hash_grow_helios, hash_grow_selene, helios_hash_init, key_image_generator,
+    leaf_from_chunk_entry, selene_hash_init, selene_point_to_helios_scalar,
 };
 use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
-/// The combined secret the spent output's secrets are derived from. Fixed, so
-/// every run proves the same output; never a live wallet's.
+/// The combined secret the outputs' secrets are derived from. Fixed, so
+/// every run proves the same tree; never a live wallet's.
 const COMBINED_SS: [u8; 64] = [0x5a; 64];
-/// The spent output's index under [`COMBINED_SS`].
-const OUTPUT_INDEX: u64 = 0;
 /// The spend key `b`'s seed, reduced to a scalar.
 const SPEND_KEY_SEED: [u8; 32] = [0x3c; 32];
+/// The seed of the generator the proof's blinds are drawn from.
+const PROOF_SEED: [u8; 32] = [0x2b; 32];
 /// The pseudo-out blind. It must differ from the commitment mask `z`, or the
 /// rerandomization `a - z` is zero and the prover refuses it.
 const PSEUDO_OUT_BLIND: [u8; 32] = [0x07; 32];
-/// Deepest tree built. Production trees are 2 layers or more; depth 1 (a root
-/// at the leaf layer) is kept because the prover accepts it.
-const MAX_DEPTH: u8 = 4;
+/// The spent output's amount.
+const AMOUNT: u64 = 1_000_000;
+/// Sibling outputs beside the spent one in its leaf chunk.
+const SIBLINGS: u64 = 3;
+/// Layers: the leaf layer and one Helios layer above it.
+const TREE_DEPTH: u8 = 2;
+/// The signable hash the proof is made over.
+const SIGNABLE_TX_HASH: [u8; 32] = [0xab; 32];
 
 const ZERO: [u8; 32] = [0u8; 32];
+
+/// What was proved, and the proof.
+struct Proved {
+    proof: ShekylFcmpProof,
+    pseudo_outs: Vec<[u8; 32]>,
+    pqc_key: PqcKeyScalar,
+    key_image: [u8; 32],
+    root: [u8; 32],
+}
+
+fn proved() -> &'static Proved {
+    static PROVED: std::sync::OnceLock<Proved> = std::sync::OnceLock::new();
+    PROVED.get_or_init(prove_once)
+}
+
+/// One leaf of the chunk: `(O, I, C)` and its fourth scalar `CM.x`.
+fn leaf(output_key: [u8; 32], commitment: [u8; 32], index: u64) -> (([u8; 32], [u8; 32], [u8; 32]), [u8; 32]) {
+    let pqc = derive_pqc_leaf(&COMBINED_SS, index).expect("production PQC leaf");
+    let cm_x = PqcLeafScalar::from_commitment_point(&pqc.point)
+        .expect("a derived commitment is a point")
+        .0;
+    ((output_key, key_image_generator(&output_key), commitment), cm_x)
+}
+
+fn prove_once() -> Proved {
+    let secrets = derive_output_secrets(&COMBINED_SS, 0);
+    let x = Scalar::from_bytes_mod_order(secrets.ho) + Scalar::from_bytes_mod_order(SPEND_KEY_SEED);
+    let y = Scalar::from_bytes_mod_order(secrets.y);
+    let z = Scalar::from_bytes_mod_order(secrets.z);
+    let output_key = (ED25519_BASEPOINT_POINT * x + *T * y).compress().to_bytes();
+    let commitment = (ED25519_BASEPOINT_POINT * z + *H * Scalar::from(AMOUNT))
+        .compress()
+        .to_bytes();
+    let pqc = derive_pqc_leaf(&COMBINED_SS, 0).expect("production PQC leaf");
+    let pqc_pk = derive_pqc_public_key(&COMBINED_SS, 0).expect("production PQC key");
+
+    // The chunk: the spent output, then its siblings.
+    let mut chunk = vec![leaf(output_key, commitment, 0)];
+    for index in 1..=SIBLINGS {
+        let seed = [u8::try_from(index).expect("few siblings"); 32];
+        let mut other = seed;
+        other[0] ^= 0x80;
+        chunk.push(leaf(
+            biased_hash_to_point(seed).compress().to_bytes(),
+            biased_hash_to_point(other).compress().to_bytes(),
+            index,
+        ));
+    }
+    let mut scalars = Vec::new();
+    for ((o, i, c), cm_x) in &chunk {
+        let leaf = leaf_from_chunk_entry(o, i, c, cm_x).expect("every point decompresses");
+        scalars.extend(leaf.chunks_exact(32).map(|s| <[u8; 32]>::try_from(s).expect("32 bytes")));
+    }
+    let leaf_node = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &scalars).expect("the leaf chunk");
+    let child = selene_point_to_helios_scalar(&leaf_node).expect("a grown node converts");
+    let root = hash_grow_helios(&helios_hash_init(), 0, &ZERO, &[child]).expect("the root");
+
+    let input = ProveInput {
+        output_key,
+        key_image_gen: chunk[0].0 .1,
+        commitment,
+        pqc_leaf_commitment: pqc.point,
+        pqc_leaf_blind: pqc.blind,
+        spend_key_x: x.to_bytes(),
+        spend_key_y: y.to_bytes(),
+        commitment_mask: z.to_bytes(),
+        pseudo_out_blind: PSEUDO_OUT_BLIND,
+        leaf_chunk_outputs: chunk.iter().map(|(points, _)| *points).collect(),
+        leaf_chunk_cm_x: chunk.iter().map(|(_, cm_x)| *cm_x).collect(),
+        c1_branch_layers: vec![],
+        c2_branch_layers: vec![BranchLayer { siblings: vec![child] }],
+    };
+    let mut rng = ChaCha20Rng::from_seed(PROOF_SEED);
+    let result = prove_with_rng(
+        &mut rng,
+        &[input],
+        &CurveTreeRoot::from_bytes(root),
+        TREE_DEPTH,
+        TxSignableHash::from_bytes(SIGNABLE_TX_HASH),
+    )
+    .expect("the fixed tree proves");
+    let key_image_gen = CompressedEdwardsY(chunk[0].0 .1)
+        .decompress()
+        .expect("I = Hp(O) is a point");
+    let proved = Proved {
+        proof: result.proof,
+        pseudo_outs: result.pseudo_outs,
+        pqc_key: PqcKeyScalar::from_pqc_public_key(&pqc_pk),
+        key_image: (key_image_gen * x).compress().to_bytes(),
+        root,
+    };
+    assert!(
+        matches!(
+            check(&proved, &proved.proof.data, proved.root, TREE_DEPTH, SIGNABLE_TX_HASH, proved.key_image),
+            Ok(true)
+        ),
+        "the fixed proof does not verify as made"
+    );
+    proved
+}
+
+fn check(
+    p: &Proved,
+    data: &[u8],
+    root: [u8; 32],
+    depth: u8,
+    hash: [u8; 32],
+    key_image: [u8; 32],
+) -> Result<bool, shekyl_fcmp::proof::VerifyError> {
+    verify(
+        &ShekylFcmpProof {
+            data: data.to_vec(),
+            num_inputs: p.proof.num_inputs,
+            tree_depth: p.proof.tree_depth,
+        },
+        &[KeyImage::from_canonical_bytes(key_image)],
+        &p.pseudo_outs,
+        &[p.pqc_key],
+        &CurveTreeRoot::from_bytes(root),
+        depth,
+        TxSignableHash::from_bytes(hash),
+    )
+}
 
 /// The fuzz input as a stream; reads past its end are zeros.
 struct Input<'a>(&'a [u8]);
@@ -80,187 +213,55 @@ impl Input<'_> {
         out
     }
 
-    fn u64(&mut self) -> u64 {
-        let mut out = [0u8; 8];
-        for b in &mut out {
-            *b = self.byte();
-        }
-        u64::from_le_bytes(out)
-    }
-}
-
-/// The spent output: its public points and the secrets that open them.
-struct Spent {
-    output_key: [u8; 32],
-    key_image_gen: [u8; 32],
-    pqc_leaf_commitment: [u8; 32],
-    pqc_leaf_blind: [u8; 32],
-    cm_x: [u8; 32],
-    pqc_key: PqcKeyScalar,
-    x: Scalar,
-    y: Scalar,
-    z: Scalar,
-}
-
-/// Derived once: the PQC key derivation is an ML-DSA key generation.
-fn spent() -> &'static Spent {
-    static SPENT: std::sync::OnceLock<Spent> = std::sync::OnceLock::new();
-    SPENT.get_or_init(derive_spent)
-}
-
-fn derive_spent() -> Spent {
-    let secrets = derive_output_secrets(&COMBINED_SS, OUTPUT_INDEX);
-    let ho = Scalar::from_bytes_mod_order(secrets.ho);
-    let y = Scalar::from_bytes_mod_order(secrets.y);
-    let z = Scalar::from_bytes_mod_order(secrets.z);
-    let b = Scalar::from_bytes_mod_order(SPEND_KEY_SEED);
-    let x = ho + b;
-    let output_key = (ED25519_BASEPOINT_POINT * x + *T * y).compress().to_bytes();
-    let pqc = derive_pqc_leaf(&COMBINED_SS, OUTPUT_INDEX).expect("production PQC leaf");
-    let pqc_pk = derive_pqc_public_key(&COMBINED_SS, OUTPUT_INDEX).expect("production PQC key");
-    let cm_x = PqcLeafScalar::from_commitment_point(&pqc.point)
-        .expect("a derived commitment is a point")
-        .0;
-    Spent {
-        key_image_gen: key_image_generator(&output_key),
-        output_key,
-        pqc_leaf_commitment: pqc.point,
-        pqc_leaf_blind: pqc.blind,
-        cm_x,
-        pqc_key: PqcKeyScalar::from_pqc_public_key(&pqc_pk),
-        x,
-        y,
-        z,
+    fn u16(&mut self) -> usize {
+        usize::from(u16::from_le_bytes([self.byte(), self.byte()]))
     }
 }
 
 fuzz_target!(|data: &[u8]| {
-    let s = spent();
+    let p = proved();
     let mut input = Input(data);
 
-    let tree_depth = 1 + input.byte() % MAX_DEPTH;
-    let signable_tx_hash = TxSignableHash::from_bytes(input.bytes32());
-    let other_root = input.bytes32();
-    let other_hash = input.bytes32();
+    // Which inputs to replace: one bit each.
+    let replace = input.byte();
+    let root = if replace & 0x01 != 0 { input.bytes32() } else { p.root };
+    let depth = if replace & 0x02 != 0 { input.byte() } else { TREE_DEPTH };
+    let hash = if replace & 0x04 != 0 { input.bytes32() } else { SIGNABLE_TX_HASH };
+    let key_image = if replace & 0x08 != 0 { input.bytes32() } else { p.key_image };
 
-    // The spent output's commitment, over a fuzz-chosen amount.
-    let amount = input.u64();
-    let commitment = (ED25519_BASEPOINT_POINT * s.z + *H * Scalar::from(amount))
-        .compress()
-        .to_bytes();
-
-    // The leaf chunk: the spent output among up to 37 siblings, each a pair of
-    // hashed-to points and a raw fourth scalar.
-    let siblings = usize::from(input.byte()) % SELENE_CHUNK_WIDTH;
-    let position = usize::from(input.byte()) % (siblings + 1);
-    let mut chunk_outputs = Vec::with_capacity(siblings + 1);
-    let mut chunk_cm_x = Vec::with_capacity(siblings + 1);
-    for _ in 0..siblings {
-        let o = biased_hash_to_point(input.bytes32()).compress().to_bytes();
-        let c = biased_hash_to_point(input.bytes32()).compress().to_bytes();
-        chunk_outputs.push((o, key_image_generator(&o), c));
-        chunk_cm_x.push(input.bytes32());
-    }
-    chunk_outputs.insert(position, (s.output_key, s.key_image_gen, commitment));
-    chunk_cm_x.insert(position, s.cm_x);
-
-    let mut leaf_scalars = Vec::with_capacity(4 * chunk_outputs.len());
-    for ((o, i, c), cm_x) in chunk_outputs.iter().zip(&chunk_cm_x) {
-        // Every point here decompresses (hashed-to, or the spent output's
-        // own), so this refuses nothing yet; it is the served-chunk path.
-        let Some(leaf) = leaf_from_chunk_entry(o, i, c, cm_x) else {
-            return;
-        };
-        for scalar in leaf.chunks_exact(32) {
-            leaf_scalars.push(<[u8; 32]>::try_from(scalar).expect("32-byte chunk"));
-        }
-    }
-    // A raw fourth scalar outside the field is refused here.
-    let Some(mut node) = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &leaf_scalars) else {
-        return;
-    };
-
-    // Each layer above the leaf: the path's child among fuzz-chosen siblings.
-    let mut c1_branch_layers = Vec::new();
-    let mut c2_branch_layers = Vec::new();
-    for layer in 1..tree_depth {
-        let width = chunk_width(layer);
-        let siblings = usize::from(input.byte()) % width;
-        let position = usize::from(input.byte()) % (siblings + 1);
-        let mut children: Vec<[u8; 32]> = (0..siblings).map(|_| input.bytes32()).collect();
-        if layer_is_selene(layer) {
-            let child = helios_point_to_selene_scalar(&node).expect("a grown node converts");
-            children.insert(position, child);
-            let Some(grown) = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &children) else {
-                return;
-            };
-            node = grown;
-            c1_branch_layers.push(BranchLayer { siblings: children });
+    let mut proof = p.proof.data.clone();
+    if replace & 0x10 != 0 {
+        // A new length: shorter cuts the proof, longer extends it with the
+        // next input bytes (zeros past the input's end).
+        let len = input.u16();
+        if len <= proof.len() {
+            proof.truncate(len);
         } else {
-            let child = selene_point_to_helios_scalar(&node).expect("a grown node converts");
-            children.insert(position, child);
-            let Some(grown) = hash_grow_helios(&helios_hash_init(), 0, &ZERO, &children) else {
-                return;
-            };
-            node = grown;
-            c2_branch_layers.push(BranchLayer { siblings: children });
+            for _ in proof.len()..len {
+                proof.push(input.byte());
+            }
         }
     }
-    let tree_root = CurveTreeRoot::from_bytes(node);
-
-    let prove_input = ProveInput {
-        output_key: s.output_key,
-        key_image_gen: s.key_image_gen,
-        commitment,
-        pqc_leaf_commitment: s.pqc_leaf_commitment,
-        pqc_leaf_blind: s.pqc_leaf_blind,
-        spend_key_x: s.x.to_bytes(),
-        spend_key_y: s.y.to_bytes(),
-        commitment_mask: s.z.to_bytes(),
-        pseudo_out_blind: PSEUDO_OUT_BLIND,
-        leaf_chunk_outputs: chunk_outputs,
-        leaf_chunk_cm_x: chunk_cm_x,
-        c1_branch_layers,
-        c2_branch_layers,
-    };
-    let proved = match prove(&[prove_input], &tree_root, tree_depth, signable_tx_hash) {
-        Ok(p) => p,
-        Err(e) => panic!("the prover refused a tree the hashes accept, at depth {tree_depth}: {e}"),
-    };
-
-    let key_image_gen = CompressedEdwardsY(s.key_image_gen)
-        .decompress()
-        .expect("I = Hp(O) is a point");
-    let key_images = [KeyImage::from_canonical_bytes(
-        (key_image_gen * s.x).compress().to_bytes(),
-    )];
-    let pqc_keys = [s.pqc_key];
-    let verifies = |root: &CurveTreeRoot, hash: TxSignableHash| {
-        verify(
-            &proved.proof,
-            &key_images,
-            &proved.pseudo_outs,
-            &pqc_keys,
-            root,
-            tree_depth,
-            hash,
-        )
-    };
-
-    match verifies(&tree_root, signable_tx_hash) {
-        Ok(true) => {}
-        other => panic!("a proof over the tree failed to verify against its root: {other:?}"),
-    }
-    let other_root = CurveTreeRoot::from_bytes(other_root);
-    if other_root != tree_root {
-        if let Ok(true) = verifies(&other_root, signable_tx_hash) {
-            panic!("the proof verified against a root other than the tree's");
+    if replace & 0x20 != 0 && !proof.is_empty() {
+        // The rest of the input: (offset, mask) pairs flipping proof bytes.
+        while input.0.len() >= 3 {
+            let at = input.u16() % proof.len();
+            proof[at] ^= input.byte();
         }
     }
-    let other_hash = TxSignableHash::from_bytes(other_hash);
-    if other_hash != signable_tx_hash {
-        if let Ok(true) = verifies(&tree_root, other_hash) {
-            panic!("the proof verified over a hash other than the one it proved");
-        }
+
+    let unchanged = root == p.root
+        && depth == TREE_DEPTH
+        && hash == SIGNABLE_TX_HASH
+        && key_image == p.key_image
+        && proof == p.proof.data;
+    let verified = check(p, &proof, root, depth, hash, key_image);
+    if unchanged {
+        assert!(matches!(verified, Ok(true)), "the proof as made failed to verify: {verified:?}");
+    } else {
+        assert!(
+            !matches!(verified, Ok(true)),
+            "the proof verified with an input it was not made over (replaced {replace:#04x})"
+        );
     }
 });
