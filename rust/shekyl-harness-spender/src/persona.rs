@@ -315,3 +315,64 @@ pub fn complete_tree() -> HoldingsDescriptor {
         shard_ids: ShardSet::new(Vec::new()).expect("empty"),
     }
 }
+
+/// Seam T4 for the persona (`CHAIN_FORGE.md` §5.3). The signing seed is the
+/// persona's own role: a post's slot and the identity signature come out of
+/// it, and a spend's seeds do not. One seed, one signature; the signature
+/// verifies under the key the production signer derives.
+#[cfg(all(test, feature = "seeded-rng"))]
+mod tests {
+    use shekyl_crypto_pq::account::Network;
+    use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
+    use shekyl_types::SigningPayloadHash;
+
+    use super::{complete_tree, Persona};
+
+    #[test]
+    fn a_signing_seed_fixes_the_identity_signature_and_the_bond_slot() {
+        let payload = SigningPayloadHash::from_bytes([0x3c; 64]);
+        let network = shekyl_network::Network::Regtest.network_id();
+        let sign = |seed: [u8; 32]| {
+            let persona = Persona::on(Network::Regtest, 1).with_signing_seed(&seed);
+            let identity = persona.identity_signature(&payload);
+            let identity_pk = persona.identity();
+            let post = persona.join(complete_tree(), [0x44; 32]);
+            let slot = post.sign_slot(&payload);
+            (identity, identity_pk, slot, post.slot_pk)
+        };
+        let (identity, identity_pk, slot, slot_pk) = sign([7; 32]);
+        let (identity_again, _, slot_again, _) = sign([7; 32]);
+        let (identity_other, _, slot_other, _) = sign([8; 32]);
+        assert_eq!(
+            identity, identity_again,
+            "one signing seed, one identity signature"
+        );
+        assert_eq!(slot, slot_again, "one signing seed, one bond slot");
+        assert_ne!(
+            identity, identity_other,
+            "another signing seed, another identity signature"
+        );
+        assert_ne!(slot, slot_other, "another signing seed, another bond slot");
+        verify_pqc_auth(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &identity_pk,
+            &identity,
+            &payload,
+            &network,
+        )
+        .expect("the identity signature verifies");
+        verify_pqc_auth(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &slot_pk,
+            &slot,
+            &payload,
+            &network,
+        )
+        .expect("the bond slot verifies");
+        let open = Persona::on(Network::Regtest, 1).identity_signature(&payload);
+        assert_ne!(
+            identity, open,
+            "a persona without a signing seed draws from the OS"
+        );
+    }
+}

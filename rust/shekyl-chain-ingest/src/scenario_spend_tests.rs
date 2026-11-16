@@ -33,7 +33,7 @@
 use shekyl_block_template::Fill;
 use shekyl_chain_rules::{CenRow, Locus, TxSlot};
 use shekyl_economics::{EconomicParams, TxVolume};
-use shekyl_harness_spender::Spender;
+use shekyl_harness_spender::{SpendPlan, Spender};
 use shekyl_types::BlockWeight;
 use shekyl_wire::transaction::COINBASE_RESERVE;
 use shekyl_wire::Transaction;
@@ -124,11 +124,14 @@ async fn two_spends_connect_and_the_per_slot_rows_record() {
 }
 
 /// Seams T1–T4 (`CHAIN_FORGE.md` §5.3) through the full signing stack on
-/// a real chain: two spenders seeded alike build the same spends, in order,
-/// byte for byte (the range proof, the pseudo-out blinds, the membership
-/// proof and the ML-DSA nonces all drawn from the seed); another seed, or
-/// the OS, builds another body of the same spend; and the seeded spends
-/// connect, judged like any other.
+/// a real chain. The planning thread draws each spend's seeds
+/// ([`SpendPlan::next_spend`]) and hands them to [`Spender::drawing`]; the
+/// spender holds no generator. The same plan builds the same spends byte
+/// for byte, including when the second spend is built before the first.
+/// Another plan seed, or the OS, builds another body. The seeded spends
+/// connect, judged like any other. A re-sign under the same plan
+/// ([`shekyl_harness_spender::Drawn::signed_under`]) is byte for byte the
+/// same too: it is its own statement and takes the plan's next seeds.
 #[tokio::test]
 async fn seeded_spenders_build_byte_identical_spends_that_connect() {
     let mut scenario = Scenario::open("spend-seeded");
@@ -136,11 +139,18 @@ async fn seeded_spenders_build_byte_identical_spends_that_connect() {
     let network = scenario.network_id();
     let wallet = scenario.wallet();
     let fee = Family::Main.fee();
+    let spender = Spender::on(network, &mined);
     let build = |seed: &[u8; 32]| {
-        let spender = Spender::seeded(network, &mined, seed);
+        let mut plan = SpendPlan::from_seed(seed);
+        let first = plan.next_spend();
+        let second = plan.next_spend();
         (
-            spender.spend_coinbase(wallet, h(0), h(AT), fee),
-            spender.spend_coinbase(wallet, h(1), h(AT), fee),
+            spender
+                .drawing(first)
+                .spend_coinbase(wallet, h(0), h(AT), fee),
+            spender
+                .drawing(second)
+                .spend_coinbase(wallet, h(1), h(AT), fee),
         )
     };
     let (a, b) = build(&[7u8; 32]);
@@ -155,17 +165,74 @@ async fn seeded_spenders_build_byte_identical_spends_that_connect() {
         b_again.serialize(),
         "one seed, one second spend"
     );
+    // The seeds name the spend. Building the second one first does not move
+    // either body: a counter inside the shared spender would.
+    let mut reversed = SpendPlan::from_seed(&[7u8; 32]);
+    let first = reversed.next_spend();
+    let second = reversed.next_spend();
+    let b_first = spender
+        .drawing(second)
+        .spend_coinbase(wallet, h(1), h(AT), fee);
+    let a_second = spender
+        .drawing(first)
+        .spend_coinbase(wallet, h(0), h(AT), fee);
+    assert_eq!(
+        a.serialize(),
+        a_second.serialize(),
+        "the first spend's seeds, built second"
+    );
+    assert_eq!(
+        b.serialize(),
+        b_first.serialize(),
+        "the second spend's seeds, built first"
+    );
     let (other, _) = build(&[8u8; 32]);
     assert_ne!(
         a.serialize(),
         other.serialize(),
         "another seed, another body"
     );
-    let drawn = Spender::on(network, &mined).spend_coinbase(wallet, h(0), h(AT), fee);
+    let from_os = spender.spend_coinbase(wallet, h(0), h(AT), fee);
     assert_ne!(
         a.serialize(),
-        drawn.serialize(),
+        from_os.serialize(),
         "the OS draws another body"
+    );
+    let mut resigns = SpendPlan::from_seed(&[7u8; 32]);
+    // The two spends take the first two draws. The re-sign is the third.
+    let _first = resigns.next_spend();
+    let _second = resigns.next_spend();
+    let resign_seeds = resigns.next_spend();
+    let resigned =
+        spender
+            .drawing(resign_seeds)
+            .signed_under(&a, wallet, h(0), h(AT), None, &network);
+    let mut resigns_again = SpendPlan::from_seed(&[7u8; 32]);
+    let _first = resigns_again.next_spend();
+    let _second = resigns_again.next_spend();
+    let resigned_again = spender.drawing(resigns_again.next_spend()).signed_under(
+        &a,
+        wallet,
+        h(0),
+        h(AT),
+        None,
+        &network,
+    );
+    assert_eq!(
+        resigned.serialize(),
+        resigned_again.serialize(),
+        "one plan, one re-sign"
+    );
+    assert_ne!(
+        resigned.serialize(),
+        a.serialize(),
+        "a re-sign draws its own seeds"
+    );
+    let resigned_from_os = spender.signed_under(&a, wallet, h(0), h(AT), None, &network);
+    assert_ne!(
+        resigned.serialize(),
+        resigned_from_os.serialize(),
+        "the OS re-sign draws another body"
     );
     scenario
         .mine_listing(vec![a, b])

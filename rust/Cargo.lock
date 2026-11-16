@@ -4608,6 +4608,7 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-harness-spender",
  "shekyl-harness-wallet",
  "shekyl-network",
  "shekyl-tx-builder",

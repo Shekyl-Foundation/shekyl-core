@@ -33,7 +33,7 @@ use shekyl_wire::tx_extra::{
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::bond::PostedBond;
-use crate::draw::{SeedStream, SpendSeeds};
+use crate::draw::SpendSeeds;
 use crate::{MinedBlock, MinerWallet, Owner, Recipient};
 
 /// An output sourced for spending: the signer's input, its key image, and
@@ -99,10 +99,6 @@ pub struct Spender {
     /// The id of the network the chain is: every spend this spender builds
     /// signs and proves under it (`NETWORK_IDENTITY.md` NI-Q4).
     network: shekyl_network::NetworkId,
-    /// A seeded spender's stream ([`Self::seeded`]): each spend draws its
-    /// own seeds from it, in the order the spends are built. `None` draws
-    /// from the OS, as the production signers do.
-    seeds: Option<SeedStream>,
 }
 
 impl Spender {
@@ -122,70 +118,11 @@ impl Spender {
             watched: BTreeSet::new(),
             located: BTreeMap::new(),
             network,
-            seeds: None,
         };
         for block in mined {
             spender.push(block);
         }
         spender
-    }
-
-    /// [`Self::on`], with every spend drawing its randomness from `seed`:
-    /// the range proof, the pseudo-out blinds, the membership proof and the
-    /// spend slots' ML-DSA nonces. Each spend draws fresh seeds from one
-    /// stream over `seed`, in the order the spends are built, so the same
-    /// calls from the same seed build the same transactions byte for byte,
-    /// and no two spends share randomness (`CHAIN_FORGE.md` §5.3, seam T4).
-    /// A bond post riding a spend signs with its persona's draw
-    /// ([`crate::Persona::with_signing_seed`]). `seeded-rng` only.
-    ///
-    /// The seeds go to spends in the order they are drawn. Spends built
-    /// from several threads at once draw in lock order, which the scheduler
-    /// decides, so a chain that must regenerate byte for byte builds its
-    /// spends in plan order, or hands each thread its spend's seed before
-    /// it starts (`CHAIN_FORGE.md` §5.3; the forge's executor, `CF-1c`).
-    #[cfg(feature = "seeded-rng")]
-    #[must_use]
-    pub fn seeded<B: MinedBlock>(
-        network: shekyl_network::NetworkId,
-        mined: &[B],
-        seed: &[u8; 32],
-    ) -> Self {
-        use rand_chacha::rand_core::SeedableRng;
-        let mut spender = Self::on(network, mined);
-        spender.seeds = Some(std::sync::Mutex::new(rand_chacha::ChaCha20Rng::from_seed(
-            *seed,
-        )));
-        spender
-    }
-
-    /// The next spend's seeds, for a seeded spender; `None` otherwise.
-    fn next_spend_seeds(&self) -> Option<SpendSeeds> {
-        match &self.seeds {
-            #[cfg(feature = "seeded-rng")]
-            Some(stream) => {
-                use rand_chacha::rand_core::RngCore;
-                // Fresh seeds for every spend, never one seed per spender
-                // (CF-1b ruling, 2026-11-15). Each spend proves and signs
-                // with Schnorr-style protocols: the membership proof, the
-                // range proof and the ML-DSA spend slots all derive their
-                // nonces from these bytes. Two spends from one seed would
-                // reuse those nonces over two different statements, and
-                // two Schnorr responses sharing a nonce over different
-                // challenges solve for the secret. Taking both seeds from
-                // the stream here, per spend and apart, keeps the chain
-                // reproducible from the spender's seed without that reuse.
-                let mut stream = stream
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut sign = zeroize::Zeroizing::new([0u8; 32]);
-                let mut open = zeroize::Zeroizing::new([0u8; 32]);
-                stream.fill_bytes(&mut *sign);
-                stream.fill_bytes(&mut *open);
-                Some(SpendSeeds { sign, open })
-            }
-            _ => None,
-        }
     }
 
     /// Watch for `output_key`: when a pushed block lists it, the tree
@@ -335,7 +272,15 @@ impl Spender {
         connecting: BlockHeight,
         fee: u64,
     ) -> Transaction {
-        self.spend_coinbase_posting(wallet, height, connecting, fee, None)
+        self.spend_coinbase_to_drawn(
+            None,
+            wallet,
+            height,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+        )
     }
 
     /// [`Self::spend_coinbase`] with its range proof one bit off what the
@@ -354,9 +299,20 @@ impl Spender {
         connecting: BlockHeight,
         fee: u64,
     ) -> Transaction {
+        self.spend_coinbase_breaking_range_proof_drawn(None, wallet, height, connecting, fee)
+    }
+
+    pub(crate) fn spend_coinbase_breaking_range_proof_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
         SpendShape {
-            seeds: self.next_spend_seeds(),
+            seeds,
             connecting,
             fee,
             bond: None,
@@ -386,9 +342,21 @@ impl Spender {
         fee: u64,
         reference: BlockHash,
     ) -> Transaction {
+        self.spend_coinbase_referencing_drawn(None, wallet, height, connecting, fee, reference)
+    }
+
+    pub(crate) fn spend_coinbase_referencing_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        reference: BlockHash,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
         SpendShape {
-            seeds: self.next_spend_seeds(),
+            seeds,
             connecting,
             fee,
             bond: None,
@@ -417,9 +385,23 @@ impl Spender {
         fee: u64,
         bond: Option<&PostedBond<'_>>,
     ) -> Transaction {
+        self.spend_coinbase_posting_breaking_membership_proof_drawn(
+            None, wallet, height, connecting, fee, bond,
+        )
+    }
+
+    pub(crate) fn spend_coinbase_posting_breaking_membership_proof_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        bond: Option<&PostedBond<'_>>,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
         SpendShape {
-            seeds: self.next_spend_seeds(),
+            seeds,
             connecting,
             fee,
             bond,
@@ -451,7 +433,15 @@ impl Spender {
         fee: u64,
         bond: Option<&PostedBond<'_>>,
     ) -> Transaction {
-        self.spend_coinbase_to(wallet, height, connecting, fee, bond, wallet.recipient())
+        self.spend_coinbase_to_drawn(
+            None,
+            wallet,
+            height,
+            connecting,
+            fee,
+            bond,
+            wallet.recipient(),
+        )
     }
 
     /// `spent` with its authorizations replaced by ones that verify under
@@ -481,6 +471,28 @@ impl Spender {
         bond: Option<&PostedBond<'_>>,
         network: &shekyl_network::NetworkId,
     ) -> Transaction {
+        self.signed_under_drawn(None, spent, wallet, height, connecting, bond, network)
+    }
+
+    /// [`Self::signed_under`] with the spend slots' ML-DSA randomness taken
+    /// from `seeds` when present. A re-sign is a different statement from the
+    /// spend that made the proof, so it takes its own seeds, drawn for this
+    /// call. The bond slot, when `bond` is set, signs with the persona's own
+    /// draw. `None` draws the spend slots from the OS.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "signed_under's arguments, plus the one re-sign's seeds"
+    )]
+    pub(crate) fn signed_under_drawn(
+        &self,
+        seeds: Option<&SpendSeeds>,
+        spent: &Transaction,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        bond: Option<&PostedBond<'_>>,
+        network: &shekyl_network::NetworkId,
+    ) -> Transaction {
         let spend = self.source_coinbase(wallet, height, connecting);
         let spend_inputs = [spend.input];
         let hashes = spent.pqc_signing_payload_hashes(network);
@@ -490,8 +502,17 @@ impl Spender {
             spend_inputs.len() + extra,
             "the body has one auth per spend input and one per bond slot"
         );
-        let spend_auths = sign_pqc_auths(&hashes[..spend_inputs.len()], &spend_inputs)
-            .expect("the coinbase's key signs under the named network");
+        let n_spend = spend_inputs.len();
+        let spend_auths = match seeds {
+            #[cfg(feature = "seeded-rng")]
+            Some(seeds) => shekyl_tx_builder::sign_pqc_auths_seeded(
+                &seeds.sign,
+                &hashes[..n_spend],
+                &spend_inputs,
+            ),
+            _ => sign_pqc_auths(&hashes[..n_spend], &spend_inputs),
+        }
+        .expect("the coinbase's key signs under the named network");
         let mut body = spent.clone();
         let Ct::Fcmp { pqc_auths, .. } = &mut body.ct else {
             panic!("a spend carries FCMP authorizations");
@@ -668,9 +689,27 @@ impl Spender {
         bond: Option<&PostedBond<'_>>,
         recipient: &Recipient,
     ) -> Transaction {
+        self.spend_coinbase_to_drawn(None, wallet, height, connecting, fee, bond, recipient)
+    }
+
+    /// [`Self::spend_coinbase_to`] from `seeds` when present, else the OS.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "spend_coinbase_to's arguments, plus the one spend's seeds"
+    )]
+    pub(crate) fn spend_coinbase_to_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        bond: Option<&PostedBond<'_>>,
+        recipient: &Recipient,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
         SpendShape {
-            seeds: self.next_spend_seeds(),
+            seeds,
             connecting,
             fee,
             bond,
@@ -686,9 +725,16 @@ impl Spender {
     /// connecting at `connecting`, paying `fee` to the chain and the rest
     /// to `recipient` in two outputs. The fan-out a fixture chain grows its
     /// spendable outputs by: each spend of one output leaves two, which the
-    /// caller watches before the block that lists them is pushed. A
-    /// method, so a seeded spender's spend draws its seeds like any other.
+    /// caller watches before the block that lists them is pushed.
+    ///
+    /// The inputs were sourced from this spender. The body does not read it
+    /// again; the method stays on [`Spender`] so the call reads as the
+    /// spender's.
     #[must_use]
+    #[allow(
+        clippy::unused_self,
+        reason = "the inputs were sourced from this spender; the call stays a method"
+    )]
     pub fn spend_owned(
         &self,
         sourced: Vec<Sourced>,
@@ -696,9 +742,19 @@ impl Spender {
         fee: u64,
         recipient: &Recipient,
     ) -> Transaction {
+        Self::spend_owned_drawn(None, sourced, connecting, fee, recipient)
+    }
+
+    pub(crate) fn spend_owned_drawn(
+        seeds: Option<SpendSeeds>,
+        sourced: Vec<Sourced>,
+        connecting: BlockHeight,
+        fee: u64,
+        recipient: &Recipient,
+    ) -> Transaction {
         assert!(!sourced.is_empty(), "a spend has an input");
         SpendShape {
-            seeds: self.next_spend_seeds(),
+            seeds,
             connecting,
             fee,
             bond: None,
@@ -730,6 +786,17 @@ impl Spender {
         connecting: BlockHeight,
         fee: u64,
     ) -> (Transaction, Vec<BlockHeight>) {
+        self.spend_coinbases_drawn(None, wallet, heights, connecting, fee)
+    }
+
+    pub(crate) fn spend_coinbases_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        heights: &[BlockHeight],
+        connecting: BlockHeight,
+        fee: u64,
+    ) -> (Transaction, Vec<BlockHeight>) {
         assert!(!heights.is_empty(), "a spend has an input");
         let pairs: Vec<(BlockHeight, Sourced)> = heights
             .iter()
@@ -749,7 +816,7 @@ impl Spender {
         );
         let inputs: Vec<Sourced> = pairs.into_iter().map(|(_, source)| source).collect();
         let tx = SpendShape {
-            seeds: self.next_spend_seeds(),
+            seeds,
             connecting,
             fee,
             bond: None,
@@ -795,9 +862,21 @@ impl Spender {
         fee: u64,
         outputs: usize,
     ) -> Transaction {
+        self.spend_coinbase_paying_drawn(None, wallet, height, connecting, fee, outputs)
+    }
+
+    pub(crate) fn spend_coinbase_paying_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        outputs: usize,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
         SpendShape {
-            seeds: self.next_spend_seeds(),
+            seeds,
             connecting,
             fee,
             bond: None,
@@ -826,8 +905,8 @@ impl Spender {
 /// builders share, besides the inputs. A value, so the body takes the
 /// spend's seeds by move and nothing else is threaded through by hand.
 struct SpendShape<'a> {
-    /// The seeds a seeded spender drew for this spend; `None` draws from
-    /// the OS.
+    /// The seeds the caller drew for this one spend. `None` draws from the
+    /// OS, as the production signers do.
     seeds: Option<SpendSeeds>,
     /// The height the block listing this spend connects at.
     connecting: BlockHeight,
