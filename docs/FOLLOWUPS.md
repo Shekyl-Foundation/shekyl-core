@@ -509,9 +509,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Block-height representation unification at the WI-2 anchoring seam** (surfaced 2026-07-11, WI-2 orchestrator review).
   - Target: pre-genesis
 
-- **Should the genesis block header carry a real mint timestamp instead of 0?** Surfaced by C2-R3-Q2 ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](completed/CONSENSUS_C2_R3_TIMESTAMPS.md) §5.1): with `timestamp: 0` (`rust/shekyl-genesis-tool/src/builder.rs`, `timestamp: 0`) the genesis-padded MTP window admits `ts = 1` at block 1; a real mint timestamp would make the chain unable to start "before" its own genesis time for free under the ratified padding rule. A genesis-mint decision (geblock + the pinned block ids across all three networks), explicitly ruled out of C2-R3's scope at ratification (2026-09-01).
-  - Target: pre-genesis (any regenesis window; #1327 rebuilt every genesis on 2026-11-13 with `timestamp: 0`, and the alpha.12 cut is the next window)
-
 - **External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)**
   - Target: pre-genesis
 
@@ -888,9 +885,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
-  - Target: pre-genesis
-
-- **TRC-1: measure ordinary-operator relay cover across hours and consensus weights.** [`TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md) §8. Falsifier step 1 is met (2026-10-06): the operator topology is running, recorded in [`benchmarks/trc1_relay_posture_20261006.md`](benchmarks/trc1_relay_posture_20261006.md). Step 2 — carried traffic at ordinary operator scale (1 MB/s average, 2 MB/s burst) across hours and consensus weights, on the shared-instance bind — is measured: [`benchmarks/trc1_carried_traffic_20261012.md`](benchmarks/trc1_carried_traffic_20261012.md), collected 2026-10-12 05:55Z to 2026-11-10 00:00Z, final results 2026-11-11, weights 1 to 380. The guard-connection reading is complete (results 2026-11-15) in [`benchmarks/trc1_guard_connection_20261112.md`](benchmarks/trc1_guard_connection_20261112.md): on the relay's guard connections, which carry about half a percent of its bytes, the window holding one of the daemon's own transactions ranks above a random other 100 ms window 93 % of the time; the ruling on that, and on §8 step 3, is Rick's. Also open: which step 2 series describes an ordinary operator (that record's ruling 3), and the `PM-3` watermark test (`DAEMON_RELAY_PRIVACY.md` §96 item 4); neither record decides those. A sidecar client Tor is not this row's subject. The 01:46Z directory lookup returned no relay and was taken against a binary the authorities call obsolete; the directory published 2026-10-06 14:00Z lists the running binary at consensus weight 1, observed bandwidth 0. That weight is not this row's measurement. Falsify by measuring carried traffic; if originated cells remain distinguishable, the ruling reopens and the carrier's scope re-expands to Tor. Reciprocity sizing is a Foundation measurement, not this row.
   - Target: pre-genesis
 
 - **Relay: a transaction mined while the carrier holds it is still SENT — every remaining window, up to ~100 KiB.** The verdict-time `pool_has_tx` gate stops the record and the F-10 observation, but the verdict arrives only on completion, so a transaction mined before its first tick emits all of its windows: `MAX_FRAGMENTS` (5) × `WINDOW_BYTES` (20 480). An earlier entry said "one wasted window", understating it by the fragment cap. Named blocker: cancelling earlier needs an enqueue-cancellation API `NoiseQueues` does not have, and `unbind` clears a whole channel, so cancelling one message would discard its channel-mates. Bounded per transaction rather than per epoch, and it is cover carrying something peers already hold. §3.1c (2026-09-12) did not show a material share. Reopen if another caller needs cancellation [`COVER_TRAFFIC_RESTORATION.md` §3.1e](design/COVER_TRAFFIC_RESTORATION.md)
@@ -1326,6 +1320,10 @@ Exceptional deferral with a named blocker. This list stays tiny.
 - **Multisig: 1-of-N with provable attribution.** DEFERRED (rule 23, R-11 ruled 2026-11-12): either of two people can spend with separate keys, and it is provable which one did. E′ refuses `m < 2` and cannot deliver this honestly: the dealer generated every member's keys, and whoever built an output (for change, a group member) can derive every member's per-output signing key for it, so the attribution is forgeable by either party. Named blocker: per-output keys only the recipient can derive (the sender-known-seed round in core). Zero code exists.
   - Target: post-genesis
   - Owner: the multisig protocol — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§5.1, R-11)
+
+- **Cover traffic on Tor rests on Tor's classical encryption.** An adversary who records a node's guard connections now and holds a quantum computer later can peel Tor's layers and tell the carrier's real windows from its dummies, which names past senders. Clearnet would not be exposed this way once its Noise layer is on, since that layer is hybrid with ML-KEM; today it is the default-off staging switch `dev-clearnet-encrypt`, so clearnet is plaintext until the Noise flip. Wrapping the carrier's Tor sessions in Noise would close this, at a latency cost nobody has measured; Tor adopting a post-quantum handshake would close it without us. Traffic sent before a fix stays exposed. Named blocker: Tor's encryption holds for now, and the Noise-over-Tor latency has to be measured against the carrier on Tor, which the cover-traffic lane has not built (Rick, 2026-11-15).
+  - Target: post-genesis
+  - Owner: the Tor cover posture — [`TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md) (TRC)
 
 ## V4
 

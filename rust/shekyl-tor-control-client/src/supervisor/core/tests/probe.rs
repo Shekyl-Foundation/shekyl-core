@@ -151,6 +151,7 @@ fn fold_unnamed_directories(core: &mut Core, at: u64) {
         Input::DirectoriesDrawn {
             fetches: Vec::new(),
             ours: None,
+            open_uploads: core.open_uploads(at),
         },
         at,
     );

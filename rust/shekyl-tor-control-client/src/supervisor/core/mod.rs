@@ -36,7 +36,9 @@ use announce::{Announcements, Cadence};
 use backoff::Backoff;
 use dials::Dials;
 pub use dials::{DialTally, TorCensus};
-pub use directories::{DirectoryAnswer, DirectoryFetch};
+pub use directories::{
+    Counted, DirectoryAnswer, DirectoryFetch, DirectoryReport, Exclusion, OpenUploads,
+};
 use probe::Probe;
 
 /// How long a respawn waits, and how often a failure is said again.
@@ -329,8 +331,8 @@ pub enum Action {
     /// Said at info. The [`Self::RepublishOnion`] that follows forces a
     /// fresh upload.
     DescriptorOverdue,
-    /// A probe's check began: give the directories the latest round's
-    /// uploads reached, each with a CSPRNG draw for its own fetch delay
+    /// A probe's check began: give every upload of the latest round that
+    /// reached a directory, each with a CSPRNG draw for its own fetch delay
     /// (§4.5, the directory check). The driver answers
     /// [`Input::DirectoriesDrawn`].
     CheckDirectories,
@@ -347,6 +349,9 @@ pub enum Action {
     /// probe alone decided. Said once at info: a node whose uploads land
     /// under a key no fetch asks for is the clock's signature (§4.5).
     DirectoriesUnmatched,
+    /// A check was judged: each directory, how its upload ended, what Tor
+    /// said, and how it counted. Said at debug, one line per directory.
+    DirectoriesSettled(Vec<DirectoryReport>),
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
     /// A descriptor round has been open for `Policy::round_stuck_after`:
@@ -547,6 +552,10 @@ pub enum Input {
         /// counts by being there. `None` when Tor gave none: the check
         /// counts nothing and the probe alone decides.
         ours: Option<ServiceDescriptor>,
+        /// How the round this list was read from treats uploads still open.
+        /// Read in the same turn as `fetches`. The check keeps this reading
+        /// and does not consult the live round.
+        open_uploads: OpenUploads,
     },
     /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
     /// window starts at this fold.
@@ -901,7 +910,11 @@ impl Core {
             }
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
-            Input::DirectoriesDrawn { fetches, ours } => self.directories_drawn(now, fetches, ours),
+            Input::DirectoriesDrawn {
+                fetches,
+                ours,
+                open_uploads,
+            } => self.directories_drawn(now, fetches, ours, open_uploads),
             Input::DirectoryFetchAccepted { hsdir } => self.directory_fetch_accepted(now, hsdir),
             Input::DirectoryAsked {
                 hsdir,

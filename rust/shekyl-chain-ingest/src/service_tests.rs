@@ -1495,6 +1495,7 @@ async fn an_external_miner_writes_at_the_reported_offsets_and_the_door_connects_
 /// before the empty chain has a job in the record.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_job_built_while_blocks_connect_never_pairs_two_tips() {
+    let deadline = Deadline::start();
     use std::collections::BTreeMap;
 
     use crate::follower::kept_jobs;
@@ -1511,34 +1512,34 @@ async fn a_job_built_while_blocks_connect_never_pairs_two_tips() {
                 seen.entry(generation).or_insert(job);
             }
         };
-        tokio::time::timeout(CHAIN_POSTED, async {
-            loop {
-                collect(&mut seen);
-                if seen.values().any(|job| job.height == BlockHeight::ZERO) {
-                    return;
+        deadline
+            .wait("the empty chain's job", async {
+                loop {
+                    collect(&mut seen);
+                    if seen.values().any(|job| job.height == BlockHeight::ZERO) {
+                        return;
+                    }
+                    posting.changed().await.expect("the posting watch");
                 }
-                posting.changed().await.expect("the posting watch");
-            }
-        })
-        .await
-        .expect("the empty chain's job");
+            })
+            .await;
         for block in &blocks {
             offer_all(&service, 1, std::slice::from_ref(block)).await;
             // The build yields, so a generation is in the record here, before
             // a later post drops it from the ring.
             collect(&mut seen);
         }
-        tokio::time::timeout(CHAIN_POSTED, async {
-            loop {
-                collect(&mut seen);
-                if seen.values().any(|job| job.height.to_raw() > 0) {
-                    return;
+        deadline
+            .wait("a job after the tip moved", async {
+                loop {
+                    collect(&mut seen);
+                    if seen.values().any(|job| job.height.to_raw() > 0) {
+                        return;
+                    }
+                    posting.changed().await.expect("the posting watch");
                 }
-                posting.changed().await.expect("the posting watch");
-            }
-        })
-        .await
-        .expect("a job after the tip moved");
+            })
+            .await;
         collect(&mut seen);
         seen
     };
@@ -1629,13 +1630,60 @@ async fn the_tip_followers_death_fails_the_service_and_closes_the_door() {
     );
 }
 
-/// How long the follower may take to post once a matured chain is in the
-/// store. Offering that chain is the slow part; a later wake is
-/// [`WAKE_POSTED`].
-const CHAIN_POSTED: std::time::Duration = std::time::Duration::from_secs(180);
+/// When a test calls an event it waits for a hang rather than a slow host:
+/// one deadline per test, set as the test starts, that every wait in it
+/// draws on.
+///
+/// These waits detect a hang; none of them is the test's claim. They were
+/// sized for an idle machine (a wake within 30 s, a stop within 15 s), and
+/// on a fleet host running beside a miner at load ten, with the lib suite
+/// taking 8,323 s, two tests timed out while the code was doing what they
+/// assert: `a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job`
+/// ("a job posted in time: Elapsed") and
+/// `stop_answers_a_found_block_waiting_inside_the_door` ("stop deadlocked
+/// ..."). Rule 50 bars widening a timeout a flake's race slips past; these
+/// time no claim, so the bound is set past any loaded host's latency.
+///
+/// The budget is the whole test's, not a step's: a test that waits on more
+/// steps does not wait longer. Twenty minutes leaves ten of nextest's
+/// 30-minute terminate (`rust/.config/nextest.toml`) for the teardown after
+/// the last wait, so a real hang fails here, naming the step it was on,
+/// rather than being killed by nextest without one.
+#[derive(Clone, Copy)]
+struct Deadline(std::time::Instant);
 
-/// How long one wake may take once the chain is up.
-const WAKE_POSTED: std::time::Duration = std::time::Duration::from_secs(30);
+impl Deadline {
+    /// One test's budget, from its start to its last wait.
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+    /// [`Self::BUDGET`] from now. A test sets it first, so its set-up
+    /// spends from the same budget.
+    fn start() -> Self {
+        Self(std::time::Instant::now() + Self::BUDGET)
+    }
+
+    /// The deadline on tokio's clock.
+    fn at(self) -> tokio::time::Instant {
+        tokio::time::Instant::from_std(self.0)
+    }
+
+    /// The time left; zero once the deadline has passed.
+    fn left(self) -> std::time::Duration {
+        self.0.saturating_duration_since(std::time::Instant::now())
+    }
+
+    /// `event`'s output, or a panic naming `step` once the deadline passes.
+    async fn wait<F: std::future::Future>(self, step: &str, event: F) -> F::Output {
+        tokio::time::timeout_at(self.at(), event)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "{step}: still waiting at the test's deadline, {:?} after it started",
+                    Self::BUDGET
+                )
+            })
+    }
+}
 
 /// A service with a real pool and a job seat. The sync sender and the
 /// found-block sender stay alive for the service's life: dropping either
@@ -1786,27 +1834,29 @@ fn flush_series(
     (hook, calls)
 }
 
-/// The next posting that is a job `holds` accepts, within `limit`.
+/// The next posting that is a job `holds` accepts, before `deadline`; a
+/// hang fails naming `step`.
 async fn posted_job(
     posting: &mut tokio::sync::watch::Receiver<crate::follower::Posting>,
     board: &shekyl_miner::JobBoard,
-    limit: std::time::Duration,
+    deadline: Deadline,
+    step: &str,
     holds: impl Fn(shekyl_miner::Generation, &shekyl_miner::Job) -> bool,
 ) -> crate::follower::Posting {
     use crate::follower::Posting;
-    tokio::time::timeout(
-        limit,
-        posting.wait_for(|now| match now {
-            Posting::Posted(generation) => board
-                .posted()
-                .is_some_and(|(at, job)| at == *generation && holds(*generation, &job)),
-            Posting::Withdrawn(_) => false,
-        }),
-    )
-    .await
-    .expect("a job posted in time")
-    .expect("the posting watch")
-    .clone()
+    deadline
+        .wait(
+            step,
+            posting.wait_for(|now| match now {
+                Posting::Posted(generation) => board
+                    .posted()
+                    .is_some_and(|(at, job)| at == *generation && holds(*generation, &job)),
+                Posting::Withdrawn(_) => false,
+            }),
+        )
+        .await
+        .expect("the posting watch")
+        .clone()
 }
 
 fn lists(job: &shekyl_miner::Job, id: shekyl_types::TxHash) -> bool {
@@ -1820,6 +1870,7 @@ fn lists(job: &shekyl_miner::Job, id: shekyl_types::TxHash) -> bool {
 /// still names the body.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
+    let deadline = Deadline::start();
     use crate::follower::Posting;
     use crate::pool_door_tests::{matured, paying_the_floor};
 
@@ -1832,7 +1883,8 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        CHAIN_POSTED,
+        deadline,
+        "the matured chain's job",
         |_at, job| job.height.to_raw() == next && !lists(job, txid),
     )
     .await;
@@ -1841,7 +1893,8 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     let Posting::Posted(with_body) = posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the job listing the shown body",
         |_at, job| lists(job, txid),
     )
     .await
@@ -1854,7 +1907,8 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the rebuilt job without the flushed body",
         |at, job| at != with_body && !lists(job, txid),
     )
     .await;
@@ -1877,6 +1931,7 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
 /// the wake.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
+    let deadline = Deadline::start();
     use crate::pool_door_tests::{matured, paying_the_floor};
 
     let (mut scenario, prefix) = matured("service-pop-returns").await;
@@ -1888,7 +1943,8 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        CHAIN_POSTED,
+        deadline,
+        "the matured chain's job",
         |_at, job| job.height.to_raw() == next && !lists(job, txid),
     )
     .await;
@@ -1897,7 +1953,8 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the job listing the shown body",
         |_at, job| lists(job, txid),
     )
     .await;
@@ -1909,7 +1966,8 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        CHAIN_POSTED,
+        deadline,
+        "the job on the spend's block",
         |_at, job| job.height.to_raw() == next + 1 && !lists(job, txid),
     )
     .await;
@@ -1922,7 +1980,8 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the job after the pop, listing the returned body",
         |_at, job| job.height.to_raw() == next && lists(job, txid),
     )
     .await;
@@ -1937,6 +1996,7 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
 /// spent, so that wake rests on `Stuck` at once.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
+    let deadline = Deadline::start();
     use crate::follower::{NoJob, Posting, Rebuild, Unbuilt};
     use crate::pool_door_tests::{matured, paying_the_floor};
 
@@ -1955,7 +2015,8 @@ async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        CHAIN_POSTED,
+        deadline,
+        "the matured chain's job",
         |_at, job| job.height.to_raw() == next,
     )
     .await;
@@ -1965,15 +2026,16 @@ async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the job listing both bodies",
         |_at, job| lists(job, first_id) && lists(job, second_id),
     )
     .await;
     let (hook, first_calls) = flush_series(vec![first_id, second_id]);
     seated.set_hook(hook);
     seated.wake();
-    let settled = tokio::time::timeout(
-        WAKE_POSTED,
+    let settled = tokio::time::timeout_at(
+        deadline.at(),
         seated.posting.wait_for(|now| {
             matches!(
                 now,
@@ -1995,7 +2057,8 @@ async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the next wake's rebuilt job",
         |_at, job| !lists(job, first_id) && !lists(job, second_id) && !lists(job, third_id),
     )
     .await;
@@ -2157,17 +2220,13 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
     y.close().await;
 }
 
-/// How long the follower may take to act on its first tip.
-const FOLLOWER_START_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// How long the sink may take to hold a seat after a block is delivered.
-const SEAT_TAKEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// How long a stop may take before the test calls it stuck. A stop that
-/// deadlocks the runtime worker cannot poll an async timeout, so the wait
-/// is this thread's, beside the runtime. It covers the follower starting,
-/// the sink taking its seat, and the stop itself.
-const STOP_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long past the test's [`Deadline`] the thread beside the runtime
+/// waits for the runtime's report. A stop that deadlocks the runtime worker
+/// cannot poll an async timeout, so that wait is the thread's own; the grace
+/// lets a step that timed out on the runtime at the deadline report first
+/// and name itself. The budget and the grace stay under nextest's
+/// terminate.
+const REPORT_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn current_thread_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
@@ -2255,6 +2314,7 @@ fn report(done: &std::sync::mpsc::Sender<bool>, stopped: bool) {
 /// ends the sink. Red edit: join the sink on the sender's lifetime.
 #[test]
 fn stop_returns_while_a_found_block_sender_lives() {
+    let deadline = Deadline::start();
     let (sender_tx, sender_rx) = std::sync::mpsc::channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -2273,9 +2333,9 @@ fn stop_returns_while_a_found_block_sender_lives() {
         report(&done_tx, outcome.is_ok());
     });
     let sender = sender_rx
-        .recv_timeout(STOP_WITHIN)
+        .recv_timeout(deadline.left())
         .expect("the service started");
-    match done_rx.recv_timeout(STOP_WITHIN) {
+    match done_rx.recv_timeout(deadline.left()) {
         Ok(true) => {}
         Ok(false) => panic!("the stop path panicked"),
         Err(_) => panic!("stop did not return while a found-block sender lived"),
@@ -2289,6 +2349,7 @@ fn stop_returns_while_a_found_block_sender_lives() {
 /// the sink on the runtime worker before that answer.
 #[test]
 fn stop_answers_a_found_block_waiting_inside_the_door() {
+    let deadline = Deadline::start();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = current_thread_runtime();
@@ -2301,9 +2362,9 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                 let service = miner_follow(&path, found, sync);
                 let mut followed = service.followed();
                 followed.borrow_and_update();
-                tokio::time::timeout(FOLLOWER_START_WITHIN, followed.changed())
+                deadline
+                    .wait("the follower started", followed.changed())
                     .await
-                    .expect("the follower started")
                     .expect("followed");
                 let before = service.door().room();
                 let block = coinbase_block();
@@ -2327,11 +2388,10 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                     generation,
                     pow: PowHash::from_bytes([0; 32]),
                 }));
-                let started = std::time::Instant::now();
                 while service.door().room() >= before {
                     assert!(
-                        started.elapsed() < SEAT_TAKEN_WITHIN,
-                        "the sink never took a seat"
+                        !deadline.left().is_zero(),
+                        "the sink never took a seat before the test's deadline"
                     );
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
@@ -2341,7 +2401,7 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
         }));
         report(&done_tx, outcome.is_ok());
     });
-    match done_rx.recv_timeout(STOP_WITHIN) {
+    match done_rx.recv_timeout(deadline.left() + REPORT_GRACE) {
         Ok(true) => {}
         Ok(false) => panic!("the stop path panicked"),
         Err(_) => panic!("stop deadlocked on a found block waiting in the door"),

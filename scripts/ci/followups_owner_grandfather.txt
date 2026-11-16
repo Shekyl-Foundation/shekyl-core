@@ -43,7 +43,6 @@ Phase 4c: no way to abandon an unconfirmed submitted transaction, so a never-min
 Phase 4b: build concurrency permit stays 1 — raising it is a rule-21 reopen gated on anonymized segment fetch.
 GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in` single-structured-output funding must land before genesis.
 Block-height representation unification at the WI-2 anchoring seam
-Should the genesis block header carry a real mint timestamp instead of 0?
 External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)
 Emission leg: verify reward→identity binding is structural, not [`design/ARCHIVAL_FIREWALL_GATE6.md`](./design/ARCHIVAL_FIREWALL_GATE6.md)
 FCMP++ circuit: confirm `incomplete_add_pub` need not constrain `c` [`completed/SHEKYL_OXIDE_UNVENDOR.md`](./completed/SHEKYL_OXIDE_UNVENDOR.md)
@@ -148,7 +147,6 @@ Retire the iai-callgrind→gungraun bench-flake bisect harness (spawned by the g
 rand 0.9 migration and curve25519-dalek 5 cascade.
 Two `unmaintained` advisories surfaced by `cargo audit` [`docs/design/STAGE_0_HARNESS.md`](./completed/STAGE_0_HARNESS.md)
 Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).
-TRC-1: measure ordinary-operator relay cover across hours and consensus weights.
 Relay: a transaction mined while the carrier holds it is still SENT — every remaining window, up to ~100 KiB.
 Relay: the carrier's pool gates NARROW the false-`Silent` window but cannot close it.
 Relay: a carrier verdict of `sent` means the transport ACCEPTED the bytes, not that they reached a peer.

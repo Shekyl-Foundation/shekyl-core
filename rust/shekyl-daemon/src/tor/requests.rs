@@ -482,21 +482,25 @@ impl Drive {
         None
     }
 
-    /// A probe's check: the directories the latest round reached, each with
-    /// its own CSPRNG draw, read now; this service's current descriptor,
-    /// asked off the loop (§4.5). No control, or no service yet, is no
-    /// descriptor; an ask that fails is a process fault.
+    /// A probe's check: every upload of the latest round that reached a
+    /// directory, confirmed or not, each with its own CSPRNG draw, read now;
+    /// this service's current descriptor, asked off the loop (§4.5). No
+    /// control, or no service yet, is no descriptor; an ask that fails is a
+    /// process fault.
     fn send_check(&self, number: u64) -> Option<Vec<Input>> {
+        // The list and the open-upload reading are one moment. The round
+        // may end while the descriptor below is being read, and the check
+        // keeps this reading rather than the live round.
+        let open_uploads = self.core.open_uploads(self.now());
         let fetches: Vec<DirectoryFetch> = self
             .rounds
             .as_ref()
             .map(|rounds| {
                 rounds
                     .directories()
-                    .iter()
-                    .map(|to| DirectoryFetch {
-                        hsdir: to.hsdir,
-                        descriptor_id: to.descriptor_id.clone(),
+                    .into_iter()
+                    .map(|upload| DirectoryFetch {
+                        upload,
                         draw: self.network.probe_delay_draw(),
                     })
                     .collect()
@@ -506,6 +510,7 @@ impl Drive {
             return Some(vec![Input::DirectoriesDrawn {
                 fetches,
                 ours: None,
+                open_uploads,
             }]);
         };
         self.answer_later(number, async move {
@@ -526,7 +531,11 @@ impl Drive {
                             "Tor gave no descriptor for this onion; the check counts nothing and the probe alone decides"
                         ),
                     }
-                    vec![Input::DirectoriesDrawn { fetches, ours }]
+                    vec![Input::DirectoriesDrawn {
+                        fetches,
+                        ours,
+                        open_uploads,
+                    }]
                 }
                 Err(error) => {
                     tracing::debug!(target: "tor", "this onion's descriptor was not asked ({error})");
