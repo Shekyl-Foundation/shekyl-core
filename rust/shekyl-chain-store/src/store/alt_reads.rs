@@ -26,7 +26,7 @@
 //! does not decode: membership is the key's presence, which is what
 //! `have_block` asks.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_store_codec::{Canonical, CodecError};
@@ -73,13 +73,19 @@ pub(super) struct AltLinks {
     /// Children of each parent hash, in the table's key order. A parent
     /// that is not itself an alt row — a main-chain block, or a hash the
     /// table does not hold — is a key with children and not a tip.
-    children: HashMap<BlockHash, Vec<BlockHash>>,
+    ///
+    /// Ordered, as [`Self::closure`]'s set is: nothing iterates either today
+    /// (both are lookups), and an ordered map keeps it that way for a later
+    /// reader, so no row a store writes and no reply it gives can depend on a
+    /// process's hash seed (`CHAIN_FORGE.md` §5.2: a forged chain's trace is
+    /// byte for byte the same in every process).
+    children: BTreeMap<BlockHash, Vec<BlockHash>>,
 }
 
 impl AltLinks {
     /// Index `entries` (AL7's order).
     pub(super) fn of(entries: &[AltEntry]) -> Self {
-        let mut children: HashMap<BlockHash, Vec<BlockHash>> = HashMap::new();
+        let mut children: BTreeMap<BlockHash, Vec<BlockHash>> = BTreeMap::new();
         for entry in entries {
             children
                 .entry(entry.block.block().header.previous)
@@ -94,8 +100,11 @@ impl AltLinks {
     /// returns to a row already taken is not walked again. No row is a
     /// main-chain block (`store/alt.rs`: a block id has one home), so the
     /// walk never reaches the recorded chain.
-    pub(super) fn closure(&self, roots: impl IntoIterator<Item = BlockHash>) -> HashSet<BlockHash> {
-        let mut dead = HashSet::new();
+    pub(super) fn closure(
+        &self,
+        roots: impl IntoIterator<Item = BlockHash>,
+    ) -> BTreeSet<BlockHash> {
+        let mut dead = BTreeSet::new();
         let mut frontier: Vec<BlockHash> = roots.into_iter().collect();
         while let Some(id) = frontier.pop() {
             if dead.insert(id) {
