@@ -64,14 +64,22 @@ def rust_rhs(path, name):
 
 
 def rust_fn(path, name):
-    """The text of top-level `fn name`, through the line before the next one."""
+    """The text of the top-level function `name`, through its closing brace.
+
+    Visibility and qualifiers before `fn` do not matter. rustfmt closes a
+    top-level item with `}` at column 0, so the body ends at the first such
+    line: whatever follows it, of any shape, is not read."""
     text = rust_text(path)
-    match = re.search(r"(?m)^fn %s\b" % re.escape(name), text)
-    if match is None:
-        raise AssertionError("%s has no fn %s" % ("/".join(path), name))
-    rest = text[match.start():]
-    nxt = re.search(r"(?m)\nfn ", rest[1:])
-    return rest if nxt is None else rest[:nxt.start() + 1]
+    found = [m.start() for m in re.finditer(
+        r"(?m)^(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+%s\b"
+        % re.escape(name), text)]
+    if len(found) != 1:
+        raise AssertionError("%s defines fn %s %d times" % ("/".join(path), name, len(found)))
+    rest = text[found[0]:]
+    end = re.search(r"(?m)^\}", rest)
+    if end is None:
+        raise AssertionError("%s: fn %s has no closing brace" % ("/".join(path), name))
+    return rest[:end.end()]
 
 
 class RecordConstants(unittest.TestCase):
