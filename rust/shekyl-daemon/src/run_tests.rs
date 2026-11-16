@@ -26,6 +26,16 @@ fn platform(home: &Path) -> Platform {
     }
 }
 
+/// The entry point as these tests start it: every step of [`main`], with
+/// the host's default configuration file left unread.
+fn start(args: &[OsString], platform: &Platform) -> i32 {
+    main_loading(
+        args,
+        platform,
+        shekyl_daemon_config::load_default_file_unread,
+    )
+}
+
 fn args(list: &[&str]) -> Vec<OsString> {
     std::iter::once("shekyld")
         .chain(list.iter().copied())
@@ -36,11 +46,14 @@ fn args(list: &[&str]) -> Vec<OsString> {
 #[test]
 fn a_refusal_exits_with_two_and_help_and_version_with_zero() {
     let d = tempfile::tempdir().unwrap();
-    assert_eq!(main(&args(&["--bogus"]), &platform(d.path())), EXIT_REFUSED);
-    assert_eq!(main(&args(&["--help"]), &platform(d.path())), 0);
-    assert_eq!(main(&args(&["--version"]), &platform(d.path())), 0);
     assert_eq!(
-        main(
+        start(&args(&["--bogus"]), &platform(d.path())),
+        EXIT_REFUSED
+    );
+    assert_eq!(start(&args(&["--help"]), &platform(d.path())), 0);
+    assert_eq!(start(&args(&["--version"]), &platform(d.path())), 0);
+    assert_eq!(
+        start(
             &args(&["--network", "regtest", "--dev-difficulty", "0"]),
             &platform(d.path())
         ),
@@ -58,7 +71,7 @@ fn a_refusal_exits_with_two_and_help_and_version_with_zero() {
 fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
     let d = tempfile::tempdir().unwrap();
     assert_eq!(
-        main(
+        start(
             &args(&["--network", "regtest", "--mine", "on"]),
             &platform(d.path())
         ),
@@ -67,7 +80,7 @@ fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
     let host_threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
     let past = (host_threads + 1).to_string();
     assert_eq!(
-        main(
+        start(
             &args(&[
                 "--network",
                 "regtest",
@@ -89,7 +102,7 @@ fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
 #[test]
 fn a_bare_word_is_refused_before_the_daemon_starts() {
     let d = tempfile::tempdir().unwrap();
-    assert_eq!(main(&args(&["status"]), &platform(d.path())), EXIT_REFUSED);
+    assert_eq!(start(&args(&["status"]), &platform(d.path())), EXIT_REFUSED);
     assert!(!d.path().join(".shekyl").exists(), "nothing was created");
 }
 
@@ -111,7 +124,9 @@ fn offline_node(d: &Path, data: &Path, log: &Path) -> (DaemonConfig, shekyl_node
         log.to_str().unwrap(),
     ]);
     let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-    let config = load(cli, &platform(d)).unwrap().config;
+    let config = shekyl_daemon_config::after_file(cli, &platform(d), None)
+        .unwrap()
+        .config;
     let node = shekyl_node::Node::open(shekyl_node::OpenArgs {
         config: &config,
         version: "test".to_owned(),
@@ -210,7 +225,7 @@ fn a_daemon_start_locks_marks_logs_announces_runs_and_stops_on_request() {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     });
-    let status = main(&a, &platform(d.path()));
+    let status = start(&a, &platform(d.path()));
     returned.store(true, std::sync::atomic::Ordering::SeqCst);
     requester.join().unwrap();
     assert_eq!(status, 0);
