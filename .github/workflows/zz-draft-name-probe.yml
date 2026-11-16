@@ -1,0 +1,38 @@
+# Scratch probe for #1414 on #1415 (closed unmerged): does a job skipped by
+# its `if` report under its evaluated `name`?
+name: zz-draft-name-probe
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  gate:
+    name: probe gate
+    if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: "true"
+  skip-by-if:
+    name: ${{ github.event.pull_request.draft && 'Probe A (draft - not run)' || 'Probe A' }}
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: "true"
+  skip-by-needs:
+    name: ${{ github.event.pull_request.draft && 'Probe B (draft - not run)' || 'Probe B' }}
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: "true"
+  skip-by-if-after-needs:
+    name: ${{ github.event.pull_request.draft && 'Probe C (draft - not run)' || 'Probe C' }}
+    needs: gate
+    if: ${{ always() && !github.event.pull_request.draft && needs.gate.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: "true"
