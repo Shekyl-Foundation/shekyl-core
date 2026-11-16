@@ -1,3 +1,16 @@
+# `seeds/<target>/` is committed and read by every run of that target
+# (the nightly workflow's `fuzz` job; locally,
+#   cargo +nightly fuzz run <target> corpus/<target> seeds/<target>).
+# `fuzz_body_hybrid_sig_decode/kat_one_signature` is a one-input body
+# (`0x01 || sig`) and `fuzz_body_commitment_decode/kat_one_round` a
+# one-input round (`0x01 || preprocess || key`), from the
+# `hybrid_signature_hex` and `hybrid_public_key_hex` of
+# `docs/test_vectors/PQC_HYBRID_V2_KAT.json`. The 64-byte preprocess is
+# zeros and comes from no vector: the body travels it as raw bytes and
+# does not parse it. Unseeded, both decoders never got past the input
+# count and the first field's length. A crash's input joins its
+# target's directory with the fix.
+
 [package]
 name = "shekyl-multisig-fuzz"
 version = "0.0.0"

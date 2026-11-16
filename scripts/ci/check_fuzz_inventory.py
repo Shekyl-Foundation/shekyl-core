@@ -65,14 +65,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ".github/workflows/fuzz-harness.yml"
 NIGHTLY = ".github/workflows/nightly.yml"
-# The weekly long run: the parsers that take bytes from anyone before
-# anything about the sender is known, run for thirty minutes each (ruled
-# 2026-11-15). The Noise handshake's reader is the responder reading an
-# unknown initiator's first message; transaction and block decode are the
-# wire parsers; KEM decapsulation reads a ciphertext an output carries.
+# The weekly long run, thirty minutes each (ruled 2026-11-15): the parsers
+# that take bytes from anyone before anything about the sender is known,
+# and the target five minutes cannot exercise. The Noise handshake's
+# reader is the responder reading an unknown initiator's first message;
+# transaction and block decode are the wire parsers; KEM decapsulation
+# reads a ciphertext an output carries. The Bulletproofs+ round trip
+# proves and verifies once per input, a few thousand executions in five
+# minutes.
 WEEKLY = (
     "shekyl-crypto-pq/fuzz_kem_decapsulate",
     "shekyl-p2p-transport/fuzz_read_message1",
+    "shekyl-tx-builder/fuzz_bp_plus_masks",
     "shekyl-wire/fuzz_block_parse",
     "shekyl-wire/fuzz_tx_parse",
 )
