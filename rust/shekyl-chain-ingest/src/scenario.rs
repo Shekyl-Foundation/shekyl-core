@@ -209,27 +209,22 @@ impl<P: Pow> Scenario<P> {
     /// wake the ranker fails here. A free longhash has no hasher, and
     /// this does nothing.
     async fn quiet_holds_the_list(&self) {
-        let (Some(store), Some(mut resident)) = (&self.store, self.substrate.resident()) else {
+        let (Some(store), Some(resident)) = (&self.store, self.substrate.resident()) else {
             return;
         };
         let snap = store.begin_read().expect("the driver's store reads");
         let list = crate::cache_window::ranked_on(&snap, self.rules, None)
             .unwrap_or_else(|read| panic!("the driver's store ranks: {read:?}"));
         drop(snap);
-        let named: std::collections::BTreeSet<[u8; 32]> = list
-            .iter()
-            .flat_map(shekyl_hasher::Ranked::seeds)
-            .map(|seed| *seed.as_bytes())
-            .collect();
-        let quiet = resident
-            .wait_for(|resident| resident.quiet)
+        let named = crate::test_support::named_seeds(list.as_ref());
+        // Bounded. A hasher that never rests fails here with what it
+        // holds and this list. One that rests on the wrong seeds fails
+        // the comparison below, and does not sit out the bound: the
+        // ranker has already been given its writes.
+        let quiet = crate::test_support::quiet_resident(resident)
             .await
-            .expect("the driver's hasher runs for the driver's life");
-        let held: std::collections::BTreeSet<[u8; 32]> = quiet
-            .caches
-            .iter()
-            .map(|(seed, _)| *seed.as_bytes())
-            .collect();
+            .unwrap_or_else(|unquiet| unquiet.expected(&list));
+        let held = crate::test_support::held_seeds(&quiet);
         assert_eq!(
             held, named,
             "a quiet hasher holds the seeds its last list names (HA-R5); the list: {list:?}"
