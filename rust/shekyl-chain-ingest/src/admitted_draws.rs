@@ -23,8 +23,8 @@ use std::collections::BTreeSet;
 
 use shekyl_archival_retention::{
     assemble_bundle, challenge_nonce, draw_commit, sign_bundle_commitment, support_challenge_nonce,
-    BundleKept, BundleRecord, PassBitmap, PassStream, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
-    CHALLENGE_READS,
+    BundleBody, BundleKept, BundleRecord, BundleRef, PassBitmap, PassStream, BUNDLE_SIGNATURE_LEN,
+    BUNDLE_WITNESS_KEY_LEN, CHALLENGE_READS,
 };
 use shekyl_bundle_producer::DrawTarget;
 use shekyl_chain_rules::harness::bundle::{signed_record_by, Anchor};
@@ -36,6 +36,7 @@ use shekyl_crypto_pq::signature::SignatureScheme as _;
 use shekyl_crypto_pq::CryptoError;
 use shekyl_harness_spender::Persona;
 use shekyl_network::envelope::Framed64;
+use shekyl_network::NetworkId;
 use shekyl_types::archival::{DrawCommitment, COUNTED_DRAWS};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use zeroize::Zeroizing;
@@ -300,7 +301,54 @@ async fn file_draws(
     hash: BlockHash,
 ) -> bool {
     let scenario = &drive.scenario;
-    let mined = &drive.chain;
+    let Some(drawn) = bundle_for(scenario, &drive.chain, witness, signers, passes, h, hash).await
+    else {
+        return false;
+    };
+    let (reference, body) = witness.assemble(&scenario.network_id(), &drawn);
+    let offered = scenario
+        .connector()
+        .ask(OfferBundle { reference, body })
+        .await
+        .expect("the connector answers");
+    assert!(
+        matches!(offered, BundleOffered::Queued { h: queued, .. } if queued == h),
+        "the bundle for block {h} is queued: {offered:?}"
+    );
+    true
+}
+
+/// A block's bundle before its witness signs it: the kept fields and the
+/// records, each record's receipt signed by the draw's holder.
+pub struct DrawnBundle {
+    /// The block, its seed and the two streams' pass bitmaps.
+    pub kept: BundleKept,
+    /// The records, economy first, then support (the bitmaps' order).
+    pub records: Vec<BundleRecord>,
+}
+
+/// The bundle of block `h` (whose hash is `hash`, on `mined`): its draws
+/// learned from the connector, each one passed or withheld by `passes`, a
+/// passing draw's receipt signed by the holder among `signers`. `None` when
+/// the block drew nothing.
+///
+/// # Panics
+///
+/// If the connector cannot derive the block's draws, a drawing block has
+/// no parent, or a passing draw's holder is not among `signers`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is one input of the block's filing"
+)]
+pub async fn bundle_for(
+    scenario: &Scenario<FreeHash>,
+    mined: &[Mined],
+    witness: &DriverWitness,
+    signers: &[&Persona],
+    passes: Passes<'_>,
+    h: BlockHeight,
+    hash: BlockHash,
+) -> Option<DrawnBundle> {
     let seed = witness.seed(h);
     let learned = scenario
         .connector()
@@ -315,7 +363,7 @@ async fn file_draws(
         panic!("the draws of block {h} are derived: {learned:?}");
     };
     if targets.draws.is_empty() {
-        return false;
+        return None;
     }
     let parent = h
         .checked_sub_count(BlockCount::ONE)
@@ -334,30 +382,38 @@ async fn file_draws(
         passes,
         &*witness.draws,
     );
-    let kept = BundleKept {
-        h,
-        seed,
-        passes: filed.economy,
-        support: filed.support,
-    };
-    let (reference, body) = assemble_bundle(
-        &scenario.network_id(),
-        &kept,
-        &filed.records,
-        &witness.public,
-        |commitment| witness.draws.sign_bundle(h, &witness.secret, commitment),
-    )
-    .expect("the witness signs");
-    let offered = scenario
-        .connector()
-        .ask(OfferBundle { reference, body })
-        .await
-        .expect("the connector answers");
-    assert!(
-        matches!(offered, BundleOffered::Queued { h: queued, .. } if queued == h),
-        "the bundle for block {h} is queued: {offered:?}"
-    );
-    true
+    Some(DrawnBundle {
+        kept: BundleKept {
+            h,
+            seed,
+            passes: filed.economy,
+            support: filed.support,
+        },
+        records: filed.records,
+    })
+}
+
+impl DriverWitness {
+    /// `drawn` signed by this witness over `network`'s framing and
+    /// assembled: the reference a block's section carries, and the body it
+    /// names.
+    ///
+    /// # Panics
+    ///
+    /// If the witness does not sign.
+    pub fn assemble(&self, network: &NetworkId, drawn: &DrawnBundle) -> (BundleRef, BundleBody) {
+        assemble_bundle(
+            network,
+            &drawn.kept,
+            &drawn.records,
+            &self.public,
+            |commitment| {
+                self.draws
+                    .sign_bundle(drawn.kept.h, &self.secret, commitment)
+            },
+        )
+        .expect("the witness signs")
+    }
 }
 
 /// Both streams of one block, each draw passed or withheld by `passes`.

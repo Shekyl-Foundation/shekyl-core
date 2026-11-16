@@ -474,6 +474,36 @@ impl<P: Pow> Scenario<P> {
         Ok((self.mined(height, out.applied, kept)?, out.admitted))
     }
 
+    /// [`Self::connect_next_admitting`] carrying `section` rather than the
+    /// queue's: the references and the bodies the caller hands in, the
+    /// header's root set to the root they make. The block is judged by the
+    /// connector's own door, so a section the queue would never have packed
+    /// (a tampered bundle, CHAIN_FORGE.md `CF-R16`) meets the rules that
+    /// judge a block's section at connect (CEN-J29 through J37).
+    ///
+    /// # Errors
+    ///
+    /// A refused block, as [`Self::mine_listing`]'s.
+    pub async fn connect_next_carrying(
+        &mut self,
+        next: NextBlock,
+        section: (
+            Vec<shekyl_archival_retention::BundleRef>,
+            Vec<shekyl_archival_retention::BundleBody>,
+        ),
+    ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
+        let (height, formed, kept) = self.form_next_carrying(next, Some(section))?;
+        let out = self
+            .asked(crate::connector::ApplyAdmitting {
+                height,
+                formed: Ok(formed),
+            })
+            .await
+            .map_err(handler_error)
+            .map_err(StepOutcome::Connector)?;
+        Ok((self.mined(height, out.applied, kept)?, out.admitted))
+    }
+
     /// The section the node's template would carry at `height`: the
     /// production [`crate::template::section`], `fill_section` over the
     /// queue on one snapshot. `None` when it packs nothing.
