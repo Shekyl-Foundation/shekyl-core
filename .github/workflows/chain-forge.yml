@@ -2,19 +2,32 @@ name: chain-forge
 
 # The chain forge's determinism check (CHAIN_FORGE.md §9, CF-1c): a forged
 # chain is a known answer, so the same plan at the same commit must give the
-# same bytes on every machine that forges it. Each leg runs on its own
-# architecture and holds its result to the answers committed in the tree;
-# two legs that both match the tree match each other.
+# same bytes on every machine that forges it. Each leg forges the small plan
+# (rust/shekyl-chain-forge/plans/small.toml) twice, in two processes that
+# differ in thread count, working directory, time zone and locale, and holds
+# both to the blocks.txt and manifest committed in chains/small/. Two legs
+# that both match the tree match each other.
 #
-# - x86_64 on GitHub's hosted `ubuntu-24.04`, aarch64 on the hosted
+# - x86_64 on GitHub's hosted `ubuntu-24.04`; aarch64 on the hosted
 #   `ubuntu-24.04-arm`. The Pi 4 floor device (rule 76) is aarch64 too; its
 #   run is fleet evidence recorded with the increment, not a CI leg.
-# - The seeded primitives first (seconds): when the legs disagree, this
-#   step names the primitive.
+# - The seeded primitives first (seconds): when the legs disagree, that step
+#   names the primitive.
+# - Cost (measured at CF-1c): one forging of the small plan is about 29
+#   CPU-minutes, 222 s on a 16-vCPU build VM, so about 8 minutes on a
+#   4-vCPU hosted runner; a leg forges twice. That is over the five minutes
+#   a leg that runs on every pull request may take, so the x86_64 leg runs
+#   on every pull request in scope and the aarch64 leg nightly and on a pull
+#   request that touches the crypto beneath the chain's bytes
+#   (shekyl-crypto-pq, shekyl-fcmp, shekyl-tx-builder).
+# - Nightly, at dev's HEAD (§9): both legs, and on x86_64 the forged-chain
+#   test (the identity test's four locks and the receipt tamper test) and the
+#   negative controls (each source of randomness drawn from the OS, the chain
+#   must differ). A red nightly reaches `report-dev-red`.
 #
 # Scope: the Rust tree, because a forged chain's bytes depend on the
-# consensus rules, the store, the driver and the crypto beneath them, and
-# on nothing outside `rust/`. Not a required check, so the `paths` filter
+# consensus rules, the store, the driver and the crypto beneath them, and on
+# nothing outside `rust/`. Not a required check, so the `paths` filter
 # suppressing the workflow on other changes waits on nothing.
 
 on:
@@ -30,10 +43,14 @@ on:
       - 'rust/**'
       - '.github/workflows/chain-forge.yml'
       - '.github/actions/install-rust/**'
+  schedule:
+    - cron: "35 3 * * *"
   workflow_dispatch:
 
+# A scheduled or dispatched run is its own group: a push landing mid-night
+# must not cancel the nightly whose red is the issue.
 concurrency:
-  group: chain-forge-${{ github.ref }}
+  group: chain-forge-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -42,20 +59,39 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   CARGO_TERM_COLOR: never
+  # Nightly forges dev's HEAD (§9); every other event its own ref.
+  FORGE_REF: ${{ github.event_name == 'schedule' && 'dev' || '' }}
 
 jobs:
-  determinism:
-    name: "chain forge: determinism (${{ matrix.arch }})"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+  scope:
+    name: "chain forge: does the change touch the crypto beneath a chain"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      crypto: ${{ steps.diff.outputs.crypto }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: diff
+        # A pull request's own diff against its base. Fails closed: a diff
+        # that cannot be computed counts as touching the crypto.
+        run: |
+          crypto=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if ! files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"); then
+              crypto=true
+            elif printf '%s\n' "$files" | grep -qE '^rust/shekyl-(crypto-pq|fcmp|tx-builder)/'; then
+              crypto=true
+            fi
+          fi
+          echo "crypto=$crypto" >> "$GITHUB_OUTPUT"
+          echo "the change touches the crypto beneath a chain: $crypto"
+
+  x86_64:
+    name: "chain forge: determinism (x86_64)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
     steps:
       - name: the runner
         # The architecture this leg claims, checked, and the cores its
@@ -63,16 +99,78 @@ jobs:
         run: |
           echo "uname -m: $(uname -m)"
           echo "nproc: $(nproc)"
-          test "$(uname -m)" = "${{ matrix.arch }}"
+          test "$(uname -m)" = "x86_64"
       - uses: actions/checkout@v5
         with:
+          ref: ${{ env.FORGE_REF }}
           submodules: recursive
       - name: install Rust
         uses: ./.github/actions/install-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
-          key: chain-forge-${{ matrix.arch }}
+          key: chain-forge-x86_64
       - name: the seeded primitives give x86_64's answers
         working-directory: rust
-        run: cargo test --locked -p shekyl-chain-forge --test primitives_across_architectures
+        run: cargo test --locked --release -p shekyl-chain-forge --test primitives_across_architectures
+      - name: the small plan, forged in two processes, is the committed chain
+        working-directory: rust
+        run: >-
+          cargo test --locked --release -p shekyl-chain-forge --test determinism --
+          --ignored --nocapture --test-threads=1
+          the_small_plan_forges_the_same_bytes_in_two_processes
+      - name: the forged chain is regtest's alone, and refuses a tampered receipt (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        working-directory: rust
+        run: >-
+          cargo test --locked --release -p shekyl-chain-forge --test forged_chain --
+          --ignored --nocapture
+      - name: each source of randomness, drawn from the OS, moves the chain (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        working-directory: rust
+        run: >-
+          cargo test --locked --release -p shekyl-chain-forge --test determinism --
+          --ignored --nocapture --test-threads=1
+          each_source_drawn_from_the_os_moves_the_chain
+
+  aarch64:
+    name: "chain forge: determinism (aarch64)"
+    needs: scope
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || needs.scope.outputs.crypto == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - name: the runner
+        run: |
+          echo "uname -m: $(uname -m)"
+          echo "nproc: $(nproc)"
+          test "$(uname -m)" = "aarch64"
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.FORGE_REF }}
+          submodules: recursive
+      - name: install Rust
+        uses: ./.github/actions/install-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: chain-forge-aarch64
+      - name: the seeded primitives give x86_64's answers
+        working-directory: rust
+        run: cargo test --locked --release -p shekyl-chain-forge --test primitives_across_architectures
+      - name: the small plan, forged in two processes, is the committed chain
+        working-directory: rust
+        run: >-
+          cargo test --locked --release -p shekyl-chain-forge --test determinism --
+          --ignored --nocapture --test-threads=1
+          the_small_plan_forges_the_same_bytes_in_two_processes
+
+  report-dev-red:
+    needs: [scope, x86_64, aarch64]
+    if: ${{ !cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml
