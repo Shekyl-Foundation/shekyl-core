@@ -1,6 +1,6 @@
 # One hashing actor owns the RandomX caches
 
-**Status:** OPEN — Round 0 RULED 2026-11-10 and 2026-11-11 (Rick): HA-R1…HA-R8, §4. §6 steps 2 and 3 BUILT (as of 2026-11-14): the crate `rust/shekyl-hasher`, and the cutover that moved every consumer onto it and deleted the cache store. Step 4, the close-out, is under way (as of 2026-11-16): the capture with a fork case is taken (§5.10); the floor device's reading is open.
+**Status:** OPEN — Round 0 RULED 2026-11-10 and 2026-11-11 (Rick): HA-R1…HA-R8, §4. §6 steps 2 and 3 BUILT (as of 2026-11-14): the crate `rust/shekyl-hasher`, and the cutover that moved every consumer onto it and deleted the cache store. Step 4, the close-out, is under way (as of 2026-11-16): the capture with a fork case is taken (§5.10); the floor device's reading waits for the alpha.12 testnet to pass about 4,200 blocks (`docs/FOLLOWUPS.md`).
 
 **Ground:** the cutover's own tree, branched from `dev` at `bfdc84a30e` (which includes #1327 and #1359). §2 and §5 describe that tree. §1 and §3 are the findings as they were read at `cf561f79d6`, before the cutover: each names the code it found, which the cutover deleted.
 
@@ -245,7 +245,7 @@ The record is kept with the Foundation's internal captures, dated 2026-11-16: th
 1. **This document.**
 2. **`shekyl-hasher`, with no consumer** (rule 26: a new crate is its own PR) — BUILT (as of 2026-11-12). The actor, the cap, leases, builds, refill and the metric. Its tests are the invariant tests of §8, written against the crate's own API.
 3. **The cutover, one PR, driven by the deletion** — BUILT (as of 2026-11-14). The cache store's slots were shared by every consumer in §2, so any split would have left two owners of caches in one process. The PR deleted the slot API and moved the ingest, chain sync's executor, the miner, `pow`, the node, the replay binary, the pipeline and the test harnesses onto the actor, with `ranked_seeds` and its tests.
-4. **Close-out** — under way (as of 2026-11-16): the fork-case capture is taken (§5.10) and PB-R1's cache rows are restated; the floor device's reading is open. The live RSS capture repeated with a fork case, the floor device's `RssAnon` with three caches resident during a real initial sync, PB-R1's cache rows restated against the cap, and this document moved or made a contract (rule 95).
+4. **Close-out** — under way (as of 2026-11-16): the fork-case capture is taken (§5.10) and PB-R1's cache rows are restated. The floor device's reading waits for a chain a release daemon can sync that is past height 4,161, where a third seed takes effect: the alpha.12 testnet, about six days after its genesis at the 120 s target (Rick, 2026-11-16; `docs/FOLLOWUPS.md`). This document becomes a contract when that reading is in §5.10. The step is: the live RSS capture repeated with a fork case, the floor device's `RssAnon` with three caches resident during a real initial sync, PB-R1's cache rows restated against the cap, and this document moved or made a contract (rule 95).
 
 ## 7. What holds the deletion
 
