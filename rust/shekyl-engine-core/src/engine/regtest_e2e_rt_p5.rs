@@ -65,6 +65,11 @@ const RECORD_PAYLOAD_MAX: usize = shekyl_noise::MAX_RECORD_PLAINTEXT - shekyl_no
 /// A submission's label: the 4.x wire carries every method on `/json_rpc`.
 const SUBMISSION: &str = "json_rpc:tx_submit";
 
+/// `run.json`'s key for the daemon's curve tree reply. The derivation
+/// script reads the file under the same key (`RUN_CURVE_KEY` in
+/// `scripts/bench/rt_p5_classes.py`), and its tests hold the two equal.
+const RUN_CURVE_KEY: &str = "curve";
+
 /// Outputs per fan-out transaction: fifteen recipients and the change.
 const FANOUT_RECIPIENTS: usize = 15;
 
@@ -546,7 +551,7 @@ fn write_outputs(
             "fanout_txs": cell.fanout_txs,
             "shapes": cell.shapes,
             "chain_height": chain_height,
-            "curve": depth,
+            RUN_CURVE_KEY: depth,
         }))
         .expect("encode run.json"),
     )

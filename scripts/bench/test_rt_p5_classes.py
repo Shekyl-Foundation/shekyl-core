@@ -11,6 +11,7 @@
 import itertools
 import os
 import random
+import re
 import sys
 import tempfile
 import unittest
@@ -34,30 +35,75 @@ def brute(records, K):
     return best
 
 
+RUST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "rust")
+
+# The integer-valued right-hand sides the record constants are written
+# with. A form not listed here fails the test by name rather than being
+# guessed at.
+RUST_INTEGER_FORMS = {"u16::MAX as usize": 0xFFFF}
+
+
+def rust_const(path, name):
+    """The right-hand side of `const NAME: T = ...;` in a Rust source file,
+    its whitespace collapsed: the definition read by its shape, so layout,
+    visibility and the code around it do not matter."""
+    with open(os.path.join(RUST, *path), encoding="utf-8") as f:
+        text = f.read()
+    found = re.findall(r"\bconst\s+%s\s*:[^=;]+=\s*(.+?)\s*;" % re.escape(name), text, re.S)
+    if len(found) != 1:
+        raise AssertionError("%s defines %s %d times" % ("/".join(path), name, len(found)))
+    return " ".join(found[0].split())
+
+
+def rust_integer(rhs):
+    """A constant's value from its right-hand side: a literal, or a form in
+    `RUST_INTEGER_FORMS`."""
+    if rhs in RUST_INTEGER_FORMS:
+        return RUST_INTEGER_FORMS[rhs]
+    try:
+        return int(rhs.replace("_", ""), 0)
+    except ValueError:
+        raise AssertionError("no value is known for the Rust expression %r" % rhs)
+
+
 class RecordConstants(unittest.TestCase):
     """The script cannot import the Rust constants, so it reads their
-    definitions. Red edit: set `OCCUPANCY_LEN = 3` in the script."""
+    definitions in `shekyl-noise` and compares the values. Red edit: set
+    `OCCUPANCY_LEN = 3` in the script, and this test fails."""
 
     def test_the_record_constants_are_the_noise_crates(self):
-        here = os.path.dirname(os.path.abspath(__file__))
-        src = os.path.join(here, "..", "..", "rust", "shekyl-noise", "src", "classed.rs")
-        with open(src, encoding="utf-8") as f:
-            text = f.read()
-        self.assertIn("pub const OCCUPANCY_LEN: usize = %d;" % rc.OCCUPANCY_LEN, text)
-        self.assertIn("pub const MAX_RECORD_PLAINTEXT: usize = u16::MAX as usize;", text)
-        self.assertEqual(rc.MAX_RECORD_PLAINTEXT, 0xFFFF)
+        classed = ("shekyl-noise", "src", "classed.rs")
+        self.assertEqual(rust_integer(rust_const(classed, "OCCUPANCY_LEN")), rc.OCCUPANCY_LEN)
+        self.assertEqual(rust_integer(rust_const(classed, "MAX_RECORD_PLAINTEXT")),
+                         rc.MAX_RECORD_PLAINTEXT)
+
+    def test_a_constant_is_read_whatever_its_layout(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "k.rs"), "w", encoding="utf-8") as f:
+                f.write("pub(crate)  const\n    OCCUPANCY_LEN :\n usize =\n 0x2 ;\n")
+            here = os.path.relpath(d, RUST).split(os.sep) + ["k.rs"]
+            self.assertEqual(rust_integer(rust_const(here, "OCCUPANCY_LEN")), 2)
+
+    def test_an_unknown_form_is_refused_by_name(self):
+        with self.assertRaisesRegex(AssertionError, "u32::MAX"):
+            rust_integer("u32::MAX as usize")
 
 
 class RunKeys(unittest.TestCase):
-    """run.json's curve key is the instrument's. Red edit: set
-    `RUN_CURVE_KEY = "curve_tree_info"` in the script."""
+    """run.json's curve key is the instrument's: the instrument writes the
+    file under its `RUN_CURVE_KEY`, and the script reads it under its own.
+    Red edit: set `RUN_CURVE_KEY = "curve_tree_info"` in the script, and
+    this test fails."""
+
+    INSTRUMENT = ("shekyl-engine-core", "src", "engine", "regtest_e2e_rt_p5.rs")
 
     def test_the_curve_key_is_the_instruments(self):
-        here = os.path.dirname(os.path.abspath(__file__))
-        src = os.path.join(here, "..", "..", "rust", "shekyl-engine-core", "src", "engine",
-                           "regtest_e2e_rt_p5.rs")
-        with open(src, encoding="utf-8") as f:
-            self.assertIn('"%s": depth,' % rc.RUN_CURVE_KEY, f.read())
+        self.assertEqual(rust_const(self.INSTRUMENT, "RUN_CURVE_KEY"),
+                         '"%s"' % rc.RUN_CURVE_KEY)
+
+    def test_the_instrument_writes_run_json_under_its_constant(self):
+        with open(os.path.join(RUST, *self.INSTRUMENT), encoding="utf-8") as f:
+            self.assertRegex(f.read(), r"\bRUN_CURVE_KEY\s*:\s*\w+\s*,")
 
 
 class RecordSplit(unittest.TestCase):
