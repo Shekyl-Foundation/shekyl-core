@@ -12,6 +12,12 @@ libfuzzer-sys = "0.4"
 shekyl-fcmp = { path = ".." }
 shekyl-curve-generators = { path = "../../shekyl-curve-generators" }
 shekyl-types = { path = "../../shekyl-types" }
+# `fuzz_block_header_tree_root` builds a real output: its secrets from the
+# production derivation (`shekyl-crypto-pq`), its points with the curve crate
+# `shekyl-fcmp` itself uses, at the same version and features. Both are
+# already in this crate's tree through `shekyl-fcmp`.
+shekyl-crypto-pq = { path = "../../shekyl-crypto-pq" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 [[bin]]
 name = "fuzz_fcmp_proof_deserialize"
