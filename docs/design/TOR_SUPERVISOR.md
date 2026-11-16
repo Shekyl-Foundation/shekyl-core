@@ -1040,7 +1040,10 @@ impaired at once and no check runs. An on-demand check confirms no
 republish: only a republish's own round does. Whenever a want waits and no
 check starts, the next chance is due: a check in hand that ends with no
 fact (the probe alone decided, or the check was dropped) leaves the want
-asked again once the spacing from that check's start has passed.
+asked again once the spacing from that check's start has passed. A want whose
+own check ends without a fact waits out the reading wait: that check began
+the spacing, so the next could rarely answer in time. A later failure's want
+asks again.
 
 **When the check cannot run.** While the clock is named, or the latest
 round was refused, the probe stands down (§4.5), and the manager cannot
