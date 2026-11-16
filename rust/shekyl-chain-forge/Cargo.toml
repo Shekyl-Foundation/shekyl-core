@@ -48,6 +48,8 @@ shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
 shekyl-hasher = { path = "../shekyl-hasher" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# The identity test's lock 2: another network's table genesis.
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }
 tempfile = { workspace = true }
 rand = "0.8"

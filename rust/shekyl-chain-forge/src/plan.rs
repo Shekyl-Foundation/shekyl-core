@@ -35,6 +35,14 @@ pub struct Plan {
     pub fixed_difficulty: u64,
     /// The settlement schedule.
     pub schedule: Schedule,
+    /// Seconds between consecutive blocks' timestamps, from regtest's
+    /// genesis. A fixed-difficulty chain's rules read heights, not times, so
+    /// the spacing moves no verdict; it is written because it moves every
+    /// block's bytes. A short spacing keeps a chain's timestamps behind any
+    /// real clock: a trace is replayed under the node's own clock, which
+    /// refuses a block stamped past it (CEN-C1), so a chain stamped ahead of
+    /// the wall clock would replay or not depending on when it was forged.
+    pub block_seconds: u64,
     /// The steps, in order.
     #[serde(rename = "step")]
     pub steps: Vec<Step>,
@@ -143,6 +151,9 @@ pub enum PlanFault {
     /// A network other than regtest.
     #[error("plan: a forged chain is regtest's, not {0:?}'s")]
     Network(String),
+    /// A block spacing of zero.
+    #[error("plan: block_seconds is at least 1")]
+    BlockSeconds,
     /// A difficulty this increment does not forge.
     #[error("plan: fixed difficulty {0}; only 1 is forged until the LWMA chain")]
     Difficulty(u64),
@@ -168,6 +179,9 @@ impl Plan {
         }
         if plan.fixed_difficulty != 1 {
             return Err(PlanFault::Difficulty(plan.fixed_difficulty));
+        }
+        if plan.block_seconds == 0 {
+            return Err(PlanFault::BlockSeconds);
         }
         if plan.steps.is_empty() {
             return Err(PlanFault::Empty);
@@ -200,6 +214,7 @@ chain = "small"
 seed = "0000000000000000000000000000000000000000000000000000000000000001"
 network = "regtest"
 fixed_difficulty = 1
+block_seconds = 1
 schedule = { settlement_epoch_blocks = "settled", reorg_cap_blocks = 10 }
 
 [[step]]
@@ -272,5 +287,9 @@ depth = 2
         ));
         assert!(Plan::parse(&PLAN.replace("blocks = 3", "blocks = 3\nextra = 1")).is_err());
         assert!(Plan::parse(&PLAN.replace("do = \"mine\"", "do = \"smelt\"")).is_err());
+        assert!(matches!(
+            Plan::parse(&PLAN.replace("block_seconds = 1", "block_seconds = 0")),
+            Err(PlanFault::BlockSeconds)
+        ));
     }
 }

@@ -29,6 +29,7 @@ chain = "small"
 seed = "4caafe22ad997dbcdf53d5a74394c7d9f594482231d080f2e43bb364170cdf9d"
 network = "regtest"
 fixed_difficulty = 1
+block_seconds = 1
 schedule = { settlement_epoch_blocks = "settled", reorg_cap_blocks = 10 }
 
 # The regtest miner's coinbases mature (block 0's pays the table's

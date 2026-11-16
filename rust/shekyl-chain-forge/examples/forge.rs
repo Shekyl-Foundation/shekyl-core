@@ -21,6 +21,10 @@
 
 #![deny(unsafe_code)]
 
+#[allow(
+    dead_code,
+    reason = "the runnable uses the executor's forging; the tests use the rest"
+)]
 #[path = "../executor/mod.rs"]
 mod executor;
 

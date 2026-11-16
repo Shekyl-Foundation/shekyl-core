@@ -177,7 +177,8 @@ impl DriverWitness {
         self.draws.draw_seed(h)
     }
 
-    fn commitment(&self, h: BlockHeight) -> DrawCommitment {
+    /// The draw commitment the block at `h` carries in its coinbase.
+    pub fn commitment(&self, h: BlockHeight) -> DrawCommitment {
         DrawCommitment::from_bytes(draw_commit(&self.public, &self.seed(h)))
     }
 }

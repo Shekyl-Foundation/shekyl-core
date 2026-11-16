@@ -96,7 +96,7 @@ pub struct Forged {
 /// What a forging came to.
 pub enum Outcome {
     /// The plan ran to its end and every file is written.
-    Forged(Forged),
+    Forged(Box<Forged>),
     /// A block differed from the committed ledger
     /// ([`Options::stop_at_difference`]): the ledger up to it, and where.
     Differed {
@@ -152,7 +152,44 @@ pub async fn forge(
     forge
         .finish(plan, plan_ref, out, hashers)
         .await
-        .map(Outcome::Forged)
+        .map(|forged| Outcome::Forged(Box::new(forged)))
+}
+
+/// A body the plan built, with what re-signing it takes
+/// ([`Spender::signed_under`]): the identity test's proof leg re-signs one
+/// of each kind under another network's id.
+#[derive(Clone, Debug)]
+pub struct Built {
+    /// The body as listed.
+    pub body: shekyl_wire::Transaction,
+    /// The height its block connected at.
+    pub connecting: BlockHeight,
+    /// What it is.
+    pub kind: BuiltKind,
+}
+
+/// What a [`Built`] body is.
+#[derive(Clone, Debug)]
+pub enum BuiltKind {
+    /// A spend of the miner's coinbases at these heights.
+    Spend {
+        /// The coinbases spent.
+        coinbases: Vec<BlockHeight>,
+    },
+    /// A coinbase spend carrying persona `slot`'s compact join of `shards`.
+    Join {
+        /// The coinbase spent.
+        coinbase: BlockHeight,
+        /// The persona.
+        slot: u32,
+        /// The shards joined.
+        shards: Vec<u64>,
+    },
+    /// Persona `slot`'s emission claim.
+    Claim {
+        /// The persona.
+        slot: u32,
+    },
 }
 
 /// A persona the plan joined.
@@ -197,6 +234,7 @@ pub struct Forge {
     schedule: SettlementSchedule,
     stop: Option<BlocksTxt>,
     stopped: Option<Difference>,
+    built: Vec<Built>,
 }
 
 impl Forge {
@@ -231,6 +269,9 @@ impl Forge {
         )?;
         let (scenario, genesis) =
             Scenario::open_regtest_mined(&format!("forge-{}", plan.chain), FreeHash, capped).await;
+        let spacing = std::num::NonZeroU64::new(plan.block_seconds)
+            .ok_or_else(|| ForgeFault::Plan("block_seconds is at least 1".into()))?;
+        scenario.space_blocks(spacing);
         let mut forge = Self {
             scenario: Some(scenario),
             chain: vec![genesis],
@@ -250,6 +291,7 @@ impl Forge {
             schedule: capped.settlement(),
             stop: options.stop_at_difference,
             stopped: None,
+            built: Vec::new(),
         };
         forge.write_new()?;
         Ok(forge)
@@ -288,6 +330,59 @@ impl Forge {
         self.scenario
             .as_mut()
             .expect("the scenario is home between steps")
+    }
+
+    /// The chain from block 0, each block at its height's place.
+    #[must_use]
+    pub fn chain(&self) -> &[Mined] {
+        &self.chain
+    }
+
+    /// The rules the chain runs.
+    #[must_use]
+    pub const fn rules(&self) -> ChainRules {
+        self.rules
+    }
+
+    /// Every body the plan built, in the order it built them.
+    #[must_use]
+    pub fn built(&self) -> &[Built] {
+        &self.built
+    }
+
+    /// Persona `slot`, as the plan joined it.
+    #[must_use]
+    pub fn persona(&self, slot: u32) -> Option<&Persona> {
+        self.personas.get(&slot).map(|joined| &joined.persona)
+    }
+
+    /// The live scenario beside persona `slot`: a caller that drives the
+    /// chain while the persona signs holds both.
+    pub fn scenario_with(&mut self, slot: u32) -> (&mut Scenario<FreeHash>, Option<&Persona>) {
+        (
+            self.scenario
+                .as_mut()
+                .expect("the scenario is home between steps"),
+            self.personas.get(&slot).map(|joined| &joined.persona),
+        )
+    }
+
+    /// The witness the plan's blocks commit their draws to: its key and its
+    /// draws from the plan's seed.
+    #[must_use]
+    pub fn witness(&self) -> DriverWitness {
+        let (key_ed, key_fn) = self.seeds.witness_key();
+        DriverWitness::keyed(
+            &key_ed,
+            &key_fn,
+            Box::new(PlanDraws(Arc::clone(&self.seeds))),
+        )
+    }
+
+    /// Stop the scenario without finishing the chain: a forging a test held
+    /// open and is done with.
+    pub async fn abandon(mut self) {
+        self.scenario.take().expect("home").close().await;
     }
 
     /// The height the next block connects at.
@@ -404,6 +499,11 @@ impl Forge {
         let (spend, _) = spender
             .drawing(seeds)
             .spend_coinbases(wallet, &heights, connecting, FEE);
+        self.built.push(Built {
+            body: spend.clone(),
+            connecting,
+            kind: BuiltKind::Spend { coinbases: heights },
+        });
         let block = self
             .scenario()
             .mine_listing(vec![spend])
@@ -490,6 +590,15 @@ impl Forge {
         );
         let backing_key = funding.prefix.outputs[0].key;
         let fee_key = funding.prefix.outputs[1].key;
+        self.built.push(Built {
+            body: funding.clone(),
+            connecting: join_height,
+            kind: BuiltKind::Join {
+                coinbase,
+                slot,
+                shards: shards.to_vec(),
+            },
+        });
         let block = self
             .scenario()
             .mine_listing(vec![funding])
@@ -525,12 +634,7 @@ impl Forge {
             .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
         let served = SettlementEpoch::from_raw(joined.join_epoch.to_raw() + 1);
         let until = BlockHeight::from_raw((served.to_raw() + 1) * self.schedule.blocks().get());
-        let (key_ed, key_fn) = self.seeds.witness_key();
-        let witness = DriverWitness::keyed(
-            &key_ed,
-            &key_fn,
-            Box::new(PlanDraws(Arc::clone(&self.seeds))),
-        );
+        let witness = self.witness();
         let scenario = self.scenario.take().expect("home");
         let chain = std::mem::take(&mut self.chain);
         let (scenario, chain) =
@@ -612,6 +716,11 @@ impl Forge {
             },
         )
         .await;
+        self.built.push(Built {
+            body: claim.clone(),
+            connecting,
+            kind: BuiltKind::Claim { slot },
+        });
         let block = self
             .scenario()
             .mine_listing(vec![claim])
@@ -706,6 +815,7 @@ impl Forge {
                 settlement_epoch_blocks: self.schedule.blocks().get(),
                 reorg_cap_blocks: plan.schedule.reorg_cap_blocks,
                 fixed_difficulty: Some(plan.fixed_difficulty),
+                block_seconds: plan.block_seconds,
             },
             corpus_format_version: CORPUS_FORMAT_VERSION,
             blocks: u64::try_from(self.ledger.lines().len()).expect("fits"),

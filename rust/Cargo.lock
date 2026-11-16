@@ -3833,6 +3833,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
+ "shekyl-genesis-tool",
  "shekyl-harness-spender",
  "shekyl-hash-budget",
  "shekyl-hasher",

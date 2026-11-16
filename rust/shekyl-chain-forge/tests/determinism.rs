@@ -30,6 +30,10 @@
 //! The forgings are minutes of proofs, so every test here is ignored in
 //! the workspace run and run by `chain-forge.yml`, in release.
 
+#[allow(
+    dead_code,
+    reason = "each test-kind target uses part of the executor; this one forges in child processes"
+)]
 #[path = "../executor/mod.rs"]
 mod executor;
 

@@ -45,6 +45,8 @@ pub struct ScheduleRecord {
     pub reorg_cap_blocks: u64,
     /// The fixed difficulty; `None` for live LWMA.
     pub fixed_difficulty: Option<u64>,
+    /// Seconds between consecutive blocks' timestamps.
+    pub block_seconds: u64,
 }
 
 /// One indexed event: where a consumer finds it by name.
@@ -181,6 +183,7 @@ mod tests {
                 settlement_epoch_blocks: 300,
                 reorg_cap_blocks: 10,
                 fixed_difficulty: Some(1),
+                block_seconds: 1,
             },
             corpus_format_version: 4,
             blocks: 3,
