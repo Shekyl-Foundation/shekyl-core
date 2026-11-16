@@ -36,11 +36,17 @@ class Results:
         self.passed = 0
 
     def expect(
-        self, root: Path, text: str, want: int, why: str, says: str = ""
+        self, root: Path, text: str, want: int, why: str, says: str = "",
+        *, absent: tuple[str, ...] = (),
     ) -> None:
         code, out = verdict(root, text)
-        if code != want or (says and says not in out):
-            wanted = f"exit {want}" + (f" naming {says!r}" if says else "")
+        leaked = [item for item in absent if item in out]
+        if code != want or (says and says not in out) or leaked:
+            wanted = f"exit {want}"
+            if says:
+                wanted += f" naming {says!r}"
+            if leaked:
+                wanted += f" without {leaked!r}"
             self.failures.append(f"{why}: wanted {wanted}, got {code}\n{out}")
         else:
             self.passed += 1
@@ -1215,8 +1221,9 @@ def scenario_dispositions(results: Results) -> None:
 
 def scenario_full_ids(results: Results) -> None:
     """Every commit id the ledger writes is the full 40 hex and names a
-    commit (Rick, 2026-11-15). A parent ledger written before the rule is
-    still read."""
+    commit (Rick, 2026-11-15). A short or upper-case spelling that still
+    names a commit stays on its row. A parent ledger written before the
+    rule is read from HEAD^1."""
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
         rev = init_tree(root)
@@ -1232,33 +1239,100 @@ def scenario_full_ids(results: Results) -> None:
         results.expect(
             root, document(path_set(body=heard(short)), stale), 1,
             "a short through is refused, though it resolves", "written in full",
+            absent=("needs stale_through", "have not been heard"),
         )
         results.expect(
-            root,
-            document(path_set(body=heard(c3)), constant("control", "stale", c1, body=stale_body(short))),
-            1, "a short stale_since is refused", "stale_since is not a commit id written in full",
+            root, document(
+                path_set(body=cleared(short)), constant("control", "current", c1),
+            ), 1,
+            "a short cleared id is refused, and the review point still moves",
+            "written in full", absent=("says current",),
         )
         results.expect(
-            root,
-            document(path_set(body=heard(c3)), constant("control", "stale", c1[:9], body=stale_body(c3))),
-            1, "a short capture_rev is refused", "capture_rev is not a commit id written in full",
+            root, document(
+                path_set(body=heard(c3)),
+                constant("control", "stale", c1, body=stale_body(short)),
+            ), 1, "a short stale_since is refused",
+            "stale_since is not a commit id written in full",
+            absent=("is not a commit in this repository",),
+        )
+        results.expect(
+            root, document(
+                path_set(body=heard(c3)),
+                constant("control", "stale", c1[:9], body=stale_body(c3)),
+            ), 1, "a short capture_rev is refused",
+            "capture_rev is not a commit id written in full",
+            absent=("is not a commit in this repository",),
         )
         results.expect(
             root, document(path_set(body=heard(c3.upper())), stale), 1,
-            "upper-case hex is not the id", "written in full",
+            "upper-case hex is not the id, and the commit is still heard",
+            "written in full", absent=("needs stale_through",),
         )
         unknown = "0123456789abcdef0123456789abcdef01234567"
         results.expect(
             root, document(path_set(body=heard(unknown)), stale), 1,
             "a full id that names no commit is refused", "not a commit",
         )
-        # A parent ledger in the old short form is history: the rule is the
-        # ledger under review's, and the parent is still read.
-        write(root, LEDGER, document(path_set(body=heard(short)), constant("control", "stale", c1[:10], body=stale_body(short))))
+        # The abbreviated ledger has to be HEAD^1. A commit that only adds
+        # it leaves HEAD^1 as the commit before the ledger existed, and the
+        # parent read returns quietly.
+        write(root, LEDGER, document(
+            path_set(body=heard(short)),
+            constant("control", "stale", c1[:10], body=stale_body(short)),
+        ))
         commit(root, "the parent ledger, short ids", ledger=True)
+        commit(root, "the pull request's commit")
         results.expect(
             root, document(path_set(body=heard(c3)), stale), 0,
             "a full-id ledger over a short-id parent passes",
+        )
+        results.expect(
+            root, document(
+                path_set("cold", '["src/cold"]'),
+                constant("other", "current", c1, set_id="cold"),
+            ), 1,
+            "a short-id parent is read: dropping its stale constant is refused",
+            "is gone",
+        )
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        sh(root, "init", "-q", "-b", "main")
+        write(root, "src/consts.txt", "LIMIT = 4\n")
+        write(root, "src/hot/a.rs", "fn a() {}\n")
+        write(root, "toolchain.toml", 'channel = "1.0"\n')
+        write(root, "docs/design/TRACKED.md", TRACKED)
+        c1 = commit(root, "c1: the measured tree")
+        write(root, "docs/benchmarks/cap.txt", f"# git_rev={c1}\nvalue=1\n")
+        commit(root, "capture lands")
+        fresh = constant("control", "current", c1)
+        write(root, "toolchain.toml", 'channel = "2.0"\n')
+        bump = commit(root, "bump: the pinned toolchain moves")
+        ack = (
+            f'[[toolchain]]\ncommit = "{bump[:10]}"\n'
+            'note = "codegen may differ; allocation path re-read"\n\n'
+        )
+        results.expect(
+            root, document(path_set(), fresh, toolchain=ack), 1,
+            "a short toolchain commit is refused, and the bump stays acknowledged",
+            "written in full", absent=("Add a [[toolchain]] entry",),
+        )
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        rev = init_tree(root)
+        c1 = rev["c1"]
+        control = constant("control", "current", c1)
+        write(root, LEDGER, document(path_set(), control + estimated("guess")))
+        commit(root, "the ledger as the base branch holds it", ledger=True)
+        commit(root, "the pull request's commit")
+        write(root, "docs/benchmarks/new_cap.txt", f"# git_rev={c1}\nvalue=51\n")
+        commit(root, "the measurement lands")
+        results.expect(
+            root, document(path_set(), control + retired(
+                "guess", c1[:10], capture="docs/benchmarks/new_cap.txt",
+            )), 1,
+            "a short retired capture_rev is refused, and the estimate stays retired",
+            "written in full", absent=("is gone",),
         )
 
 
