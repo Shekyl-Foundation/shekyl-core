@@ -761,13 +761,14 @@ or not its round is still open: an open round is neither a success nor a
 failure, and its refusal no longer stands. A refusal names a key this
 publication still holds. The same blinded id seen again after a drop is a
 new key, so a refusal left on the old one would stand with no round that
-can clear it. `ADD_ONION` retires the publication the same way: the core
-forgets the rounds open then and every refusal of those keys, and the next
+can clear it. `ADD_ONION` retires the publication the same way: the
+driver starts the next publication's rounds afresh, so the core forgets
+the rounds open then and every refusal of those keys, and the next
 publication's own rounds note a refusal again if the directories refuse
-those. The core keys rounds by the order of first sight (`DescriptorKey`), which
-continues across publications, since the driver starts the next
-publication's rounds afresh.
-Tor's descriptor ids stay in the control layer and the directory check.
+them. The core keys rounds by the order of first sight (`DescriptorKey`),
+which continues across publications, so no mark of one publication is read
+as another's. Tor's descriptor ids stay in the control layer and the
+directory check.
 
 **A round that never ends is counted, not hidden.** A descriptor's round
 still open five minutes after it began (uploads with neither `UPLOADED` nor

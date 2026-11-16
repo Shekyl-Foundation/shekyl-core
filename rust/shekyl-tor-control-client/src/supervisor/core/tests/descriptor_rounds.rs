@@ -126,8 +126,8 @@ fn a_refusal_of_one_descriptor_stands_through_the_others_acceptance() {
 /// with it.** The round is already closed, so there is no track to drop
 /// and nothing to judge. The key will not be accepted again, including
 /// when the same blinded id is seen under a new key. The sibling's
-/// refusal stays. Fails if `uploads_accepted` returns early when the
-/// descriptor has no open round, or if clearing one key clears the set.
+/// refusal stays. Fails if `round_forgotten` keeps the descriptor's
+/// refusal, or if clearing one key clears the set.
 #[test]
 fn a_dropped_descriptors_closed_refusal_leaves_with_it() {
     let mut core = published();
