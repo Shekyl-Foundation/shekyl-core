@@ -434,7 +434,10 @@ impl Drive {
             return Some(vec![Input::ForwardAbsent]);
         };
         let service = self.onion.service_id().clone();
-        self.rounds = Some(UploadRounds::new(service.clone()));
+        self.rounds = Some(match &self.rounds {
+            Some(previous) => previous.next_publication(service.clone()),
+            None => UploadRounds::new(service.clone()),
+        });
         self.service = Some(service);
         let onion = Arc::clone(&self.onion);
         let virtual_port = self.virtual_port;
@@ -488,16 +491,17 @@ impl Drive {
     /// control, or no service yet, is no descriptor; an ask that fails is a
     /// process fault.
     fn send_check(&self, number: u64) -> Option<Vec<Input>> {
-        // The list and the open-upload reading are one moment. The round
-        // may end while the descriptor below is being read, and the check
-        // keeps this reading rather than the live round.
+        // The list and the open-upload reading are one moment: which rounds
+        // are young chooses what the list holds, and the check keeps this
+        // reading rather than the live rounds, which may end while the
+        // descriptor below is being read.
         let open_uploads = self.core.open_uploads(self.now());
         let fetches: Vec<DirectoryFetch> = self
             .rounds
             .as_ref()
             .map(|rounds| {
                 rounds
-                    .directories()
+                    .directories(open_uploads.young())
                     .into_iter()
                     .map(|upload| DirectoryFetch {
                         upload,
