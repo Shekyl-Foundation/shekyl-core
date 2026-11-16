@@ -120,6 +120,10 @@ fn run(config: config::Config) -> ExitCode {
     match runtime.block_on(serve::run(config, key, |line| println!("{line}"))) {
         Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
+            // What ended the tunnel goes to its log as well as to stderr:
+            // an operator reading the log after a restart finds the
+            // revocation there, at the default level.
+            tracing::error!(target: "global", "{why}");
             eprintln!("{why}");
             ExitCode::FAILURE
         }

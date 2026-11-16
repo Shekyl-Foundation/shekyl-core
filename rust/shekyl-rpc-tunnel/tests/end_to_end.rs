@@ -202,7 +202,9 @@ fn consumer_call(listen: &str, method: &str) -> (u16, String) {
 /// `Channel::client_remove`, and the tunnel keeps being served after the
 /// revocation; make the pool report `NotEnrolled` after a held session
 /// (`Pool::open_session`), and the refusal does not name the revocation
-/// (the tunnel ends on it, and the next call finds no listener). The
+/// (the tunnel ends on it, and the next call finds no listener); drop the
+/// `tracing::error!` in the tunnel's `main`, and its log does not name the
+/// revocation. The
 /// submission's padding is `shekyl-daemon-rpc`'s submission test.
 #[test]
 fn enrol_dial_call_revoke_and_a_refused_call_after() {
@@ -392,6 +394,11 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
             .contains("The node revoked this client's enrolment."),
         "{}",
         tunnel_run.stderr()
+    );
+    let log = std::fs::read_to_string(dir.path().join("tunnel.log")).unwrap_or_default();
+    assert!(
+        log.contains("The node revoked this client's enrolment."),
+        "the tunnel's log names the revocation at its default level: {log}"
     );
     let listed = enrol::run(&cli, &Enrol::ClientList).expect("rpc client list");
     assert!(!listed.contains(&fingerprint), "{listed}");
