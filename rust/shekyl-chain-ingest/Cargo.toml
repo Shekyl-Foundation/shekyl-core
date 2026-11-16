@@ -102,6 +102,10 @@ harness = [
 # so no build that ships is a second producer.
 forge = [
     "pipeline",
+    # The bundle producer's task, and its ring's draws from the forge's plan
+    # (CHAIN_FORGE.md §4, the producer audit).
+    "producer",
+    "shekyl-bundle-producer/seeded-rng",
     # `harness`'s edges, named here: no feature of this crate may enable
     # its own TEST_ONLY `harness` (the gate's second limb), and a forward to
     # another crate's TEST_ONLY feature from this TEST_ONLY one is the

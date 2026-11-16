@@ -260,6 +260,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
     (
+        "shekyl-bundle-producer",
+        "seeded-rng",
+    ): "WitnessRing::drawing and RingDraws: a ring whose witness keys, draw "
+    "seeds and bundle signatures come from a caller's draws, not the OS. The "
+    "chain forge's producer plan holds a produced bundle's bytes to its "
+    "plan's seed with it (CHAIN_FORGE.md §4, the producer audit); every "
+    "node's ring is WitnessRing::new's. Forwarded by shekyl-chain-ingest's "
+    "TEST_ONLY forge, whose one enabler is shekyl-chain-forge's dev edge",
+    (
         "shekyl-chain-ingest",
         "forge",
     ): "the scenario driver as public library code for the chain forge "

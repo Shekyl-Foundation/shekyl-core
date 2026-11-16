@@ -152,19 +152,46 @@ pub(crate) fn recorded_at(snap: &ReadSnapshot<'_>, h: BlockHeight) -> Option<Rec
 }
 
 /// Run the producer until `stop` reads true or the tip watch closes
-/// (module docs).
+/// (module docs). Its read plans and start delays draw from the OS.
 pub async fn run(
     parts: ProducerParts,
-    mut tips: watch::Receiver<TipChanged>,
-    mut stop: watch::Receiver<bool>,
+    tips: watch::Receiver<TipChanged>,
+    stop: watch::Receiver<bool>,
     seat: ProducerSeat,
     progress: watch::Sender<ProducerProgress>,
 ) {
     use rand::SeedableRng;
     let rng = rand::rngs::StdRng::from_entropy();
+    run_with(parts, tips, stop, seat, progress, Box::new(rng)).await;
+}
+
+/// [`run`] with its read plans and start delays drawn from `rng`: the chain
+/// forge's producer plan (`CHAIN_FORGE.md` §4, the producer audit). Only
+/// under the TEST_ONLY `forge` feature; every node's producer is [`run`]'s.
+#[cfg(feature = "forge")]
+pub async fn run_drawing(
+    parts: ProducerParts,
+    tips: watch::Receiver<TipChanged>,
+    stop: watch::Receiver<bool>,
+    seat: ProducerSeat,
+    progress: watch::Sender<ProducerProgress>,
+    rng: Box<dyn rand::RngCore + Send>,
+) {
+    run_with(parts, tips, stop, seat, progress, rng).await;
+}
+
+/// [`run`]'s body, over the RNG its caller chose.
+async fn run_with(
+    parts: ProducerParts,
+    mut tips: watch::Receiver<TipChanged>,
+    mut stop: watch::Receiver<bool>,
+    seat: ProducerSeat,
+    progress: watch::Sender<ProducerProgress>,
+    rng: Box<dyn rand::RngCore + Send>,
+) {
     let mut producer = Producer::new(
         Arc::clone(&seat.witness),
-        Box::new(rng),
+        rng,
         shekyl_bundle_producer::read::READS_AT_ONCE,
         seat.start_spread,
     );

@@ -67,6 +67,8 @@ pub use producer::{
     DrawTarget, DueRead, Filing, Learn, Lost, Observed, Producer, Recorded, Targets,
     TipPublication, Window,
 };
+#[cfg(feature = "seeded-rng")]
+pub use ring::RingDraws;
 pub use ring::{DrawFailed, WitnessRing};
 
 use std::time::Duration;
