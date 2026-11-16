@@ -1186,6 +1186,98 @@ mod check_workflows {
         .expect("with-secrets proof verifies");
         assert_eq!(verified.len(), 2);
     }
+
+    /// What `get_tx_proof` reads for an OUTBOUND proof: the fixture's
+    /// ledger holding `retained` (if any) under the fixture's txid, a key
+    /// actor for another wallet (OUTBOUND never signs in the actor), and
+    /// that other wallet's address as the primary, so the fixture's own
+    /// address is a counterparty.
+    async fn outbound_from_ledger(
+        fx: &CheckFixture,
+        retained: Option<shekyl_engine_state::TxSecretKey>,
+    ) -> Result<GeneratedTxProof, ProofsError> {
+        const SENDER_SEED: [u8; 32] = [0x5C; 32];
+        let (_, blob) =
+            shekyl_crypto_pq::account::account_from_seed(&SENDER_SEED, Network::Testnet)
+                .expect("the sender's account derives");
+        let key = KeyEngineHandle::spawn(blob);
+        let sender = LocalKeys::from_test_seed(SENDER_SEED);
+        let ledger = LocalLedger::from_test_blocks(Vec::new());
+        if let Some(retained) = retained {
+            ledger
+                .write()
+                .ledger
+                .record_retained_tx_key(fx.txid, retained);
+        }
+        let ctx = ProofsCtx {
+            key: &key,
+            daemon: &fx.rpc,
+            ledger: &ledger,
+            primary_address: sender.keys.to_address(Network::Testnet),
+        };
+        get_tx_proof(&ctx, TxHash::from_bytes(fx.txid), &fx.address, MSG).await
+    }
+
+    /// The OUTBOUND ledger path end to end: the key the sender retained,
+    /// stored and opened again, proves both outputs, and the proof checks.
+    #[tokio::test]
+    async fn an_outbound_proof_from_the_retained_key_checks() {
+        let fx = make_fixture(vec![]);
+        let retained = shekyl_engine_state::TxSecretKey::new(
+            shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET).store(),
+        );
+        let generated = outbound_from_ledger(&fx, Some(retained))
+            .await
+            .expect("the retained key proves the payment");
+        assert_eq!(generated.direction, TxProofDirection::Outbound);
+        let checked = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &generated.proof)
+            .await
+            .expect("check succeeds");
+        let CheckedTxProof::Valid {
+            direction, outputs, ..
+        } = checked
+        else {
+            panic!("expected Valid, got Invalid");
+        };
+        assert_eq!(direction, TxProofDirection::Outbound);
+        assert_eq!(outputs.len(), 2);
+    }
+
+    /// A retained record that is not a canonical scalar loads with the
+    /// ledger but does not open, and the proof is refused by name.
+    #[tokio::test]
+    async fn a_retained_key_that_does_not_open_is_refused() {
+        let fx = make_fixture(vec![]);
+        // The record's bytes, read as the ledger reads any record (its
+        // serialized form is the 32 bytes); only `TxKey::store` writes one in
+        // code.
+        let unreadable: shekyl_engine_state::TxSecretKey =
+            serde_json::from_value(serde_json::json!([0xFFu8; 32].to_vec()))
+                .expect("the record reads");
+        let err = outbound_from_ledger(&fx, Some(unreadable))
+            .await
+            .expect_err("a record that does not open proves nothing");
+        assert!(
+            matches!(
+                err,
+                ProofsError::TxSecretUnreadable(StoredKeyError::NotCanonical)
+            ),
+            "expected TxSecretUnreadable, got {err:?}"
+        );
+    }
+
+    /// No retained record: this wallet did not send the transaction.
+    #[tokio::test]
+    async fn an_outbound_proof_with_no_retained_key_is_unavailable() {
+        let fx = make_fixture(vec![]);
+        let err = outbound_from_ledger(&fx, None)
+            .await
+            .expect_err("no retained key proves nothing");
+        assert!(
+            matches!(err, ProofsError::TxSecretUnavailable),
+            "expected TxSecretUnavailable, got {err:?}"
+        );
+    }
 }
 
 /// **`confirmations` is carried, not recomputed.**

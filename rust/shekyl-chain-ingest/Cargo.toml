@@ -51,6 +51,8 @@ pipeline = [
     "dep:shekyl-miner",
     "dep:shekyl-mempool",
     "dep:shekyl-block-template",
+    # The template's coinbase key (`TxKey::random`, R-21).
+    "dep:shekyl-crypto-pq",
     "dep:shekyl-chain-sync",
     "dep:rand",
     "dep:zeroize",

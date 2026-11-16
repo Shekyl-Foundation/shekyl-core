@@ -683,6 +683,34 @@ mod tests {
         assert_eq!(opened.public(), key.public());
     }
 
+    #[test]
+    fn tx_secret_key_reads_the_record_bytes_it_always_had() {
+        // The wallet record's bytes for one retained key, as written before
+        // the key was typed (rule 42: the shape did not change, so no
+        // version bump): a varint length of 32, then the canonical scalar.
+        // `[7; 32]` is canonical (its top byte is below ℓ's), so the stored
+        // scalar is these bytes as written.
+        const SCALAR: [u8; 32] = [7; 32];
+        let mut blob = vec![32u8];
+        blob.extend_from_slice(&SCALAR);
+        let read: TxSecretKey = postcard::from_bytes(&blob).expect("the record reads");
+        assert_eq!(postcard::to_allocvec(&read).expect("serialize"), blob);
+        let opened = TxKey::open(read.stored()).expect("the record opens");
+        assert_eq!(opened.public(), TxKey::seeded(SCALAR).public());
+    }
+
+    #[test]
+    fn a_record_that_is_not_a_canonical_scalar_reads_but_does_not_open() {
+        // A record loads whole; the key it holds is refused where it is used.
+        let mut blob = vec![32u8];
+        blob.extend_from_slice(&[0xFF; 32]);
+        let read: TxSecretKey = postcard::from_bytes(&blob).expect("the record reads");
+        assert_eq!(
+            TxKey::open(read.stored()).err(),
+            Some(shekyl_crypto_pq::tx_key::StoredKeyError::NotCanonical)
+        );
+    }
+
     proptest! {
         // Arbitrary tx_notes + scanned_pool_txs sizes.
         // We deliberately keep tx_keys out of the proptest: TxSecretKey
