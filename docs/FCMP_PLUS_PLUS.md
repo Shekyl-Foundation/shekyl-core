@@ -859,13 +859,24 @@ Bech32m as specified also admits the all-uppercase spelling, and a
 general Bech32 decoder also admits the older Bech32 checksum and
 non-zero padding bits; Shekyl accepts none of them. Every segment, and
 every other Shekyl Bech32m string (multisig fingerprints, the transaction
-and reserve proofs), is read by `shekyl-encoding::decode_blob`, which
-refuses an uppercase letter by name (`EncodingError::NotLowercase`) and
-then re-encodes what it decoded and refuses any string that differs
-(`EncodingError::NotCanonical`). One address therefore has one string to
-compare, store, hash or put in a payment URI, and a looser library
-fails closed at the re-encode rather than widening what an address is.
-HRP lookups are exact for the same reason.
+and reserve proofs), is read by `shekyl-encoding::decode_blob`. The
+codec lowercases the input, decodes that spelling as Bech32m, re-encodes
+the bytes, and compares. The refusal names the step that failed:
+
+- `EncodingError::Malformed` — not a Bech32m string in any case.
+- `EncodingError::Checksum` — the checksum is not Bech32m's, the older
+  Bech32 checksum included. This fails inside the Bech32m decode, before
+  any re-encode.
+- `EncodingError::NotCanonical` — the string decodes, and the re-encode
+  differs. Non-zero padding bits do this, and so does one more zero
+  character when the extra bits still fit in the same bytes.
+- `EncodingError::NotLowercase` — the lowercased string is the canonical
+  one, and the original is not. A string that is not Bech32m in any case
+  is named for that (`Malformed` or `Checksum`), not for its capitals.
+
+One address therefore has one string to compare, store, hash or put in
+a payment URI. HRP lookup compares the decoded HRP exactly, because a
+string that decoded has already been reduced to that lowercase spelling.
 
 ### Display
 
