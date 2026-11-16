@@ -59,7 +59,6 @@ scripts/ci/check_internal_information.py	docs-gates:check-doc-links
 scripts/ci/check_job_timeouts.py	grep-gates:grep-gates
 scripts/ci/check_landed_rows_stamped.py	docs-gates:check-doc-links
 scripts/ci/check_launch_recipes.py	docs-gates:check-doc-links
-scripts/ci/check_matrix_job_gating.py	grep-gates:grep-gates
 scripts/ci/check_measurement_ledger.py	docs-gates:check-doc-links
 scripts/ci/check_measurement_spans.py	rust-audit-test:rust-audit-and-test
 scripts/ci/check_multisig_doc_literals.sh	grep-gates:grep-gates
@@ -146,3 +145,4 @@ scripts/ci/windows_probe.ps1	build:build-windows-msvc
 scripts/ci/with_small_disk.sh	none
 scripts/ci/check_fuzz_inventory.py	fuzz-harness:compile,fuzz-harness:scope
 scripts/ci/test_check_fuzz_inventory.py	fuzz-harness:scope
+scripts/ci/workflow_pass.py	build:pass,grep-gates:grep-gates,rust-audit-test:pass

@@ -58,9 +58,8 @@ jobs:
   # suppresses the WORKFLOW, so on a docs-only PR no check is created at all --
   # and branch protection waits forever for a context nobody will report. That
   # is a required check that CANNOT PASS: loud, but a hard deadlock. A job-level
-  # `if:` instead produces a check that reports "skipping", which protection
-  # accepts -- the same shape `codeql.yml`'s `analyze-python` already relies
-  # on for another required context in this repo.
+  # `if:` instead skips the job inside a run that still ends in `cli-pass`
+  # (the `pass` job), the check protection requires.
   #
   # No third-party action: `git diff` against the base does this, and a
   # change-detection action would be a new supply-chain surface in CI (rule 17).
@@ -78,7 +77,8 @@ jobs:
       # Whether the OS builds do their work: not for a docs-only change, and
       # not on a draft pull request (ruled 2026-11-16). One decision, read by
       # macOS, Windows and Ubuntu as `!= 'false'`, so a missing value runs
-      # them.
+      # them. A skip blocks no merge and passes none: the required check is
+      # `cli-pass` (the `pass` job), not these jobs.
       work: ${{ steps.work.outputs.work }}
     # `actions: read` lists this workflow's earlier runs for a push's base.
     permissions:
@@ -116,7 +116,7 @@ jobs:
         env:
           DOCS_ONLY: ${{ steps.scope.outputs.docs_only }}
           # A draft skips them; marking it ready (`ready_for_review`) runs
-          # them on the same head, replacing the draft's skipped checks.
+          # them on the same head, and `cli-pass` reports once they finish.
           DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
         run: |
           if [ "$DOCS_ONLY" = "true" ] || [ "$DRAFT" = "true" ]; then
@@ -254,20 +254,11 @@ jobs:
   build-ubuntu:
     name: ${{ matrix.name }}
     needs: changes
-    # NO JOB-LEVEL `if:` HERE, deliberately, and it is not an oversight.
-    #
-    # `Ubuntu 24.04` is a required context and it comes from `${{ matrix.name }}`.
-    # A job-level `if:` is evaluated BEFORE the matrix expands, so a skipped
-    # job has no `matrix.name` to interpolate and cannot emit the check under
-    # that name: protection would keep waiting (`check_matrix_job_gating.py`).
-    # So the job runs, and gates its WORK at the step level instead, on
-    # `changes.work`: nothing for a docs-only change, and nothing on a draft
-    # pull request. Marking the draft ready (`ready_for_review`) runs the
-    # leg in full on the same head, and its pending check replaces the
-    # draft's empty one.
-    #
-    # Cost on a docs-only change or a draft: one runner allocation that
-    # finishes in seconds.
+    # Skipped for a docs-only change and on a draft pull request
+    # (`changes.work`). A skipped matrix job reports its name expression
+    # unevaluated, not `Ubuntu 24.04`; that blocks nothing, because the
+    # required check is `cli-pass` (the `pass` job below), not this job.
+    if: needs.changes.outputs.work != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 90  # p90 44.7 min over 15 runs (the 24.04 leg)
     strategy:
@@ -294,23 +285,17 @@ jobs:
       options: --tmpfs /mnt/shekyl-small-disk:rw,size=1m
     steps:
       - name: set apt conf
-        if: needs.changes.outputs.work != 'false'
         run: ${{env.APT_SET_CONF}}
       - name: update apt
-        if: needs.changes.outputs.work != 'false'
         run: apt update
       - name: install build dependencies
-        if: needs.changes.outputs.work != 'false'
         run: ${{env.APT_INSTALL_LINUX}}
       - name: configure git
-        if: needs.changes.outputs.work != 'false'
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.work != 'false'
         with:
           submodules: recursive
       - name: install Rust
-        if: needs.changes.outputs.work != 'false'
         # Composite action (.github/actions/install-rust): the one
         # hardened download-then-run recipe, installing the
         # rust-toolchain.toml pin + components up front so the daemon
@@ -321,9 +306,7 @@ jobs:
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
       - uses: ./.github/actions/set-make-job-count
-        if: needs.changes.outputs.work != 'false'
       - name: build
-        if: needs.changes.outputs.work != 'false'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: ${{env.BUILD_DEFAULT_LINUX}}
@@ -344,7 +327,7 @@ jobs:
       # reference of the PoW test setter cannot merge on a green source
       # grep alone. nm is binutils, pulled in by build-essential.
       - name: symbol isolation on linked daemon (nm)
-        if: matrix.live_gates && needs.changes.outputs.work != 'false'
+        if: matrix.live_gates
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       # The hardening the link flags claim, read off the staged ELF binaries
@@ -352,7 +335,6 @@ jobs:
       # Rust binaries built by one cargo invocation; no CMake flag list
       # reaches them, so the result is what is asserted. readelf is binutils.
       - name: binary hardening on the staged binaries (readelf)
-        if: needs.changes.outputs.work != 'false'
         shell: bash
         run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
       # The C++ removal's end state (Rick, 2026-11-06), on what this job
@@ -361,13 +343,12 @@ jobs:
       # target compiling any) runs in the grep gates. Selftest first, so a
       # gate that cannot fail is caught before it passes.
       - name: the daemon holds no C++ (no C++ runtime, no C++ symbol)
-        if: needs.changes.outputs.work != 'false'
         shell: bash
         run: |
           python3 scripts/ci/check_no_first_party_c.py --selftest
           python3 scripts/ci/check_no_first_party_c.py --binary build/bin/shekyld
       - name: live-daemon gates
-        if: matrix.live_gates && needs.changes.outputs.work != 'false'
+        if: matrix.live_gates
         # `shell: bash`: the job's default shell in this container is dash,
         # which rejects `set -o pipefail` outright — the script dies on line
         # 1 before running anything.
@@ -849,6 +830,39 @@ jobs:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
 
+  # The one required check for this workflow: `cli-pass`
+  # (scripts/ci/workflow_pass.py, ruled 2026-11-16). It needs every other
+  # job but the reporter and runs whatever they did, so it reports once
+  # all of them have finished: green when each succeeded or was skipped by
+  # scope, red when the scope job did not succeed or any job failed or was
+  # cancelled. Protection counts a skip as a pass, so no job that can be
+  # skipped is required: a draft skips the heavy jobs, and when it is marked
+  # ready the jobs after `changes` have no check until `changes` finishes.
+  # On a draft this job reports as `cli-pass (draft)`, a name protection
+  # does not require, so a draft never satisfies it and a PR marked ready
+  # waits for its own `cli-pass`. A job that runs reports its evaluated
+  # name; a skipped one would report the expression unevaluated, which is
+  # why the name changes here and nowhere else. `workflow_pass.py --check`
+  # holds this job to the file.
+  #
+  # Cost: one ubuntu-latest job per run, a one-file checkout and a script.
+  pass:
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'cli-pass (draft)' || 'cli-pass' }}
+    needs: [changes, lint-rust-debug-macros, build-macos, build-ubuntu, build-windows-msvc, source-archive]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/ci/workflow_pass.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: every job succeeded or was skipped by scope
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/workflow_pass.py --decide --scope changes
+
   # A red push run on `dev` opens or threads a tracking issue
   # (`report-dev-red.yml`). `needs` lists every other job in this file, so
   # a red in any of them reports; scripts/ci/check_dev_red_reporter.py
@@ -859,7 +873,7 @@ jobs:
   # failed or cancelled one reports, unless the whole run was cancelled
   # (a newer merge superseded it), which `!cancelled()` leaves out.
   report-dev-red:
-    needs: [changes, lint-rust-debug-macros, build-macos, build-ubuntu, build-windows-msvc, source-archive]
+    needs: [changes, lint-rust-debug-macros, build-macos, build-ubuntu, build-windows-msvc, source-archive, pass]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
       actions: read

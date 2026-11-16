@@ -126,13 +126,21 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   suite) and the benchmark comparator. CodeQL analyses each push to `dev`
   and, weekly, `main`; the depends cross-compiles run per PR and nightly;
   the ProVerif model is not a required check and runs per PR.
-- **A draft PR runs the cheap gates only.** The Rust suite, the OS
-  builds, the benchmark capture and the RandomX differential jobs skip a
-  draft, and run when it is marked ready and on every push after. Their
-  workflows list `ready_for_review`, so a check skipped on the draft is
-  replaced by a real run before the PR can merge
-  (`scripts/ci/check_pr_event_triggers.py`). Ubuntu 22.04 builds pushes
-  to `dev` and `main` only.
+- **A draft PR runs the cheap gates only.** The Rust suite, the
+  economics sim's narration pins, the OS builds, the benchmark capture
+  and the RandomX differential jobs skip a draft, and run when it is
+  marked ready and on every push after; their workflows list
+  `ready_for_review` (`scripts/ci/check_pr_event_triggers.py`). Ubuntu
+  22.04 builds pushes to `dev` and `main` only.
+- **Each of the two build workflows has one required check, its pass
+  job:** `cli-pass` (`build.yml`) and `rust-pass` (`rust-audit-test.yml`).
+  A skipped job counts as a pass to protection, so no job that can be
+  skipped is required. The pass job needs every other job and runs
+  whatever they did: green when each succeeded or was skipped by scope,
+  red when the scope job did not succeed or any job failed or was
+  cancelled. On a draft it reports as `<name> (draft)`, so a draft never
+  satisfies the requirement, and a PR marked ready waits for its own pass
+  job (`scripts/ci/workflow_pass.py`).
 - **A stacked PR retargeted onto `dev` keeps its old base's checks until
   its next push.** Merge `dev` into it before it merges
   (`scripts/ci/check_pr_event_triggers.py` names why no event does this).
