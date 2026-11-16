@@ -607,8 +607,9 @@ mod tests {
     /// reads them, from the lines the VM run of 2026-11-01 recorded: a
     /// `REQUESTED` names the descriptor asked for; `FAILED` with an id is an
     /// answer, `NOT_FOUND` the only reason that says the directory lacks it;
-    /// an upload's refusal is not an answer, and a fetch's `UNEXPECTED` says
-    /// nothing about the descriptor. `RECEIVED` is not an
+    /// an upload's refusal is not an answer, and a fetch's `UNEXPECTED`,
+    /// `BAD_DESC` or `QUERY_REJECTED` says nothing about the descriptor.
+    /// `RECEIVED` is not an
     /// answer either: the copy's `HS_DESC_CONTENT`, with its counter, is
     /// (`a_directorys_copy_is_the_checks_answer`). Mapping every `FAILED` to
     /// `NotFound`, reading an upload's end as an answer, or answering at
@@ -658,16 +659,23 @@ mod tests {
                 answer: DirectoryAnswer::NotFound,
             })
         );
-        assert_eq!(
-            read(format!(
-                "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=QUERY_RATE_LIMITED"
-            )),
-            Some(Input::DirectoryAnswered {
-                hsdir,
-                descriptor_id: Some(key.to_owned()),
-                answer: DirectoryAnswer::Other,
-            })
-        );
+        // The fetch's other failures at tor 0.4.9.14: a copy that did not
+        // decode (`BAD_DESC`, `hs_client.c:1700`) and a refused query
+        // (`QUERY_REJECTED`, `hs_client.c:1744`). Neither says the directory
+        // lacks the descriptor.
+        for reason in ["BAD_DESC", "QUERY_REJECTED"] {
+            assert_eq!(
+                read(format!(
+                    "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON={reason}"
+                )),
+                Some(Input::DirectoryAnswered {
+                    hsdir,
+                    descriptor_id: Some(key.to_owned()),
+                    answer: DirectoryAnswer::Other,
+                }),
+                "{reason} says nothing about the descriptor"
+            );
+        }
         assert_eq!(
             read(format!(
                 "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=UPLOAD_REJECTED"
