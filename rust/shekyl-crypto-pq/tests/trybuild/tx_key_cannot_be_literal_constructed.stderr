@@ -1,0 +1,9 @@
+error[E0451]: fields `secret` and `public` of struct `TxKey` are private
+  --> tests/trybuild/tx_key_cannot_be_literal_constructed.rs:17:9
+   |
+16 |     TxKey {
+   |     ----- in this type
+17 |         secret,
+   |         ^^^^^^ private field
+18 |         public,
+   |         ^^^^^^ private field

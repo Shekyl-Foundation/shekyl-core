@@ -1,0 +1,11 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/trybuild/stored_tx_key_cannot_be_literal_constructed.rs:16:5
+   |
+16 |     StoredTxKey(secret)
+   |     ^^^^^^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/tx_key.rs
+   |
+   | pub struct StoredTxKey(HeapSecret<TX_KEY_LEN>);
+   |                        ^^^^^^^^^^^^^^^^^^^^^^ private field
