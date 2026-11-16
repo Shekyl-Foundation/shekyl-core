@@ -407,7 +407,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
     mine_until_spendable(origin, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 
     for attempt in 1..=ATTEMPTS {
-        let amount = AtomicUnits::from_raw(unlocked_balance(&arc).await.to_raw() / 4);
+        let amount = AtomicUnits::from_raw(spendable_balance(&arc).await.to_raw() / 4);
         let txid = submit_transfer(
             origin,
             &arc,
@@ -575,7 +575,7 @@ async fn restricted_listener_names_a_transaction_this_node_shows() {
     let arc = Arc::new(RwLock::new(wallet));
     mine_until_spendable(&daemon, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 
-    let amount = AtomicUnits::from_raw(unlocked_balance(&arc).await.to_raw() / 4);
+    let amount = AtomicUnits::from_raw(spendable_balance(&arc).await.to_raw() / 4);
     let txid = submit_transfer(
         &daemon,
         &arc,

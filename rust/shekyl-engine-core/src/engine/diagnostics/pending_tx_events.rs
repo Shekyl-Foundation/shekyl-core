@@ -52,11 +52,15 @@ pub enum BuildErrorKind {
     /// Recipient failed validation (zero amount, malformed address).
     InvalidRecipient,
 
-    /// Snapshot failed well-formedness, or Custom is out of band.
+    /// The daemon's fee snapshot failed well-formedness.
     FeeRefused,
 
     /// Output coverage cannot meet amount + fee.
     InsufficientFunds,
+
+    /// The spend needs more inputs, or the request more outputs, than one
+    /// transaction may carry (`MAX_INPUTS`, `MAX_OUTPUTS`).
+    TransactionTooLarge,
 
     /// The configured `Signer` surface is unavailable (e.g., HW
     /// signer disconnected; cooperative-signing peer offline).
@@ -91,7 +95,7 @@ pub enum BuildErrorKind {
     /// A precondition the build relies on failed, or proof / signature
     /// construction did — a bug, never a state the request put the wallet
     /// in. Mirrors [`SendError::BuildInvariant`](crate::engine::error::SendError::BuildInvariant)
-    /// and [`SendError::Tx`](crate::engine::error::SendError::Tx).
+    /// and [`SendError::Sign`](crate::engine::error::SendError::Sign).
     InternalInvariant,
 
     /// The wallet has the balance but the FCMP++ curve tree is still

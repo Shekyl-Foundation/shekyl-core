@@ -66,7 +66,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
-        frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
