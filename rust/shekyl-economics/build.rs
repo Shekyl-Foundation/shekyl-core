@@ -117,7 +117,7 @@ fn main() {
          pub const GENERATED_FEE_DECIMAL_PLACES: u64 = {fee_decimals};\n\
          pub const GENERATED_RELAY_FLOOR_REFERENCE_TX_WEIGHT: u64 = {w_ref};\n\
          pub const GENERATED_STANDARD_RUNG_OVER_ECONOMY: u64 = {standard};\n\
-         pub const GENERATED_PRIORITY_RUNG_FACTOR: u64 = {priority};\n\
+         pub const GENERATED_HIGH_RUNG_FACTOR: u64 = {high};\n\
          pub const GENERATED_EMISSION_CLAIM_FEE_FLOOR: u64 = {claim_hold};\n",
         scale = get_u64(&map, "shekyl_fixed_point_scale"),
         release_min = get_u64(&map, "shekyl_release_min"),
@@ -140,7 +140,7 @@ fn main() {
         fee_decimals = get_u64(&relay, "fee_decimal_places"),
         w_ref = get_u64(&relay, "relay_floor_reference_tx_weight"),
         standard = get_u64(&relay, "standard_rung_over_economy"),
-        priority = get_u64(&relay, "priority_rung_factor"),
+        high = get_u64(&relay, "high_rung_factor"),
         claim_hold = get_u64(&relay, "emission_claim_fee_floor_atomic"),
     );
 

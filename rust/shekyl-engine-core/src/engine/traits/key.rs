@@ -541,13 +541,18 @@ pub(crate) struct OutputDestination {
     pub rid: Option<shekyl_engine_state::PaymentRequestId>,
 }
 
-/// Public fee variant directive (§3.9). All fields are network-derived.
+/// Public fee variant directive (§3.9): the two ladder fees a signing
+/// pass may carry, both network-derived. Which one it carries is
+/// `fee_variant::fee_and_change`'s rule; the fee is always one of these,
+/// never the leftover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub(crate) struct FeeDirective {
+    /// The fee for the payments alone.
     pub fee_no_change: u64,
-    pub fee_with_change: u64,
-    pub dust_threshold: u64,
+    /// The fee with a change output added; `None` when the payments
+    /// already fill the output limit and no change output fits.
+    pub fee_with_change: Option<u64>,
 }
 
 /// Per-output signing context (§3.9). Deliberately **not** `Clone`.
@@ -1005,8 +1010,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
-                dust_threshold: 0,
+                fee_with_change: Some(0),
             },
         };
         let rendered = format!("{tx:?}");

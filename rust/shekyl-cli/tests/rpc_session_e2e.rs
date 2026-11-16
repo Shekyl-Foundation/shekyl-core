@@ -154,7 +154,7 @@ fn send_lifecycle_errors_are_typed_end_to_end() {
             "build_pending_tx",
             json!({
                 "recipients": [{ "address": "skl1abc", "amount": "1" }],
-                "priority": "STANDARD",
+                "priority": "standard",
             }),
         )
         .expect_err("no wallet open");
@@ -170,7 +170,7 @@ fn send_lifecycle_errors_are_typed_end_to_end() {
             "build_pending_tx",
             json!({
                 "recipients": [{ "address": "not-an-address", "amount": "1" }],
-                "priority": "STANDARD",
+                "priority": "standard",
             }),
         )
         .expect_err("invalid recipient must refuse");

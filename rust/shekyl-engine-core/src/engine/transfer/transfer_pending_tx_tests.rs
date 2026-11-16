@@ -113,7 +113,7 @@ fn test_fee_estimates() -> FeeEstimates {
     FeeEstimates {
         economy: tiny,
         standard: tiny,
-        priority: tiny,
+        high: tiny,
     }
 }
 
@@ -495,6 +495,70 @@ async fn build_refuses_a_bad_recipient_before_the_balance() {
         "a real address on this ledger is short of funds, not an invalid recipient: {err:?}"
     );
     assert_eq!(pending.outstanding(), 0);
+}
+
+/// A selector that answers every target with one index no candidate
+/// carries, covering the target in full.
+struct OutOfSetSelector;
+
+impl crate::engine::output_selector::OutputSelector for OutOfSetSelector {
+    type Error = crate::engine::error::OutputSelectorError;
+
+    fn select_outputs(
+        &self,
+        _candidates: &[crate::engine::output_selector::OutputCandidate],
+        target: AtomicUnits,
+    ) -> Result<crate::engine::output_selector::SelectedOutputs, Self::Error> {
+        Ok(crate::engine::output_selector::SelectedOutputs {
+            indices: vec![usize::MAX],
+            total_covered: target,
+        })
+    }
+}
+
+/// A selector that returns an index outside its candidate set is the
+/// wallet's own bug (F4): the build refuses it as a build invariant, with
+/// the selector-contract diagnostic, and never tells the client to fix a
+/// recipient. Bites if the violation is reported as `InvalidRecipient`, or
+/// if the subset check is removed and the out-of-set index reaches assembly.
+#[tokio::test]
+async fn an_out_of_set_selection_is_the_wallets_fault() {
+    use crate::engine::diagnostics::BuildErrorKind;
+
+    let sink = Arc::new(AssertionSink::new());
+    let pending = LocalPendingTx::new(
+        Arc::new(LocalSigner::new(test_signer_handle())),
+        OutOfSetSelector,
+        DaemonFeeEstimator,
+        test_fee_snapshot_source(),
+        test_submitter(),
+        funded_ledger(),
+        None,
+        Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
+        ReservationTTLConfig::default(),
+        Network::Mainnet,
+    );
+
+    let err = pending.build(standard_request(7_000)).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SendError::BuildInvariant {
+                reason: "output selector returned indices outside candidate set"
+            }
+        ),
+        "{err:?}"
+    );
+    assert!(
+        sink.recorded_pending().iter().any(|event| matches!(
+            event,
+            PendingTxDiagnostic::BuildFailed {
+                kind: BuildErrorKind::SelectorContractViolation
+            }
+        )),
+        "the build reports the selector-contract violation"
+    );
+    assert_eq!(pending.outstanding(), 0, "nothing is reserved");
 }
 
 // --- CT-5a commit 4b-1: curve-tree spend-gate KATs (D1/D3) --------------
@@ -1386,7 +1450,12 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+            !td.is_spendable(
+                shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                    u64::MAX
+                )),
+                &spend_locks
+            ),
             "journal-locked output must be excluded from selection"
         );
     }
@@ -1737,7 +1806,12 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+                !td.is_spendable(
+                    shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                        u64::MAX
+                    )),
+                    &spend_locks
+                ),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -1914,7 +1988,12 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+                !td.is_spendable(
+                    shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                        u64::MAX
+                    )),
+                    &spend_locks
+                ),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -3608,7 +3687,7 @@ fn daemon_fee_estimates_distinct() -> FeeEstimates {
     FeeEstimates {
         economy: FeeRate::new(5).expect("economy rate"),
         standard: FeeRate::new(10).expect("standard rate"),
-        priority: FeeRate::new(40).expect("priority rate"),
+        high: FeeRate::new(40).expect("high rate"),
     }
 }
 
@@ -3727,9 +3806,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
 #[tokio::test]
 async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
-    use crate::engine::tx_fee_model::{
-        converge_fee, fee_from_weight, fee_rate_for_priority, predict_weight,
-    };
+    use crate::engine::tx_fee_model::{converge_fee, fee_from_weight, predict_weight};
 
     let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
     let (ledger, _tree_dir, tree) =
@@ -3749,7 +3826,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     let snapshot =
         crate::engine::fee_policy::ValidatedFeeEstimates::try_new(daemon_fee_estimates_distinct())
             .expect("test daemon tiers are well-formed");
-    let rate = fee_rate_for_priority(FeePriority::Standard, &snapshot).expect("standard rate");
+    let rate = snapshot.rate(FeePriority::Standard);
     // Real tree depth for the 2-leaf consistent fixture is 2.
     let seed = fee_from_weight(
         &rate,

@@ -37,6 +37,7 @@ fn behind(seconds: u64) -> InboundCause {
 /// refused. The VM run's rounds are 2 of 16 accepted and 14 refused.
 fn round_tally(uploaded: u32, refused: u32, begun: u32) -> Input {
     Input::UploadRoundEnded {
+        descriptor: super::D0,
         tally: RoundTally {
             uploaded,
             refused,
@@ -50,8 +51,10 @@ fn overdues(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::DescriptorOverdue))
 }
 
-fn checks(step: &Step) -> usize {
-    count(step, |action| matches!(action, Action::CheckDirectories))
+/// A probe is scheduled. Its check's list is drawn when it goes out, so a
+/// scheduled probe shows in the core, not in the step that scheduled it.
+fn scheduled(core: &Core) -> bool {
+    matches!(core.probe, super::super::probe::Probe::Scheduled { .. })
 }
 
 /// Answer each sample `actions` sent, as the driver answers it: a full
@@ -127,8 +130,19 @@ fn serve(core: &mut Core, at: u64, wall_at: impl Fn(u64) -> Option<(u64, u64)>) 
 /// arrived: Reachable, with the descriptor's lifetime counting from 0.
 fn reachable() -> Core {
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, 0);
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        0,
+    );
     core.on(uploaded(0), secs(5));
     let (probe_at, step) = run_timed(&mut core, secs(20));
     assert_eq!(probes(&step), 1, "the round's probe");
@@ -248,10 +262,21 @@ fn only_a_clock_behind_past_the_tolerance_is_named() {
 fn no_republish_while_the_clock_is_named() {
     let mut core = reachable();
     core.on(clock(VALID_AFTER, VALID_AFTER - DAY), secs(30));
-    core.on(Input::UploadRoundStarted, secs(40));
-    core.on(Input::FirstUploaded { draw: 0 }, secs(40));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        secs(40),
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(40),
+    );
     let ended = core.on(uploaded(0), secs(45));
-    assert_eq!(checks(&ended), 0, "no probe's check under the clock");
+    assert!(!scheduled(&core), "no probe under the clock: {ended:?}");
     let behind = |_| Some((VALID_AFTER, VALID_AFTER - DAY));
     let served = serve(&mut core, secs(40 + 4 * 3_600), behind);
     assert_eq!(probes(&served), 0, "no probe");
@@ -279,7 +304,7 @@ fn no_republish_under_a_majority_of_refusals() {
     let mut core = reachable();
     let refused = core.on(round_tally(2, 14, 16), secs(30));
     assert_eq!(republishes(&refused), 0);
-    assert_eq!(checks(&refused), 0, "no probe for a refused round");
+    assert!(!scheduled(&core), "no probe for a refused round");
     let status = core.status();
     assert_eq!(
         status.inbound,
@@ -304,7 +329,10 @@ fn no_republish_under_a_majority_of_refusals() {
         "{:?}",
         core.status().inbound
     );
-    assert_eq!(checks(&half), 1, "an accepted round's probe judges");
+    assert!(
+        scheduled(&core),
+        "an accepted round's probe judges: {half:?}"
+    );
 }
 
 /// **The backoff doubles, caps at three hours, and resets on a confirmed
@@ -635,8 +663,19 @@ fn a_republish_counts_its_lifetime_from_the_send() {
 #[test]
 fn a_republish_cancels_the_probe_in_hand() {
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, 0);
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        0,
+    );
     core.on(uploaded(0), secs(5));
     let (probe_at, step) = run_timed(&mut core, secs(20));
     assert_eq!(probes(&step), 1);
@@ -659,8 +698,19 @@ fn a_republish_cancels_the_probe_in_hand() {
 #[test]
 fn a_named_clock_drops_the_probe_in_hand() {
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, 0);
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        0,
+    );
     core.on(uploaded(0), secs(5));
     let (probe_at, step) = run_timed(&mut core, secs(20));
     assert_eq!(probes(&step), 1);
@@ -687,18 +737,31 @@ fn a_named_clock_drops_the_probe_in_hand() {
 fn a_round_wait_while_suppressed_can_still_schedule() {
     let mut core = reachable();
     core.on(clock(VALID_AFTER, VALID_AFTER - DAY), secs(30));
-    core.on(Input::UploadRoundStarted, secs(40));
-    core.on(Input::FirstUploaded { draw: 0 }, secs(40));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        secs(40),
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(40),
+    );
     let wait_end = secs(40) + super::super::duration_ns(policy().round_wait);
     let waited = core.on_deadline(wait_end);
     let waited = sample_answered(&mut core, waited, wait_end);
-    assert_eq!(checks(&waited), 0, "standing down schedules nothing");
+    assert!(
+        !scheduled(&core),
+        "standing down schedules nothing: {waited:?}"
+    );
     let clear = secs(40) + super::super::duration_ns(policy().round_wait) + secs(1);
     core.on(clock(VALID_AFTER, VALID_AFTER), clear);
-    let ended = core.on(uploaded(0), clear);
-    assert_eq!(
-        checks(&ended),
-        1,
+    core.on(uploaded(0), clear);
+    assert!(
+        scheduled(&core),
         "the round's end still schedules its probe"
     );
 }
@@ -762,7 +825,12 @@ fn a_round_with_no_upload_leaves_refused_uploads_standing() {
             ..
         }
     ));
-    core.on(Input::UploadRoundStarted, secs(40));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        secs(40),
+    );
     let ended = core.on(round_tally(0, 0, 16), secs(50));
     assert_eq!(republishes(&ended), 0);
     assert!(

@@ -7,6 +7,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::EdwardsPoint;
@@ -22,12 +23,13 @@ use shekyl_crypto_pq::TxKey;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
-    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput,
-    WireEncodeInput,
+    tx_prefix_hash_from_parts, InternalSignFault, LeafEntry, OutputInfo, PqcAuth, SignFault,
+    SignedProofs, SpendInput, WireEncodeInput,
 };
 use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
+use super::fee_variant::{fee_and_change, FeeVariantFault};
 use super::local_keys::LocalKeys;
 use super::pending::TxDestination;
 use super::traits::key::{
@@ -305,6 +307,24 @@ fn payment_outputs_of(
     Ok((total, payments))
 }
 
+impl From<FeeVariantFault> for KeyEngineError {
+    fn from(fault: FeeVariantFault) -> Self {
+        match fault {
+            // The build's selection covers the with-change fee and the least
+            // change, so a short leftover is a bug. It keeps the builder's
+            // insufficient-funds fault: the amounts do not balance at a
+            // ladder fee. The shortfall stays in the local log.
+            FeeVariantFault::Short { shortfall } => {
+                tracing::debug!(shortfall, "a leftover no ladder fee balances");
+                Self::Sign(SignFault::Internal(InternalSignFault::InsufficientFunds))
+            }
+            FeeVariantFault::TooManyOutputs { count } => {
+                Self::Sign(SignFault::TooManyOutputs { count })
+            }
+        }
+    }
+}
+
 pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, KeyEngineError> {
     let keys = &local.keys;
     if tx.inputs.is_empty() {
@@ -334,19 +354,9 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                 shortfall: payment_total.saturating_sub(input_amounts),
             })?;
 
-    let (fee, include_change) = if leftover
-        >= fee_directive
-            .fee_with_change
-            .saturating_add(fee_directive.dust_threshold)
-    {
-        (fee_directive.fee_with_change, true)
-    } else if leftover >= fee_directive.fee_no_change {
-        (fee_directive.fee_no_change, false)
-    } else {
-        return Err(KeyEngineError::InsufficientFunds {
-            shortfall: fee_directive.fee_no_change.saturating_sub(leftover),
-        });
-    };
+    let priced = fee_and_change(leftover, &fee_directive)?;
+    let fee = priced.fee;
+    let change = priced.change;
 
     // The transaction key: retained for the OUTBOUND proof (WI-RPC-3).
     let tx_key = TxKey::random()?;
@@ -388,24 +398,21 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         output_index += 1;
     }
 
-    if include_change {
-        let change_amount = leftover
-            .checked_sub(fee)
-            .ok_or(KeyEngineError::InsufficientFunds { shortfall: 1 })?;
-        if change_amount > 0 {
-            let change_pk = derived.change_spend_pk();
-            let built = build_output(
-                &tx_key,
-                &change_pk,
-                &keys.x25519_pk,
-                &keys.ml_kem_ek,
-                change_amount,
-                output_index,
-                &sentinel_plaintext(),
-            )?;
-            kem_blobs.push(built.kem_blob.clone());
-            built_outputs.push(built);
-        }
+    // A change is at least one unit (`fee_variant::fee_and_change`): when the
+    // fee is the with-change fee, the change output is always built.
+    if let Some(change_amount) = change.map(NonZeroU64::get) {
+        let change_pk = derived.change_spend_pk();
+        let built = build_output(
+            &tx_key,
+            &change_pk,
+            &keys.x25519_pk,
+            &keys.ml_kem_ek,
+            change_amount,
+            output_index,
+            &sentinel_plaintext(),
+        )?;
+        kem_blobs.push(built.kem_blob.clone());
+        built_outputs.push(built);
     }
 
     if built_outputs.is_empty() {
@@ -515,13 +522,11 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         AtomicUnits::from_raw(fee),
         &tree,
     )
-    .map_err(|e| KeyEngineError::Primitive {
-        detail: match e {
-            shekyl_tx_builder::TxBuilderError::InsufficientFunds { .. } => {
-                "tx-builder insufficient funds"
-            }
-            _ => "tx-builder sign_transaction failed",
-        },
+    .map_err(|e| {
+        // The inner text (a prover's or encoder's message) stays in the
+        // local log; the fault that leaves is the variant, bounded.
+        tracing::debug!(error = %e, "the transaction builder refused the signing pass");
+        KeyEngineError::Sign(e.fault())
     })?;
 
     // The wire shape is assembled by the single shared constructor both this
@@ -967,5 +972,24 @@ mod tests {
             .is_err(),
             "an output encapsulated to the raw Edwards bytes must NOT be recoverable"
         );
+    }
+
+    /// A leftover the ladder does not balance keeps the builder's
+    /// insufficient-funds fault. The shortfall stays in the log; the variant
+    /// that leaves is the closed one.
+    #[test]
+    fn a_short_leftover_keeps_the_insufficient_funds_fault() {
+        use super::super::traits::key::FeeDirective;
+        use shekyl_tx_builder::InternalSignFault;
+
+        let directive = FeeDirective {
+            fee_no_change: 700,
+            fee_with_change: Some(900),
+        };
+        let err = KeyEngineError::from(fee_and_change(900, &directive).expect_err("short"));
+        assert!(matches!(
+            err,
+            KeyEngineError::Sign(SignFault::Internal(InternalSignFault::InsufficientFunds))
+        ));
     }
 }

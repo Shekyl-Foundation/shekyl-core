@@ -14,7 +14,7 @@
 //! 2. admits the block's demand, built on the tip below it, making room
 //!    under CEN-M10's limit from strictly cheaper entries and refusing what
 //!    it cannot make room for. Demand arrives on the fee ladder's rungs
-//!    ([`Rung`]), richest first ([`Rung::ADMISSION`]);
+//!    ([`FeePriority`]), richest first ([`ADMISSION`](crate::rung_mix::ADMISSION));
 //! 3. offers the cohorts to the producer's fill rule
 //!    ([`Fill`](shekyl_block_template::Fill)) in the template's order, at the
 //!    effective median [`MedianWindow`](crate::median_window::MedianWindow)
@@ -44,7 +44,7 @@ use shekyl_wire::transaction::COINBASE_RESERVE;
 
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::median_window::MedianWindow;
-use crate::rung_mix::{PerRung, Rung, RungTraffic};
+use crate::rung_mix::{FeePriority, PerRung, RungTraffic};
 
 /// Seconds in the pool's received key: `ReceivedHour::of` is Unix seconds
 /// over this (`shekyl-chain-store`, `codec/pool.rs`), pinned by
@@ -65,7 +65,7 @@ struct Cohort {
     weight: u64,
     count: u64,
     /// The rung it was priced on. Counted, never ordered on.
-    rung: Rung,
+    rung: FeePriority,
 }
 
 impl Cohort {
@@ -181,7 +181,7 @@ pub(crate) struct OwnListing {
 /// One rung's demand at a block: `count` transactions, each `tx`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Arrival {
-    pub(crate) rung: Rung,
+    pub(crate) rung: FeePriority,
     pub(crate) count: u64,
     pub(crate) tx: OrdinaryTx,
 }
@@ -578,7 +578,7 @@ impl BlockSpace {
     /// Build the block at `height` under `medians` — what [`Self::medians`]
     /// returned for it — from the pool and the block's `arrivals`, each
     /// rung's ordinary transaction priced at `at`, admitted in the order
-    /// given ([`Rung::ADMISSION`]), then record it.
+    /// given ([`ADMISSION`](crate::rung_mix::ADMISSION)), then record it.
     #[cfg(test)]
     pub(crate) fn fill(
         &mut self,
@@ -637,7 +637,7 @@ impl BlockSpace {
                 fees_atomic: txs * own.tx.fee_atomic,
             }
         });
-        for rung in Rung::ALL {
+        for rung in FeePriority::ALL {
             rungs[rung].expired_txs = expired[rung];
             rungs[rung].evicted_txs = evicted[rung];
         }

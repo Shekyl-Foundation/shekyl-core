@@ -11,12 +11,13 @@ use shekyl_curve_tree::{
     AssembleInput, ClientError, CommitmentBytes, OneTimePubkey, StoreOpenFault,
 };
 use shekyl_engine_state::TransferDetails;
+use shekyl_tx_builder::SignFault;
 
 use super::super::curve_tree_actor::CurveTreeHandleError;
 use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, DiagnosticSink, PendingTxDiagnostic,
 };
-use super::super::error::{FeeEstimatorError, OutputSelectorError, SendError, SignerError};
+use super::super::error::{FeeEstimatorError, SendError, SignerError};
 use super::super::pending::ReservationId;
 
 use super::types::{PendingTxState, ReanchorError};
@@ -220,9 +221,7 @@ pub(super) fn map_handle_err_to_reanchor(err: &CurveTreeHandleError) -> Reanchor
 pub(super) fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } => BuildErrorKind::InvalidRecipient,
-        SendError::Fee(
-            FeeEstimatorError::DaemonFeeUnreasonable(_) | FeeEstimatorError::CustomFeeOutOfRange(_),
-        ) => BuildErrorKind::FeeRefused,
+        SendError::Fee(FeeEstimatorError::DaemonFeeUnreasonable(_)) => BuildErrorKind::FeeRefused,
         SendError::InsufficientFunds { .. } => BuildErrorKind::InsufficientFunds,
         SendError::SpendUnavailableRebuilding { .. } => BuildErrorKind::RebuildingMembershipData,
         SendError::OutputNotYetSpendable { .. } => BuildErrorKind::OutputNotYetSpendable,
@@ -231,12 +230,17 @@ pub(super) fn build_error_kind(err: &SendError) -> BuildErrorKind {
         SendError::WalletTooYoungToSpend { .. } | SendError::NotSynced => {
             BuildErrorKind::LedgerNotReady
         }
-        SendError::SignerUnavailable | SendError::SignerFailed { .. } => {
-            BuildErrorKind::SignerUnavailable
+        SendError::SignerUnavailable => BuildErrorKind::SignerUnavailable,
+        // More inputs or outputs than one transaction carries: the request's
+        // shape against a consensus limit.
+        SendError::Sign(SignFault::TooManyInputs { .. } | SignFault::TooManyOutputs { .. }) => {
+            BuildErrorKind::TransactionTooLarge
         }
         // A failed proof or signature, or a broken precondition: a bug, not a
         // state the request put the wallet in.
-        SendError::Tx(_) | SendError::BuildInvariant { .. } => BuildErrorKind::InternalInvariant,
+        SendError::Sign(_) | SendError::SignerFailed { .. } | SendError::BuildInvariant { .. } => {
+            BuildErrorKind::InternalInvariant
+        }
         // A curve-tree actor that cannot be queried is an infrastructure
         // outage indistinguishable, to the caller, from the daemon being down.
         SendError::CurveTreeUnavailable { .. } | SendError::Io(_) | SendError::Fee(_) => {
@@ -260,18 +264,15 @@ pub(super) fn fail_build_after_attempted(sink: &dyn DiagnosticSink, err: SendErr
     err
 }
 
-pub(super) fn map_output_selector_error(err: &OutputSelectorError) -> SendError {
-    match *err {
-        OutputSelectorError::InsufficientFunds { needed, available } => {
-            SendError::InsufficientFunds { needed, available }
-        }
-        OutputSelectorError::NoEligibleOutputs => SendError::InsufficientFunds {
-            needed: 0,
-            available: 0,
-        },
-        OutputSelectorError::ReturnedIndicesNotSubset { .. } => SendError::InvalidRecipient {
-            reason: "output selector returned indices outside candidate set",
-        },
+/// The selector returned an index that was not in the candidate set it was
+/// given: the wallet's own bug, never the request's, so it is a
+/// [`SendError::BuildInvariant`] and the client is not told to fix a
+/// recipient. The diagnostic for this error is
+/// [`BuildErrorKind::SelectorContractViolation`]. A short or empty candidate
+/// set is not this error: that goes through [`super::candidates::CandidatePartition::refusal`].
+pub(super) fn selector_subset_violation() -> SendError {
+    SendError::BuildInvariant {
+        reason: "output selector returned indices outside candidate set",
     }
 }
 
@@ -282,7 +283,8 @@ pub(super) fn map_fee_estimator_error(err: &FeeEstimatorError) -> SendError {
 pub(super) fn map_signer_error(err: &SignerError) -> SendError {
     match err {
         SignerError::Unavailable => SendError::SignerUnavailable,
-        SignerError::RemoteFailure { reason } => SendError::SignerFailed { reason },
+        SignerError::Sign(fault) => SendError::Sign(*fault),
+        SignerError::Internal { fault } => SendError::SignerFailed { fault: *fault },
     }
 }
 

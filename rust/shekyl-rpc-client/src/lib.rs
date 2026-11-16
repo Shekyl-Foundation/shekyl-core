@@ -265,52 +265,6 @@ impl FeeRate {
     }
 }
 
-/// The priority for the fee.
-///
-/// Higher-priority transactions will be included in blocks earlier.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[allow(non_camel_case_types)]
-pub enum FeePriority {
-    /// The `Unimportant` priority, as defined by Monero.
-    Unimportant,
-    /// The `Normal` priority, as defined by Monero.
-    Normal,
-    /// The `Priority` priority, as defined by Monero.
-    Priority,
-    /// A custom priority.
-    Custom {
-        /// The numeric representation of the priority, as used within the RPC.
-        priority: u32,
-    },
-}
-
-/// https://github.com/monero-project/monero/blob/ac02af92867590ca80b2779a7bbeafa99ff94dcb/
-///   src/simplewallet/simplewallet.cpp#L161
-impl FeePriority {
-    pub(crate) fn fee_priority(&self) -> u32 {
-        match self {
-            FeePriority::Unimportant => 1,
-            FeePriority::Normal => 2,
-            FeePriority::Priority => 4,
-            FeePriority::Custom { priority, .. } => *priority,
-        }
-    }
-}
-
-/// Which fee tier a caller's priority buys (IG-Q52's `economy`,
-/// `standard`, `high`).
-///
-/// Priority `0` and `1` both take the lowest tier, `2` takes the middle,
-/// and anything `>= 3`, including a `Custom` priority of a million, takes
-/// the highest. Every `u32` maps to a tier.
-fn fee_tier_for(priority: FeePriority, fee: &wire::chain::Fee) -> &AtomicUnitsString {
-    match priority.fee_priority() {
-        0 | 1 => &fee.economy,
-        2 => &fee.standard,
-        _ => &fee.high,
-    }
-}
-
 // The identity verdict [`RpcError::IdentityMismatch`] and
 // [`DaemonFault::Identity`] carry, with the types inside it: a consumer that
 // names the verdict reaches it through this crate.
@@ -324,7 +278,6 @@ pub use shekyl_rpc_types::wire;
 pub use shekyl_rpc_types::wire::tx::{Publication, Rejection, Verdict};
 
 use shekyl_rpc_types::kinds::{Bytes, Count, Height};
-use shekyl_units::wire::AtomicUnitsString;
 
 /// The route a call is posted on:
 /// [`JSON_RPC_PATH`](shekyl_rpc_types::endpoint::JSON_RPC_PATH) relative to the
@@ -504,27 +457,6 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
-    /// The daemon's fee rate for `priority`.
-    ///
-    /// This may be manipulated to unsafe levels and MUST be sanity checked,
-    /// and MUST NOT be expected to be deterministic.
-    ///
-    /// NOTE (2026-08-16): parallel, older consumer path — the engine's
-    /// build/quote surfaces use `DaemonClient::get_fee_estimates` (one
-    /// atomic snapshot, interim-ceiling-guarded). The remaining consumer is
-    /// `shekyl-mobile-wallet`.
-    fn get_fee_rate(
-        &self,
-        priority: FeePriority,
-    ) -> impl Send + Future<Output = Result<FeeRate, RpcError>> {
-        async move {
-            let fee = self
-                .call::<wire::Fee>(shekyl_rpc_types::kinds::NoParams)
-                .await?;
-            FeeRate::new(fee_tier_for(priority, &fee).to_atomic_units().to_raw())
-        }
-    }
-
     /// Offer a transaction to the daemon (`tx_submit`), returning its atomic
     /// [`Verdict`] (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2).
     ///
@@ -581,9 +513,7 @@ pub trait Rpc: Sync + Clone {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        fee_tier_for, DaemonFault, FeePriority, HashHex, IdentityMismatch, Network, RpcError,
-    };
+    use super::{DaemonFault, HashHex, IdentityMismatch, Network, RpcError};
 
     /// Each failure's remedy class, named once. The identity verdict rides
     /// through unchanged; nothing is classified by its message.
@@ -672,37 +602,6 @@ mod tests {
                 assert!(message.contains(stem), "{stem:?} in {message}");
             }
         }
-    }
-
-    fn tiers() -> super::wire::chain::Fee {
-        use shekyl_units::{wire::AtomicUnitsString, AtomicUnits};
-        let amount = |raw| AtomicUnitsString::from(AtomicUnits::from_raw(raw));
-        super::wire::chain::Fee {
-            economy: amount(10),
-            standard: amount(20),
-            high: amount(40),
-        }
-    }
-
-    fn rate(priority: FeePriority) -> u64 {
-        fee_tier_for(priority, &tiers()).to_atomic_units().to_raw()
-    }
-
-    /// Every priority maps to the tier the deleted index arithmetic gave it:
-    /// `0` and `1` the lowest, `2` the middle, everything from `3` up the
-    /// highest, a `Custom` priority having no upper bound.
-    #[test]
-    fn every_priority_maps_to_the_tier_the_index_arithmetic_gave_it() {
-        let custom = |priority| FeePriority::Custom { priority };
-        assert_eq!(rate(custom(0)), 10);
-        assert_eq!(rate(FeePriority::Unimportant), 10);
-        assert_eq!(rate(custom(1)), 10);
-        assert_eq!(rate(FeePriority::Normal), 20);
-        assert_eq!(rate(custom(2)), 20);
-        assert_eq!(rate(custom(3)), 40);
-        assert_eq!(rate(FeePriority::Priority), 40);
-        assert_eq!(rate(custom(4)), 40);
-        assert_eq!(rate(custom(u32::MAX)), 40);
     }
 
     /// A refusal is classified by its class, never by its message.
