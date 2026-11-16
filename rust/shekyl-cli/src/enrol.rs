@@ -204,6 +204,19 @@ impl EnrolLeg {
     }
 }
 
+/// Whether a service has published its console leg at `place`.
+///
+/// Not found is the only "no service" answer. Any other failure means the
+/// leg cannot be seen, which is §4.5's console-key failure: the owner's
+/// leg is not tried in its place.
+fn leg_published(place: &Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(place) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(CONSOLE_KEY_FAILURE.to_owned()),
+    }
+}
+
 /// This computer's service's console leg, when a service runs here.
 fn service_console(network: Network, request: GrantSet) -> Result<Option<EnrolLeg>, String> {
     let platform = shekyl_process::platform::current();
@@ -212,7 +225,7 @@ fn service_console(network: Network, request: GrantSet) -> Result<Option<EnrolLe
     };
     let dir = paths::data_dir_default(&root, network);
     let place = shekyl_rpc_rendezvous::console_leg_place(&dir);
-    if std::fs::symlink_metadata(&place).is_err() {
+    if !leg_published(&place)? {
         return Ok(None);
     }
     // A service runs here: from now on, no other leg (§4.5).
@@ -266,4 +279,42 @@ fn key_show(path: &Path) -> Result<String, String> {
                 path.display()
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A missing leg is no service. A leg this account cannot see is the
+    /// console-key failure, so enrolment does not fall through to the owner.
+    /// Red edit: treat every `symlink_metadata` error as absent in
+    /// `leg_published`, and a mode-000 directory is "no service".
+    #[test]
+    fn only_a_missing_console_leg_means_no_service() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!leg_published(&dir.path().join("absent")).unwrap());
+
+        let published = dir.path().join("published");
+        std::fs::write(&published, b"leg").unwrap();
+        assert!(leg_published(&published).unwrap());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if shekyl_os_account::effective_uid() == 0 {
+                return;
+            }
+            let hidden = dir.path().join("hidden");
+            std::fs::create_dir(&hidden).unwrap();
+            let place = hidden.join("console");
+            std::fs::write(&place, b"leg").unwrap();
+            std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let saw = leg_published(&place);
+            std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(
+                saw.expect_err("the leg cannot be seen"),
+                CONSOLE_KEY_FAILURE
+            );
+        }
+    }
 }
