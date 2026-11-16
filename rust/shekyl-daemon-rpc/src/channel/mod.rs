@@ -21,6 +21,7 @@
 //!   request stamped with the connection's effective grant (RT-O32).
 
 mod console;
+pub mod console_leg;
 pub mod files;
 pub mod listener;
 mod message;
@@ -169,6 +170,9 @@ pub struct Channel {
     pub(crate) budget: HandshakeBudget,
     /// Where a service publishes its rendezvous record, when it listens.
     pub(crate) service_rendezvous: Option<PathBuf>,
+    /// A service's data directory, where its console leg is bound
+    /// ([`console_leg`]); `None` for a daemon run as its user.
+    pub(crate) console_dir: Option<PathBuf>,
 }
 
 impl Channel {
@@ -240,6 +244,7 @@ impl Channel {
             service_rendezvous: setup.service_rendezvous.as_deref().map(|dir| {
                 shekyl_rpc_rendezvous::service_record_path(dir, &setup.network_id, &setup.instance)
             }),
+            console_dir: setup.service.then(|| setup.data_dir.clone()),
         }))
     }
 

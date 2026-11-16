@@ -84,6 +84,7 @@ impl Served {
         let tracker = ConnTracker::new(ConnLimits::default());
         let serving = tokio::spawn(super::listener::serve(
             LimitedListener::new(listener, Arc::clone(&tracker)),
+            super::listener::Leg::Network,
             Arc::clone(&channel),
             router,
             async move {
@@ -167,6 +168,9 @@ struct Session {
 /// How a connection ended before a session.
 #[derive(Debug, PartialEq, Eq)]
 enum NoSession {
+    /// The daemon closed the connection before message 2: no slot, or no
+    /// listener.
+    ClosedBeforeMessage2,
     /// The daemon closed the connection before message 4.
     ClosedBeforeMessage4,
 }
@@ -177,12 +181,26 @@ async fn open_stream(
     client: &StaticKeypair,
     request: GrantSet,
 ) -> Result<(RecordStream<TcpStream>, GrantSet), NoSession> {
-    let mut tcp = TcpStream::connect(served.addr).await.expect("connect");
-    let daemon = served.bundle();
-    let (c, message1) = Client::start(&NETWORK, client, &daemon).expect("message 1");
+    let tcp = TcpStream::connect(served.addr).await.expect("connect");
+    open_over(tcp, &served.bundle(), client, request).await
+}
+
+/// The client's side of the handshake over `tcp`, any stream.
+async fn open_over<S>(
+    mut tcp: S,
+    daemon: &StaticPublic,
+    client: &StaticKeypair,
+    request: GrantSet,
+) -> Result<(RecordStream<S>, GrantSet), NoSession>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (c, message1) = Client::start(&NETWORK, client, daemon).expect("message 1");
     tcp.write_all(&message1).await.expect("write message 1");
     let mut message2 = vec![0u8; MESSAGE2_LEN];
-    tcp.read_exact(&mut message2).await.expect("message 2");
+    if tcp.read_exact(&mut message2).await.is_err() {
+        return Err(NoSession::ClosedBeforeMessage2);
+    }
     let c = c
         .read_message2(&message2)
         .expect("the daemon is the bundle's");
@@ -205,6 +223,14 @@ async fn connect(
     request: GrantSet,
 ) -> Result<Session, NoSession> {
     let (stream, ceiling) = open_stream(served, client, request).await?;
+    session_over(stream, ceiling).await
+}
+
+/// The HTTP session over an opened record stream.
+async fn session_over<S>(stream: RecordStream<S>, ceiling: GrantSet) -> Result<Session, NoSession>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let mark = stream.submission_mark();
     let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
@@ -494,6 +520,83 @@ async fn the_console_key_is_the_host_and_never_an_enrolment() {
         .client_remove(HOST, fingerprint)
         .expect_err("not an enrolment");
     assert_eq!(removed.diagnostic.code, super::codes::CONSOLE);
+}
+
+/// **A service's console leg serves the console key alone, from its own
+/// reserve** (RT-O37). Served through `serve_bound`, as a start serves it,
+/// with the shared pool already full: the console key is answered as the
+/// host; an enrolled key there gets no message 4, whatever its ceiling;
+/// the socket is the service account's alone. Red edits: build the console
+/// leg's listener with `LimitedListener::new` in `serve_bound`, and the
+/// console is closed at accept with the pool; drop the console-only
+/// check in the listener's `handshake`, and the enrolled key is answered.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_console_leg_serves_the_console_key_alone_from_its_reserve() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let served = Served::start(true).await;
+    let tracker = ConnTracker::new(ConnLimits::checked(1, 0, 0).expect("limits"));
+    let _pool_full = tracker
+        .try_acquire("10.0.0.9".parse().expect("an address"))
+        .expect("the one shared slot");
+    let console_listener =
+        super::console_leg::bind(&served.data_dir).expect("the console's leg binds");
+    let place = super::console_leg::place(&served.data_dir);
+    let mode = std::fs::metadata(&place)
+        .expect("bound")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+    // The router's own chain store: `Served` holds the one in its data
+    // directory.
+    let store_dir = tempfile::tempdir().expect("a directory");
+    let router = crate::server::channel_router(
+        app_state(store_dir.path(), Arc::clone(&served.channel)),
+        &[],
+    );
+    let (stop, stopped) = watch::channel(false);
+    let serving = tokio::spawn(crate::server::serve_bound(
+        Vec::new(),
+        None,
+        Some(crate::server::ChannelServed {
+            router,
+            channel: Arc::clone(&served.channel),
+            network: Vec::new(),
+            console: Some(console_listener),
+        }),
+        Arc::clone(&tracker),
+        stopped,
+    ));
+
+    let console = super::files::read_key(&served.data_dir.join(super::files::CONSOLE_KEY_FILE))
+        .expect("readable")
+        .expect("a service has a console key");
+    let io = tokio::net::UnixStream::connect(&place).await.expect("dial");
+    let (stream, ceiling) = open_over(io, &served.bundle(), &console, GrantSet::ALL)
+        .await
+        .expect("the console is admitted from its reserve");
+    let mut session = session_over(stream, ceiling).await.expect("a session");
+    let host = session
+        .call("relay_stats", json!({}))
+        .await
+        .expect("a reply");
+    assert_ne!(code(&host), Some("grant.host-only"), "{host}");
+
+    let client = StaticKeypair::generate().unwrap();
+    served.enrol(&client, &[CeilingWord::Admin]);
+    let io = tokio::net::UnixStream::connect(&place).await.expect("dial");
+    assert_eq!(
+        open_over(io, &served.bundle(), &client, Preset::View.grants())
+            .await
+            .err(),
+        Some(NoSession::ClosedBeforeMessage4)
+    );
+
+    drop(session);
+    stop.send_replace(true);
+    serving.await.expect("joined").expect("served");
 }
 
 /// **Enrolment is bounded by the caller's own grant** (RT-O9.1). A key

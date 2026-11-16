@@ -37,7 +37,8 @@ mod place;
 
 pub use place::{
     account_dir, data_home, file_name, service_file_name, service_record_path, Record,
-    ServiceRecord, PIPE_PREFIX, RECORD_FORMAT, RENDEZVOUS_DIR, SERVICE_RECORD_FORMAT,
+    ServiceRecord, CONSOLE_PIPE_PREFIX, PIPE_PREFIX, RECORD_FORMAT, RENDEZVOUS_DIR,
+    SERVICE_RECORD_FORMAT,
 };
 
 /// cSHAKE256 customization of [`rendezvous_name`].

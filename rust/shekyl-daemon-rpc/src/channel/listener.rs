@@ -62,17 +62,55 @@ struct Handshaken {
     request: GrantSet,
 }
 
-/// Serve the channel on `listener` until `signal` completes, then wait for
-/// every connection to end. `router` is the one router, not yet stamped:
-/// each connection stamps its own authority.
+/// Which of the channel's legs a listener is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Leg {
+    /// `rpc-listen`: every enrolled key and the console key.
+    Network,
+    /// A service's console leg (RT-O37): the console key alone, at a socket
+    /// or pipe only the service account and an administrator can open. Any
+    /// other claim is closed at message 3.
+    Console,
+}
+
+/// How a connection's peer is named in the node's log.
+pub(crate) trait PeerLabel {
+    fn label(&self) -> String;
+}
+
+impl PeerLabel for SocketAddr {
+    fn label(&self) -> String {
+        self.to_string()
+    }
+}
+
+#[cfg(unix)]
+impl PeerLabel for tokio::net::unix::SocketAddr {
+    fn label(&self) -> String {
+        "the console's socket".to_owned()
+    }
+}
+
+#[cfg(windows)]
+impl PeerLabel for () {
+    fn label(&self) -> String {
+        "the console's pipe".to_owned()
+    }
+}
+
+/// Serve the channel's `leg` on `listener` until `signal` completes, then
+/// wait for every connection to end. `router` is the one router, not yet
+/// stamped: each connection stamps its own authority.
 pub(crate) async fn serve<L>(
     mut listener: crate::conn_limit::LimitedListener<L>,
+    leg: Leg,
     channel: Arc<Channel>,
     router: Router,
     signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()>
 where
-    L: crate::conn_limit::AdmitAs<Addr = SocketAddr>,
+    L: crate::conn_limit::AdmitAs,
+    L::Addr: PeerLabel + std::fmt::Debug,
     L::Io: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -86,7 +124,8 @@ where
         tokio::spawn(connection(
             stop_rx.clone(),
             io,
-            peer,
+            peer.label(),
+            leg,
             accepted_at,
             Arc::clone(&channel),
             router.clone(),
@@ -106,7 +145,8 @@ where
 async fn connection<S>(
     mut stop: watch::Receiver<bool>,
     mut io: S,
-    peer: SocketAddr,
+    peer: String,
+    leg: Leg,
     accepted_at: Instant,
     channel: Arc<Channel>,
     router: Router,
@@ -117,7 +157,7 @@ async fn connection<S>(
     let handshaken = tokio::select! {
         result = tokio::time::timeout_at(
             deadline,
-            handshake(&mut io, &channel, accepted_at, peer),
+            handshake(&mut io, &channel, accepted_at, &peer, leg),
         ) => result,
         _stopped = stop.wait_for(|&stopped| stopped) => return,
     };
@@ -251,7 +291,8 @@ async fn handshake<S>(
     io: &mut S,
     channel: &Channel,
     accepted_at: Instant,
-    peer: SocketAddr,
+    peer: &str,
+    leg: Leg,
 ) -> Option<Handshaken>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -298,6 +339,16 @@ where
             return None;
         }
     };
+    if leg == Leg::Console && admitted != Admitted::Console {
+        // The console's leg serves the console key alone (RT-O37): another
+        // claim there gets no message 4, as an unenrolled one does not.
+        tracing::info!(
+            target: "global",
+            "refused client {} on {peer}: only the console key is served there",
+            hex::encode(claim)
+        );
+        return None;
+    }
     let (pending, message4) = daemon
         .write_message4(&admitted.ceiling().to_payload())
         .ok()?;

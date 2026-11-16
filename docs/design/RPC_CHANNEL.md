@@ -1262,7 +1262,8 @@ R0 RT-7 stands: generated material only, never typed from memory.
   methods. The admin listener is reachable by any local account until
   RT-W12 retires it (RT-O33), and an enrolment made there would outlive
   that listener. A run-as-me daemon's owner enrols on the owner's socket;
-  a service's administrator enrols with the console key, over the channel.
+  a service's administrator enrols with the console key, over the channel
+  on the service's console leg (§7, RT-O37).
 - **Who may enrol, and how far (RULED, RT-O9.1).** Enrolment is the `enrol`
   grant, carried by the `admin` preset only. **An enrolled ceiling can
   never exceed the enroller's own effective grant** — otherwise every
@@ -1642,6 +1643,20 @@ the admin listener.
   compromised enrolled key on the operator's network, the internet-facing
   tunnel the likeliest, could hold every connection and lock the
   administrator out of revoking it.
+- **Reserved slots (RT-O37, ruled 2026-11-15).** The owner's leg and a
+  service's console leg (§7) each hold `SESSIONS_PER_CLIENT` connections
+  beyond `rpc-connections-max`, drawn only by their own listener once the
+  shared pool is full, so the process's total is the operator's number
+  plus eight. The reason: under the ruled posture the RPC port is reachable
+  only from the operator's controlled network, and the case this defends
+  is a compromised enrolled host on that network, the internet-facing
+  website tunnel the likeliest, filling the connection limit with silent
+  connections to lock the administrator out of revoking it. The owner's
+  reserve also covers local accounts reaching the plaintext view listener
+  until RT-W12. A channel connection is identified only at message 3, so
+  the console's reserve is reached through a leg only an administrator can
+  open, not through a peer address: an onion service or a tunnel ending on
+  the daemon's host delivers a remote client from loopback too.
 - **A shard fetch** (`INPUT_GRAMMAR.md` IG-Q90). Bounded callers share one shard-fetch permit, taken at the view desk's cache miss (`rust/shekyl-archival-fetch-sched/src/view.rs`). A cached view takes none, and neither does a call that joins a flight already in the air. A bounded call that would open a flight while the permit is out is `OverResourceBound`, `bound.shard`, and the flight is not queued. The host takes no permit. The bundle producer's challenge reads come first by reservation, not priority: the node's one fetch client has exactly the slots its lanes use, `READS_AT_ONCE` for the producer when the node mines and `VIEW_SLOTS` (two: the bounded permit's flight and one host flight beside it) for every view flight, the host's included (`rust/shekyl-node/src/producer.rs`). Views never hold more than their lane, so a started producer read never waits for a slot and its read ceiling holds; a missed read is a missed witness duty. Every node with a Tor builds the scheduler and serves the view; a node with Tor off has no client to read through and refuses with `RefusedByMethod`, `shard.tor-off`.
 - **A request over a bound is refused with the bound named**, never silently truncated. Each bound has its own dotted code (`INPUT_GRAMMAR.md` IG-Q79).
 
@@ -1941,7 +1956,25 @@ a demonstrated operator recovery need returns it as a ruled capability.
   no-read-up label at `CreateFileW`), the mode set exactly so no umask
   narrows or widens it, and the file and its directory entry synced before
   the start goes on. A key file or an enrolled set anyone else can read
-  refuses the start; it is never repaired.
+  refuses the start; it is never repaired. The rule is
+  `shekyl-os-account`'s `private_file`, which the tunnel's and a remote
+  CLI's keys follow too.
+- **A service's console leg (RT-O37, ruled 2026-11-15).** A service
+  listens on the channel at a leg only its account and an administrator
+  can open, as the owner reaches a run-as-me daemon on one only it can
+  open: on Unix the socket `rpc-console.sock` in the network's data
+  directory (inside the `0700` data home; the socket `0600`), replaced at
+  start under the exclusive lock and removed at a clean stop; on Windows a
+  pipe under a fresh random name with the data home's ACL (the service
+  account and Administrators), named in `rpc-console.pipe` beside the
+  key, because a fixed pipe name could be taken by another account first.
+  The handshake runs over it unchanged; a connection there that claims any
+  key but the console's is closed at message 3. It draws on the console's
+  reserved slots, beyond `rpc-connections-max`, as the owner's leg draws on
+  the owner's (§6.3), so a compromised enrolled host that fills the shared
+  pool cannot lock the administrator out of revoking it. The CLI finds the
+  leg at its fixed name in the data directory. The service record's TCP
+  address is not the console's way in; it serves every other local client.
 - **A service's data home (Rick, 2026-11-14, amending IG-Q36 and §7.1).**
   A fixed root per platform: `/var/lib/shekyl` on Linux (the unit's
   `StateDirectory=shekyl` with `StateDirectoryMode=0700`; the unit passes

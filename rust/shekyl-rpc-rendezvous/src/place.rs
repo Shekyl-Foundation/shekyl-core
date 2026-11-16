@@ -37,6 +37,12 @@ pub const RECORD_FORMAT: &str = "shekyl-rendezvous 1";
 /// random on each start.
 pub const PIPE_PREFIX: &str = r"\\.\pipe\shekyl-owner-";
 
+/// A service's console pipe's namespace prefix (`RPC_CHANNEL.md` RT-O37);
+/// the rest of the name is drawn at random on each start and written in the
+/// data directory, where only the service account and an administrator
+/// read it.
+pub const CONSOLE_PIPE_PREFIX: &str = r"\\.\pipe\shekyl-console-";
+
 /// A service's record's first line: its format and version.
 pub const SERVICE_RECORD_FORMAT: &str = "shekyl-service-rendezvous 1";
 
