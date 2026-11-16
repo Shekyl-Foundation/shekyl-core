@@ -245,6 +245,8 @@ Equal numbers on the two rows are two derivations landing on one value, not one 
 
 At target nothing changes, except that the verdict on an Uncertain failure waits for its reading. During fill, or at boot with no session, an Uncertain failure on a dead address is often excused; each excusal of an address with no counted failure costs a redial after `outage_retry`, so the cost is redials, not a lost address. A Destination failure always counts.
 
+**Registered before the Pi run (Rick, 2026-11-15).** With half of a 100-address gray list dead, a settled node that loses one Tor slot refills it in a median of 4.2 s; the registered band is 0.6 s to 55.6 s, the model's 5th to 95th percentile, and a floor-device refill outside it is a finding. At most one check runs during a refill: the completed dial is itself a working fact. The model and every input it states are shekyl-dev `data/dialer-outage/2026-11-15-onion-path-refill/`.
+
 **Recovery (invariant 3).**
 - **At the pin:** the first rung is 120–180 s. The Pi recovered 2 min 44 s after the unblock, against 6 s in the refuse block.
 - **Clearnet:** `outage_retry` bounds the cooldown that starts at an excused verdict, not the time from the unblock. A failure just before the unblock holds its seat outstanding for its waiting verdict, up to the wait (15 s, §4.1), and only then cools for up to 15 s; and the redial needs that address to be the one drawn, or another eligible candidate to exist. So the first redial of a given excused address is at most about δ + 15 s (≈ 30 s) after the unblock, plus one dial, and its success clears every excused cooldown of an address with no counted failure; addresses with counted failures keep their rung (§3.4). This is the design's bound; the Pi measures it (brief §7).
