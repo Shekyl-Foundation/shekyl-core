@@ -533,10 +533,11 @@ pub enum Input {
         /// Uniform over `u64`.
         draw: u64,
     },
-    /// A descriptor was dropped with its round open: Tor freed it at a
-    /// time-period rotation. The round is forgotten, not judged: it is
-    /// neither a success nor a failure, and that descriptor's refusals no
-    /// longer stand.
+    /// A descriptor left the tracker: Tor freed it at a time-period
+    /// rotation. An open round, if it had one, is forgotten rather than
+    /// judged. The descriptor's refusal no longer stands. The key will
+    /// not be accepted after this, so keeping the refusal would leave
+    /// the facet refused.
     UploadRoundForgotten {
         /// The descriptor dropped.
         descriptor: DescriptorKey,
@@ -822,10 +823,10 @@ pub struct Core {
     /// so its Reachable confirms that republish. A clock-jump probe and a
     /// probe scheduled before the republish do not.
     probe_confirms: bool,
-    /// The descriptors whose latest round had more than half of its uploads
-    /// refused. Either descriptor's refused round is the clock's evidence; a
-    /// round of the other descriptor does not clear it (§4.5).
-    refused_descriptors: Vec<DescriptorKey>,
+    /// Refusals of descriptors this publication still holds (§4.5). A
+    /// sibling's accepted round does not clear one. Retiring the
+    /// descriptor, or the publication, does.
+    refusals: clock::Refusals,
     /// Whether Tor's standing skew report owns a bootstrap block.
     skew_hold: clock::SkewHold,
     /// The republish backoff (§4.5).
@@ -879,7 +880,7 @@ impl Core {
             queued_send: None,
             check_from: 0,
             probe_confirms: false,
-            refused_descriptors: Vec::new(),
+            refusals: clock::Refusals::new(),
             skew_hold: clock::SkewHold::Holding,
             republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),

@@ -42,6 +42,16 @@ fn ended(descriptor: DescriptorKey, uploaded: u32, refused: u32, begun: u32) -> 
     }
 }
 
+fn refused(core: &super::super::Core) -> bool {
+    matches!(
+        core.status().inbound,
+        Inbound::Unreachable {
+            cause: InboundCause::UploadsRefused,
+            ..
+        }
+    )
+}
+
 fn stuck(step: &Step) -> Vec<DescriptorKey> {
     step.actions
         .iter()
@@ -98,15 +108,6 @@ fn two_rounds_close_together_bring_one_probe_whose_list_waits_for_both() {
 fn a_refusal_of_one_descriptor_stands_through_the_others_acceptance() {
     let mut core = published();
     core.on(ended(D0, 1, 7, 8), secs(10));
-    let refused = |core: &super::super::Core| {
-        matches!(
-            core.status().inbound,
-            Inbound::Unreachable {
-                cause: InboundCause::UploadsRefused,
-                ..
-            }
-        )
-    };
     assert!(refused(&core));
     core.on(ended(D1, 8, 0, 8), secs(20));
     assert!(
@@ -117,6 +118,32 @@ fn a_refusal_of_one_descriptor_stands_through_the_others_acceptance() {
     assert!(
         matches!(core.status().inbound, Inbound::Publishing { .. }),
         "{:?}",
+        core.status().inbound
+    );
+}
+
+/// **A descriptor dropped after its refused round ended takes that refusal
+/// with it.** The round is already closed, so there is no track to drop
+/// and nothing to judge. The key will not be accepted again, including
+/// when the same blinded id is seen under a new key. The sibling's
+/// refusal stays. Fails if `uploads_accepted` returns early when the
+/// descriptor has no open round, or if clearing one key clears the set.
+#[test]
+fn a_dropped_descriptors_closed_refusal_leaves_with_it() {
+    let mut core = published();
+    core.on(ended(D0, 1, 7, 8), secs(10));
+    core.on(ended(D1, 1, 7, 8), secs(20));
+    let forgot = core.on(Input::UploadRoundForgotten { descriptor: D0 }, secs(30));
+    assert_eq!(probes(&forgot), 0, "a closed round is not judged again");
+    assert!(
+        refused(&core),
+        "the sibling's refusal stands: {:?}",
+        core.status().inbound
+    );
+    core.on(Input::UploadRoundForgotten { descriptor: D1 }, secs(40));
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "the last retired descriptor takes the facet with it: {:?}",
         core.status().inbound
     );
 }

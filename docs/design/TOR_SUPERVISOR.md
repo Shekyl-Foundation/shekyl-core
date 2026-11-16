@@ -756,11 +756,17 @@ clients ask for until the next time period begins, and each descriptor
 re-uploads on its own clock, so dropping the one whose latest upload is
 oldest would often drop it. A drop in the wrong order heals on the dropped
 descriptor's next upload, which sees it again and drops the other. A
-dropped descriptor's open round is forgotten (`Input::UploadRoundForgotten`):
-neither a success nor a failure, and its refusal no longer stands. The
-core keys rounds by the order of first sight (`DescriptorKey`), which
-continues across publications; it forgets the rounds open when `ADD_ONION`
-goes out, since the driver starts the next publication's rounds afresh.
+dropped descriptor is forgotten (`Input::UploadRoundForgotten`), whether
+or not its round is still open: an open round is neither a success nor a
+failure, and its refusal no longer stands. A refusal names a key this
+publication still holds. The same blinded id seen again after a drop is a
+new key, so a refusal left on the old one would stand with no round that
+can clear it. `ADD_ONION` retires the publication the same way: the core
+forgets the rounds open then and every refusal of those keys, and the next
+publication's own rounds note a refusal again if the directories refuse
+those. The core keys rounds by the order of first sight (`DescriptorKey`), which
+continues across publications, since the driver starts the next
+publication's rounds afresh.
 Tor's descriptor ids stay in the control layer and the directory check.
 
 **A round that never ends is counted, not hidden.** A descriptor's round

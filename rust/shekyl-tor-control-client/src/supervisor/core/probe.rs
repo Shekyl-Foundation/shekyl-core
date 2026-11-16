@@ -184,19 +184,21 @@ impl Core {
         Vec::new()
     }
 
-    /// `descriptor` was dropped with its round open: Tor freed it at a
-    /// rotation. The round is not judged, and that descriptor's refusal,
-    /// if it had one, no longer stands.
+    /// `descriptor` left the tracker: Tor freed it at a rotation. An open
+    /// round is not judged. Its refusal, if it had one, no longer stands,
+    /// whether or not that round was still open.
     pub(super) fn round_forgotten(&mut self, now: u64, descriptor: DescriptorKey) -> Vec<Action> {
         self.take_track(descriptor);
         self.uploads_accepted(now, descriptor);
         Vec::new()
     }
 
-    /// The driver is about to publish the onion afresh (`ADD_ONION`), and
-    /// starts its rounds anew: the open rounds will never end in this core.
-    pub(super) fn forget_rounds(&mut self) {
+    /// The driver is about to publish the onion afresh (`ADD_ONION`). The
+    /// open rounds will never end in this core, and their keys will not be
+    /// accepted, so the publication's refusals leave with them.
+    pub(super) fn forget_publication(&mut self, now: u64) {
         self.rounds.clear();
+        self.clear_publication_refusals(now);
     }
 
     /// A round of `descriptor` ended, judged on that descriptor's whole

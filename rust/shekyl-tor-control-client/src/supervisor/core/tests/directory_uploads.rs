@@ -301,6 +301,52 @@ fn an_add_onion_forgets_the_rounds_open_then() {
     assert!(core.rounds.is_empty());
 }
 
+/// **`ADD_ONION` retires the publication's refusals.** The delete is
+/// already in flight when a round of the publication being replaced ends
+/// refused. The add still goes out, and those keys will not be accepted
+/// by the next publication, so the refusal leaves with them. The facet
+/// is publishing again. A refused round of the new publication notes its
+/// own. Fails if `forget_publication` clears the open rounds and leaves
+/// the refusal set.
+#[test]
+fn an_add_onion_retires_the_publications_refusals() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    let (at, verdict) = missed_twice_by_directories(&mut core, 0);
+    assert_eq!(republishes(&verdict), 1);
+    core.on(
+        Input::UploadRoundEnded {
+            descriptor: super::D0,
+            tally: super::super::RoundTally {
+                uploaded: 1,
+                refused: 7,
+                begun: 8,
+            },
+            draw: 0,
+        },
+        at,
+    );
+    assert!(
+        matches!(
+            core.status().inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::UploadsRefused,
+                ..
+            }
+        ),
+        "the round being replaced was refused: {:?}",
+        core.status().inbound
+    );
+    let deleted = replied(&mut core, at);
+    assert!(deleted.actions.contains(&Action::AddOnion));
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "the publication's refusal left with its keys: {:?}",
+        core.status().inbound
+    );
+    assert!(core.rounds.is_empty());
+}
+
 /// From a round that ended at `at` with its probe scheduled: two probes,
 /// each arriving, and two checks over [`run_four`] whose unconfirmed uploads
 /// say nothing, so each is a miss. Returns the verdict's time and step.
