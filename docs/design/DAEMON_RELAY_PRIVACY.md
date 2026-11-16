@@ -10,15 +10,20 @@ written against §6.8's joint `L × labelable × linkable` over a stated horizon
 not per-observation precision; the goal **borrows from FCMP++'s linkability
 gate**, which is therefore a reopening trigger for this document (§31.6).
 
-> **UPDATE 2026-09-12 — Tor-zone wire-observer cover SUPERSEDED as a protocol
-> default.** [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) (TRC; RULED
-> 2026-09-04, recorded 2026-09-12): on Tor, cover is operator non-exit relay
-> posture, not the §42 carrier. Mixing requires the daemon's Tor client on
-> that same relay process ([`TOR_RELAY.md`](../TOR_RELAY.md)); a sidecar
-> client Tor is uncovered. The §42 architecture is **retained** for
-> encrypted zones other than Tor. Default Tor nodes no longer receive
-> protocol-level constant-rate cover. This document's Round-3 / RP port
-> status is unchanged.
+> **REOPENED 2026-11-15 — Tor-zone wire-observer cover is open again.** The
+> 2026-09-12 update superseded the §42 carrier on Tor with operator relay
+> volume ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md), TRC). TRC-1
+> measured that and found no cover: an observer of a relay's guard
+> connections picks out the node's own sends
+> ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md);
+> TRC banner). **A node on Tor has no wire-observer cover today, relay or
+> not.** The reading measured a node with a relay; without one, a client's
+> guard connections carry only its own traffic, so the same follows by
+> reasoning, not by measurement. The §42 architecture is retained, and its scope is open again for
+> every encrypted link, Tor included; the redesign was ruled 2026-11-15 in the cover-traffic lane's Round 0
+> (§96 item 4 states its acceptance test). Each Tor-zone SUPERSEDED note below is marked REOPENED
+> and no longer holds. This document's Round-3 / RP port status is
+> unchanged.
 
 **Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
 **structurally complete** (§20.10), and the mechanism's definition of done is
@@ -186,11 +191,14 @@ this lane.
      measurement is not a stem edge. Per transaction, not per relay.
    - **Cover.** `CoverClass` is the ruling, not `link_encrypted` and not
      `address_hidden_from_peer`. An open link (clearnet) may run the
-     substitution carrier when it is requested. Tor is volume cover: no
+     substitution carrier when it is requested. Tor's class is `Volume`
+     (measured 2026-11-15, not cover: REOPENED, banner): no
      envelope, and a stem or an own-edge leaves immediately. On an open
      link the unrestricted origin is a stem slot, so it is slot-aligned
-     with that channel. No cover on Tor by ruling; on cover-bearing
-     links the own-edge is slot-aligned.
+     with that channel. No cover on Tor by ruling (**REOPENED
+     2026-11-15**, banner: ruled that Tor sessions take the carrier,
+     not yet built); on
+     cover-bearing links the own-edge is slot-aligned.
 
    UPDATE 2026-10-02. Role, epoch, fluff, and ingress do not read the
    connector. Stem selection reads it twice: hop 0 reads the
@@ -2564,7 +2572,7 @@ and only one gets a mechanism on Tor:
 - **Channel observer** (ISP, entry guard, circuit-level traffic analysis) — sees
   the *wire*, not the content. The noise channel (constant-rate cover) defends this
   *(SUPERSEDED as Tor-zone default 2026-09-12, TRC — cover on Tor is operator
-  relay volume, not this channel; retained for other encrypted zones)*,
+  relay volume, not this channel; retained for other encrypted zones; REOPENED 2026-11-15 (banner))*,
   legitimately and arguably better than clearnet's jitter. The source comment says
   exactly this: *"good protection against ISP adversaries, but not sybil
   adversaries"* ([levin_notify.cpp:829-833](../../src/cryptonote_protocol/levin_notify.cpp#L829)).
@@ -2761,7 +2769,7 @@ broken position). That is a **parameter to the one mechanism, not a fork of it**
 mechanism + Tor mechanism." Everything else — selection, embargo, reshape, the
 `g_max` bound itself — is transport-invisible. Under this mechanism the broadcast-to-2
 disappears as a *consequence* (the unified mechanism selects, like the public path;
-the constant-rate cover traffic then simply wraps the *selected* send on Tor *(SUPERSEDED as Tor-zone default wrap 2026-09-12, TRC — cover on Tor is operator relay posture, not this wrap; retained as the wrap for other encrypted zones)*, an
+the constant-rate cover traffic then simply wraps the *selected* send on Tor *(SUPERSEDED as Tor-zone default wrap 2026-09-12, TRC — cover on Tor is operator relay posture, not this wrap; retained as the wrap for other encrypted zones; REOPENED 2026-11-15 (banner))*, an
 orthogonal transport-layer concern on the observation axis).
 
 **Why this is the structural-enforcement move, not a preference.** Same discipline
@@ -7586,12 +7594,12 @@ after.
 
 |  | **recall denial** (deny the count) | **assembly denial** (deny the link) |
 | --- | --- | --- |
-| **wire observer** | payload-independence → **0** — **SUPERSEDED as Tor-zone default 2026-09-12 (TRC)**; posture-conditional there; **retained for other encrypted zones** | memorylessness — **(b)** |
+| **wire observer** | payload-independence → **0** — **SUPERSEDED as Tor-zone default 2026-09-12 (TRC)**; posture-conditional there; **retained for other encrypted zones**; **REOPENED 2026-11-15 (banner)** | memorylessness — **(b)** |
 | **peer adversary** | **floored at `p` — unreachable** | stem asymmetry + FCMP++ |
 
 **Both wire-observer cells are achievable outright** *(on encrypted zones
 other than Tor; Tor-zone recall is SUPERSEDED as a protocol default
-2026-09-12, TRC — posture-conditional)*, because that adversary
+2026-09-12, TRC — posture-conditional; REOPENED 2026-11-15 (banner))*, because that adversary
 appears in **no floor theorem**. The peer adversary's recall cell is **the one
 place where the honest answer is "you cannot"** — which is precisely why the
 goal had to become non-enumerability (§31.1), and why **the remaining work
@@ -8674,7 +8682,7 @@ every subsequent round.**
 ### 41.2 The trade, recorded as §30.6 required
 
 **What is lost** *(records-was, 2026-08-01 B-deletion; Tor-zone default cover
-is SUPERSEDED 2026-09-12, TRC)*: constant-rate cover on anonymity zones. A wire
+is SUPERSEDED 2026-09-12, TRC; REOPENED 2026-11-15 (banner))*: constant-rate cover on anonymity zones. A wire
 observer at the guard regains **emission timing** — it can see *that* this node
 transmitted and *when*. That is a real loss on the axis §20.9 charters, and it
 is the **only** cell of §32.6's grid where the answer was previously *zero*.
@@ -8684,7 +8692,7 @@ had covert channels.
 
 **What restores it** *(2026-08-01 path; Tor-zone restoration SUPERSEDED
 2026-09-12, TRC — operator relay posture, not covert re-enable; retained for
-other encrypted zones)*: the §30 composition, in this order — **R-1** (relayed
+other encrypted zones; REOPENED 2026-11-15 (banner))*: the §30 composition, in this order — **R-1** (relayed
 traffic made eligible for the anonymity zone, so the channel stops being an
 origin oracle), the **restored backstop** (§25.1's design question: what the
 embargo does when it fires on a noise zone, with the public-zone fallback
@@ -8739,7 +8747,7 @@ It records why the composition has the shape §30 gives it, and a reader who
 finds covert channels re-enabled later needs to know what made them unsafe the
 first time.
 
-## 42. Cover traffic over configuration C — the capacity collision is a *fluff* problem, and RD-4 already separates the classes — Tor-zone application SUPERSEDED 2026-09-12 (TRC); architecture retained for other encrypted zones
+## 42. Cover traffic over configuration C — the capacity collision is a *fluff* problem, and RD-4 already separates the classes — Tor-zone application SUPERSEDED 2026-09-12 (TRC); architecture retained for other encrypted zones; REOPENED 2026-11-15 (banner)
 
 **2026-08-01. Candidate output of the §30 design round, not an implementation.**
 §30.2 said R-1 collides with capacity at zero slack and left three options plus
@@ -8866,7 +8874,7 @@ requirement: **32 % more than "cover everything" needs.**
 
 **So the wire-observer recall cell returns to zero for ALL traffic**
 *(SUPERSEDED as Tor-zone default 2026-09-12, TRC — posture-conditional there;
-retained for other encrypted zones)*, and
+retained for other encrypted zones; REOPENED 2026-11-15 (banner))*, and
 §42.4's conceded activity signal closes. The narrowing is not repaired — its
 premise is gone. §42.4 is kept above rather than rewritten, because a reader who
 finds the cell reading zero needs to know it once did not, and why.
@@ -16007,9 +16015,13 @@ which is the opposite of what a stem is. **Deleted, not repaired** (§2.9 step
 **Current.** `CoverClass` decides, not `RelayZone::is_encrypted` and not
 `link_encrypted`. An open link (clearnet) may run the substitution carrier
 when the development flag asks for it: requesting the carrier means the
-NNhfs pipe encrypts and covers that link. Tor is volume cover
+NNhfs pipe encrypts and covers that link. Tor's class is `Volume`
 ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)): no envelope, and a stem
-or an own-edge leaves immediately. `Relay::new` refuses the flag when no
+or an own-edge leaves immediately. Measured 2026-11-15, relay volume is not
+cover, so on Tor nothing covers that send (**REOPENED 2026-11-15 (banner)**). The
+class does not survive: ruled 2026-11-15 in the cover-traffic lane's Round 0, cover follows the session's
+encryption and its connector's timing visibility, and the build deletes
+`CoverClass`. Until it lands, this paragraph describes the code. `Relay::new` refuses the flag when no
 configured connector is an open link, rather than silently running
 carrier-off. The FFI maps that refusal to null. `is_encrypted` stays the
 wire-observer cell. It does not select the carrier.
@@ -17269,18 +17281,39 @@ Each item is open. Its carrier is the only thing that closes it.
    that, closed when slice 1 had landed, the C++ peer lists gone
    (`m_peers_white` / `peerlist_manager` absent from `src/p2p`) and the
    uniform draw within a connector the dial source.*
-4. **TRC-1.** On Tor, wire-observer resistance is operator relay
-   volume, and that measurement is not finished. **Carrier:**
-   TRC-1 (`TOR_COVER_POSTURE.md` §8, the FOLLOWUPS row). **Test
-   (Rick, 2026-10-09):** the ProxyMark step 3 reproduction (§99,
-   PM-3, Level 3: the message-rate watermark recovered at a malicious
-   guard; the paper's bar is 100 % precision with 93.8 % recall for
-   onion-service nodes and 91.4 % for Tor-client nodes) is this item's
-   test. **Closes when** that row's falsifier is met:
-   carried traffic at ordinary operator scale is measured, PM-3 has
-   run against it, and the row is removed, or the ruling reopens
-   because originated cells stayed distinguishable. **Re-evaluation:**
-   the TRC-1 index row's next dated status.
+4. **Wire-observer cover on Tor — restated 2026-11-15 (Rick).**
+   *Status:* the item that stood here, TRC-1, has closed. Its close
+   condition fired on its second branch: the ruling reopened because
+   originated cells stayed distinguishable (`TOR_COVER_POSTURE.md`
+   banner), and its FOLLOWUPS tracking row is deleted. A node on Tor
+   has no wire-observer cover today. *The item as restated:* on Tor,
+   wire-observer resistance is the cover carrier, running on every
+   encrypted session whose connector declares its timing visible.
+   **Carrier:** the cover-traffic lane's build, then its measurement
+   (`TOR_COVER_POSTURE.md`, `COVER_TRAFFIC_RESTORATION.md`). **Test
+   (Rick, 2026-11-15, fixed before measuring):** on the managed
+   client-only Tor's guard connections, summed, real windows against
+   dummy windows in 100 ms bins, each window scored from its emission
+   time. It passes when the AUC's upper 95 % bound is at most 0.55
+   and the share of real windows above the dummy windows' 99th
+   percentile has an upper 95 % bound of at most 2 %. A timing test
+   holds to the same bound: the interval before a real window against
+   the interval before a dummy. The run takes at least 2,000 real
+   sends. The labels (time, channel, real or dummy) come from the
+   carrier through the measurement-spans feature only; a default build
+   never logs them. The run also confirms that real and dummy windows
+   produce the same Tor cell count. **The run is void** unless the instrument can see: with
+   cover off, under the same load, transaction-carrying windows
+   against all others give an AUC of at least 0.80; own and relayed
+   sends are reported separately there. Reported against the same
+   thresholds, not deciding: 1 s and 10 s bins, each guard alone, a
+   quiet run, the receiving side, both ends together, and the
+   inbound-to-outbound matcher. A clear failure there is explained
+   before Rick rules. Clearnet takes the same test per stem-peer
+   connection once its encryption is on; it is not this item's.
+   **PM-3** (§99) is a check, not this item's test, and keeps its own
+   row. **Closes when** Rick rules on a valid run that passes on Tor.
+   **Re-evaluation:** the `TRC-1…TRC-n` index row's next dated status.
 5. **Onion inbound capacity against a ceiling.** Reading 5's tail is
    `h / f` and above, and no inbound ceiling is ruled against it.
    **Carrier:** the #1004 follow-up ruling. **Closes when** a dated
@@ -18055,7 +18088,7 @@ state); P (persistent onion) is the sensitivity row.
 | **PM-1** identity | A requester polling the node's cached disclosure sample tries to name the node's own address or onion. The paper's step: the node's own onion was the last entry of each timed-sync reply (the `outgoing_to_same_zone` insertion, `net_node.inl:2730`); under the handshake-address ruling the own address is one uniform member of the sample with no position, and nothing is disclosed below the floor | Level 1 on the `shekyl-peerlist` sample instrument; Level 2 after PR-3 with per-boot and persistent onions, shortly after restart (A) and in steady state (B). Decides PWD-E7 | **100 % precision, 100 % recall** | A: — · B: — · P: — | One uniform guess among the disclosure population: `1 / (|W| + 1)` per guess; a sample of 12 contains the own address with probability `12 / (|W| + 1)` |
 | **PM-2a** connection occupation (TC-I) | Adversarial occupation of the 12 hidden outbound sessions over time, plus time to fill, under the attacker of 99.2 at the §97 knobs; D-S1's intake cap and the resulting `p_h` per connector are read off the same run | Level 1 on the `shekyl-peerlist` model plus the relay's hidden-slot draw (`simulate_two_slot_occupancy`, `simulate_hidden_slot_churn_exposure` extended with gray intake under D-S1 and the uniform white draw); Level 2 after PR-3 against the live dialer. **§96 item 3 is tracked here.** A clearnet variant with a many-address adversary (one `/24`, and many prefixes) is the reopen check for the dialer brief's no-subnet-grouping ruling (Rick, 2026-10-11): occupation beyond the attacker's share of honest addresses reopens it | **A: 7–11 of 12** hidden outbound occupied after restarts · **B: 8–10 of 10** within about 20 minutes under periodic replacement | A: — · B: — · P: — | The attacker's uniform share of white times 12, and a fill time set by the dialer's honest refill rate, not by its flood |
 | **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | Level 1 on the merged relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). The partition is `graph/hidden_slot_tests.rs` (#1022) | **Proxy selection raised from 15.3 % to 35.7 %** with one occupied connection | **Closed by construction** (§96 item 1): no height input exists. The candidate partition is exactly the established outbound sessions with an assessed transit (`stem_candidates_are_established_outbound_sessions_with_an_assessed_transit`). Profile-independent: no knob moves it | The attacker's uniform share of the hidden outbound sessions. One occupied connection of 12 is 1/12. A falsified height does not move that share: the relay never reads one |
-| **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | Level 3: a documented procedure under TRC-1 (`TOR_COVER_POSTURE.md` §8), after RD, against operator relay volume, run at milestones. **§96 item 4's test** | **100 % precision, 93.8 % recall** for onion-service nodes; **100 % precision, 91.4 % recall** for Tor-client nodes | A: — · B: — · P: — | The guard's base rate: the target's share of the circuits it carries, with no recall from the signal |
+| **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | Level 3: a documented procedure under TRC-1 (`TOR_COVER_POSTURE.md` §8), after RD, against operator relay volume, run at milestones. **A check, not §96 item 4's test** (Rick, 2026-11-15): item 4 was restated that day with its own test, and this row stays open on its own. Relay volume is not cover (**REOPENED 2026-11-15**, `TOR_COVER_POSTURE.md` banner) | **100 % precision, 93.8 % recall** for onion-service nodes; **100 % precision, 91.4 % recall** for Tor-client nodes | A: — · B: — · P: — | The guard's base rate: the target's share of the circuits it carries, with no recall from the signal |
 
 ### 99.4 The harness — three levels (stretch goal, Rick, 2026-10-09)
 

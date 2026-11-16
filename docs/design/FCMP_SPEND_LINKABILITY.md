@@ -844,7 +844,8 @@ archival fixtures, the docs citation gates. **Gates that do not fire and
 must be done by hand:** the rule-42 snapshot (silent), the domain registry
 (silent on a *new* domain). The fuzz inventory checked file presence only
 at this census; the compile gate landed 2026-10-01 (`cargo check --locked`
-of `rust/shekyl-fcmp/fuzz` in `rust-audit-test.yml`).
+of `rust/shekyl-fcmp/fuzz`, now in `fuzz-harness.yml` with every other fuzz
+crate).
 
 **Census findings outside the asked scope, with dispositions:**
 
@@ -1053,7 +1054,7 @@ Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
   `VERSION 14` and the wallet curve-tree store `SCHEMA_VERSION 5`.
 - Open by design: A5-1…A5-7 (gate-6 owner, ruling 4, now that the premise
   is restored), `PL-D4` (`Target: V4`). The fuzz-crate CI gap closed
-  2026-10-01: `rust-audit-test.yml` `cargo check --locked`s
+  2026-10-01: `fuzz-harness.yml` `cargo check --locked`s
   `rust/shekyl-fcmp/fuzz`.
 
 ## 13. What this round did not find (denominator, rule 26)
