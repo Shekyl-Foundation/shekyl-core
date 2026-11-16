@@ -3963,4 +3963,60 @@ mod tests {
             "emitted but not in the contract: {unlisted:?}; in the contract with no variant: {unbacked:?}"
         );
     }
+
+    /// `-29119`'s `data.fault` is one keyword of a closed set: the builder's
+    /// invariants and the wallet-side faults. The contract and the input
+    /// grammar list that set; both lists are the two enums' keywords. Bites
+    /// when a fault is added, renamed or removed in the code without the
+    /// docs, or the docs name a keyword nothing emits.
+    #[test]
+    fn the_signer_fault_keywords_are_the_documented_set() {
+        use std::collections::BTreeSet;
+        let emitted: BTreeSet<&str> = shekyl_engine_core::InternalSignFault::ALL
+            .iter()
+            .map(|f| f.keyword())
+            .chain(
+                shekyl_engine_core::SignerFault::ALL
+                    .iter()
+                    .map(|f| f.keyword()),
+            )
+            .collect();
+        assert_eq!(
+            emitted.len(),
+            shekyl_engine_core::InternalSignFault::ALL.len()
+                + shekyl_engine_core::SignerFault::ALL.len(),
+            "no keyword names two faults"
+        );
+
+        fn between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
+            let from = text.find(start).expect(start) + start.len();
+            let len = text[from..].find(end).expect(end);
+            &text[from..from + len]
+        }
+
+        let contract = include_str!("../../../docs/api/wallet_rpc.yaml");
+        // The entry wraps across the YAML's description column: one space
+        // between words, so a phrase reads whole.
+        let entry = between(contract, "-29119 SIGNER_FAILED", "-29120 SEND_NOT_SAVED")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let builder = between(&entry, "a builder invariant — ", " — or the wallet");
+        let wallet = between(&entry, "signing reads — ", ").");
+        let listed: BTreeSet<&str> = builder
+            .split(',')
+            .chain(wallet.split(','))
+            .map(str::trim)
+            .collect();
+        assert_eq!(listed, emitted, "wallet_rpc.yaml's -29119 keywords");
+
+        let grammar = include_str!("../../../docs/design/INPUT_GRAMMAR.md");
+        let sentence = between(
+            grammar,
+            "`-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set:",
+            "(the wallet state signing reads)",
+        );
+        let listed: BTreeSet<&str> = sentence.split('`').skip(1).step_by(2).collect();
+        assert_eq!(listed, emitted, "INPUT_GRAMMAR.md's -29119 keywords");
+    }
 }

@@ -232,6 +232,30 @@ pub enum InternalSignFault {
 }
 
 impl InternalSignFault {
+    /// Every internal fault, in declaration order.
+    pub const ALL: [Self; 20] = [
+        Self::NoInputs,
+        Self::NoOutputs,
+        Self::ZeroInputAmount,
+        Self::ZeroOutputAmount,
+        Self::InputAmountOverflow,
+        Self::OutputAmountOverflow,
+        Self::InsufficientFunds,
+        Self::EmptyLeafChunk,
+        Self::PqcLeafDerivation,
+        Self::LeafChunkTooLarge,
+        Self::ZeroTreeDepth,
+        Self::TreeTooShallow,
+        Self::TreeDepthTooLarge,
+        Self::BranchLayerMismatch,
+        Self::InvalidCombinedSsLength,
+        Self::BulletproofError,
+        Self::FcmpProveError,
+        Self::PqcSignError,
+        Self::WireError,
+        Self::BalanceSelfCheck,
+    ];
+
     /// The variant's name as one keyword, the closed set a report and the
     /// wire carry (`data.fault` on the wallet RPC's `-29119`).
     #[must_use]

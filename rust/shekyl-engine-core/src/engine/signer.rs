@@ -58,7 +58,7 @@
 //! pending-tx engine over the secret-holding signer instance. They
 //! share a name family but are layered, not overlapping.
 
-use super::error::SignerError;
+use super::error::{SignerError, SignerFault};
 use super::key_actor::KeyEngineHandle;
 use super::traits::key::KeyEngine;
 
@@ -411,7 +411,7 @@ impl Signer for LocalSigner {
             &mut signatures.bulletproof_plus.as_slice(),
         )
         .map_err(|_| SignerError::Internal {
-            fault: super::error::SignerFault::BulletproofParse,
+            fault: SignerFault::BulletproofParse,
         })?;
 
         let wire_input = shekyl_tx_builder::WireEncodeInput {
@@ -445,7 +445,7 @@ impl Signer for LocalSigner {
 
         let tx_bytes =
             shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| SignerError::Internal {
-                fault: super::error::SignerFault::WireEncode,
+                fault: SignerFault::WireEncode,
             })?;
 
         Ok(SignedTransfer {
@@ -558,7 +558,7 @@ mod tests {
         assert!(matches!(
             err,
             SignerError::Internal {
-                fault: super::super::error::SignerFault::Primitive
+                fault: SignerFault::Primitive
             }
         ));
     }

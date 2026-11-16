@@ -11,7 +11,8 @@ use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_core::{SubmitOutcome, SubmitReceipt};
 use shekyl_engine_state::{
-    DisputeReason, LedgerBlock, ReceiveAttribution, SendRecord, SendState, TransferDetails,
+    DisputeReason, InFlightSpendLocks, LedgerBlock, OutputStanding, ReceiveAttribution, SendRecord,
+    SendState, TransferDetails,
 };
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
@@ -62,18 +63,15 @@ pub use shekyl_wallet_contract::transfer_id::{
 /// how a row maps to [`TransferState`] without re-projecting the whole row.
 /// `spend_locks` is the journal-derived lock map (PR-SJ-1b): a locked,
 /// unspent receive row is a spend in flight, so it reads `PENDING`.
-pub fn transfer_state(
-    td: &TransferDetails,
-    spend_locks: &shekyl_engine_state::InFlightSpendLocks,
-) -> TransferState {
+pub fn transfer_state(td: &TransferDetails, spend_locks: &InFlightSpendLocks) -> TransferState {
     // The list has no horizon: confirmed is on chain, spendable or not.
     // The standing's precedence is the classifier's, so an unspendable row
     // is never CONFIRMED (PL-D3 §6.2).
     match td.standing(spend_locks) {
-        shekyl_engine_state::OutputStanding::Spent => TransferState::Spent,
-        shekyl_engine_state::OutputStanding::Unspendable => TransferState::Unspendable,
-        shekyl_engine_state::OutputStanding::InFlight => TransferState::Pending,
-        shekyl_engine_state::OutputStanding::OnChain => TransferState::Confirmed,
+        OutputStanding::Spent => TransferState::Spent,
+        OutputStanding::Unspendable => TransferState::Unspendable,
+        OutputStanding::InFlight => TransferState::Pending,
+        OutputStanding::OnChain => TransferState::Confirmed,
     }
 }
 
@@ -149,7 +147,7 @@ pub fn attribution_matches(
 /// every call site shares the same projection.
 pub fn transfer_view(
     td: &TransferDetails,
-    spend_locks: &shekyl_engine_state::InFlightSpendLocks,
+    spend_locks: &InFlightSpendLocks,
     tx_notes: &std::collections::BTreeMap<[u8; 32], String>,
 ) -> TransferView {
     TransferView {

@@ -265,11 +265,13 @@ pub(super) fn fail_build_after_attempted(sink: &dyn DiagnosticSink, err: SendErr
 }
 
 /// The selector returned an index that was not in the candidate set it was
-/// given. The diagnostic for this error is
+/// given: the wallet's own bug, never the request's, so it is a
+/// [`SendError::BuildInvariant`] and the client is not told to fix a
+/// recipient. The diagnostic for this error is
 /// [`BuildErrorKind::SelectorContractViolation`]. A short or empty candidate
 /// set is not this error: that goes through [`super::candidates::CandidatePartition::refusal`].
 pub(super) fn selector_subset_violation() -> SendError {
-    SendError::InvalidRecipient {
+    SendError::BuildInvariant {
         reason: "output selector returned indices outside candidate set",
     }
 }
