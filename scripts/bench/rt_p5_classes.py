@@ -53,15 +53,42 @@ K_MAX = 8
 # hold the two equal.
 RUN_CURVE_KEY = "curve"
 # The 4.x wire carries every method on `/json_rpc` (RW-Q1), so a label is
-# `json_rpc:` and the method's name.
-SUBMIT = "json_rpc:tx_submit"
-BLOCK_BATCH = "json_rpc:block_show"
-SPEND_BUILDING = "json_rpc:fee"
+# `json_rpc:` and the method's name. The instrument spells the same
+# strings; the tests hold each pair equal. A block batch is a
+# `LABEL_BLOCK_SHOW` response. Spend building is `LABEL_FEE`, either
+# direction. Wallet sync is every other label.
+LABEL_TX_SUBMIT = "json_rpc:tx_submit"
+LABEL_BLOCK_SHOW = "json_rpc:block_show"
+LABEL_FEE = "json_rpc:fee"
+
+# The HTTP body of `tx_submit` on the 4.x wire. The envelope is what
+# `shekyl-rpc-client` posts for `TxBody { body }` with an empty `bytes`
+# string (`id` is 0). A real body is that envelope plus the base64 of the
+# transaction (RFC 4648 §4, padded: 4 characters for each 3 bytes). IG-6.
+# `derive` does not call `tx_submit_body`: the registered rule fits a whole
+# factor, and this rounding is not one. The 2026-11-15 record states the
+# encoding beside that rule, and the tests check it against the trace.
+TX_SUBMIT_ENVELOPE = '{"jsonrpc":"2.0","id":0,"method":"tx_submit","params":{"body":""}}'
+BASE64_BYTES = 3
+BASE64_CHARS = 4
 
 # Registered tolerance for the determinism check: per matched message, the
 # larger of these.
 DETERMINISM_ABS_BYTES = 64
 DETERMINISM_REL = 0.01
+
+
+def base64_padded_len(nbytes):
+    """Characters in the padded base64 of `nbytes` (RFC 4648 §4)."""
+    if nbytes < 0:
+        raise ValueError(f"a transaction of {nbytes} bytes")
+    groups = (nbytes + BASE64_BYTES - 1) // BASE64_BYTES
+    return groups * BASE64_CHARS
+
+
+def tx_submit_body(tx_len):
+    """Bytes of the `tx_submit` HTTP body for a transaction of `tx_len` bytes."""
+    return len(TX_SUBMIT_ENVELOPE) + base64_padded_len(tx_len)
 
 
 def records_of(total):
@@ -189,7 +216,7 @@ def submission_encoding(messages, txs):
     submission requests with the built transactions by size order and
     require one (a, f) for all of them. Returns (a, f, head_bytes) or None."""
     subs = sorted(
-        (m for m in messages if m["label"] == SUBMIT and m["direction"] == "request"),
+        (m for m in messages if m["label"] == LABEL_TX_SUBMIT and m["direction"] == "request"),
         key=lambda m: m["body"],
     )
     tx_lens = sorted({int(t["tx"]): int(t["tx_len"]) for t in txs}.values())
@@ -240,10 +267,14 @@ def derive(run_dir):
           "method and direction with records in those classes (records counted).\n")
     for K in range(1, K_MAX + 1):
         classes, _ = tables[K]
-        sub_classes = sorted({class_of(r, classes) for r, o in zip(records, record_owner) if o == (SUBMIT, "request")})
+        sub_classes = sorted({
+            class_of(r, classes)
+            for r, o in zip(records, record_owner)
+            if o == (LABEL_TX_SUBMIT, "request")
+        })
         sharing = Counter(
             o for r, o in zip(records, record_owner)
-            if class_of(r, classes) in sub_classes and o != (SUBMIT, "request")
+            if class_of(r, classes) in sub_classes and o != (LABEL_TX_SUBMIT, "request")
         )
         who = ", ".join(f"`{l}` {d} ×{n}" for (l, d), n in sorted(sharing.items())) or "nothing else"
         print(f"- **K = {K}**: submission records in {', '.join(f'{c:,}' for c in sub_classes)}; shared with {who}.")
@@ -258,7 +289,7 @@ def derive(run_dir):
           "Each row below is the submission message at that depth, from the weight crate's size predictor; "
           "the head is taken as unchanged except for the length of `content-length`'s digits.\n")
     # The head differs between submissions only in `content-length`'s digits.
-    ref = min((m for m in messages if m["label"] == SUBMIT and m["direction"] == "request"),
+    ref = min((m for m in messages if m["label"] == LABEL_TX_SUBMIT and m["direction"] == "request"),
               key=lambda m: m["body"])
     base_head = ref["head"] - len(str(ref["body"]))
     per_tx = defaultdict(dict)
@@ -282,11 +313,11 @@ def derive(run_dir):
 # every other message a refresh makes. Building a spend is `fee`;
 # submitting it is `tx_submit`.
 def category(label, direction):
-    if label == SUBMIT:
+    if label == LABEL_TX_SUBMIT:
         return "submission" if direction == "request" else "submission reply"
-    if label == BLOCK_BATCH and direction == "response":
+    if label == LABEL_BLOCK_SHOW and direction == "response":
         return "block batch"
-    if label == SPEND_BUILDING:
+    if label == LABEL_FEE:
         return "spend building"
     return "wallet sync"
 
@@ -344,11 +375,11 @@ def submission_standing(records, classes):
     direction and in either direction."""
     out = {}
     for r, l, d in records:
-        if l == SUBMIT and d == "request":
+        if l == LABEL_TX_SUBMIT and d == "request":
             out.setdefault(class_of(r, classes), [0, Counter(), Counter()])[0] += 1
     for r, l, d in records:
         c = class_of(r, classes)
-        if c not in out or (l == SUBMIT and d == "request"):
+        if c not in out or (l == LABEL_TX_SUBMIT and d == "request"):
             continue
         out[c][2][category(l, d)] += 1
         if d == "request":

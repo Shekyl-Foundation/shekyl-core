@@ -11,8 +11,9 @@
   submission is still at most 512 bytes, and the submission body's encoding,
   and leaves any change to the classes to the maintainer. The instrument
   reads the record constants from `shekyl-noise` instead of restating them,
-  and the derivation script's tests check its copies against that crate. The
-  2026-10-17 record is unchanged. **Measured 2026-11-16:** both registered
+  and the derivation script's tests check those copies, and the subject
+  labels, against the definitions they are copied from. The 2026-10-17
+  record is unchanged. **Measured 2026-11-16:** both registered
   runs passed and the determinism check passes; every request other than a
   submission is at most 197 bytes; the three-class rule now rounds to 512,
   4,096 and 65,535 against the ruled 16,384 middle class, and a submission's

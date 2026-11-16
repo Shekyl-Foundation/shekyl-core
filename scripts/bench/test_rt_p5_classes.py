@@ -37,73 +37,134 @@ def brute(records, K):
 
 RUST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "rust")
 
-# The integer-valued right-hand sides the record constants are written
-# with. A form not listed here fails the test by name rather than being
-# guessed at.
-RUST_INTEGER_FORMS = {"u16::MAX as usize": 0xFFFF}
+# The committed 4.x trace the bytes-kind pin reads. A missing directory
+# fails the test: the subject is this registration's capture.
+REGISTERED_TRACE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "docs", "benchmarks",
+    "rt_p5_rpc_message_sizes_20261115_captures", "registered_1",
+)
 
 
-def rust_const(path, name):
-    """The right-hand side of `const NAME: T = ...;` in a Rust source file,
-    its whitespace collapsed: the definition read by its shape, so layout,
-    visibility and the code around it do not matter."""
+def rust_text(path):
     with open(os.path.join(RUST, *path), encoding="utf-8") as f:
-        text = f.read()
-    found = re.findall(r"\bconst\s+%s\s*:[^=;]+=\s*(.+?)\s*;" % re.escape(name), text, re.S)
+        return f.read()
+
+
+def rust_rhs(path, name):
+    """The right-hand side of `const NAME`, whitespace collapsed.
+
+    Layout and visibility do not matter. The comparison is against the
+    expression as written: this does not evaluate Rust, so an equivalent
+    expression the test has not named fails, and a reflow does not."""
+    found = re.findall(
+        r"\bconst\s+%s\s*:[^=;]+=\s*(.+?)\s*;" % re.escape(name), rust_text(path), re.S)
     if len(found) != 1:
         raise AssertionError("%s defines %s %d times" % ("/".join(path), name, len(found)))
     return " ".join(found[0].split())
 
 
-def rust_integer(rhs):
-    """A constant's value from its right-hand side: a literal, or a form in
-    `RUST_INTEGER_FORMS`."""
-    if rhs in RUST_INTEGER_FORMS:
-        return RUST_INTEGER_FORMS[rhs]
-    try:
-        return int(rhs.replace("_", ""), 0)
-    except ValueError:
-        raise AssertionError("no value is known for the Rust expression %r" % rhs)
+def rust_fn(path, name):
+    """The text of top-level `fn name`, through the line before the next one."""
+    text = rust_text(path)
+    match = re.search(r"(?m)^fn %s\b" % re.escape(name), text)
+    if match is None:
+        raise AssertionError("%s has no fn %s" % ("/".join(path), name))
+    rest = text[match.start():]
+    nxt = re.search(r"(?m)\nfn ", rest[1:])
+    return rest if nxt is None else rest[:nxt.start() + 1]
 
 
 class RecordConstants(unittest.TestCase):
-    """The script cannot import the Rust constants, so it reads their
-    definitions in `shekyl-noise` and compares the values. Red edit: set
-    `OCCUPANCY_LEN = 3` in the script, and this test fails."""
+    """The script cannot import the Rust constants, so it reads each
+    definition's right-hand side and compares that, and compares its own
+    number separately. Red edit: set `OCCUPANCY_LEN = 3` in the script, and
+    this test fails. A reflow of the Rust definition does not."""
 
     def test_the_record_constants_are_the_noise_crates(self):
         classed = ("shekyl-noise", "src", "classed.rs")
-        self.assertEqual(rust_integer(rust_const(classed, "OCCUPANCY_LEN")), rc.OCCUPANCY_LEN)
-        self.assertEqual(rust_integer(rust_const(classed, "MAX_RECORD_PLAINTEXT")),
-                         rc.MAX_RECORD_PLAINTEXT)
-
-    def test_a_constant_is_read_whatever_its_layout(self):
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "k.rs"), "w", encoding="utf-8") as f:
-                f.write("pub(crate)  const\n    OCCUPANCY_LEN :\n usize =\n 0x2 ;\n")
-            here = os.path.relpath(d, RUST).split(os.sep) + ["k.rs"]
-            self.assertEqual(rust_integer(rust_const(here, "OCCUPANCY_LEN")), 2)
-
-    def test_an_unknown_form_is_refused_by_name(self):
-        with self.assertRaisesRegex(AssertionError, "u32::MAX"):
-            rust_integer("u32::MAX as usize")
+        self.assertEqual(rust_rhs(classed, "OCCUPANCY_LEN"), "2")
+        self.assertEqual(rc.OCCUPANCY_LEN, 2)
+        self.assertEqual(rust_rhs(classed, "MAX_RECORD_PLAINTEXT"), "u16::MAX as usize")
+        self.assertEqual(rc.MAX_RECORD_PLAINTEXT, 0xFFFF)
 
 
 class RunKeys(unittest.TestCase):
-    """run.json's curve key is the instrument's: the instrument writes the
-    file under its `RUN_CURVE_KEY`, and the script reads it under its own.
+    """The script's labels and curve key are the instrument's constants.
     Red edit: set `RUN_CURVE_KEY = "curve_tree_info"` in the script, and
-    this test fails."""
+    this test fails. Red edit: write run.json's key as the literal
+    `"curve"` inside `write_outputs`, and the write-site test fails."""
 
     INSTRUMENT = ("shekyl-engine-core", "src", "engine", "regtest_e2e_rt_p5.rs")
 
-    def test_the_curve_key_is_the_instruments(self):
-        self.assertEqual(rust_const(self.INSTRUMENT, "RUN_CURVE_KEY"),
-                         '"%s"' % rc.RUN_CURVE_KEY)
+    def test_the_labels_are_the_instruments(self):
+        pairs = (
+            ("LABEL_TX_SUBMIT", rc.LABEL_TX_SUBMIT),
+            ("LABEL_BLOCK_SHOW", rc.LABEL_BLOCK_SHOW),
+            ("LABEL_FEE", rc.LABEL_FEE),
+            ("RUN_CURVE_KEY", rc.RUN_CURVE_KEY),
+        )
+        for name, value in pairs:
+            self.assertEqual(rust_rhs(self.INSTRUMENT, name), '"%s"' % value, name)
 
-    def test_the_instrument_writes_run_json_under_its_constant(self):
-        with open(os.path.join(RUST, *self.INSTRUMENT), encoding="utf-8") as f:
-            self.assertRegex(f.read(), r"\bRUN_CURVE_KEY\s*:\s*\w+\s*,")
+    def test_run_json_is_written_under_the_constant(self):
+        # One use, inside the function. The constant's own definition is
+        # outside it; a reader that returns the whole file counts two and
+        # fails. A comment carrying the same shape inside the function does
+        # too.
+        body = rust_fn(self.INSTRUMENT, "write_outputs")
+        self.assertEqual(len(re.findall(r"\bRUN_CURVE_KEY\s*:", body)), 1)
+
+
+class BytesKind(unittest.TestCase):
+    """A submission body on the 4.x wire is the client's envelope plus
+    padded base64. `derive` does not use this; the registered rule is the
+    whole-factor fit. Red edit: set `BASE64_CHARS = 5` in the script, and
+    both tests fail."""
+
+    def test_the_empty_transaction_is_the_envelope(self):
+        # RFC 4648 §4: a short group still occupies 4 characters, and no
+        # bytes occupy none. The envelope's 66 is the client's empty body.
+        self.assertEqual(rc.base64_padded_len(0), 0)
+        self.assertEqual(rc.base64_padded_len(1), 4)
+        self.assertEqual(rc.base64_padded_len(3), 4)
+        self.assertEqual(rc.base64_padded_len(4), 8)
+        self.assertEqual(len(rc.TX_SUBMIT_ENVELOPE), 66)
+        self.assertEqual(rc.tx_submit_body(0), 66)
+        self.assertEqual(rc.tx_submit_body(1), 70)
+        with self.assertRaises(ValueError):
+            rc.base64_padded_len(-1)
+
+    def test_the_registered_trace_is_that_encoding(self):
+        messages, txs, _ = rc.load(REGISTERED_TRACE)
+        tx_len = {}
+        predicted = {}
+        for t in txs:
+            index = int(t["tx"])
+            tx_len[index] = int(t["tx_len"])
+            predicted.setdefault(index, {})[int(t["depth"])] = int(t["predicted_tx_len"])
+        subs = sorted(
+            (m for m in messages
+             if m["label"] == rc.LABEL_TX_SUBMIT and m["direction"] == "request"),
+            key=lambda m: m["body"],
+        )
+        order = sorted(tx_len, key=lambda i: (tx_len[i], i))
+        self.assertEqual(len(subs), len(order))
+        ref = min(subs, key=lambda m: m["body"])
+        # The head aside from content-length's digits. The registration
+        # records it as 100.
+        base_head = ref["head"] - len(str(ref["body"]))
+        self.assertEqual(base_head, 100)
+        largest = 0
+        for message, index in zip(subs, order):
+            self.assertEqual(message["body"], rc.tx_submit_body(tx_len[index]))
+            for _depth, nbytes in predicted[index].items():
+                body = rc.tx_submit_body(nbytes)
+                total = base_head + len(str(body)) + body
+                largest = max(largest, total)
+                if nbytes == tx_len[index]:
+                    self.assertEqual(total, message["total"], index)
+        # The registration's largest cell: 8 inputs, 16 outputs, depth 8.
+        self.assertEqual(largest, 108_860)
 
 
 class RecordSplit(unittest.TestCase):
@@ -171,7 +232,7 @@ class Report(unittest.TestCase):
 
     def test_a_submission_alone_in_its_direction_is_reported_alone(self):
         classes = [500, 65_535]
-        recs = [(30_000, rc.SUBMIT, "request"), (200, "json_rpc:chain_height", "request"),
+        recs = [(30_000, rc.LABEL_TX_SUBMIT, "request"), (200, "json_rpc:chain_height", "request"),
                 (40_000, "json_rpc:block_header_show", "response")]
         standing = rc.submission_standing(recs, classes)
         n, same, either = standing[65_535]

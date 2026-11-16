@@ -7,13 +7,15 @@
 //! message sizes, per method, of a generated wallet's traffic with a
 //! regtest daemon. The record channel's size classes are derived from them.
 //!
-//! The registration is
-//! `docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md`. It fixes, before
-//! any registered run, the traffic generated here, what is counted, the
-//! gates a run must pass, and how the classes are derived from the output
-//! (`scripts/bench/rt_p5_classes.py`). Read it before changing anything in
-//! this file: a change to the generated traffic is a change to the
-//! registered method.
+//! The method — the traffic, what is counted, the gates and the derivation
+//! — is the registration of 2026-10-17
+//! (`docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md`). The run this
+//! file performs is the 4.x registration of 2026-11-15
+//! (`docs/benchmarks/rt_p5_rpc_message_sizes_20261115.md`): its subjects,
+//! its seeds and the key `run.json` is written under. Read that record
+//! before changing the traffic or the gates. A change to the generated
+//! traffic is a change to the registered method. The classes are derived
+//! by `scripts/bench/rt_p5_classes.py`.
 //!
 //! # What is counted
 //!
@@ -62,8 +64,23 @@ use super::{assert_tx_confirmed, create_wallet, require_fresh_accept, RegtestDae
 /// largest record less its occupancy field (`RPC_CHANNEL.md` §4.4).
 const RECORD_PAYLOAD_MAX: usize = shekyl_noise::MAX_RECORD_PLAINTEXT - shekyl_noise::OCCUPANCY_LEN;
 
-/// A submission's label: the 4.x wire carries every method on `/json_rpc`.
-const SUBMISSION: &str = "json_rpc:tx_submit";
+/// Wire labels of the 4.x registration's subjects. A label is `json_rpc:`
+/// and the method (RW-Q1). The derivation script spells the same strings
+/// `LABEL_TX_SUBMIT`, `LABEL_BLOCK_SHOW` and `LABEL_FEE`; its tests hold
+/// each pair equal. `LABEL_CHAIN_HEIGHT` is a subject and, in the script,
+/// wallet sync, which is every label those three do not name.
+const LABEL_TX_SUBMIT: &str = "json_rpc:tx_submit";
+const LABEL_BLOCK_SHOW: &str = "json_rpc:block_show";
+const LABEL_CHAIN_HEIGHT: &str = "json_rpc:chain_height";
+const LABEL_FEE: &str = "json_rpc:fee";
+
+/// The subjects the trace must carry.
+const SUBJECTS: &[&str] = &[
+    LABEL_TX_SUBMIT,
+    LABEL_BLOCK_SHOW,
+    LABEL_CHAIN_HEIGHT,
+    LABEL_FEE,
+];
 
 /// `run.json`'s key for the daemon's curve tree reply. The derivation
 /// script reads the file under the same key (`RUN_CURVE_KEY` in
@@ -431,12 +448,7 @@ async fn run_cell(cell: &Cell) {
 /// The gates of the registration that read the messages (rule 47: the
 /// subject must be present, not merely unrefuted).
 fn check_subjects(messages: &[Row], built: &[Built]) {
-    for needle in [
-        SUBMISSION,
-        "json_rpc:block_show",
-        "json_rpc:chain_height",
-        "json_rpc:fee",
-    ] {
+    for &needle in SUBJECTS {
         assert!(
             messages.iter().any(|m| m.label == needle),
             "the trace must carry `{needle}`; it carries {:?}",
@@ -461,7 +473,7 @@ fn check_subjects(messages: &[Row], built: &[Built]) {
     );
     let submissions = messages
         .iter()
-        .filter(|m| m.label == SUBMISSION && m.direction == "request")
+        .filter(|m| m.label == LABEL_TX_SUBMIT && m.direction == "request")
         .count();
     assert_eq!(
         submissions,
