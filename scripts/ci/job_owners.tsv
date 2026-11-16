@@ -63,7 +63,7 @@ scripts/ci/check_matrix_job_gating.py	grep-gates:grep-gates
 scripts/ci/check_measurement_ledger.py	docs-gates:check-doc-links
 scripts/ci/check_measurement_spans.py	rust-audit-test:rust-audit-and-test
 scripts/ci/check_multisig_doc_literals.sh	grep-gates:grep-gates
-scripts/ci/check_network_uniformity.py	grep-gates:grep-gates
+scripts/ci/check_network_uniformity.py	docs-gates:check-doc-links,grep-gates:grep-gates
 scripts/ci/check_no_claim_era_spec.py	docs-gates:check-doc-links
 scripts/ci/check_no_first_party_c.py	build:build-ubuntu,grep-gates:grep-gates
 scripts/ci/check_no_orphan_tor.sh	tor-pin-verify:verify
@@ -96,7 +96,7 @@ scripts/ci/check_store_error_conversion_ban.py	docs-gates:check-doc-links
 scripts/ci/check_store_invariant_register.py	docs-gates:check-doc-links
 scripts/ci/check_store_unlock_time_projection.py	docs-gates:check-doc-links
 scripts/ci/check_template_secrets.sh	grep-gates:grep-gates
-scripts/ci/check_test_only_features.py	grep-gates:grep-gates,rust-audit-test:rust-audit-and-test
+scripts/ci/check_test_only_features.py	docs-gates:check-doc-links,grep-gates:grep-gates,rust-audit-test:rust-audit-and-test
 scripts/ci/check_tor_pin_targets.py	grep-gates:grep-gates
 scripts/ci/check_transit_marker.sh	grep-gates:grep-gates
 scripts/ci/check_tx_weight_literals.py	docs-gates:check-doc-links
