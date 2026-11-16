@@ -1000,9 +1000,12 @@ BENCH_SELFTEST = [
     ("rust/shekyl-levin/src/reader.rs", {"shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
     ("rust/shekyl-block-template/src/lib.rs", {"shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
     # Noise reaches the transport, and through it the runtime and the RPC
-    # server. It does not reach `shekyl-chain-ingest`, so the block path
-    # and the template stay out. The body exchange and the wallet read run.
-    ("rust/shekyl-noise/src/direction.rs", {"shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai"}),
+    # server; since RT-W11 it reaches `shekyl-rpc-transport` too (the RPC
+    # channel's initiator lives there, Rick 2026-11-15), and through it
+    # `shekyl-chain-ingest` and `shekyl-engine-core`, so the block path, the
+    # template and the engine's rows run. The ledger, which reaches neither,
+    # stays out.
+    ("rust/shekyl-noise/src/direction.rs", {"shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-engine-core::engine_trait_bench_ledger_balance_iai"}, {"shekyl-engine-state::ledger_iai"}),
     ("rust/shekyl-p2p-transport/src/channel.rs", {"shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai"}),
     ("rust/shekyl-engine-core/src/lib.rs", set(), {"shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai", "shekyl-p2p-transport::c5_iai"}),
     ("rust/Cargo.lock", "all", None),

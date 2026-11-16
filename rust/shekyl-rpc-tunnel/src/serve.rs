@@ -44,6 +44,9 @@ fn names(set: GrantSet) -> String {
 
 /// Serve until a stop signal, or until the node revokes this tunnel.
 ///
+/// `say` carries the lines the operator reads (the grants connected with,
+/// the listener bound); the binary's `main` prints them.
+///
 /// # Errors
 ///
 /// What ended the tunnel, in the words its operator acts on: the key, the
@@ -51,6 +54,7 @@ fn names(set: GrantSet) -> String {
 pub async fn run(
     config: Config,
     key: shekyl_rpc_channel::handshake::StaticKeypair,
+    say: fn(&str),
 ) -> Result<(), String> {
     let fingerprint = shekyl_rpc_transport::channel::fingerprint_hex(key.public());
     let target = ChannelTarget::new(
@@ -71,11 +75,11 @@ pub async fn run(
         names(granted),
         names(ceiling)
     );
-    println!(
+    say(&format!(
         "Connected with {}; this client is enrolled for at most {}.",
         names(granted),
         names(ceiling)
-    );
+    ));
     let keeper = tokio::spawn(Arc::clone(&pool).keep());
     let (ended_tx, ended_rx) = watch::channel(None::<ChannelFault>);
     let result = match &config.listen {
@@ -84,10 +88,10 @@ pub async fn run(
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .map_err(|e| format!("the listener {addr} could not be bound: {e}"))?;
-            println!(
+            say(&format!(
                 "Listening on {}.",
                 listener.local_addr().map_or(*addr, |bound| bound)
-            );
+            ));
             accept_loop(
                 || async { listener.accept().await.map(|(io, _)| io) },
                 &pool,
@@ -99,7 +103,7 @@ pub async fn run(
         #[cfg(unix)]
         Listen::Socket(path) => {
             let listener = bind_socket(path)?;
-            println!("Listening on {}.", path.display());
+            say(&format!("Listening on {}.", path.display()));
             let served = accept_loop(
                 || async { listener.accept().await.map(|(io, _)| io) },
                 &pool,

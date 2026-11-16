@@ -117,7 +117,7 @@ fn run(config: config::Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(serve::run(config, key)) {
+    match runtime.block_on(serve::run(config, key, |line| println!("{line}"))) {
         Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
             eprintln!("{why}");
