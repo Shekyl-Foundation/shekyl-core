@@ -47,7 +47,7 @@ const ROWS: &[Row] = &[
     row("daemon-socks", Kind::Endpoint(EndpointRule::Any), Default::Unset, Surface::Both, "A SOCKS5 proxy to reach the node through; the proxy resolves its name. Required for an onion."),
     row("daemon-bundle-file", Kind::Path, Default::Unset, Surface::Both, "The node's public bundle, as `rpc bundle show` prints it on that node. Required."),
     row("rpc-key-file", Kind::Path, Default::Derived("this account's root and rpc-shekyl-rpc-tunnel-<network>.key"), Surface::Both, "This tunnel's channel key, readable by this account alone (make it with rpc-key-create)."),
-    row("rpc-request", Kind::List(&CEILING_WORD), Default::Value("view"), Surface::Both, "The grant the tunnel asks for on every session, as grant and preset words, the option repeated. The node clamps it to this tunnel's ceiling; the tunnel reports what it received."),
+    row("rpc-grant", Kind::List(&CEILING_WORD), Default::Value("view"), Surface::Both, "The grants the tunnel's sessions ask for, as grant and preset words, the option repeated. The node clamps it to this tunnel's ceiling; the tunnel reports what it received."),
     row("listen", Kind::Endpoint(EndpointRule::Loopback), Default::Unset, Surface::Both, "The local listener consumers reach the node through: a loopback address and a port, never a wildcard (RT-14). Required unless listen-socket-file is set."),
     row("listen-socket-file", Kind::Path, Default::Unset, Surface::Both, "A socket for local consumers, in a directory only this account can enter, in place of listen. Not on Windows."),
     row("log-file", Kind::Path, Default::Derived("this account's root, logs/shekyl-rpc-tunnel-<network>.log"), Surface::Both, "The log file."),

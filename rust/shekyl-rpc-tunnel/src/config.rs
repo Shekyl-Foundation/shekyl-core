@@ -195,7 +195,7 @@ fn build(
             },
         },
     };
-    let request = match resolved.get("rpc-request") {
+    let request = match resolved.get("rpc-grant") {
         Some(Value::List(words)) => {
             let words: Vec<CeilingWord> = words
                 .iter()
@@ -310,7 +310,7 @@ mod tests {
     /// A whole configuration builds: the node, its bundle, the grant asked
     /// for (the flag repeated, expanded), the loopback listener and the
     /// key file's default under this account's root. Red edit: read only
-    /// the first `rpc-request` word, and `submit` is lost.
+    /// the first `rpc-grant` word, and `submit` is lost.
     #[test]
     fn a_whole_configuration_builds() {
         let home = tempfile::tempdir().unwrap();
@@ -323,9 +323,9 @@ mod tests {
                 "203.0.113.5:29501",
                 "--daemon-bundle-file",
                 bundle.to_str().unwrap(),
-                "--rpc-request",
+                "--rpc-grant",
                 "view",
-                "--rpc-request",
+                "--rpc-grant",
                 "submit",
                 "--listen",
                 "127.0.0.1:29600",

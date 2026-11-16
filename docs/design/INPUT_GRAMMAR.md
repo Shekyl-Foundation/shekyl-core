@@ -445,7 +445,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | debug | — | show the machine detail of a failure | |
 | option | — | a runtime-changeable row of the daemon's table (IG-12) | |
 | tx | — | a transaction | |
-| request | —, rpc | a payment request; under `rpc`, the grant a client asks for (IG-Q108; see §32's note on the term) | |
+| request | — | a payment request | |
 | uri | — | a `shekyl:` payment URI | |
 | stake | — | the staking balance and bond | |
 | shard | — | an archival shard | |
@@ -990,7 +990,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | disk | daemon | the data directory's disk | |
 | free | disk | its free space, in bytes | |
 | outbound | peer, clearnet, tor, floor | connections we open | |
-| grant | daemon | the grants this connection holds | |
+| grant | daemon, rpc | the grants this connection holds; under `rpc`, the grants a tunnel's sessions ask for (IG-Q108) | |
 | consensus | — | the consensus rules; `consensus digest`, the constants' digest | |
 | digest | consensus | a digest | |
 | connector | connection, floor, tally, sync, daemon | one-of `clearnet`, `tor`; under `sync`, the connectors the node syncs over (IG-Q71); under `daemon`, a map from each connector the node runs to its counts (IG-Q82) | |
@@ -1636,8 +1636,8 @@ prints it (the `bytes` kind's base64); set, it selects the channel, and
 it is unconstructible with `daemon-socket-file`. `rpc-key-file`, a path:
 this client's channel key, readable by this account alone, refused if
 another can read it and never repaired; its default is the account root
-and `rpc-<binary>-<network>.key`. `rpc-request`, the tunnel's only: the
-grant its pool asks for, grant and preset words, the option repeated
+and `rpc-<binary>-<network>.key`. `rpc-grant`, the tunnel's only: the
+grants its sessions ask for, grant and preset words, the option repeated
 (IG-6), default `view` (`RPC_CHANNEL.md` §6.2). In RT-W11 the two new
 rows move only the five enrolment words onto the channel; the CLI's
 other words and the wallet session's daemon leg stay until RT-W12. An
@@ -1674,7 +1674,7 @@ its parent, as `shekyld`'s `rpc-listen` gives it `rpc`.
 | `daemon-socks` | endpoint | unset | both | IG-Q108; required for an onion |
 | `daemon-bundle-file` | path | unset; required | both | IG-Q108 |
 | `rpc-key-file` | path | the account root + `rpc-shekyl-rpc-tunnel-<network>.key` | both | IG-Q108 |
-| `rpc-request` | list of grant and preset words | `view` | both | IG-Q108 |
+| `rpc-grant` | list of grant and preset words | `view` | both | IG-Q108 |
 | `listen` | endpoint, loopback | unset; required without `listen-socket-file` | both | IG-Q110 |
 | `listen-socket-file` | path | unset | both | IG-Q110; Unix only |
 | `log-file` | path | the account root + `logs/shekyl-rpc-tunnel-<network>.log` | both | |
@@ -1685,8 +1685,6 @@ daemon enforces (RT-O37). The tunnel reports on start the grant it
 received ("Connected with GRANT; this client is enrolled for at most
 CEILING.", `RPC_CHANNEL.md` §4.5), and ends naming a revocation.
 
-**A note on `request`.** The glossary's `request` is a payment request
-(a root). `rpc-request` gives it a second meaning, the grant a client
-asks for, as `RPC_CHANNEL.md` §6.2 uses the word. A term has one meaning
-(§3), so this is posed to the maintainer with RT-W11's review; the row
-is built as ruled until it is answered.
+**The tunnel's grant row is `rpc-grant`** (Rick, 2026-11-16): the grants
+the tunnel's sessions ask for. `request` keeps its one meaning; `grant`
+gains the parent `rpc`.

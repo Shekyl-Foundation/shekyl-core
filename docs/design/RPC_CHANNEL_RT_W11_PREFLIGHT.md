@@ -266,21 +266,23 @@ Rick ruled one table for both, with existing names where they fit.
 | `daemon-socks` | endpoint | unset | both | Reused: SOCKS5, for an onion |
 | `daemon-bundle-file` | path | the tunnel: required; the CLI: unset | both | The daemon's public bundle, as `rpc bundle show` prints it. Set, it selects the channel. Unconstructible with `daemon-socket-file` |
 | `rpc-key-file` | path | the account root + `rpc-<binary>-<network>.key` | both | This client's static key. A file anyone else can read is refused with a typed code, never repaired (as `wallet-password-file`) |
-| `rpc-request` | a list of grant and preset keywords | `view` (§6.2) | the tunnel | The grant the tunnel's pool asks for in message 3, one grant per pool (§8). The connection holds it clamped to the ceiling; the tunnel reports what it received (§6.2, §4.5) |
+| `rpc-grant` | a list of grant and preset keywords | `view` (§6.2) | the tunnel | The grants the tunnel's sessions ask for in message 3, one grant per pool (§8). The connection holds it clamped to the ceiling; the tunnel reports what it received (§6.2, §4.5) |
 
 `client` and `bundle` already have one meaning under `rpc` (IG-Q87), and
-`key` gains one: "this client's static key". `request` under `rpc` is
-"the grant a client asks for".
+`key` gains one: "this client's static key". `grant` under `rpc` is "the
+grants the tunnel's sessions ask for": the row was posed as `rpc-request`
+and renamed `rpc-grant` (Rick, 2026-11-16), so `request` keeps its one
+meaning.
 
 **What the CLI asks for, and which of its words these rows move.** The
-CLI does not read `rpc-request`. An enrolment word asks for every grant,
+CLI does not read `rpc-grant`. An enrolment word asks for every grant,
 and the node clamps the request to the key's ceiling: what a key may
 enrol, change, list or remove is bounded by its effective grant (§5,
 RT-O9.1), so a session holding `enrol` alone could enrol nothing beyond
-`enrol`. Each session lasts one command. *(Corrected 2026-11-16, after
-the ruling: the recommendation as ruled had each word ask for its method's
-grant alone, which RT-O9.1's bound refuses; the end-to-end test found it.
-Raised with Rick.)* In RT-W11, `daemon-bundle-file`
+`enrol`. Each session lasts one command. *(Corrected 2026-11-16 and
+confirmed by Rick the same day: the recommendation as first ruled had each
+word ask for its method's grant alone, which RT-O9.1's bound refuses; the
+end-to-end test found it.)* In RT-W11, `daemon-bundle-file`
 and `rpc-key-file` move **only the five enrolment words** onto the
 channel. Every other console word, and the wallet session's daemon leg,
 stay where they are until RT-W12 moves them (§1).

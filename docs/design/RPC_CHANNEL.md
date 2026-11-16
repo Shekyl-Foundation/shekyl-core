@@ -2269,8 +2269,9 @@ A small Shekyl binary on the consumer's host:
 
 - generates and holds that host's static bundle; prints its fingerprint
   for enrolment;
-- is configured with the daemon's address and public bundle, and the grant
-  it requests; reports the grant it received (§6.2);
+- is configured with the daemon's address and public bundle, and the
+  grants its sessions ask for (`rpc-grant`, `INPUT_GRAMMAR.md` IG-Q108);
+  reports the grant it received (§6.2);
 - listens on the host's **loopback only** — it is plaintext on that side,
   so RT-14 applies: specific address, never a wildcard — through the same
   listen classifier
