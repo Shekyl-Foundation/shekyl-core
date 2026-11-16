@@ -312,6 +312,7 @@ members = [
     # ClassedRecord, for hyper and axum (RPC_CHANNEL.md section 4.4, RT-W9
     # step 5b). Depends on shekyl-noise, never on the handshake.
     "shekyl-rpc-stream",
+    "shekyl-rpc-tunnel",
 
     # The peer address union. Levin frames it; the transport layer selects
     # a connector from it. Neither crate defines a second copy.

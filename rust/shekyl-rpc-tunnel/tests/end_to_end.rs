@@ -1,0 +1,336 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! RT-W11 end to end, against a real daemon (Rick, 2026-11-15): enrol,
+//! dial, call, revoke, and a refused call after the revocation.
+//!
+//! A service daemon runs in a child of this test binary, as
+//! `shekyl-daemon`'s own tests run one, listening on the channel on
+//! loopback. Its console key enrols through `shekyl-cli`'s enrolment words
+//! (the library), reaching the node as a CLI on another host does: the
+//! node's bundle in a file and a key file. The tunnel is this crate's
+//! binary. A consumer is a plain HTTP client of the tunnel's loopback
+//! listener.
+#![cfg(unix)]
+
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+use shekyl_cli::enrol::{self, EnrolOptions, Remote};
+use shekyl_cli::resolve::Enrol;
+use shekyl_daemon_config::{Network, Platform};
+use shekyl_rpc_rendezvous::ServiceRecord;
+use shekyl_rpc_types::wire::rpc::CeilingWord;
+
+const CHILD_DIR: &str = "SHEKYL_TEST_TUNNEL_CHILD_DIR";
+const CHILD_LISTEN: &str = "SHEKYL_TEST_TUNNEL_CHILD_LISTEN";
+const READY: Duration = Duration::from_secs(120);
+const POLL: Duration = Duration::from_millis(50);
+
+fn run_child_if_requested() {
+    let Some(dir) = std::env::var_os(CHILD_DIR) else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    let listen = std::env::var(CHILD_LISTEN).expect("the channel listener");
+    let log = dir.join("shekyld.log");
+    let args: Vec<std::ffi::OsString> = [
+        "shekyld",
+        "--network",
+        "regtest",
+        "--service",
+        "--clearnet",
+        "off",
+        "--tor",
+        "off",
+        "--rpc-admin-listen",
+        "none",
+        "--rpc-listen",
+        &listen,
+        "--log-file",
+        log.to_str().expect("a UTF-8 path"),
+    ]
+    .iter()
+    .map(std::ffi::OsString::from)
+    .collect();
+    let status = shekyl_daemon::run::main(
+        &args,
+        &Platform {
+            home: Some(dir.clone()),
+            service_parent: Some(dir.clone()),
+            session_dir: None,
+            service_rendezvous: Some(dir.join("run")),
+        },
+    );
+    std::process::exit(status);
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("a free port")
+        .port()
+}
+
+/// The service's directory: the data home 0700, the rendezvous 0755.
+fn workdir() -> tempfile::TempDir {
+    use std::os::unix::fs::DirBuilderExt;
+    let dir = tempfile::tempdir().expect("a directory");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(dir.path().join("shekyl"))
+        .expect("the data home");
+    std::fs::DirBuilder::new()
+        .mode(0o755)
+        .create(dir.path().join("run"))
+        .expect("the rendezvous directory");
+    dir
+}
+
+/// A child process, killed if the test ends first.
+struct Running {
+    child: Child,
+    what: &'static str,
+    stderr: PathBuf,
+}
+
+impl Running {
+    fn stderr(&self) -> String {
+        std::fs::read_to_string(&self.stderr).unwrap_or_default()
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            drop(self.child.kill());
+            drop(self.child.wait());
+        }
+    }
+}
+
+fn spawn(what: &'static str, mut command: Command, stderr: PathBuf) -> Running {
+    command
+        .stdin(Stdio::null())
+        .stderr(Stdio::from(File::create(&stderr).expect("the stderr file")));
+    let child = shekyl_spawn::spawn_lock::with(|| command.spawn()).expect(what);
+    Running {
+        child,
+        what,
+        stderr,
+    }
+}
+
+/// The record the service publishes, once whole.
+fn wait_for_record(service: &mut Running, dir: &Path) -> ServiceRecord {
+    let deadline = Instant::now() + READY;
+    while Instant::now() < deadline {
+        if let Some(status) = service.child.try_wait().expect("the child") {
+            panic!("the {} ended: {status}\n{}", service.what, service.stderr());
+        }
+        let found = std::fs::read_dir(dir.join("run"))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .find_map(|entry| ServiceRecord::parse(&std::fs::read(entry.path()).ok()?));
+        if let Some(record) = found {
+            return record;
+        }
+        std::thread::sleep(POLL);
+    }
+    panic!("no rendezvous\n{}", service.stderr());
+}
+
+/// One JSON-RPC call through the tunnel's loopback listener, as a plain
+/// HTTP/1.1 consumer that closes after each request: the status and body.
+fn consumer_call(listen: &str, method: &str) -> (u16, String) {
+    let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{{}}}}"#);
+    let mut tcp = std::net::TcpStream::connect(listen).expect("the tunnel listens");
+    tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    write!(
+        tcp,
+        "POST /json_rpc HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
+         content-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut reply = String::new();
+    tcp.read_to_string(&mut reply).expect("a reply");
+    let status = reply
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0);
+    let body = reply
+        .split("\r\n\r\n")
+        .nth(1)
+        .unwrap_or_default()
+        .to_owned();
+    (status, body)
+}
+
+/// **Enrol, dial, call, revoke, and a refused call after the revocation**
+/// (RT-W11, against a real daemon). The console enrols the tunnel's key
+/// with `rpc client add` over the channel; the tunnel reports its grant and
+/// serves a consumer's call; `rpc client remove` revokes it; the next call
+/// is refused, the tunnel exits naming the revocation, and `rpc client
+/// list` no longer lists it. Red edits: drop `changing.close` in
+/// `Channel::client_remove`, and the tunnel keeps being served after the
+/// revocation; make the pool report `NotEnrolled` after a held session
+/// (`Pool::open_session`), and the refusal does not name the revocation
+/// (the tunnel ends on it, and the next call finds no listener). The
+/// submission's padding is `shekyl-daemon-rpc`'s submission test.
+#[test]
+fn enrol_dial_call_revoke_and_a_refused_call_after() {
+    const NAME: &str = "enrol_dial_call_revoke_and_a_refused_call_after";
+    run_child_if_requested();
+    let dir = workdir();
+    let channel_listen = format!("127.0.0.1:{}", free_port());
+    let mut service = {
+        let mut command = Command::new(std::env::current_exe().expect("this test binary"));
+        command
+            .args(["--exact", NAME, "--nocapture"])
+            .env(CHILD_DIR, dir.path())
+            .env(CHILD_LISTEN, &channel_listen)
+            .stdout(Stdio::null());
+        spawn("service", command, dir.path().join("service.stderr"))
+    };
+    let record = wait_for_record(&mut service, dir.path());
+
+    // The CLI as the console, on another host's terms: the bundle in a
+    // file, the console key as its key file.
+    let bundle_file = dir.path().join("node.bundle");
+    std::fs::write(
+        &bundle_file,
+        shekyl_rpc_transport::channel::bundle_text(&record.bundle),
+    )
+    .unwrap();
+    let console = EnrolOptions {
+        network: Network::Regtest,
+        remote: Some(Remote {
+            endpoint: record.channel.to_string(),
+            socks: None,
+            bundle_file: bundle_file.clone(),
+        }),
+        key_file: dir
+            .path()
+            .join("shekyl")
+            .join("regtest")
+            .join(shekyl_rpc_rendezvous::CONSOLE_KEY_FILE),
+    };
+
+    // The tunnel's key.
+    let tunnel = env!("CARGO_BIN_EXE_shekyl-rpc-tunnel");
+    let key_file = dir.path().join("tunnel.key");
+    let made = Command::new(tunnel)
+        .args(["--network", "regtest", "--rpc-key-create", "--rpc-key-file"])
+        .arg(&key_file)
+        .output()
+        .expect("rpc-key-create");
+    assert!(made.status.success(), "{made:?}");
+    let fingerprint = String::from_utf8(made.stdout).unwrap().trim().to_owned();
+    assert_eq!(fingerprint.len(), 64, "{fingerprint}");
+
+    // Enrol.
+    enrol::run(
+        &console,
+        &Enrol::ClientAdd {
+            fingerprint: fingerprint.clone(),
+            ceiling: vec![CeilingWord::View],
+        },
+    )
+    .expect("rpc client add");
+    let listed = enrol::run(&console, &Enrol::ClientList).expect("rpc client list");
+    assert!(listed.contains(&fingerprint), "{listed}");
+
+    // Dial: the tunnel reports its grant and listens.
+    let listen = format!("127.0.0.1:{}", free_port());
+    let mut tunnel_run = {
+        let mut command = Command::new(tunnel);
+        command
+            .args(["--network", "regtest", "--daemon-endpoint"])
+            .arg(record.channel.to_string())
+            .arg("--daemon-bundle-file")
+            .arg(&bundle_file)
+            .arg("--rpc-key-file")
+            .arg(&key_file)
+            .args(["--listen", &listen, "--log-file"])
+            .arg(dir.path().join("tunnel.log"))
+            .stdout(Stdio::piped());
+        spawn("tunnel", command, dir.path().join("tunnel.stderr"))
+    };
+    let mut stdout = tunnel_run.child.stdout.take().expect("stdout");
+    let mut said = String::new();
+    let deadline = Instant::now() + READY;
+    while !said.contains("Listening on") {
+        assert!(Instant::now() < deadline, "{said}\n{}", tunnel_run.stderr());
+        let mut buf = [0u8; 256];
+        let n = stdout.read(&mut buf).expect("the tunnel's output");
+        assert!(n > 0, "the tunnel ended: {said}\n{}", tunnel_run.stderr());
+        said.push_str(&String::from_utf8_lossy(&buf[..n]));
+    }
+    let view: Vec<&str> = shekyl_rpc_grants::Preset::View
+        .grants()
+        .iter()
+        .map(shekyl_rpc_grants::Grant::name)
+        .collect();
+    let view = view.join(", ");
+    assert!(
+        said.contains(&format!(
+            "Connected with {view}; this client is enrolled for at most {view}."
+        )),
+        "the tunnel reports the grant it received and its ceiling: {said}"
+    );
+
+    // Call.
+    let (status, body) = consumer_call(&listen, "version");
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("\"result\""), "{body}");
+
+    // Revoke.
+    enrol::run(
+        &console,
+        &Enrol::ClientRemove {
+            fingerprint: fingerprint.clone(),
+        },
+    )
+    .expect("rpc client remove");
+
+    // A refused call after the revocation, and the tunnel ends on it.
+    let deadline = Instant::now() + READY;
+    let refused = loop {
+        let (status, body) = consumer_call(&listen, "version");
+        if status == 502 && body.contains("revoked") {
+            break body;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the tunnel kept being served after the revocation: {status} {body}"
+        );
+        std::thread::sleep(POLL);
+    };
+    assert_eq!(refused, "The node revoked this client's enrolment.");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let ended = loop {
+        if let Some(status) = tunnel_run.child.try_wait().expect("the tunnel") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the tunnel did not end");
+        std::thread::sleep(POLL);
+    };
+    assert!(!ended.success(), "{ended}");
+    assert!(
+        tunnel_run
+            .stderr()
+            .contains("The node revoked this client's enrolment."),
+        "{}",
+        tunnel_run.stderr()
+    );
+    let listed = enrol::run(&console, &Enrol::ClientList).expect("rpc client list");
+    assert!(!listed.contains(&fingerprint), "{listed}");
+}

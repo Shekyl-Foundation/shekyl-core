@@ -26,14 +26,17 @@
 //! 3. **This computer's daemon, run as this account:** the owner's leg
 //!    (`LocalTarget`).
 //!
-//! Each word asks for the one grant its method needs, `enrol`.
+//! Each word asks for every grant, and the node clamps the request to the
+//! key's ceiling. What a key may enrol, change, list or remove is bounded by
+//! that effective grant (`RPC_CHANNEL.md` §5, RT-O9.1), so a session asking
+//! for `enrol` alone could enrol nothing beyond `enrol`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use shekyl_daemon_config::{paths, RunMode};
 use shekyl_rpc_client::{wire, RpcMethod};
-use shekyl_rpc_grants::{Grant, GrantSet};
+use shekyl_rpc_grants::GrantSet;
 use shekyl_rpc_transport::channel::{
     bundle_from_bytes, bundle_from_text, bundle_text, create_client_key, fingerprint_hex,
     read_client_key, ChannelDaemon, ChannelTarget, Leg,
@@ -149,7 +152,7 @@ enum EnrolLeg {
 
 impl EnrolLeg {
     fn resolve(options: &EnrolOptions) -> Result<Self, String> {
-        let request = GrantSet::of(&[Grant::Enrol]);
+        let request = GrantSet::ALL;
         if let Some(remote) = &options.remote {
             let text = std::fs::read_to_string(&remote.bundle_file).map_err(|error| {
                 format!(

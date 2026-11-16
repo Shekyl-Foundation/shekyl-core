@@ -273,10 +273,14 @@ Rick ruled one table for both, with existing names where they fit.
 "the grant a client asks for".
 
 **What the CLI asks for, and which of its words these rows move.** The
-CLI does not read `rpc-request`. Each word asks for exactly the grant its
-method's row needs (`rpc client add` asks for `enrol`), so a CLI never
-holds a grant it is not using. The console key asks the same way: it
-holds every grant, and asks for the word's. In RT-W11, `daemon-bundle-file`
+CLI does not read `rpc-request`. An enrolment word asks for every grant,
+and the node clamps the request to the key's ceiling: what a key may
+enrol, change, list or remove is bounded by its effective grant (§5,
+RT-O9.1), so a session holding `enrol` alone could enrol nothing beyond
+`enrol`. Each session lasts one command. *(Corrected 2026-11-16, after
+the ruling: the recommendation as ruled had each word ask for its method's
+grant alone, which RT-O9.1's bound refuses; the end-to-end test found it.
+Raised with Rick.)* In RT-W11, `daemon-bundle-file`
 and `rpc-key-file` move **only the five enrolment words** onto the
 channel. Every other console word, and the wallet session's daemon leg,
 stay where they are until RT-W12 moves them (§1).

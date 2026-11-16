@@ -5305,6 +5305,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-rpc-tunnel"
+version = "3.1.0"
+dependencies = [
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "shekyl-cli",
+ "shekyl-daemon",
+ "shekyl-daemon-config",
+ "shekyl-logging",
+ "shekyl-options",
+ "shekyl-os-account",
+ "shekyl-process",
+ "shekyl-rpc-channel",
+ "shekyl-rpc-grants",
+ "shekyl-rpc-rendezvous",
+ "shekyl-rpc-stream",
+ "shekyl-rpc-transport",
+ "shekyl-rpc-types",
+ "shekyl-spawn",
+ "shekyl-version",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "shekyl-rpc-types"
 version = "3.1.0"
 dependencies = [
