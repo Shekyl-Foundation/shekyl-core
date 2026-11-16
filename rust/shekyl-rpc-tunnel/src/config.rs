@@ -12,8 +12,9 @@ use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use shekyl_daemon_config::resolve::{self, chosen_network};
 use shekyl_daemon_config::Network;
-use shekyl_daemon_config::{choosers, file, paths, resolve, Logging, Platform, Resolved, RunMode};
+use shekyl_daemon_config::{file, paths, Logging, Platform, Resolved, RunMode};
 use shekyl_options::{read_cli, read_file, Code, Diagnostic, PeerEndpoint, Source, Value};
 use shekyl_rpc_channel::handshake::StaticPublic;
 use shekyl_rpc_grants::GrantSet;
@@ -89,7 +90,7 @@ where
     if given("version") {
         return Ok(Action::Version);
     }
-    let (network, _mode) = choosers(&cli);
+    let network = chosen_network(&cli);
     let root = paths::root(platform, RunMode::User, "config-file").map_err(|d| vec![d])?;
     let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
         Some(g) => match &g.value {
@@ -108,7 +109,7 @@ where
         Some(config_file) => read_file(&TABLE, &config_path, &config_file.text)?,
         None => Vec::new(),
     };
-    let resolved = resolve(&TABLE, network, cli, file_given)?;
+    let resolved = resolve::resolve(&TABLE, network, cli, file_given)?;
     let key_file = path_of(&resolved, "rpc-key-file")
         .unwrap_or_else(|| root.join(format!("rpc-shekyl-rpc-tunnel-{}.key", network.name())));
     if key_create {
@@ -195,22 +196,7 @@ fn build(
             },
         },
     };
-    let request = match resolved.get("rpc-grant") {
-        Some(Value::List(words)) => {
-            let words: Vec<CeilingWord> = words
-                .iter()
-                .filter_map(|word| match word {
-                    Value::Word(word) => CeilingWord::ALL
-                        .iter()
-                        .copied()
-                        .find(|w| w.as_str() == *word),
-                    _ => None,
-                })
-                .collect();
-            CeilingWord::expand(&words)
-        }
-        _ => CeilingWord::View.grants(),
-    };
+    let request = grants_asked(resolved.get("rpc-grant"), &mut faults);
     let listen = match (
         resolved.get("listen"),
         path_of(resolved, "listen-socket-file"),
@@ -241,8 +227,10 @@ fn build(
             None
         }
     };
-    match (endpoint, bundle, listen, logging) {
-        (Some(endpoint), Some(bundle), Some(listen), Some(logging)) if faults.is_empty() => {
+    match (endpoint, bundle, listen, logging, request) {
+        (Some(endpoint), Some(bundle), Some(listen), Some(logging), Some(request))
+            if faults.is_empty() =>
+        {
             Ok(Config {
                 network,
                 endpoint,
@@ -256,6 +244,51 @@ fn build(
         }
         _ => Err(faults),
     }
+}
+
+/// The grant every session asks for. An absent row is `view`, the table's
+/// default. A word [`CeilingWord::from_name`] does not know is a fault, and
+/// the list is not applied in part: one unknown word refuses the whole set.
+fn grants_asked(value: Option<&Value>, faults: &mut Vec<Diagnostic>) -> Option<GrantSet> {
+    let Some(value) = value else {
+        return Some(CeilingWord::View.grants());
+    };
+    let Value::List(words) = value else {
+        faults.push(
+            Diagnostic::new(Code::ValueSyntax, Source::Cli)
+                .option("rpc-grant")
+                .param("value", value.render())
+                .param("expected", "a list of grants"),
+        );
+        return None;
+    };
+    let mut ceiling = Vec::with_capacity(words.len());
+    let mut sound = true;
+    for word in words {
+        let Value::Word(spelling) = word else {
+            faults.push(
+                Diagnostic::new(Code::ValueSyntax, Source::Cli)
+                    .option("rpc-grant")
+                    .param("value", word.render())
+                    .param("expected", "a grant or a preset"),
+            );
+            sound = false;
+            continue;
+        };
+        match CeilingWord::from_name(spelling) {
+            Some(known) => ceiling.push(known),
+            None => {
+                faults.push(
+                    Diagnostic::new(Code::ValueWord, Source::Cli)
+                        .option("rpc-grant")
+                        .param("value", *spelling)
+                        .param("words", CeilingWord::WORDS.join(", ")),
+                );
+                sound = false;
+            }
+        }
+    }
+    sound.then(|| CeilingWord::expand(&ceiling))
 }
 
 #[cfg(unix)]
@@ -395,5 +428,19 @@ mod tests {
             load(args(&["--rpc-key-show"]), &platform(home.path())),
             Ok(Action::KeyShow(_))
         ));
+    }
+
+    /// An unknown grant refuses the whole set. A list that also names
+    /// `view` does not quietly ask for view alone. Red edit: `filter_map`
+    /// unknown words away in `grants_asked`, and this returns `view`.
+    #[test]
+    fn an_unknown_grant_refuses_the_whole_set() {
+        let mut faults = Vec::new();
+        let asked = Value::List(vec![Value::Word("view"), Value::Word("not-a-grant")]);
+        assert!(grants_asked(Some(&asked), &mut faults).is_none());
+        assert_eq!(codes(&faults), vec!["config.value.word"]);
+        assert!(grants_asked(None, &mut Vec::new())
+            .expect("the default")
+            .holds(shekyl_rpc_grants::Grant::Chain));
     }
 }

@@ -380,8 +380,8 @@ fn parse_client_ceiling(
     }
     let mut ceiling = Vec::with_capacity(words.len());
     for word in words {
-        match CeilingWord::ALL.iter().find(|known| known.as_str() == word) {
-            Some(known) => ceiling.push(*known),
+        match CeilingWord::from_name(word) {
+            Some(known) => ceiling.push(known),
             None => {
                 return diag(format!(
                     "{word:?} is not a grant or a preset; one of: {}",

@@ -41,6 +41,14 @@ crate::wire_keywords! {
 }
 
 impl CeilingWord {
+    /// The ceiling word an operator's name names. The one resolver: a
+    /// command line and a configuration file both ask here, and a name that
+    /// is not a grant or a preset is [`None`].
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|word| word.as_str() == name)
+    }
+
     /// The grants this word stands for. A preset's name is that preset; any
     /// other word is the grant of the same name ([`Grant::name`]).
     #[must_use]
@@ -139,21 +147,17 @@ mod tests {
                 "{} is a grant and a preset",
                 grant.name()
             );
-            let word = CeilingWord::ALL
-                .iter()
-                .copied()
-                .find(|word| word.as_str() == grant.name())
+            let word = CeilingWord::from_name(grant.name())
                 .unwrap_or_else(|| panic!("{} has no ceiling word", grant.name()));
             assert_eq!(word.grants(), GrantSet::of(&[grant]));
         }
         for preset in Preset::ALL {
-            let word = CeilingWord::ALL
-                .iter()
-                .copied()
-                .find(|word| word.as_str() == preset.name())
+            let word = CeilingWord::from_name(preset.name())
                 .unwrap_or_else(|| panic!("{} has no ceiling word", preset.name()));
             assert_eq!(word.grants(), preset.grants());
         }
+        assert_eq!(CeilingWord::from_name("view"), Some(CeilingWord::View));
+        assert_eq!(CeilingWord::from_name("not-a-grant"), None);
         for word in CeilingWord::ALL {
             assert!(
                 Grant::from_name(word.as_str()).is_some()
