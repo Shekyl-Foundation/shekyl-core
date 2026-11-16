@@ -7,10 +7,12 @@
 //! IG-10).
 //!
 //! `docs/api/wallet_rpc.yaml`'s `x-shekyl-method-registry` holds each
-//! name's status, and its header holds the full rationale and the reopening
-//! clause. This table is what a caller hears: a REJECTED name is answered
+//! name's status and, for a REJECTED name, the reason the server states
+//! (`{ status: REJECTED, reason: "…" }`); its header holds the full
+//! rationale and the reopening clause. A REJECTED name is answered
 //! `-32601`, as any name the server does not serve, with the reason in the
-//! message. The test below holds the table to the registry's REJECTED set.
+//! message. The test below holds this table's names and reasons equal to
+//! the registry's.
 
 /// Each REJECTED method name with the reason its refusal states.
 pub const REJECTED_METHODS: &[(&str, &str)] = &[
@@ -89,11 +91,13 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// The table names exactly the registry's REJECTED methods. Bites when
-    /// a name is rejected in the contract without a reason here, or a
-    /// reason outlives its row.
+    /// The table is the registry's REJECTED rows, name and reason: each row
+    /// is `name: { status: REJECTED, reason: "…" }`. Bites when a name is
+    /// rejected in the contract without a row here or a row outlives it,
+    /// when a REJECTED row carries no reason, and when the served reason and
+    /// the registry's differ.
     #[test]
-    fn the_table_is_the_registrys_rejected_set() {
+    fn the_table_is_the_registrys_rejected_rows() {
         let contract = include_str!("../../../docs/api/wallet_rpc.yaml");
         let start = contract
             .find("\nx-shekyl-method-registry:\n")
@@ -103,15 +107,23 @@ mod tests {
             if !line.starts_with("  ") {
                 break;
             }
-            if let Some(name) = line.trim().strip_suffix(": { status: REJECTED }") {
-                registry.insert(name);
+            let Some((name, row)) = line.trim().split_once(": ") else {
+                continue;
+            };
+            if !row.starts_with("{ status: REJECTED") {
+                continue;
             }
+            let reason = row
+                .strip_prefix("{ status: REJECTED, reason: \"")
+                .and_then(|rest| rest.strip_suffix("\" }"))
+                .unwrap_or_else(|| panic!("{name}: a REJECTED row carries its reason: {row}"));
+            registry.insert((name, reason));
         }
         assert!(
-            registry.contains("freeze") && registry.len() > 10,
+            registry.iter().any(|(name, _)| *name == "freeze") && registry.len() > 10,
             "the parse found the registry: {registry:?}"
         );
-        let table: BTreeSet<&str> = REJECTED_METHODS.iter().map(|(name, _)| *name).collect();
+        let table: BTreeSet<(&str, &str)> = REJECTED_METHODS.iter().copied().collect();
         assert_eq!(table, registry);
         assert_eq!(table.len(), REJECTED_METHODS.len(), "one row per name");
     }

@@ -545,7 +545,8 @@ pub enum WalletRpcError {
     /// build cannot read.
     #[error(
         "the wallet's files were written by a version this build cannot read — open them \
-         with the build that wrote them, or restore the wallet from your seed"
+         with the build that wrote them, or restore the wallet from your seed; your send \
+         history, proofs for earlier sends, notes and payment requests are not restored"
     )]
     WalletFileVersionUnsupported,
     /// `-29013`: a read or write of the wallet's files failed underneath —
@@ -3464,7 +3465,8 @@ mod tests {
 
     /// A wallet file whose ledger block an earlier build wrote (version 14,
     /// before the user freeze was removed) is refused `-29012`, and the
-    /// message names the remedy: restore the wallet from its seed.
+    /// message names the remedy, restoring the wallet from its seed, and
+    /// what that restore does not bring back (rule 82).
     #[test]
     fn an_earlier_ledger_version_is_refused_with_the_remedy() {
         let err = file_err(WalletFileError::Ledger(
@@ -3475,10 +3477,17 @@ mod tests {
             },
         ));
         assert_eq!(err.code(), WalletRpcErrorCode::WalletFileVersionUnsupported);
+        let message = err.message();
         assert!(
-            err.message().contains("restore the wallet from your seed"),
-            "{}",
-            err.message()
+            message.contains("restore the wallet from your seed"),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "your send history, proofs for earlier sends, notes and payment requests are \
+                 not restored"
+            ),
+            "{message}"
         );
     }
 

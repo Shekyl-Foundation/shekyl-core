@@ -70,11 +70,18 @@ pub enum WalletLedgerError {
 
 /// What to do about a file whose version this build does not read. A file
 /// from an earlier build is not migrated (pre-genesis, rule 42): the wallet
-/// is restored from its seed. A file from a later build is opened with that
+/// is restored from its seed, and the refusal names what a restore does not
+/// bring back (rule 82). The scan re-derives the received outputs, what is
+/// spent and the balance from the chain; it cannot re-derive what only this
+/// file held: the send journal (the history of the wallet's sends), the
+/// random per-transaction secrets the outbound proofs need, the notes and
+/// the payment requests. A file from a later build is opened with that
 /// build.
 fn version_remedy(file: u32, binary: u32) -> &'static str {
     if file < binary {
-        "this build does not migrate files from earlier versions: restore the wallet from its seed"
+        "this build does not migrate files from earlier versions: restore the wallet from its \
+         seed; your send history, proofs for earlier sends, notes and payment requests are not \
+         restored"
     } else {
         "the file is from a later build: open it with that build"
     }

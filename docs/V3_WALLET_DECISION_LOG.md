@@ -7334,13 +7334,19 @@ does this wallet hold", which incoming money is part of.
   balance's parked leg and `-29127 OUTPUTS_PARKED` are deleted; `-29127`
   is retired and never reused. Ledger block version 15 and wallet ledger
   format 26: a file an earlier build wrote is refused for its version,
-  and the refusal names the remedy, restoring the wallet from its seed.
+  and the refusal names the remedy, restoring the wallet from its seed,
+  and what that restore does not bring back: the scan re-derives the
+  received outputs and the balance, not the send history, the proofs for
+  earlier sends (their transaction secrets are random), the notes or the
+  payment requests.
 - **balance = spendable + incoming.** `held` names nothing in the
   balance: it would be incoming under a second name, and the grammar's
   `held` already means the shards a wallet holds.
 - **`freeze`, `thaw` and `frozen` are REJECTED**, the names a Monero user
   would try, in the CLI's table and the contract's method registry. Each
-  refusal states the reason and points to this entry.
+  refusal states the reason and points to this entry. A REJECTED registry
+  row carries the reason the server states (`reason`), held equal to the
+  server's table by a test.
 - This supersedes, in the entries above: held = incoming + parked, the
   parked leg, the parked refusal, parked outputs among a reserve proof's
   candidates, and the ratified names `parked`, `held` and `-29127`.

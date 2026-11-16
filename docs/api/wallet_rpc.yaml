@@ -554,6 +554,10 @@ servers:
 # arm. JsonRpcRequest.method.enum must equal the SPECIFIED set exactly.
 # Rationale for each non-SPECIFIED status lives in the header comment block
 # at the top of this file; this table is the status, the header is the why.
+# A REJECTED row also carries `reason`: the sentence the server states when
+# the name is called (-32601), held equal to the server's table by
+# shekyl-wallet-contract's rejected.rs test. The header keeps the full
+# rationale and the reopening clause.
 x-shekyl-method-registry:
   create_wallet: { status: SPECIFIED }
   restore_wallet: { status: SPECIFIED }
@@ -600,19 +604,19 @@ x-shekyl-method-registry:
   sign_message: { status: SPECIFIED }
   verify_message: { status: SPECIFIED }
   get_shard_view: { status: SPECIFIED }
-  match_transfer_to_request: { status: REJECTED }
-  claim: { status: REJECTED }
-  claim_rewards: { status: REJECTED }
-  get_stakes: { status: REJECTED }
-  get_tx_key: { status: REJECTED }
-  check_tx_key: { status: REJECTED }
-  get_spend_proof: { status: REJECTED }
-  check_spend_proof: { status: REJECTED }
-  export_unsigned: { status: REJECTED }
-  submit_signed: { status: REJECTED }
-  freeze: { status: REJECTED }
-  thaw: { status: REJECTED }
-  frozen: { status: REJECTED }
+  match_transfer_to_request: { status: REJECTED, reason: "attribution is automatic: get_transfers carries it (wallet_rpc.yaml, REJECTED 2026-09-07)" }
+  claim: { status: REJECTED, reason: "emission claims run inside the wallet's staking; there is no manual claim (wallet_rpc.yaml, REJECTED 2026-08-26)" }
+  claim_rewards: { status: REJECTED, reason: "emission claims run inside the wallet's staking; there is no manual claim (wallet_rpc.yaml, REJECTED 2026-09-07)" }
+  get_stakes: { status: REJECTED, reason: "a per-stake listing would link stakes to their personas; get_staked_balance, get_staked_outputs and staking_info are the aggregate reads (wallet_rpc.yaml, REJECTED 2026-08-26)" }
+  get_tx_key: { status: REJECTED, reason: "the transaction key is a bearer credential; use get_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-23)" }
+  check_tx_key: { status: REJECTED, reason: "the transaction key is a bearer credential; use check_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-23)" }
+  get_spend_proof: { status: REJECTED, reason: "a spend proof only links key images to an identity, which FCMP++ hides; use get_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-24)" }
+  check_spend_proof: { status: REJECTED, reason: "a spend proof only links key images to an identity, which FCMP++ hides; use check_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-24)" }
+  export_unsigned: { status: REJECTED, reason: "cold signing is not offered: an FCMP++ spend needs the live curve tree; cold storage is your seed (V3_WALLET_DECISION_LOG.md, 2026-09-07)" }
+  submit_signed: { status: REJECTED, reason: "cold signing is not offered: an FCMP++ spend needs the live curve tree; cold storage is your seed (V3_WALLET_DECISION_LOG.md, 2026-09-07)" }
+  freeze: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
+  thaw: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
+  frozen: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
 
 # ── Error-code ranges (STATUS OF RECORD — rule 23) ────────────────────────
 # SPECIFIED ranges carry allocated codes (enumerated in WalletRpcErrorCode);
@@ -950,7 +954,13 @@ components:
                                           password and a damaged file are
                                           different remedies
           -29012 WALLET_FILE_VERSION_UNSUPPORTED wallet files: written by a version,
-                                          or in a shape, this build cannot read
+                                          or in a shape, this build cannot read.
+                                          The message names the remedy: open
+                                          them with the build that wrote them,
+                                          or restore the wallet from its seed,
+                                          which does not bring back the send
+                                          history, proofs for earlier sends,
+                                          notes or payment requests
           -29013 WALLET_FILE_IO_FAILED    wallet files: a read or write failed
                                           underneath (disk full, filesystem
                                           error, a failed atomic rename, a

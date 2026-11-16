@@ -653,7 +653,8 @@ mod tests {
 
     /// A ledger block as version 14 wrote it (`fixtures/ledger_block_v14.hex`:
     /// one transfer, carrying the `frozen` flag version 15 removed) is
-    /// refused for its version, and the refusal names the remedy. Bites if
+    /// refused for its version, and the refusal names the remedy and what a
+    /// restore does not bring back (rule 82). Bites if
     /// the body were decoded before the version: the v14 transfer's extra
     /// field would then fail as a decode error, which the wallet reports as
     /// a damaged file rather than an old one.
@@ -679,6 +680,13 @@ mod tests {
         }
         assert!(
             message.contains("restore the wallet from its seed"),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "your send history, proofs for earlier sends, notes and payment requests are \
+                 not restored"
+            ),
             "{message}"
         );
     }
