@@ -45,7 +45,8 @@ pub enum AddressKind {
 }
 
 /// Infer the network from a classical (single-sig) segment HRP string.
-/// HRPs compare case-insensitively, as Bech32m defines them.
+/// Exact: an HRP has one spelling, the lowercase one in the network table
+/// (the codec refuses every other before a lookup sees it).
 #[must_use]
 pub fn network_from_hrp(hrp: &str) -> Option<Network> {
     match network_and_kind_from_hrp(hrp) {
@@ -55,15 +56,15 @@ pub fn network_from_hrp(hrp: &str) -> Option<Network> {
 }
 
 /// Infer the network and address kind from a segment-head HRP: a
-/// classical (single-sig) or multisig prefix.
+/// classical (single-sig) or multisig prefix. Exact, as
+/// [`network_from_hrp`].
 #[must_use]
 pub fn network_and_kind_from_hrp(hrp: &str) -> Option<(Network, AddressKind)> {
-    let lower = hrp.to_lowercase();
     Network::ALL.into_iter().find_map(|net| {
         let prefixes = net.prefixes();
-        if prefixes.classical == lower {
+        if prefixes.classical == hrp {
             Some((net, AddressKind::SingleSig))
-        } else if prefixes.multisig == lower {
+        } else if prefixes.multisig == hrp {
             Some((net, AddressKind::Multisig))
         } else {
             None
@@ -88,7 +89,8 @@ mod tests {
             assert_eq!(network_from_hrp(classical_hrp(net)), Some(net));
             assert_eq!(
                 network_from_hrp(&classical_hrp(net).to_uppercase()),
-                Some(net)
+                None,
+                "an HRP has one spelling"
             );
             assert_eq!(
                 network_from_hrp(multisig_hrp(net)),
