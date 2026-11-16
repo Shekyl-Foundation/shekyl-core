@@ -102,6 +102,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_address::{AddressError, Network, PaymentAddress};
 use shekyl_crypto_pq::archival_p::PersonaDestination;
+use shekyl_encoding::EncodingError;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, SendJournalBlock, WalletSafetyConstants};
 use shekyl_engine_state::{PaymentRequestId, SendDestination};
@@ -429,7 +430,10 @@ fn recipient_reason(err: &AddressError) -> &'static str {
         }
         AddressError::EkBindMismatch => "recipient address is damaged",
         AddressError::DisplayOnly => "recipient address cannot receive a payment",
-        AddressError::Encoding(_)
+        AddressError::Bech32m(EncodingError::NotLowercase) => {
+            "recipient address must be written in lowercase"
+        }
+        AddressError::Bech32m(_)
         | AddressError::WrongHrp { .. }
         | AddressError::BadLength { .. }
         | AddressError::BadSegmentCount(_)
