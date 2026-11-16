@@ -117,16 +117,9 @@ shekyl-noise = { path = "../shekyl-noise" }
 # same crate (RPC_CHANNEL.md RT-15, §7.1).
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 redb = { workspace = true }
-zeroize = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
-# The channel's key file is refused unless this account owns it.
-rustix = { version = "1", features = ["process"] }
-
-[target.'cfg(unix)'.dev-dependencies]
-# channel::stage's test sets a child's umask to show the mode is set, not
-# requested.
-rustix = { version = "1", features = ["process", "fs"] }
+# The channel's files are this account's alone, written and checked by the
+# rule the tunnel's and a remote CLI's keys follow too (`private_file`).
+shekyl-os-account = { path = "../shekyl-os-account" }
 
 [target.'cfg(windows)'.dependencies]
 # The owner's pipe, its rendezvous directory and file, and the start-up

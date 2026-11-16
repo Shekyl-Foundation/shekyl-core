@@ -63,6 +63,21 @@ pub fn service_file_name(name: &RendezvousName) -> String {
     format!("shekyl-{name}")
 }
 
+/// Where a service's record is: [`service_file_name`] in the service's
+/// rendezvous directory `dir`, under the RT-O10 name of `network_id` and
+/// `instance`. The daemon publishes there and a client on the same
+/// machine reads there, through this one function.
+#[must_use]
+pub fn service_record_path(
+    dir: &Path,
+    network_id: &[u8; crate::NETWORK_ID_LEN],
+    instance: &crate::Instance,
+) -> PathBuf {
+    dir.join(service_file_name(&crate::rendezvous_name(
+        network_id, instance,
+    )))
+}
+
 /// Windows: the account's data home, `Shekyl` under the local application
 /// data folder `root`. The default rendezvous directory sits in it.
 #[must_use]

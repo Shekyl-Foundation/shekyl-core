@@ -6,9 +6,9 @@
 //! The operating-system account this process runs as, read from the
 //! platform's own interface and never from the environment (IG-Q14).
 //!
-//! **The contract: who this account is, where its session keeps things, and
-//! which account is at the other end of a local socket; nothing that dials,
-//! listens or speaks a protocol.** It is a leaf with no network stack (libc
+//! **The contract: who this account is, where its session keeps things,
+//! which files it alone may read, and which account is at the other end of
+//! a local socket; nothing that dials, listens or speaks a protocol.** It is a leaf with no network stack (libc
 //! on Unix, `shekyl-win-sec` on Windows), so the daemon's process-hardening
 //! crate and the client transport both read the account here without either
 //! pulling in the other (`docs/design/RPC_CHANNEL.md` RT-15, §7.1).
@@ -22,10 +22,16 @@
 //!   connected Unix socket (`SO_PEERCRED` on Linux, `getpeereid`
 //!   elsewhere). On Windows the pipe's peer check is
 //!   `shekyl_win_sec::open_verified`, which opens and checks in one call.
+//! - [`private_file`]: files this account alone may read (a key), written
+//!   that way in the creating call and refused when read if they are not,
+//!   and files it publishes for every account to read; each written
+//!   durably, or staged beside its destination and renamed over it.
 
 #![deny(unsafe_code)]
 
 use std::path::PathBuf;
+
+pub mod private_file;
 
 /// This process's effective user id.
 #[cfg(unix)]

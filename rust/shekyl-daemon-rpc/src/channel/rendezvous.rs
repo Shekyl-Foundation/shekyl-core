@@ -25,21 +25,9 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use shekyl_rpc_rendezvous::{rendezvous_name, service_file_name, Instance, ServiceRecord};
+use shekyl_rpc_rendezvous::ServiceRecord;
 
-use super::stage::{self, Access};
-
-/// Where a service's record goes: [`service_file_name`] in its rendezvous
-/// directory, the RT-O10 name over the network id and the instance, as the
-/// owner's leg names its own.
-#[must_use]
-pub fn record_path(
-    dir: &Path,
-    network_id: &shekyl_rpc_channel::NetworkId,
-    instance: &Instance,
-) -> PathBuf {
-    dir.join(service_file_name(&rendezvous_name(network_id, instance)))
-}
+use shekyl_os_account::private_file::{Access, StagedWrite};
 
 /// The published record. Dropping it removes the file, if the file is
 /// still this daemon's record.
@@ -66,7 +54,7 @@ impl ServiceRendezvous {
             bundle: bundle.to_vec(),
         }
         .bytes();
-        let journal = stage::StagedWrite::create(path, &record, Access::WorldReadable)?;
+        let journal = StagedWrite::create(path, &record, Access::WorldReadable)?;
         journal.commit()?;
         Ok(Self {
             path: path.to_path_buf(),

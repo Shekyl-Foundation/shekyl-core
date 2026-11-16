@@ -205,11 +205,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
             service_rendezvous_line(
                 network.name(),
                 config.rpc.instance.label(),
-                &shekyl_daemon_rpc::channel::rendezvous::record_path(
-                    dir,
-                    &network_id,
-                    &config.rpc.instance,
-                ),
+                &shekyl_rpc_rendezvous::service_record_path(dir, &network_id, &config.rpc.instance),
                 !config.rpc.channel_listen.is_empty(),
             )
         }));

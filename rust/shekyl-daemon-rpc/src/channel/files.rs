@@ -7,18 +7,15 @@
 //! exclusive lock covers (RT-O34; Rick, 2026-11-14): the daemon's key, its
 //! public bundle, a service's console key, and the enrolled set's store.
 //!
-//! Each is readable by the daemon's account alone: created `0600` with
-//! `O_EXCL` on Unix, and on Windows with an owner-only descriptor and the
-//! no-read-up label set in the creating call (`CreateFileW`, RT-P8's
-//! finding), never tightened afterwards. A key file anyone else can read is
-//! refused at start, never repaired: whoever can read it is the daemon.
+//! Each is readable by the daemon's account alone, written and checked by
+//! `shekyl-os-account`'s [`private_file`], the rule the tunnel's and a
+//! remote CLI's keys follow too. A key file anyone else can read is refused
+//! at start, never repaired: whoever can read it is the daemon.
 
 use std::path::{Path, PathBuf};
 
+use shekyl_os_account::private_file::{self, PrivateFileError};
 use shekyl_rpc_channel::handshake::{KeyFileError, StaticKeypair};
-use zeroize::Zeroizing;
-
-use super::stage::{self, Access};
 
 /// The daemon's static key (`StaticKeypair::to_key_file`).
 pub const KEY_FILE: &str = "rpc-channel.key";
@@ -58,18 +55,24 @@ impl std::fmt::Display for FileRefused {
 
 impl std::error::Error for FileRefused {}
 
+impl From<PrivateFileError> for FileRefused {
+    fn from(error: PrivateFileError) -> Self {
+        match error {
+            PrivateFileError::Io(path, e) => Self::Io(path, e),
+            PrivateFileError::Exposed(path, why) => Self::Exposed(path, why),
+        }
+    }
+}
+
 /// The key at `path`, read and checked; `None` when there is none yet.
 ///
 /// # Errors
 ///
 /// [`FileRefused`]: unreadable, readable by another account, or not a key.
 pub fn read_key(path: &Path) -> Result<Option<StaticKeypair>, FileRefused> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(FileRefused::Io(path.to_path_buf(), e)),
+    let Some(bytes) = private_file::read_private(path)? else {
+        return Ok(None);
     };
-    private(path)?;
     StaticKeypair::from_key_file(&bytes)
         .map(Some)
         .map_err(|e| FileRefused::Key(path.to_path_buf(), e))
@@ -82,8 +85,7 @@ pub fn read_key(path: &Path) -> Result<Option<StaticKeypair>, FileRefused> {
 ///
 /// [`FileRefused::Io`] when the create or the write fails.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), FileRefused> {
-    stage::write_new(path, bytes, Access::OwnerOnly)
-        .map_err(|error| FileRefused::Io(path.to_path_buf(), error))
+    Ok(private_file::write_private(path, bytes)?)
 }
 
 /// Replace the file at `path` with `bytes`, readable by this account alone.
@@ -94,11 +96,7 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), FileRefused> {
 ///
 /// [`FileRefused::Io`] when a step fails.
 pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), FileRefused> {
-    let journal = stage::StagedWrite::create(path, bytes, Access::OwnerOnly)
-        .map_err(|error| FileRefused::Io(stage::staged_path(path), error))?;
-    journal
-        .commit()
-        .map_err(|error| FileRefused::Io(path.to_path_buf(), error))
+    Ok(private_file::replace_private(path, bytes)?)
 }
 
 /// The enrolled set's store at `path`, made ready for redb: created empty
@@ -118,37 +116,7 @@ pub fn private_store(path: &Path) -> Result<(), FileRefused> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => write_private(path, &[])?,
         Err(e) => return Err(FileRefused::Io(path.to_path_buf(), e)),
     }
-    private(path)
-}
-
-/// Whether only this account can read `path`.
-#[cfg(unix)]
-fn private(path: &Path) -> Result<(), FileRefused> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let meta =
-        std::fs::symlink_metadata(path).map_err(|e| FileRefused::Io(path.to_path_buf(), e))?;
-    let exposed = |why: String| Err(FileRefused::Exposed(path.to_path_buf(), why));
-    if meta.file_type().is_symlink() {
-        return exposed("is a symbolic link".to_owned());
-    }
-    let me = rustix::process::geteuid().as_raw();
-    if meta.uid() != me {
-        return exposed(format!(
-            "is owned by uid {}, not this account (uid {me})",
-            meta.uid()
-        ));
-    }
-    let mode = meta.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return exposed(format!("has mode {mode:04o}"));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn private(path: &Path) -> Result<(), FileRefused> {
-    shekyl_win_sec::rendezvous::check_owner_only_labelled(path)
-        .map_err(|e| FileRefused::Exposed(path.to_path_buf(), e.to_string()))
+    Ok(private_file::check_private(path)?)
 }
 
 #[cfg(all(test, unix))]

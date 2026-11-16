@@ -26,7 +26,6 @@ pub mod listener;
 mod message;
 pub mod rendezvous;
 pub mod sessions;
-mod stage;
 pub mod store;
 
 #[cfg(test)]
@@ -238,10 +237,9 @@ impl Channel {
             store,
             sessions: Arc::new(Sessions::default()),
             budget: HandshakeBudget::new(Instant::now()),
-            service_rendezvous: setup
-                .service_rendezvous
-                .as_deref()
-                .map(|dir| rendezvous::record_path(dir, &setup.network_id, &setup.instance)),
+            service_rendezvous: setup.service_rendezvous.as_deref().map(|dir| {
+                shekyl_rpc_rendezvous::service_record_path(dir, &setup.network_id, &setup.instance)
+            }),
         }))
     }
 

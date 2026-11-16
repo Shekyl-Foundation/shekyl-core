@@ -10,7 +10,7 @@
 //! become the console key. The two are written so a crash cannot leave
 //! them disagreeing.
 //!
-//! Install writes the new key to the file's journal ([`staged_path`]),
+//! Install writes the new key to the file's journal ([`private_file::staged_path`]),
 //! commits the fingerprint and, on a reset, the reset note in one store
 //! transaction, then renames the journal over the file. [`reconcile`] is
 //! what the next start does with whatever of that survived:
@@ -28,8 +28,8 @@ use std::path::{Path, PathBuf};
 use shekyl_rpc_channel::handshake::StaticKeypair;
 
 use super::files::{self, FileRefused};
-use super::stage::{self, Access, StagedWrite};
 use super::store::{Store, StoreError};
+use shekyl_os_account::private_file::{self, Access, StagedWrite};
 
 /// What [`reconcile`] found.
 #[derive(Debug, PartialEq, Eq)]
@@ -98,7 +98,7 @@ pub(crate) fn install(
     let fingerprint = fingerprint_of(&key);
     let live = dir.join(files::CONSOLE_KEY_FILE);
     let journal = StagedWrite::create(&live, &key.to_key_file(), Access::OwnerOnly)
-        .map_err(|error| FileRefused::Io(stage::staged_path(&live), error))?;
+        .map_err(|error| FileRefused::Io(private_file::staged_path(&live), error))?;
     if let Err(error) = store.commit_console(&fingerprint, reset_at) {
         // The cell was not moved. The journal is not a key of record.
         drop(journal.discard());
@@ -118,7 +118,7 @@ pub(crate) fn install(
 /// [`ConsoleFault::Refuse`], and nothing is rewritten to make them agree.
 pub(crate) fn reconcile(dir: &Path, store: &Store) -> Result<Reconcile, ConsoleFault> {
     let live = dir.join(files::CONSOLE_KEY_FILE);
-    let journal = stage::staged_path(&live);
+    let journal = private_file::staged_path(&live);
     let cell = store.console()?;
     let live_key = seen(&live);
     let journal_key = seen(&journal);
@@ -395,7 +395,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         let live = install(dir.path(), &store, Some(9)).unwrap();
-        assert!(!stage::staged_path(&live).exists());
+        assert!(!private_file::staged_path(&live).exists());
         let key = files::read_key(&live).unwrap().unwrap();
         assert_eq!(store.console().unwrap(), Some(fingerprint_of(&key)));
         assert_eq!(store.take_console_reset().unwrap(), Some(9));
@@ -416,21 +416,21 @@ mod tests {
         let other = StaticKeypair::generate().unwrap();
         std::fs::remove_file(&live).unwrap();
         files::write_private(&live, &other.to_key_file()).unwrap();
-        files::write_private(&stage::staged_path(&live), &record).unwrap();
+        files::write_private(&private_file::staged_path(&live), &record).unwrap();
         assert_eq!(reconcile(dir.path(), &store).unwrap(), Reconcile::Placed);
-        assert!(!stage::staged_path(&live).exists());
+        assert!(!private_file::staged_path(&live).exists());
         assert_eq!(
             fingerprint_of(&files::read_key(&live).unwrap().unwrap()),
             cell
         );
 
         let stray = StaticKeypair::generate().unwrap();
-        files::write_private(&stage::staged_path(&live), &stray.to_key_file()).unwrap();
+        files::write_private(&private_file::staged_path(&live), &stray.to_key_file()).unwrap();
         assert_eq!(
             reconcile(dir.path(), &store).unwrap(),
             Reconcile::Consistent
         );
-        assert!(!stage::staged_path(&live).exists());
+        assert!(!private_file::staged_path(&live).exists());
 
         std::fs::remove_file(&live).unwrap();
         files::write_private(&live, &other.to_key_file()).unwrap();
@@ -459,13 +459,13 @@ mod tests {
         assert!(store.console().unwrap().is_none());
 
         std::fs::remove_file(&live).unwrap();
-        files::write_private(&stage::staged_path(&live), &planted.to_key_file()).unwrap();
+        files::write_private(&private_file::staged_path(&live), &planted.to_key_file()).unwrap();
         assert_eq!(reconcile(dir.path(), &store).unwrap(), Reconcile::Absent);
         let installed = install(dir.path(), &store, None).unwrap();
         assert_ne!(
             fingerprint_of(&files::read_key(&installed).unwrap().unwrap()),
             fingerprint_of(&planted)
         );
-        assert!(!stage::staged_path(&installed).exists());
+        assert!(!private_file::staged_path(&installed).exists());
     }
 }

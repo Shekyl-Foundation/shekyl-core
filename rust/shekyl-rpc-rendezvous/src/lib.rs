@@ -36,8 +36,8 @@ use shekyl_crypto_hash::cshake256_32;
 mod place;
 
 pub use place::{
-    account_dir, data_home, file_name, service_file_name, Record, ServiceRecord, PIPE_PREFIX,
-    RECORD_FORMAT, RENDEZVOUS_DIR, SERVICE_RECORD_FORMAT,
+    account_dir, data_home, file_name, service_file_name, service_record_path, Record,
+    ServiceRecord, PIPE_PREFIX, RECORD_FORMAT, RENDEZVOUS_DIR, SERVICE_RECORD_FORMAT,
 };
 
 /// cSHAKE256 customization of [`rendezvous_name`].
