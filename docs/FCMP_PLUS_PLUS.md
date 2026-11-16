@@ -1139,7 +1139,7 @@ Ten `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and st
 | `fuzz_claim_reward` | `shekyl-staking` | Random accrual records; reward overflow, monotonicity, and bound invariants |
 | `fuzz_tx_deserialize_fcmp_type7` | `shekyl-fcmp` | Transaction-structured FCMP++ deserialization: pseudoOuts, proof blobs, PQC leaf entries, corrupted types |
 
-CI runs a smoke gate that ensures this required fuzz harness inventory exists (`.github/workflows/build.yml`, `verify fuzz harness inventory (smoke gate)`).
+CI compiles every fuzz harness on the pinned stable toolchain (`.github/workflows/fuzz-harness.yml`, one job per fuzz crate, scoped to the change), and `scripts/ci/check_fuzz_inventory.py` derives the inventory from the tree: every `[[bin]]` a file, every file a `[[bin]]`, every fuzz lockfile at the workspace's versions.
 
 For the full pre-release fuzz campaign (10M runs per harness), run:
 
