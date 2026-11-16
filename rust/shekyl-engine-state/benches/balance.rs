@@ -6,9 +6,9 @@
 //! Hardening-pass commit 2 (§3.2): `BalanceSummary::compute` over N transfers.
 //!
 //! Direct counterpart to `tests/wallet_bench/bench_wallet2.cpp::BM_balance_compute`.
-//! Measures the linear-in-N walk that categorizes each `TransferDetails`
-//! as unlocked / locked-by-timelock / staked_total / staked_matured /
-//! staked_locked / frozen. This is the wallet UI's refresh cost after
+//! Measures the linear-in-N walk that classifies each `TransferDetails`
+//! once (spent / unspendable / in flight / incoming / spendable) and sums
+//! the balance's legs. This is the wallet UI's refresh cost after
 //! every block; a drift from O(n) to O(n log n) lands here first.
 //!
 //! The canonical balance implementation lives in `shekyl-scanner`; the
@@ -53,7 +53,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
-        frozen: (seed & 0xf) == 0,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
@@ -82,16 +81,18 @@ fn hot_path_bench_balance_compute(c: &mut Criterion) {
             BenchmarkId::from_parameter(n),
             &transfers,
             |b, transfers| {
-                // PR-SJ-1b: locks are journal-derived and caller-supplied.
-                // Empty map = the baseline-comparable workload (the retired
-                // field was `None` on every fixture row); derivation cost is
-                // O(live sends), measured at its consumer, not per-row here.
-                let spend_locks = shekyl_engine_state::SendJournalBlock::empty().spend_locks();
+                // An empty journal: nothing in flight, the
+                // baseline-comparable workload; the per-row cost is the
+                // classifier (A17) at one horizon.
+                let journal = shekyl_engine_state::SendJournalBlock::empty();
+                let horizon = shekyl_engine_state::SpendHorizon::at_tip(
+                    shekyl_types::BlockHeight::from_raw(current_height),
+                );
                 b.iter(|| {
                     black_box(BalanceSummary::compute(
                         black_box(transfers),
-                        shekyl_types::BlockHeight::from_raw(current_height),
-                        black_box(&spend_locks),
+                        horizon,
+                        black_box(&journal),
                     ))
                 });
             },

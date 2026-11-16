@@ -173,8 +173,9 @@ cross-stack delta is attempted.
 `shekyl-scanner` as a dev-dep.
 **Binaries.** `benches/balance.rs`, `benches/balance_iai.rs`.
 
-**What it measures.** `BalanceSummary::compute(&transfers,
-current_height)` over `N ∈ {100, 1000, 10000}`. The canonical
+**What it measures.** `BalanceSummary::compute(&transfers, horizon,
+&journal)` over `N ∈ {100, 1000, 10000}`, with an empty journal (nothing
+in flight). The canonical
 balance implementation lives in `shekyl-scanner`; the bench is hosted
 in `shekyl-engine-state` because the `TransferDetails` fixture
 builder is already there and duplicating it would split the
@@ -183,15 +184,20 @@ source-of-truth for the synthetic transfer shape.
 **Operation list — every step exercised in the hot loop.**
 
 - Iterate `&[TransferDetails]`.
-- For each transfer, classify into exactly one of:
-  `unlocked` | `locked_by_timelock` | `spent` | `frozen` |
-  `staked_total` | `staked_matured` | `staked_locked`.
-- Predicate evaluation per transfer:
-  - `td.spent` short-circuit.
-  - `td.frozen` short-circuit.
-  - `td.eligible_height <= current_height` (timelock).
-  - `td.staked` branch + `td.stake_lock_until` comparison.
-- Accumulate per-class running totals into `BalanceSummary` fields.
+- For each transfer, classify into exactly one state with the one
+  classifier (`TransferDetails::state`, A17): `spent` | `unspendable` |
+  `in flight` | `incoming` | `spendable`.
+- Predicate evaluation per transfer, in that precedence:
+  - `td.spent`, `td.unspendable` and the in-flight lock lookup
+    short-circuit.
+  - the reference rule: `in_tree_at_reference(td.eligible_height,
+    reference)` at the horizon's one reference block.
+- Accumulate per-class running totals in locals, and keep the least
+  eligible height among the incoming outputs.
+- After the walk: the wait at that least eligible height, once (the wait
+  never falls as the eligible height rises), and the in-flight sends'
+  outgoing and change. With a send in flight, one more pass first finds
+  the in-flight inputs a scan has spent; the empty journal skips it.
 - Return the summary.
 
 **Fixture shape.** Same `synthetic_transfer(seed, height)` builder as
@@ -199,10 +205,6 @@ source-of-truth for the synthetic transfer shape.
 
 - `spent = (seed & 0x7) == 0` — forces ~12.5% of entries through the
   spent short-circuit.
-- `frozen = (seed & 0xf) == 0` — forces ~6.25% through the frozen
-  short-circuit, and has overlap with `spent` (by design) so the
-  predicate ordering inside `compute` is exercised.
-- `staked = (seed & 0b11) == 0` — 25% staked.
 - `current_height = 1_000 + N/2` so roughly half of `eligible_height`
   comparisons fall on either side of the cutoff. This mirrors the
   "balanced classification spread" that `BM_balance_compute` in the
@@ -210,10 +212,10 @@ source-of-truth for the synthetic transfer shape.
   §`BM_balance_compute`).
 
 **Measurement boundary.** The inner closure is
-`BalanceSummary::compute(black_box(transfers), current_height)` with
-the return value swallowed by `black_box(...)`. For iai-callgrind,
+`BalanceSummary::compute(black_box(transfers), horizon, black_box(&journal))`
+with the return value swallowed by `black_box(...)`. For iai-callgrind,
 `build_transfers(N)` is the annotated `setup` and the measured region
-is `compute(&transfers, current_height)` only; the setup's
+is `compute(&transfers, horizon, &journal)` only; the setup's
 allocations and key-scalar multiplications do not count toward the
 reported instruction counts.
 
@@ -225,7 +227,7 @@ iai-callgrind six-metric block.
 over the same logical transfer shape. **Documented asymmetries:**
 
 - The Rust path evaluates a richer classification (six-way;
-  `unlocked`/`locked`/`spent`/`frozen`/`staked_*`). The C++ path
+  `spendable`/`incoming`/`in flight`/`unspendable`/`spent`). The C++ path
   evaluates a narrower spent/frozen/unlocked split. The Rust
   per-transfer cost is therefore expected to be modestly higher at
   equal `N`.

@@ -5,6 +5,8 @@
 
 //! Submit verdict + `PendingTxEngine` collaborator error vocabulary (PR 5).
 
+use shekyl_tx_builder::{InternalSignFault, SignFault};
+
 use crate::engine::pending::{ReservationId, SnapshotId};
 
 use super::KeyEngineError;
@@ -382,68 +384,125 @@ pub enum OutputSelectorError {
     },
 }
 
+/// A wallet-side signing fault outside the transaction builder.
+///
+/// Closed: a new fault is a variant, and the wire carries [`Self::keyword`].
+/// The builder's own faults travel as [`shekyl_tx_builder::SignFault`], not
+/// as one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignerFault {
+    /// A structural failure during signing whose detail stays in the log.
+    Primitive,
+    /// An input's handle does not match its derivation.
+    HandleMismatch,
+    /// A spendable input has no canonical key image.
+    MissingKeyImage,
+    /// An input's source ciphertext does not decapsulate.
+    SourceDecapsulation,
+    /// A recipient id the label cannot echo reached the sign pass.
+    RidNotEncodable,
+    /// A proof message reached the signer, which does not serve proofs.
+    Proof,
+    /// The signed bulletproof bytes do not parse.
+    BulletproofParse,
+    /// Encoding the signed transaction failed.
+    WireEncode,
+}
+
+impl SignerFault {
+    /// Every wallet-side fault, in declaration order.
+    pub const ALL: [Self; 8] = [
+        Self::Primitive,
+        Self::HandleMismatch,
+        Self::MissingKeyImage,
+        Self::SourceDecapsulation,
+        Self::RidNotEncodable,
+        Self::Proof,
+        Self::BulletproofParse,
+        Self::WireEncode,
+    ];
+
+    /// The fault's wire keyword (`data.fault` on `-29119`).
+    #[must_use]
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::Primitive => "primitive",
+            Self::HandleMismatch => "handle-mismatch",
+            Self::MissingKeyImage => "missing-key-image",
+            Self::SourceDecapsulation => "source-decapsulation",
+            Self::RidNotEncodable => "rid-not-encodable",
+            Self::Proof => "proof",
+            Self::BulletproofParse => "bulletproof-parse",
+            Self::WireEncode => "wire-encode",
+        }
+    }
+}
+
+impl core::fmt::Display for SignerFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.keyword())
+    }
+}
+
 /// Failures from `Signer::sign_transfer`. Phase 0h binding form
 /// per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (R11 (b) segment-2b
 /// closure as separate `LocalSigner` / `SigningActor`).
 ///
-/// The trait isolates spend-key access from the build pipeline so the
-/// PR 5 design can survive the eventual V3.x `SigningActor` topology
-/// without re-opening the trait surface. The default V3.0 impl is
-/// `LocalSigner` (synchronous, in-process); the V3.x actor variant
-/// lives behind the same trait.
-///
-/// `#[non_exhaustive]` so V3.x signers can extend the variant set
-/// (e.g., a `HardwareApprovalDeclined` variant when offline-approval
-/// flows land).
+/// Every failure here is local: the wallet signs in process. A remote
+/// signer (a device, a cooperative peer) would add its own variant with
+/// its own remedy, not borrow one of these.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SignerError {
-    /// The signer has no spend-key material in scope (view-only
-    /// wallet; hardware wallet not connected; signing actor not yet
-    /// started). Distinct from [`SendError::BuildInvariant`](super::SendError::BuildInvariant) because it
-    /// is the trait-method's outcome, not the engine's pre-build
-    /// capability check.
+    /// The signer has no spend-key material in scope: its signing actor
+    /// has stopped. Distinct from [`SendError::BuildInvariant`](super::SendError::BuildInvariant)
+    /// because it is the trait method's outcome, not the engine's
+    /// pre-build capability check.
     #[error("signer unavailable")]
     Unavailable,
 
-    /// The signer attempted to sign but a downstream failure
-    /// prevented completion (hardware-device error, remote-actor
-    /// disconnect, etc.). Carries a `&'static str` named at the call
-    /// site.
-    #[error("signer remote failure ({reason})")]
-    RemoteFailure {
-        /// Compile-time-fixed description of the downstream failure.
-        reason: &'static str,
+    /// The transaction builder refused or failed the signing pass, by
+    /// identity ([`shekyl_tx_builder::SignFault`]).
+    #[error("signing failed: {0}")]
+    Sign(shekyl_tx_builder::SignFault),
+
+    /// The wallet's own state did not hold what signing needs, or encoding
+    /// the signed transaction failed: a bug, named by [`SignerFault`].
+    #[error("signer internal fault ({fault})")]
+    Internal {
+        /// The fault.
+        fault: SignerFault,
     },
 }
 
 impl From<KeyEngineError> for SignerError {
     fn from(err: KeyEngineError) -> Self {
-        match err {
-            KeyEngineError::KeyActorUnavailable => Self::Unavailable,
-            KeyEngineError::Primitive { detail } => Self::RemoteFailure { reason: detail },
-            KeyEngineError::InsufficientFunds { .. } => Self::RemoteFailure {
-                reason: "insufficient funds for fee variant",
-            },
-            KeyEngineError::HandleMismatch { .. } => Self::RemoteFailure {
-                reason: "output handle mismatch",
-            },
-            KeyEngineError::MissingKeyImage { .. } => Self::RemoteFailure {
-                reason: "missing key image on spend input",
-            },
-            KeyEngineError::SourceCiphertextDecapsulationFailed(_) => Self::RemoteFailure {
-                reason: "source ciphertext re-decapsulation failed",
-            },
+        let fault = match err {
+            KeyEngineError::KeyActorUnavailable => return Self::Unavailable,
+            KeyEngineError::Sign(fault) => return Self::Sign(fault),
+            KeyEngineError::Primitive { detail } => {
+                tracing::debug!(detail, "signer primitive failure");
+                SignerFault::Primitive
+            }
+            // Amounts that do not balance, including a fee variant the
+            // build's selection should have made unreachable. The shortfall
+            // stays in the log; the fault is the builder's closed one.
+            KeyEngineError::InsufficientFunds { shortfall } => {
+                tracing::debug!(shortfall, "signing amounts do not balance");
+                return Self::Sign(SignFault::Internal(InternalSignFault::InsufficientFunds));
+            }
+            KeyEngineError::HandleMismatch { .. } => SignerFault::HandleMismatch,
+            KeyEngineError::MissingKeyImage { .. } => SignerFault::MissingKeyImage,
+            KeyEngineError::SourceCiphertextDecapsulationFailed(_) => {
+                SignerFault::SourceDecapsulation
+            }
             // Unreachable for a request `build_pending_tx` admitted (it
             // refuses a rid the label cannot carry), kept total.
-            KeyEngineError::RidNotEncodable(_) => Self::RemoteFailure {
-                reason: "recipient payment request id cannot be echoed on the wire",
-            },
+            KeyEngineError::RidNotEncodable(_) => SignerFault::RidNotEncodable,
             // Unreachable on the signing path (proofs never route through
             // `Signer`), but the conversion must stay total.
-            KeyEngineError::Proof(_) => Self::RemoteFailure {
-                reason: "proof generation failure",
-            },
-        }
+            KeyEngineError::Proof(_) => SignerFault::Proof,
+        };
+        Self::Internal { fault }
     }
 }

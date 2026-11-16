@@ -177,6 +177,79 @@ fn candidate(tag: u8, amount: u64) -> ReserveCandidate {
     }
 }
 
+/// One ledger row, disclosable (key image and source ciphertext set),
+/// eligible at `eligible` (tagged `tag` throughout).
+fn row(tag: u8, amount: u64, eligible: u64) -> shekyl_engine_state::TransferDetails {
+    shekyl_engine_state::TransferDetails {
+        tx_hash: shekyl_types::TxHash::from_bytes([tag; 32]),
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(u64::from(tag)),
+        block_height: shekyl_types::BlockHeight::from_raw(eligible.saturating_sub(10)),
+        key: curve25519_dalek::constants::ED25519_BASEPOINT_POINT,
+        key_offset: curve25519_dalek::Scalar::ZERO,
+        commitment: shekyl_curve_primitives::Commitment::new(
+            curve25519_dalek::Scalar::ZERO,
+            amount,
+        ),
+        payment_id: None,
+        spent: false,
+        spent_height: None,
+        key_image: Some(KeyImage::from_canonical_bytes([tag; 32])),
+        spending_tx_hash: None,
+        source_ciphertext: Some(HybridCiphertext {
+            x25519: [tag; 32],
+            ml_kem: vec![tag; 4],
+        }),
+        output_handle: None,
+        eligible_height: shekyl_types::BlockHeight::from_raw(eligible),
+        unspendable: None,
+        fcmp_precomputed_path: None,
+        receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
+    }
+}
+
+/// A reserve proof discloses money held: every on-chain output in the
+/// balance. An output still incoming (on chain, not yet in the reference
+/// block's tree) is a candidate, as is a spendable one; an
+/// in-flight send's input, an unspendable output and a spent one are not.
+/// Bites if the candidates go back to the spendable set (the incoming
+/// output drops out).
+#[test]
+fn a_reserve_proof_includes_money_still_incoming() {
+    use shekyl_engine_state::{SendInputRef, SendJournalBlock, SpendHorizon, UnspendableReason};
+    let tip = 1_000;
+    let spendable = row(1, 100, 10);
+    let incoming = row(2, 200, tip - 1);
+    let in_flight = row(4, 400, 10);
+    let mut unspendable = row(5, 500, 10);
+    unspendable.unspendable = Some(UnspendableReason::PqcLeafMismatch);
+    let mut spent = row(6, 600, 10);
+    spent.spent = true;
+
+    let mut journal = SendJournalBlock::empty();
+    journal.record_dispatched(
+        [9; 32],
+        shekyl_types::BlockHeight::from_raw(tip),
+        0,
+        Vec::new(),
+        vec![SendInputRef {
+            gindex: 4,
+            amount: 400,
+        }],
+        vec![0xAA],
+    );
+    assert!(journal.stamp_lock_baseline(&[9; 32], tip));
+
+    let candidates = reserve_candidates(
+        &[spendable, incoming, in_flight, unspendable, spent],
+        SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(tip)),
+        &journal.spend_locks(),
+    );
+    let mut tags: Vec<u8> = candidates.iter().map(|c| c.txid[0]).collect();
+    tags.sort_unstable();
+    assert_eq!(tags, vec![1, 2], "spendable and incoming");
+}
+
 #[test]
 fn selection_is_largest_first_and_minimal_for_amount_bounds() {
     let candidates = vec![candidate(1, 100), candidate(2, 500), candidate(3, 300)];

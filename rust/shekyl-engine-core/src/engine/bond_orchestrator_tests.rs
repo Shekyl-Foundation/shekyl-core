@@ -794,7 +794,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     let snapshot = |e: u64, s: u64, p: u64| FeeEstimates {
         economy: FeeRate::new(e).expect("economy"),
         standard: FeeRate::new(s).expect("standard"),
-        priority: FeeRate::new(p).expect("priority"),
+        high: FeeRate::new(p).expect("high"),
     };
 
     // Honest served-ladder KAT row: accepted, and the fee is the shared

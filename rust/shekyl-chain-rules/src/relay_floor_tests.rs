@@ -400,7 +400,7 @@ fn the_ladder_is_the_owners_over_the_floors_operands_and_its_economy_rung_is_the
             other => panic!("floor at {height:?}: {other:?}"),
         };
         assert_eq!(ladder.economy, floor, "FL-R6 at {height:?}");
-        assert!(ladder.economy <= ladder.standard && ladder.standard <= ladder.priority);
+        assert!(ladder.economy <= ladder.standard && ladder.standard <= ladder.high);
     }
     assert_eq!(
         chain.with_view(|view| fee_ladder_at(&view, h(13))),

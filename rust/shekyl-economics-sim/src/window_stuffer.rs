@@ -30,7 +30,7 @@ use crate::engine::{ScenarioConfig, SimParams, VolumeSchedule};
 use crate::esr10::{scenario_named, Arm};
 use crate::eup4::{release_multiplier_at, SharedRuns};
 use crate::miner_stuffer::{envelope_at, ROWS};
-use crate::rung_mix::Rung;
+use crate::rung_mix::FeePriority;
 use crate::scenarios::{
     BASELINE_STEADY_STATE, BOOM_BUST_CYCLE, STUFFING_ATTACK, STUFFING_ATTACK_BLOCKS,
 };
@@ -515,7 +515,7 @@ impl FoldProbe for StufferProbe<'_> {
             let floor = self
                 .params
                 .fee
-                .rung_tx(Rung::Economy, &seen.priced.fee_point)
+                .rung_tx(FeePriority::Economy, &seen.priced.fee_point)
                 .expect("a producer's own body is priced on the Economy rung");
             self.floor_fees += u128::from(own.txs) * u128::from(floor.fee_atomic);
         }

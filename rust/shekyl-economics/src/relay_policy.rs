@@ -27,7 +27,7 @@ use crate::fee::{
     EMISSION_CLAIM_FEE_FLOOR, FEE_DECIMAL_PLACES, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
     RELAY_FLOOR_REFERENCE_TX_WEIGHT, STANDARD_RUNG_OVER_ECONOMY,
 };
-use crate::params::GENERATED_PRIORITY_RUNG_FACTOR;
+use crate::params::GENERATED_HIGH_RUNG_FACTOR;
 
 /// Basis points in one whole. [`RelayPolicy::admission_slack_bp`] is
 /// written in these. A slack at or above this admits at zero.
@@ -59,9 +59,9 @@ pub struct RelayPolicy {
     /// Standard over the Economy rung (the relay floor). Same line as
     /// [`Self::ref_tx_weight`].
     pub standard_over_economy: u64,
-    /// Priority's factor: Priority is `max(factor·R·C/M, Standard)`. Same
+    /// High's factor: High is `max(factor·R·C/M, Standard)`. Same
     /// line as [`Self::ref_tx_weight`].
-    pub priority_factor: u64,
+    pub high_factor: u64,
 }
 
 impl RelayPolicy {
@@ -79,7 +79,7 @@ impl RelayPolicy {
         emission_claim_fee_floor: EMISSION_CLAIM_FEE_FLOOR,
         ref_tx_weight: RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         standard_over_economy: STANDARD_RUNG_OVER_ECONOMY,
-        priority_factor: GENERATED_PRIORITY_RUNG_FACTOR,
+        high_factor: GENERATED_HIGH_RUNG_FACTOR,
     };
 
     /// Atomic units per lattice step, `10^(DISPLAY_DECIMAL_POINT − places)`.
@@ -213,7 +213,7 @@ struct RelayPolicyWire {
     emission_claim_fee_floor: u64,
     ref_tx_weight: u64,
     standard_over_economy: u64,
-    priority_factor: u64,
+    high_factor: u64,
 }
 
 impl TryFrom<RelayPolicyWire> for RelayPolicy {
@@ -227,7 +227,7 @@ impl TryFrom<RelayPolicyWire> for RelayPolicy {
             emission_claim_fee_floor: w.emission_claim_fee_floor,
             ref_tx_weight: w.ref_tx_weight,
             standard_over_economy: w.standard_over_economy,
-            priority_factor: w.priority_factor,
+            high_factor: w.high_factor,
         };
         policy.validate()?;
         Ok(policy)
@@ -262,7 +262,7 @@ fn relay_preimage(policy: &RelayPolicy) -> [u8; RELAY_DIGEST_PREIMAGE_LEN] {
     put(policy.emission_claim_fee_floor);
     put(policy.ref_tx_weight);
     put(policy.standard_over_economy);
-    put(policy.priority_factor);
+    put(policy.high_factor);
     debug_assert_eq!(off, RELAY_DIGEST_PREIMAGE_LEN);
     buf
 }
@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(policy.emission_claim_fee_floor, 1_398_068_000);
         assert_eq!(policy.ref_tx_weight, 3_000);
         assert_eq!(policy.standard_over_economy, 4);
-        assert_eq!(policy.priority_factor, 2);
+        assert_eq!(policy.high_factor, 2);
         assert_eq!(RelayPolicy::default(), policy);
         assert_eq!(*relay_policy(), policy);
         assert_eq!(policy.quantization_mask(), Some(1_000));
@@ -423,7 +423,7 @@ mod tests {
                 ..shipped
             },
             RelayPolicy {
-                priority_factor: 3,
+                high_factor: 3,
                 ..shipped
             },
         ];

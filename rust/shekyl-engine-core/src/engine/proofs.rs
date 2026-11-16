@@ -14,8 +14,9 @@
 //!   source ciphertexts; OUTBOUND signs with the retained per-tx secret
 //!   (`TxMetaBlock.tx_keys`) engine-side — see
 //!   [`super::proof_bridge`]'s module docs for the split rationale.
-//! - **`get_reserve_proof`** — selects unspent matured outputs
-//!   (largest-first — the contract's fewest-beacons choice) and signs
+//! - **`get_reserve_proof`** — selects from every on-chain output in the
+//!   balance: spendable and incoming (`reserve_candidates`),
+//!   largest-first — the contract's fewest-beacons choice — and signs
 //!   inside the key actor. Every wallet is FULL (rule 23), so there is
 //!   no capability gate.
 //! - **`check_tx_proof` / `check_reserve_proof`** — WALLET-LESS: free
@@ -563,6 +564,41 @@ struct ReserveCandidate {
     output_key: [u8; 32],
 }
 
+/// The outputs a reserve proof may disclose: every on-chain output in the
+/// balance (A17) — spendable, and incoming, which is on chain and
+/// not yet in the reference block's tree. A reserve proof shows money held:
+/// it needs each output's key image and location, not membership in a
+/// reference tree. An in-flight send's inputs are out (their money is that
+/// send's outgoing and change), as are unspendable outputs and spent ones.
+/// Rows missing a key image or a source ciphertext cannot be disclosed and
+/// are skipped rather than failing the proof.
+fn reserve_candidates(
+    transfers: &[shekyl_engine_state::TransferDetails],
+    horizon: shekyl_engine_state::SpendHorizon,
+    locks: &shekyl_engine_state::InFlightSpendLocks,
+) -> Vec<ReserveCandidate> {
+    use shekyl_engine_state::OutputState;
+    transfers
+        .iter()
+        .filter(|td| {
+            matches!(
+                td.state(horizon, locks),
+                OutputState::Spendable | OutputState::Incoming
+            )
+        })
+        .filter_map(|td| {
+            Some(ReserveCandidate {
+                txid: td.tx_hash.to_bytes(),
+                vout: u32::try_from(td.internal_output_index.to_raw()).ok()?,
+                amount: td.amount(),
+                ciphertext: td.source_ciphertext.clone()?,
+                key_image: td.key_image?,
+                output_key: td.key.compress().to_bytes(),
+            })
+        })
+        .collect()
+}
+
 /// Prove control of unspent balance (contract `GetReserveProofParams`).
 /// `amount = None` proves every eligible output (prove-all, capped at
 /// [`MAX_RESERVE_PROOF_LOCATORS`] largest); `Some` selects a minimal
@@ -575,25 +611,13 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
     // Project candidates under a short read guard.
     let candidates: Vec<ReserveCandidate> = {
         let state = ctx.ledger.read();
-        let height = state.ledger.ledger.tip.synced_height;
-        state
-            .ledger
-            .spendable_outputs(height, None)
-            .into_iter()
-            .filter_map(|(_, td)| {
-                // key_image and source_ciphertext are populated on every
-                // claimed spendable output; rows missing either cannot be
-                // disclosed and are skipped rather than failing the proof.
-                Some(ReserveCandidate {
-                    txid: td.tx_hash.to_bytes(),
-                    vout: u32::try_from(td.internal_output_index.to_raw()).ok()?,
-                    amount: td.amount(),
-                    ciphertext: td.source_ciphertext.clone()?,
-                    key_image: td.key_image?,
-                    output_key: td.key.compress().to_bytes(),
-                })
-            })
-            .collect()
+        let horizon =
+            shekyl_engine_state::SpendHorizon::at_tip(state.ledger.ledger.tip.synced_height);
+        reserve_candidates(
+            state.ledger.ledger.transfers(),
+            horizon,
+            &state.ledger.spend_locks(),
+        )
     };
 
     let (selected, total) = select_reserve_outputs(candidates, amount)?;

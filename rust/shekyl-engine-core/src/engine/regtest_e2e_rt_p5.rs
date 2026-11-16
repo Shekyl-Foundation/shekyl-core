@@ -160,8 +160,8 @@ async fn refresh(wallet: &Arc<RwLock<Engine<SoloSigner>>>) {
         .expect("refresh joins");
 }
 
-async fn unlocked(wallet: &Arc<RwLock<Engine<SoloSigner>>>) -> AtomicUnits {
-    wallet.read().await.ledger().balance().unlocked
+async fn spendable(wallet: &Arc<RwLock<Engine<SoloSigner>>>) -> AtomicUnits {
+    wallet.read().await.ledger().balance().spendable
 }
 
 async fn address_of(wallet: &Arc<RwLock<Engine<SoloSigner>>>) -> String {
@@ -261,19 +261,19 @@ async fn run_cell(cell: &Cell) {
     for _ in 0..30 {
         daemon.generate_blocks(10).await;
         refresh(&funder).await;
-        if unlocked(&funder).await > AtomicUnits::ZERO {
+        if spendable(&funder).await > AtomicUnits::ZERO {
             break;
         }
     }
     assert!(
-        unlocked(&funder).await > AtomicUnits::ZERO,
+        spendable(&funder).await > AtomicUnits::ZERO,
         "the funder never matured"
     );
     daemon.generate_blocks(FANOUT_MARGIN_BLOCKS).await;
     refresh(&funder).await;
-    let funded = unlocked(&funder).await;
+    let funded = spendable(&funder).await;
     eprintln!(
-        "rt-p5: funder unlocked {funded:?} at height {}",
+        "rt-p5: funder spendable {funded:?} at height {}",
         daemon.height().await
     );
     assert!(funded > AtomicUnits::ZERO, "the funder never matured");
@@ -330,15 +330,15 @@ async fn run_cell(cell: &Cell) {
     let received = unit * u64::try_from(cell.fanout_txs * FANOUT_RECIPIENTS).expect("small count");
     refresh(&wallet).await;
     for _ in 0..40 {
-        if unlocked(&wallet).await.to_raw() >= received {
+        if spendable(&wallet).await.to_raw() >= received {
             break;
         }
         daemon.generate_blocks(1).await;
         refresh(&wallet).await;
     }
     assert!(
-        unlocked(&wallet).await.to_raw() >= received,
-        "the fan-out's outputs never unlocked"
+        spendable(&wallet).await.to_raw() >= received,
+        "the fan-out's outputs never became spendable"
     );
     for &(inputs, outputs) in cell.shapes {
         let k = u64::try_from(inputs).expect("small count");

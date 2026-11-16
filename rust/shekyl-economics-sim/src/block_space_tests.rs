@@ -42,7 +42,7 @@ fn baseline_tx() -> OrdinaryTx {
 /// ESR-10.
 fn standard(count: u64, tx: OrdinaryTx) -> [Arrival; 1] {
     [Arrival {
-        rung: Rung::Standard,
+        rung: FeePriority::Standard,
         count,
         tx,
     }]
@@ -60,11 +60,11 @@ fn assert_total_is_the_pool(space: &BlockSpace) {
 
 /// A Standard cohort built at an arbitrary block, for the walks below.
 fn cohort(fee: u64, weight: u64, count: u64, hour: u64) -> Cohort {
-    rung_cohort(Rung::Standard, fee, weight, count, hour)
+    rung_cohort(FeePriority::Standard, fee, weight, count, hour)
 }
 
 /// A cohort on `rung` built at an arbitrary block.
-fn rung_cohort(rung: Rung, fee: u64, weight: u64, count: u64, hour: u64) -> Cohort {
+fn rung_cohort(rung: FeePriority, fee: u64, weight: u64, count: u64, hour: u64) -> Cohort {
     Cohort {
         arrived: 1_000,
         reference: 993,
@@ -149,7 +149,7 @@ fn a_cohort_lives_for_the_proof_validity_horizon() {
         );
     }
     assert_eq!(
-        space.expire(built_on + horizon + 1)[Rung::Standard],
+        space.expire(built_on + horizon + 1)[FeePriority::Standard],
         3,
         "refused past the horizon"
     );
@@ -545,7 +545,7 @@ fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
 
 /// ESR-10's three rungs: the cohort walk lists what the template's walk over
 /// every transaction lists, rung by rung, on pools where the rungs pay the
-/// ladder's ratios (Priority 50× Standard per byte and a byte heavier for
+/// ladder's ratios (High 50× Standard per byte and a byte heavier for
 /// its fee's longer varint, Standard 4× Economy), with cohorts of every age.
 /// The rung orders nothing: each transaction's rank is its rate, hour and
 /// hash, as the pool's.
@@ -554,9 +554,13 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
     let run = SimParams::default();
     let params = run.economic();
     let point = at(&run);
-    let (e, s, p) = (Rung::Economy, Rung::Standard, Rung::Priority);
+    let (e, s, p) = (
+        FeePriority::Economy,
+        FeePriority::Standard,
+        FeePriority::High,
+    );
     let pools: [&[Cohort]; 3] = [
-        // The constrained era: a Priority sprinkle, Standard over the room,
+        // The constrained era: a High sprinkle, Standard over the room,
         // Economy behind both, the oldest of each the richest.
         &[
             rung_cohort(p, 60_000_000_000, 14_644, 3, 7),
@@ -565,7 +569,7 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
             rung_cohort(e, 300_000_000, 14_643, 8, 5),
             rung_cohort(e, 297_500_000, 14_643, 7, 6),
         ],
-        // Priority enough to buy into the penalty zone.
+        // High enough to buy into the penalty zone.
         &[
             rung_cohort(p, 60_000_000_000, 14_644, 40, 7),
             rung_cohort(s, 1_200_000_000, 14_643, 30, 5),
@@ -606,7 +610,7 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
                 naive_rungs[c.rung].1 += c.fee;
             }
         }
-        for rung in Rung::ALL {
+        for rung in FeePriority::ALL {
             assert_eq!(
                 (rungs[rung].carried_txs, rungs[rung].fees_atomic),
                 naive_rungs[rung],
@@ -625,14 +629,14 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
 fn a_full_pool_drops_the_cheapest_rung_and_counts_it() {
     let weight = 10;
     let pool = [
-        rung_cohort(Rung::Standard, 4_000, weight, 50, 3),
-        rung_cohort(Rung::Economy, 1_000, weight, 30, 3),
+        rung_cohort(FeePriority::Standard, 4_000, weight, 50, 3),
+        rung_cohort(FeePriority::Economy, 1_000, weight, 30, 3),
     ];
     let limit = 80 * weight;
     let mut space = space_of(&pool);
     let mut evicted = PerRung::default();
     let economy = Arrival {
-        rung: Rung::Economy,
+        rung: FeePriority::Economy,
         count: 5,
         tx: OrdinaryTx {
             fee_atomic: 990,
@@ -645,7 +649,7 @@ fn a_full_pool_drops_the_cheapest_rung_and_counts_it() {
         "the cheapest arrival has nothing cheaper to evict"
     );
     let standard_arrival = Arrival {
-        rung: Rung::Standard,
+        rung: FeePriority::Standard,
         count: 12,
         tx: OrdinaryTx {
             fee_atomic: 3_990,
@@ -657,24 +661,24 @@ fn a_full_pool_drops_the_cheapest_rung_and_counts_it() {
         0
     );
     assert_eq!(
-        evicted[Rung::Economy],
+        evicted[FeePriority::Economy],
         12,
         "the Standard arrivals evict Economy"
     );
-    assert_eq!(evicted[Rung::Standard], 0);
+    assert_eq!(evicted[FeePriority::Standard], 0);
     assert_total_is_the_pool(&space);
 }
 
 /// What a pool holds after a block's arrivals, and what they dropped.
 struct Admitted {
     /// The pool's entries, in its order: rung, fee, count.
-    held: Vec<(Rung, u64, u64)>,
+    held: Vec<(FeePriority, u64, u64)>,
     evicted: PerRung<u64>,
     refused: PerRung<u64>,
 }
 
 impl Admitted {
-    fn rungs(&self) -> Vec<Rung> {
+    fn rungs(&self) -> Vec<FeePriority> {
         self.held.iter().map(|&(rung, ..)| rung).collect()
     }
 }
@@ -706,15 +710,15 @@ fn admit_in_order(pool: &[Cohort], order: &[Arrival], limit: u64) -> Admitted {
 #[test]
 fn at_equal_weights_the_admission_order_relabels_a_drop_and_leaves_the_pool() {
     let weight = 10;
-    let pool = [rung_cohort(Rung::Standard, 4_000, weight, 70, 3)];
+    let pool = [rung_cohort(FeePriority::Standard, 4_000, weight, 70, 3)];
     let limit = 80 * weight;
     let arrival = |rung, count, fee_atomic| Arrival {
         rung,
         count,
         tx: OrdinaryTx { fee_atomic, weight },
     };
-    let economy = arrival(Rung::Economy, 6, 1_000);
-    let standard_arrival = arrival(Rung::Standard, 7, 3_990);
+    let economy = arrival(FeePriority::Economy, 6, 1_000);
+    let standard_arrival = arrival(FeePriority::Standard, 7, 3_990);
     let richest_first = admit_in_order(&pool, &[standard_arrival, economy], limit);
     let cheapest_first = admit_in_order(&pool, &[economy, standard_arrival], limit);
     assert_eq!(
@@ -723,16 +727,16 @@ fn at_equal_weights_the_admission_order_relabels_a_drop_and_leaves_the_pool() {
     );
     assert_eq!(
         (
-            richest_first.evicted[Rung::Economy],
-            richest_first.refused[Rung::Economy]
+            richest_first.evicted[FeePriority::Economy],
+            richest_first.refused[FeePriority::Economy]
         ),
         (0, 3),
         "richest first: Economy refused"
     );
     assert_eq!(
         (
-            cheapest_first.evicted[Rung::Economy],
-            cheapest_first.refused[Rung::Economy]
+            cheapest_first.evicted[FeePriority::Economy],
+            cheapest_first.refused[FeePriority::Economy]
         ),
         (3, 0),
         "cheapest first: Economy admitted, then evicted"
@@ -740,50 +744,50 @@ fn at_equal_weights_the_admission_order_relabels_a_drop_and_leaves_the_pool() {
 }
 
 /// At unequal weights the order can change the pool, which is why
-/// [`Rung::ADMISSION`] is a declared assumption. A 20-byte pool holds a
-/// 10-byte Standard entry. Priority (11 bytes) first evicts Standard, and
+/// [`ADMISSION`](crate::rung_mix::ADMISSION) is a declared assumption. A 20-byte pool holds a
+/// 10-byte Standard entry. High (11 bytes) first evicts Standard, and
 /// Economy (9 bytes) then fits beside it. Economy first fits beside
-/// Standard, and Priority then evicts both, the cheapest first, until it
+/// Standard, and High then evicts both, the cheapest first, until it
 /// fits.
 #[test]
 fn at_unequal_weights_the_admission_order_can_change_the_pool() {
-    let pool = [rung_cohort(Rung::Standard, 4_000, 10, 1, 3)];
+    let pool = [rung_cohort(FeePriority::Standard, 4_000, 10, 1, 3)];
     let limit = 20;
     let economy = Arrival {
-        rung: Rung::Economy,
+        rung: FeePriority::Economy,
         count: 1,
         tx: OrdinaryTx {
             fee_atomic: 900,
             weight: 9,
         },
     };
-    let priority = Arrival {
-        rung: Rung::Priority,
+    let high = Arrival {
+        rung: FeePriority::High,
         count: 1,
         tx: OrdinaryTx {
             fee_atomic: 50_000,
             weight: 11,
         },
     };
-    let richest_first = admit_in_order(&pool, &[priority, economy], limit);
-    let cheapest_first = admit_in_order(&pool, &[economy, priority], limit);
+    let richest_first = admit_in_order(&pool, &[high, economy], limit);
+    let cheapest_first = admit_in_order(&pool, &[economy, high], limit);
     assert_eq!(
         richest_first.rungs(),
-        [Rung::Priority, Rung::Economy],
-        "richest first: Priority and Economy"
+        [FeePriority::High, FeePriority::Economy],
+        "richest first: High and Economy"
     );
     assert_eq!(
         cheapest_first.rungs(),
-        [Rung::Priority],
-        "cheapest first: Priority alone"
+        [FeePriority::High],
+        "cheapest first: High alone"
     );
     assert_eq!(
         (
-            cheapest_first.evicted[Rung::Economy],
-            cheapest_first.evicted[Rung::Standard]
+            cheapest_first.evicted[FeePriority::Economy],
+            cheapest_first.evicted[FeePriority::Standard]
         ),
         (1, 1),
-        "cheapest first: Priority evicts both"
+        "cheapest first: High evicts both"
     );
 }
 
