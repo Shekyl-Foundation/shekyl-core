@@ -106,17 +106,18 @@ pub enum Action {
         /// The closed shards it holds.
         shards: Vec<u64>,
     },
-    /// Mine through the end of settlement epoch `through_epoch` with each
-    /// block's draws committed (S7) and each drawing block's bundle filed
-    /// with every draw passing, receipts signed by the holders (S8), and
-    /// admitted by the next block.
+    /// Mine through the end of the first epoch persona `persona` is drawn
+    /// in (the epoch after its join's), each block's draws committed (S7),
+    /// each drawing block's bundle filed with every draw passing, receipts
+    /// signed by the holder (S8), and admitted by the next block.
     Serve {
-        /// The last epoch served.
-        through_epoch: u64,
+        /// The persona's slot in the plan.
+        persona: u32,
     },
-    /// Persona `persona` claims its reward for the epoch it served, at the
+    /// Persona `persona` claims its reward for the epoch it served, in the
     /// first block after that epoch's slash pass (S4, and S1–S6 on its fee
-    /// side).
+    /// side). The chain's only bond, shard and served pair are the
+    /// persona's: the claim's terms are the close's arithmetic over them.
     Claim {
         /// The persona's slot in the plan.
         persona: u32,
@@ -222,7 +223,7 @@ shards = [0]
 
 [[step]]
 do = "serve"
-through_epoch = 2
+persona = 0
 
 [[step]]
 event = "first-claim"

@@ -103,11 +103,21 @@ pub enum Role {
     Receipt,
     /// S8: a bundle's witness signature.
     BundleWitness,
+    /// S5: an emission claim's Auth-B, by its backing output's key.
+    BackingAuth,
+    /// S5: an emission claim's Auth-P, by its persona's identity key.
+    ClaimAuth,
+    /// S5: an emission claim's emission slot, by its persona's identity key.
+    EmissionSlot,
+    /// A transaction key the plan names (an emission claim's): not a source
+    /// of §5.2, which reads every other transaction key as derived, but a
+    /// value the plan, not a constant, decides.
+    TxKey,
 }
 
 impl Role {
     /// Every role, in declaration order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 15] = [
         Self::Range,
         Self::Blinds,
         Self::Membership,
@@ -119,6 +129,10 @@ impl Role {
         Self::DrawSeed,
         Self::Receipt,
         Self::BundleWitness,
+        Self::BackingAuth,
+        Self::ClaimAuth,
+        Self::EmissionSlot,
+        Self::TxKey,
     ];
 
     /// The role's string in the derivation.
@@ -136,6 +150,10 @@ impl Role {
             Self::DrawSeed => "draw-seed",
             Self::Receipt => "receipt",
             Self::BundleWitness => "bundle-witness",
+            Self::BackingAuth => "backing-auth",
+            Self::ClaimAuth => "claim-auth",
+            Self::EmissionSlot => "emission-slot",
+            Self::TxKey => "tx",
         }
     }
 }

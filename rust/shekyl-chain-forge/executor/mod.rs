@@ -1,0 +1,726 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The chain forge's executor (`CHAIN_FORGE.md` §11.1, §11.3): a plan in,
+//! a forged chain out.
+//!
+//! Each block is built the way the scenario driver builds one (the
+//! connector's template facts, the production template, `form`, `validate`
+//! and `connect` against a real store), on a chain carrying regtest's
+//! identity (§6), and written to the corpus as it lands. Every randomness
+//! source the blocks reach draws from the plan's seed ([`seeds`]). When the
+//! plan is done, the trace is produced **from the written corpus** by the
+//! code `shekyl-chain-replay baseline` runs, on a fresh store, under the
+//! production proof-of-work: the trace is the production pipeline's verdict
+//! on the bytes on disk, so a forge that wrote other bytes than it
+//! connected fails there.
+//!
+//! A module tree outside `src/`, included by the crate's test-kind targets
+//! (the `forge` example and the determinism test) with `#[path]`: it
+//! compiles against the dev-dependencies, which the library never sees.
+//!
+//! The chain is written as corpus layout 4 (`CORPUS_FORMAT_VERSION`): a
+//! reorg is a rewind record and the branch after it. Layout 5's `offer`
+//! record is `CF-3`'s.
+
+pub mod claim;
+pub mod seeds;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::BufWriter;
+use std::num::{NonZeroU128, NonZeroUsize};
+use std::path::Path;
+use std::sync::Arc;
+
+use shekyl_chain_forge::{
+    sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord, Line, Manifest,
+    Plan, PlanRef, ScheduleRecord, MANIFEST_FORMAT_VERSION,
+};
+use shekyl_chain_ingest::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
+use shekyl_chain_ingest::archival_driver::{ENDPOINT, FEE};
+use shekyl_chain_ingest::chain_drive::{
+    priced_emission_claim, spender_owning_before, EmissionClaimParts,
+};
+use shekyl_chain_ingest::corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
+use shekyl_chain_ingest::metrics::Metrics;
+use shekyl_chain_ingest::pipeline::PipelineConfig;
+use shekyl_chain_ingest::rebaseline::{baseline, ReplayFault};
+use shekyl_chain_ingest::scenario::{FreeHash, Mined, Scenario};
+use shekyl_chain_ingest::scenario_archival::shard_set;
+use shekyl_chain_ingest::scenario_shard::{
+    close_shards_drawing, first_admissible_compact_join, inside_one_epoch_of, maturity, mine_to,
+    settled_epoch_blocks, ClosedShard, FILL_FROM_COINBASE,
+};
+use shekyl_chain_ingest::schedule::ChainRules;
+use shekyl_chain_ingest::ProductionPow;
+use shekyl_chain_rules::{CappedEpoch, CenRow, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_harness_spender::{Owner, Persona, Recipient, Spender};
+use shekyl_network::Network;
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
+
+use seeds::{PlanDraws, Seeds, Source};
+
+/// The corpus's file name in a forged chain's directory.
+pub const CORPUS_FILE: &str = "corpus.e2";
+/// The trace's.
+pub const TRACE_FILE: &str = "trace.e2";
+/// The manifest's.
+pub const MANIFEST_FILE: &str = "manifest.json";
+/// The KAT ledger's.
+pub const BLOCKS_FILE: &str = "blocks.txt";
+/// Every file a forging writes, in the order they are compared.
+pub const FILES: [&str; 4] = [BLOCKS_FILE, MANIFEST_FILE, CORPUS_FILE, TRACE_FILE];
+
+/// How one forging runs.
+pub struct Options {
+    /// The sources a negative control swaps to the OS's randomness.
+    pub swapped: BTreeSet<Source>,
+    /// A committed `blocks.txt`: stop at the first block that differs from
+    /// it. A control's run ends there, red, without forging the rest.
+    pub stop_at_difference: Option<BlocksTxt>,
+    /// `form` workers hashing at once in the trace's replay.
+    pub hashers: NonZeroUsize,
+}
+
+/// A forged chain.
+pub struct Forged {
+    /// Its manifest, as written.
+    pub manifest: Manifest,
+    /// Its `blocks.txt`, as written.
+    pub blocks: BlocksTxt,
+}
+
+/// What a forging came to.
+pub enum Outcome {
+    /// The plan ran to its end and every file is written.
+    Forged(Forged),
+    /// A block differed from the committed ledger
+    /// ([`Options::stop_at_difference`]): the ledger up to it, and where.
+    Differed {
+        /// The lines written, the differing one last.
+        blocks: BlocksTxt,
+        /// The first difference.
+        difference: Difference,
+    },
+}
+
+/// Why a forging did not finish.
+#[derive(Debug, thiserror::Error)]
+pub enum ForgeFault {
+    /// A file could not be written.
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    /// The corpus writer refused a record.
+    #[error("corpus: {0}")]
+    Corpus(#[from] CorpusFault),
+    /// The trace's replay of the corpus failed.
+    #[error("trace: {0}")]
+    Replay(#[from] ReplayFault),
+    /// The trace's hasher did not start.
+    #[error("hasher: {0}")]
+    Hasher(String),
+    /// The plan asks for what the chain cannot do.
+    #[error("plan: {0}")]
+    Plan(String),
+}
+
+/// Forge `plan` (read from `plan_ref.path`) into `out`: the corpus, the
+/// trace, the manifest and `blocks.txt`.
+///
+/// # Errors
+///
+/// [`ForgeFault`]. A block the validator refuses panics in the driver: a
+/// plan the chain cannot carry is a broken plan, not a verdict.
+pub async fn forge(
+    plan: &Plan,
+    plan_ref: PlanRef,
+    out: &Path,
+    options: Options,
+) -> Result<Outcome, ForgeFault> {
+    let hashers = options.hashers;
+    let mut forge = Forge::open(plan, out, options).await?;
+    if let Some(difference) = forge.run(plan).await? {
+        forge.scenario.take().expect("home").close().await;
+        return Ok(Outcome::Differed {
+            blocks: forge.ledger,
+            difference,
+        });
+    }
+    forge
+        .finish(plan, plan_ref, out, hashers)
+        .await
+        .map(Outcome::Forged)
+}
+
+/// A persona the plan joined.
+struct Joined {
+    persona: Persona,
+    shard: ClosedShard,
+    join_epoch: SettlementEpoch,
+    backing_key: [u8; 32],
+    fee_key: [u8; 32],
+    join_height: BlockHeight,
+}
+
+/// One forging's state: the live scenario and its chain, the corpus being
+/// written, and what the plan has built so far.
+pub struct Forge {
+    /// Taken out while a driver helper owns it ([`mine_serving`]).
+    scenario: Option<Scenario<FreeHash>>,
+    /// The chain from block 0, each block at its height's place.
+    chain: Vec<Mined>,
+    /// Blocks of `chain` already in the corpus.
+    written: usize,
+    corpus: CorpusWriter<BufWriter<File>>,
+    ledger: BlocksTxt,
+    /// Corpus records written, blocks and rewinds.
+    records: u64,
+    /// Transactions listed, coinbases excluded.
+    transactions: u64,
+    events: Vec<EventRecord>,
+    seeds: Arc<Seeds>,
+    /// The next spend's place in the plan (every spend's seeds are keyed
+    /// by it).
+    spends: u64,
+    /// The next emission claim's place in the plan.
+    claims: u64,
+    /// The next coinbase kept for the plan's own spends and posts: the
+    /// regtest miner's first is block 1's (block 0's pays the table's
+    /// recipients), and a fill spends from [`FILL_FROM_COINBASE`] up.
+    reserved: u64,
+    closed: Vec<ClosedShard>,
+    personas: BTreeMap<u32, Joined>,
+    rules: ChainRules,
+    schedule: SettlementSchedule,
+    stop: Option<BlocksTxt>,
+    stopped: Option<Difference>,
+}
+
+impl Forge {
+    /// Open a forging of `plan` into `out`: regtest's genesis connected and
+    /// written, no step run.
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeFault`].
+    pub async fn open(plan: &Plan, out: &Path, options: Options) -> Result<Self, ForgeFault> {
+        let seed = plan
+            .seed()
+            .map_err(|fault| ForgeFault::Plan(fault.to_string()))?;
+        let epoch_blocks = match plan.schedule.settlement_epoch_blocks {
+            EpochBlocks::Settled => settled_epoch_blocks(),
+            EpochBlocks::Blocks(blocks) => blocks,
+        };
+        let capped = CappedEpoch::new(
+            SettlementEpochBlocks::new(epoch_blocks)
+                .ok_or_else(|| ForgeFault::Plan("a settlement epoch of zero blocks".into()))?,
+            BlockCount::from_raw(plan.schedule.reorg_cap_blocks),
+        )
+        .map_err(|refused| ForgeFault::Plan(format!("the schedule: {refused:?}")))?;
+        let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), capped)
+            .map_err(|refused| ForgeFault::Plan(format!("regtest's levers: {refused}")))?;
+
+        std::fs::create_dir_all(out)?;
+        let corpus = CorpusWriter::create(
+            BufWriter::new(File::create(out.join(CORPUS_FILE))?),
+            Network::Regtest,
+            BlockHeight::ZERO,
+        )?;
+        let (scenario, genesis) =
+            Scenario::open_regtest_mined(&format!("forge-{}", plan.chain), FreeHash, capped).await;
+        let mut forge = Self {
+            scenario: Some(scenario),
+            chain: vec![genesis],
+            written: 0,
+            corpus,
+            ledger: BlocksTxt::new(),
+            records: 0,
+            transactions: 0,
+            events: Vec::new(),
+            seeds: Arc::new(Seeds::new(seed, options.swapped)),
+            spends: 0,
+            claims: 0,
+            reserved: 1,
+            closed: Vec::new(),
+            personas: BTreeMap::new(),
+            rules,
+            schedule: capped.settlement(),
+            stop: options.stop_at_difference,
+            stopped: None,
+        };
+        forge.write_new()?;
+        Ok(forge)
+    }
+
+    /// Run every step of `plan`, indexing each named event. `Some` is the
+    /// first block that differed from the committed ledger
+    /// ([`Options::stop_at_difference`]); the forging stopped there.
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeFault`].
+    pub async fn run(&mut self, plan: &Plan) -> Result<Option<Difference>, ForgeFault> {
+        for step in &plan.steps {
+            if self.stopped.is_none() {
+                self.step(&step.action).await?;
+            }
+            if let Some(difference) = self.stopped.take() {
+                return Ok(Some(difference));
+            }
+            if let Some(name) = &step.event {
+                let tip = self.chain.last().expect("genesis at least");
+                self.events.push(EventRecord {
+                    name: name.clone(),
+                    height: tip.height.to_raw(),
+                    branch: Branch::Main.to_string(),
+                    record: self.records - 1,
+                });
+            }
+        }
+        Ok(None)
+    }
+
+    /// The live scenario.
+    pub fn scenario(&mut self) -> &mut Scenario<FreeHash> {
+        self.scenario
+            .as_mut()
+            .expect("the scenario is home between steps")
+    }
+
+    /// The height the next block connects at.
+    fn connecting(&self) -> BlockHeight {
+        BlockHeight::from_raw(u64::try_from(self.chain.len()).expect("a chain's length fits"))
+    }
+
+    /// A spender over the chain as it stands.
+    fn spender(&mut self) -> Spender {
+        let network = self.scenario().network_id();
+        Spender::on(network, &self.chain)
+    }
+
+    /// The next spend's place in the plan.
+    fn next_spend(&mut self) -> u64 {
+        let index = self.spends;
+        self.spends += 1;
+        index
+    }
+
+    /// The next kept coinbase, matured for a block at `connecting`.
+    fn reserve(&mut self, connecting: BlockHeight) -> Result<BlockHeight, ForgeFault> {
+        let coinbase = self.reserved;
+        if coinbase >= FILL_FROM_COINBASE {
+            return Err(ForgeFault::Plan(format!(
+                "the plan's spends and posts use the coinbases below {FILL_FROM_COINBASE}; it asked for more"
+            )));
+        }
+        if coinbase + maturity() > connecting.to_raw() {
+            return Err(ForgeFault::Plan(format!(
+                "coinbase {coinbase} is not spendable at {connecting}: mine to {} first",
+                coinbase + maturity()
+            )));
+        }
+        self.reserved += 1;
+        Ok(BlockHeight::from_raw(coinbase))
+    }
+
+    /// Write every block of the chain not yet in the corpus, and its line.
+    /// With a committed ledger to stop at, the first line that differs from
+    /// it ends the run ([`Outcome::Differed`]).
+    fn write_new(&mut self) -> Result<(), ForgeFault> {
+        while self.written < self.chain.len() {
+            let mined = &self.chain[self.written];
+            let block = mined.template.block.serialize();
+            let listed: Vec<Vec<u8>> = mined
+                .template
+                .transactions
+                .iter()
+                .map(shekyl_wire::Transaction::serialize)
+                .collect();
+            let references: Vec<Vec<u8>> = mined
+                .bundle_references
+                .as_ref()
+                .map(|section| section.as_slice().to_vec())
+                .unwrap_or_default();
+            let bodies: Vec<Vec<u8>> = mined
+                .bundle_bodies
+                .iter()
+                .map(|body| body.as_bytes().to_vec())
+                .collect();
+            self.corpus
+                .append_carrying(&block, &listed, &references, &bodies)?;
+            self.records += 1;
+            self.transactions += u64::try_from(listed.len()).expect("a block's list fits");
+            let line = Line {
+                height: mined.height.to_raw(),
+                branch: Branch::Main,
+                id: *mined.hash.as_bytes(),
+            };
+            self.ledger.push(line);
+            self.written += 1;
+            if let Some(committed) = &self.stop {
+                let at = self.ledger.lines().len();
+                if committed.lines().get(at - 1) != Some(&line) {
+                    self.stopped = Some(Difference {
+                        line: at,
+                        ours: Some(line),
+                        theirs: committed.lines().get(at - 1).copied(),
+                    });
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn step(&mut self, action: &Action) -> Result<(), ForgeFault> {
+        match action {
+            Action::Mine { blocks } => {
+                let mined = self.scenario().mine(*blocks).await;
+                self.chain.extend(mined);
+            }
+            Action::Spend { inputs } => self.spend(*inputs).await?,
+            Action::FillShards { count } => self.fill(*count).await,
+            Action::Join { persona, shards } => self.join(*persona, shards).await?,
+            Action::Serve { persona } => self.serve(*persona).await?,
+            Action::Claim { persona } => self.claim(*persona).await?,
+            Action::Reorg { depth } => self.reorg(*depth).await?,
+        }
+        self.write_new()
+    }
+
+    /// The miner spends `inputs` kept coinbases in one transaction.
+    async fn spend(&mut self, inputs: u32) -> Result<(), ForgeFault> {
+        let connecting = self.connecting();
+        let heights = (0..inputs)
+            .map(|_| self.reserve(connecting))
+            .collect::<Result<Vec<_>, _>>()?;
+        let spend = self.next_spend();
+        let seeds = self.seeds.spend(spend);
+        let spender = self.spender();
+        let wallet = self.scenario().wallet();
+        let (spend, _) = spender
+            .drawing(seeds)
+            .spend_coinbases(wallet, &heights, connecting, FEE);
+        let block = self
+            .scenario()
+            .mine_listing(vec![spend])
+            .await
+            .unwrap_or_else(|outcome| panic!("the plan's spend connects: {outcome}"));
+        self.chain.push(block);
+        Ok(())
+    }
+
+    /// Real spends until `count` shards are closed (S9).
+    async fn fill(&mut self, count: u64) {
+        let seeds = Arc::clone(&self.seeds);
+        let mut next = self.spends;
+        let mut chain = std::mem::take(&mut self.chain);
+        let filled = close_shards_drawing(
+            self.scenario.as_mut().expect("home"),
+            &mut chain,
+            FILL_FROM_COINBASE,
+            count,
+            || {
+                let index = next;
+                next += 1;
+                seeds.fill_spend(index)
+            },
+        )
+        .await;
+        self.chain = chain;
+        self.spends = next;
+        self.closed.extend(filled.closed);
+    }
+
+    /// Persona `slot` joins `shards`, funded by a kept coinbase.
+    async fn join(&mut self, slot: u32, shards: &[u64]) -> Result<(), ForgeFault> {
+        let closes: Vec<ClosedShard> = shards
+            .iter()
+            .map(|id| {
+                self.closed
+                    .iter()
+                    .find(|closed| closed.shard == ShardId::from_raw(*id))
+                    .copied()
+                    .ok_or_else(|| ForgeFault::Plan(format!("shard {id} is not closed")))
+            })
+            .collect::<Result<_, _>>()?;
+        let [close] = closes.as_slice() else {
+            return Err(ForgeFault::Plan(
+                "a join holds one closed shard in this increment".into(),
+            ));
+        };
+        // The join and the block after it sit in one epoch, neither a close.
+        let join_height = inside_one_epoch_of(
+            self.schedule,
+            first_admissible_compact_join(&self.rules, *close),
+            1,
+        );
+        let mut chain = std::mem::take(&mut self.chain);
+        mine_to(
+            self.scenario.as_mut().expect("home"),
+            &mut chain,
+            join_height,
+        )
+        .await;
+        self.chain = chain;
+        self.write_new()?;
+        if self.stopped.is_some() {
+            return Ok(());
+        }
+        let persona =
+            Persona::from_master(&self.seeds.persona_master(slot), Network::Regtest, slot)
+                .with_signing_seed(&self.seeds.persona_signing(slot));
+        let recipient = Recipient::persona(persona.keys());
+        let coinbase = self.reserve(join_height)?;
+        let spend = self.next_spend();
+        let seeds = self.seeds.spend(spend);
+        let spender = self.spender();
+        let wallet = self.scenario().wallet();
+        let join = persona.join(shard_set(shards.to_vec()), ENDPOINT);
+        let funding = spender.drawing(seeds).spend_coinbase_to(
+            wallet,
+            coinbase,
+            join_height,
+            FEE,
+            Some(&join),
+            &recipient,
+        );
+        let backing_key = funding.prefix.outputs[0].key;
+        let fee_key = funding.prefix.outputs[1].key;
+        let block = self
+            .scenario()
+            .mine_listing(vec![funding])
+            .await
+            .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
+        assert_eq!(block.height, join_height);
+        assert!(
+            block.judged_by.contains(&CenRow::J15),
+            "J15 judged the join"
+        );
+        self.chain.push(block);
+        let join_epoch = self.schedule.epoch_at(join_height);
+        self.personas.insert(
+            slot,
+            Joined {
+                persona,
+                shard: *close,
+                join_epoch,
+                backing_key,
+                fee_key,
+                join_height,
+            },
+        );
+        Ok(())
+    }
+
+    /// Mine through the first epoch persona `slot` is drawn in, with the
+    /// chain's draws admitted and every draw served (S7, S8).
+    async fn serve(&mut self, slot: u32) -> Result<(), ForgeFault> {
+        let joined = self
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        let served = SettlementEpoch::from_raw(joined.join_epoch.to_raw() + 1);
+        let until = BlockHeight::from_raw((served.to_raw() + 1) * self.schedule.blocks().get());
+        let (key_ed, key_fn) = self.seeds.witness_key();
+        let witness = DriverWitness::keyed(
+            &key_ed,
+            &key_fn,
+            Box::new(PlanDraws(Arc::clone(&self.seeds))),
+        );
+        let scenario = self.scenario.take().expect("home");
+        let chain = std::mem::take(&mut self.chain);
+        let (scenario, chain) =
+            mine_serving(scenario, chain, &witness, &[&joined.persona], until).await;
+        assert_issued_pair(&scenario, served, (joined.persona.id(), joined.shard.shard));
+        self.scenario = Some(scenario);
+        self.chain = chain;
+        Ok(())
+    }
+
+    /// Persona `slot` claims the epoch it served, in the block after that
+    /// epoch's slash pass (S4).
+    async fn claim(&mut self, slot: u32) -> Result<(), ForgeFault> {
+        let (served, shard, join_epoch, backing_key, fee_key, join_height) = {
+            let joined = self
+                .personas
+                .get(&slot)
+                .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+            (
+                SettlementEpoch::from_raw(joined.join_epoch.to_raw() + 1),
+                joined.shard,
+                joined.join_epoch,
+                joined.backing_key,
+                joined.fee_key,
+                joined.join_height,
+            )
+        };
+        let at_pass = BlockHeight::from_raw(self.schedule.slash_deadline_height(served.to_raw()));
+        let connecting = at_pass + BlockCount::ONE;
+        let mut chain = std::mem::take(&mut self.chain);
+        mine_to(
+            self.scenario.as_mut().expect("home"),
+            &mut chain,
+            connecting,
+        )
+        .await;
+        self.chain = chain;
+        self.write_new()?;
+        if self.stopped.is_some() {
+            return Ok(());
+        }
+        let count_at_close = (served.to_raw() + 1) * self.schedule.blocks().get();
+        let closing = &self.chain[usize::try_from(count_at_close - 1).expect("small")].archival;
+        let close = *closing
+            .close()
+            .expect("the block that completes the epoch carries its close");
+        assert_eq!(close.epoch(), served, "the close is the served epoch's");
+        let terms = claim::terms(&claim::Served {
+            schedule: self.schedule,
+            epoch: served,
+            join_epoch,
+            shard: shard.shard.to_raw(),
+            close_height: shard.close_height,
+            budget: close.budget().to_raw(),
+        });
+
+        let network = self.scenario().network_id();
+        let spender =
+            spender_owning_before(network, &self.chain, join_height, &[backing_key, fee_key]);
+        let index = self.claims;
+        self.claims += 1;
+        let spend = self.next_spend();
+        let seeds = self.seeds.claim(index, spend);
+        let tx_key = self.seeds.claim_tx_key(index);
+        let persona = &self.personas[&slot].persona;
+        let owner = Owner::persona(persona.keys());
+        let claim = priced_emission_claim(
+            self.scenario.as_mut().expect("home"),
+            EmissionClaimParts {
+                spender: &spender,
+                owner: &owner,
+                keys: persona.keys(),
+                backing_key,
+                fee_key,
+                terms,
+                connecting,
+                tx_key,
+                seeds: Some(&seeds),
+            },
+        )
+        .await;
+        let block = self
+            .scenario()
+            .mine_listing(vec![claim])
+            .await
+            .unwrap_or_else(|outcome| panic!("the claim connects: {outcome}"));
+        assert_eq!(block.height, connecting);
+        self.chain.push(block);
+        Ok(())
+    }
+
+    /// Pop the last `depth` blocks and mine `depth + 1` on the fork, the
+    /// first listing a spend of a kept coinbase the popped branch did not
+    /// list: a rewind record, then the branch.
+    async fn reorg(&mut self, depth: u64) -> Result<(), ForgeFault> {
+        let tip = self.chain.last().expect("genesis at least").height;
+        let fork = tip
+            .checked_sub_count(BlockCount::from_raw(depth))
+            .ok_or_else(|| ForgeFault::Plan(format!("a reorg of {depth} below genesis")))?;
+        self.scenario()
+            .rewind_to(fork)
+            .await
+            .unwrap_or_else(|fault| panic!("the rewind to {fork}: {fault:?}"));
+        self.corpus.rewind(fork)?;
+        self.records += 1;
+        self.chain
+            .truncate(usize::try_from(fork.to_raw() + 1).expect("a height fits"));
+        self.written = self.chain.len();
+        self.spend(1).await?;
+        let rest = self.scenario().mine(depth).await;
+        self.chain.extend(rest);
+        Ok(())
+    }
+
+    /// Close the corpus and the scenario, replay the corpus into the trace,
+    /// and write the manifest and `blocks.txt`.
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeFault`].
+    pub async fn finish(
+        mut self,
+        plan: &Plan,
+        plan_ref: PlanRef,
+        out: &Path,
+        hashers: NonZeroUsize,
+    ) -> Result<Forged, ForgeFault> {
+        self.corpus.finish()?;
+        let genesis_hash = hex::encode(self.chain[0].hash.as_bytes());
+        let tip_height = self.chain.last().expect("genesis at least").height.to_raw();
+        self.scenario.take().expect("home").close().await;
+
+        let corpus_path = out.join(CORPUS_FILE);
+        let trace_path = out.join(TRACE_FILE);
+        let store = tempfile::Builder::new()
+            .prefix("shekyl-chain-forge-")
+            .tempdir()?;
+        let metrics = Arc::new(Metrics::new());
+        let (hasher, owner) =
+            shekyl_hasher::Hasher::start(shekyl_hash_budget::Budget::new(hashers))
+                .map_err(|fault| ForgeFault::Hasher(format!("{fault:?}")))?;
+        let pow = Arc::new(ProductionPow::new(hasher, Arc::clone(&metrics)));
+        let replayed = baseline(
+            &corpus_path,
+            &store.path().join("trace.redb"),
+            self.rules,
+            PipelineConfig {
+                window: PipelineConfig::DEFAULT_WINDOW,
+                hashers,
+                digest_each_commit: false,
+            },
+            pow,
+            metrics,
+            &trace_path,
+        )
+        .await;
+        owner.stop();
+        let report = replayed?;
+        assert_eq!(
+            report.connected.last().map(|(height, _)| height.to_raw()),
+            Some(tip_height),
+            "the replay connects the forged chain to its tip"
+        );
+
+        let manifest = Manifest {
+            format_version: MANIFEST_FORMAT_VERSION,
+            chain: plan.chain.clone(),
+            plan: plan_ref,
+            seed: plan.seed.clone(),
+            network: Network::Regtest.name().to_owned(),
+            genesis_hash,
+            schedule: ScheduleRecord {
+                settlement_epoch_blocks: self.schedule.blocks().get(),
+                reorg_cap_blocks: plan.schedule.reorg_cap_blocks,
+                fixed_difficulty: Some(plan.fixed_difficulty),
+            },
+            corpus_format_version: CORPUS_FORMAT_VERSION,
+            blocks: u64::try_from(self.ledger.lines().len()).expect("fits"),
+            tip_height,
+            transactions: self.transactions,
+            corpus_sha256: sha256_hex(&std::fs::read(&corpus_path)?),
+            trace_sha256: sha256_hex(&std::fs::read(&trace_path)?),
+            events: self.events,
+            switches: Vec::new(),
+        };
+        std::fs::write(out.join(MANIFEST_FILE), manifest.render())?;
+        std::fs::write(out.join(BLOCKS_FILE), self.ledger.render())?;
+        Ok(Forged {
+            manifest,
+            blocks: self.ledger,
+        })
+    }
+}

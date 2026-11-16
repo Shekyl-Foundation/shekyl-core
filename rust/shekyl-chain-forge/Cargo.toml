@@ -35,6 +35,23 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 # enabler.
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", features = ["forge"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
+# The executor's other edges: the spender's seeded spends, the per-source
+# proof seeds, the consensus types it plans with, the trace's hasher and
+# its budget, the runtime the driver's actors run on, the trace's scratch
+# store, and the OS randomness a negative control swaps a source to.
+shekyl-harness-spender = { path = "../shekyl-harness-spender", features = ["seeded-rng"] }
+shekyl-tx-builder = { path = "../shekyl-tx-builder", features = ["seeded-rng"] }
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-network = { path = "../shekyl-network" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
+shekyl-hasher = { path = "../shekyl-hasher" }
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }
+tempfile = { workspace = true }
+rand = "0.8"
+zeroize = { workspace = true }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
