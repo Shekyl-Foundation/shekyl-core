@@ -5,13 +5,17 @@ on a daemon/p2p cutover this series excludes (§2.9a). The C++ covert
 restructure (§2.1 stages 1–3) is not being pursued; stage 4 enablement is
 not startable. See §2.9 for the series, §3 for what has landed.
 
-> **UPDATE 2026-09-12 — Tor-zone cover is no longer this document's subject.**
-> [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) (TRC; RULED 2026-09-04,
-> recorded 2026-09-12) obtains wire-observer resistance on the **Tor zone**
-> by operator non-exit relay posture, not by this carrier. **This file's
-> carrier is retained** for encrypted network layers other than Tor. §1.6 is
-> **not** triggered. Do not delete the machinery on "Tor no longer uses it"
-> grounds; that is a scope restatement, not abandonment.
+> **REOPENED 2026-11-15 — Tor-zone cover is this document's subject again.**
+> The 2026-09-12 update that took the Tor zone out of this carrier's scope
+> rested on [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) (TRC): operator
+> relay volume as Tor's cover. TRC-1 measured it and found no cover
+> ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md);
+> TRC banner), so TRC §8 step 3 is met and the carrier's scope is open again
+> for every encrypted link, Tor included. How the carrier covers each link was
+> ruled 2026-11-15 in the cover-traffic lane's Round 0; this document records it with that lane's build. **The machinery is retained**; §1.6 is
+> **not** triggered. Each place below that confines the carrier to zones
+> other than Tor, or calls Tor's wire-observer cell posture-conditional, is
+> marked REOPENED and no longer holds.
 
 > **UPDATED 2026-08-29: the mechanism now HAS its production caller** — see
 > §3.1a. It is still **inert by default**, behind a development opt-in, so the
@@ -21,9 +25,8 @@ not startable. See §2.9 for the series, §3 for what has landed.
 This document exists because the cover mechanism was **deliberately inert,
 fully built, and had no production caller** — which is indistinguishable, to a
 dead-code sweep or a new maintainer, from abandoned scaffolding. It was not.
-`DAEMON_RELAY_PRIVACY.md` §42 remains the carrier's architecture for encrypted
-zones other than Tor. **Its application as the Tor zone's cover mechanism is
-SUPERSEDED 2026-09-12** by [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md).
+`DAEMON_RELAY_PRIVACY.md` §42 remains the carrier's architecture. Its scope
+on the Tor zone is open again (**REOPENED 2026-11-15**, banner).
 
 > **DO NOT DELETE ANY COMPONENT IN §1 ON "NO CALLERS" GROUNDS.** This was
 > written when the absence of a production caller was *the current state of a
@@ -62,8 +65,7 @@ by:
    records why turning it back on naively would be wrong.
 
 **Restoring cover traffic is, mechanically, changing (1).** *(Tor-zone
-application SUPERSEDED 2026-09-12, TRC; this restoration remains for encrypted
-zones other than Tor.)* Everything below is what that change would wake up.
+application SUPERSEDED 2026-09-12, TRC; **REOPENED 2026-11-15 (banner).**)* Everything below is what that change would wake up.
 
 ### 1.2 C++ inventory
 
@@ -185,11 +187,13 @@ it*, because a replacement exists and is tested.
 
 ### 1.6 The ONLY conditions under which deletion is correct
 
-**Not triggered by TRC (2026-09-12).**
+**Not triggered by TRC (2026-09-12), nor by its reopening (2026-11-15).**
 [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) removes the Tor zone from this
 carrier's cover-mechanism role and **retains the mechanism** for other
 encrypted layers. That is a scope restatement. Deletion still requires
-abandoning §42 as a design for those remaining layers.
+abandoning §42 as a design for those remaining layers. **REOPENED
+2026-11-15 (banner):** the Tor zone is in scope again, so nothing here
+narrows.
 
 Not "no callers". Deletion requires **abandoning §42 as a design**, which means
 re-opening, in writing:
@@ -199,7 +203,7 @@ re-opening, in writing:
   wire; without it the wire-observer row of §32.6 is undefended — is
   **SUPERSEDED for Tor 2026-09-12**
   ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)). Design A is not re-ruled
-  here. On Tor that row is posture-conditional, not undefended-without-carrier.
+  here. On Tor that row is posture-conditional, not undefended-without-carrier. **REOPENED 2026-11-15 (banner).**
   **On encrypted zones other than Tor** cover traffic remains what defends it.
 - **§42.4** — the carrier's narrowed job (deny the count of *originations*).
   **Re-opened 2026-08-23** (§42.4a): the narrowing's "4.3× over capacity" was
@@ -210,7 +214,7 @@ re-opening, in writing:
 - **§32.6's grid** — the wire-observer recall cell. Cover is the only
   mechanism addressing it **on encrypted zones other than Tor**. On Tor the
   cell is **SUPERSEDED as a protocol default 2026-09-12 (TRC)** — posture-
-  conditional.
+  conditional. **REOPENED 2026-11-15 (banner).**
 - **Q-11 Unit 2** — `conformance/linkage.rs` is its substrate.
 
 **The symmetry, added 2026-08-23: §1.7 states the conditions under which
@@ -245,7 +249,7 @@ The carrier buys **§20.9's charter: wire-observer recall goes to zero for
 originations** — §32.6's top-left cell, held as a **structural** property rather
 than a statistical one. **On the Tor zone this charter is SUPERSEDED 2026-09-12**
 ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §6): that cell is
-posture-conditional, not a protocol default. **On encrypted zones other than
+posture-conditional, not a protocol default. **REOPENED 2026-11-15 (banner).** **On encrypted zones other than
 Tor the charter still holds**, and the carrier remains the only mechanism
 addressing that cell there (§1.6). At a window sized to the maximum
 admissible transaction, §42.4's narrowing no longer applies (re-opened
@@ -368,7 +372,13 @@ to this axis we do not have.
 > `carrier::WINDOW_BYTES`, `MEAN_CADENCE_MS` and `NOISE_MIN_DELAY_MS` at the
 > time of the run rather than the numbers above.
 
-#### Axis 3 — relay co-location does NOT retire the carrier. **Ruled 2026-08-23; SUPERSEDED for the Tor zone 2026-09-12 (TRC)**
+#### Axis 3 — relay co-location does NOT retire the carrier. **Ruled 2026-08-23; SUPERSEDED for the Tor zone 2026-09-12 (TRC); REOPENED 2026-11-15 (banner)**
+
+**REOPENED 2026-11-15 (banner).** Volume cover does not replace this carrier
+on Tor: TRC-1 measured relay volume and found no cover. The 2026-09-12
+supersession below no longer holds, so this section's ruling holds again on
+every encrypted link, Tor included. That Tor takes the carrier's envelope is
+ruled (2026-11-15), not yet built.
 
 Ruled 2026-08-23 rather than measured later, because after the build it becomes
 an argument about sunk work. **Tor-zone substitution is SUPERSEDED 2026-09-12**
@@ -380,7 +390,7 @@ against an assumption of relay cover (TRC §5).
 
 **Relay cover cannot substitute for the carrier at any measured relay traffic
 level** *(SUPERSEDED as a Tor-zone conclusion 2026-09-12; retained as the
-reason the carrier stays for encrypted zones other than Tor)*, and the reason
+reason the carrier stays for encrypted zones other than Tor; **REOPENED 2026-11-15 (banner).**)*, and the reason
 is the mission hierarchy rather than a number:
 
 - **Relay operation is optional.** A wire-observer guarantee that holds only for
@@ -404,7 +414,7 @@ carrier rate because relay operators have cover underneath it"* — and that
 is the back door mission priority 2 still forbids on any zone the carrier
 still covers. Held, co-location benefit is a bonus nothing depends on.
 
-**Scope of the 2026-08-23 ruling, as of 2026-09-12.** What remains foreclosed
+**Scope of the 2026-08-23 ruling, as of 2026-09-12.** **REOPENED 2026-11-15 (banner).** What remains foreclosed
 is relay cover **licensing a weaker carrier constant** on zones the carrier
 still covers. What is **withdrawn for the Tor zone** is relay cover being
 unable to *substitute* for the carrier there —
@@ -413,12 +423,13 @@ unable to *substitute* for the carrier there —
 
 #### Relay contribution as an operator posture — the four constraints
 
-**SoT as of 2026-09-12:** [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §§4–5
+**SoT:** [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §§4–5
 and [`docs/TOR_RELAY.md`](../TOR_RELAY.md). The four constraints below are
 the 2026-08-23 wording; they are preserved (path selection, non-exit, opt-in,
-separate process) and are not a second authority. **UPDATE 2026-09-12:**
-"separate process" means separate from `shekyld`, not a sidecar client Tor —
-mixing is [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §5 / [`TOR_RELAY.md`](../TOR_RELAY.md).
+separate process) and are not a second authority. "Separate process" means
+separate from `shekyld`. The relay is Tor payback, not cover: no relay
+topology mixes a node's own cells into cover (**REOPENED 2026-11-15**,
+banner).
 
 Recommended, and separate from every remaining carrier guarantee:
 
