@@ -719,9 +719,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm** [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
   - Target: pre-genesis
 
-- **Single-sig address decode enforces the Bech32m variant** [`rust/shekyl-address/src/address.rs`](../rust/shekyl-address/src/address.rs)
-  - Target: pre-genesis
-
 - **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,
   - Target: pre-genesis
 

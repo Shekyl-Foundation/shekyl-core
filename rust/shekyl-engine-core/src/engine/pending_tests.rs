@@ -538,6 +538,15 @@ fn check_recipients_names_why_an_address_cannot_be_paid() {
         })
     ));
 
+    let mut upper = standard_request(1_000);
+    upper.recipients[0].destination = TxDestination::Address(test_address().to_uppercase());
+    assert!(matches!(
+        upper.check_recipients(Network::Mainnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient address must be written in lowercase"
+        })
+    ));
+
     let full = ShekylAddress::decode(&test_address()).expect("the test address decodes");
     let display = full
         .encode_classical_display()

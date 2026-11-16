@@ -36,6 +36,25 @@ must not replicate this.
    When in doubt, do not add an HRP. If a proposed change "could" use
    a new HRP or "could" use a version bump, use the version bump.
 
+6. **One canonical string per address; decoders refuse everything else.**
+   The canonical string is the lowercase one the encoder writes. Every
+   Bech32m string is read by `shekyl-encoding::decode_blob`. It
+   lowercases, decodes that spelling, re-encodes, and compares. The
+   refusal names the step that failed:
+
+   - `EncodingError::Malformed` — not Bech32m in any case.
+   - `EncodingError::Checksum` — a checksum other than Bech32m's,
+     including the older Bech32 checksum. This fails before re-encoding.
+   - `EncodingError::NotCanonical` — Bech32m that decodes to bytes
+     whose re-encode is a different string (non-zero padding bits, or
+     one more zero character that still fits in those bytes).
+   - `EncodingError::NotLowercase` — the lowercased string is the
+     canonical one, and the original is not. A string that is not
+     Bech32m is never named for its capitals.
+
+   HRP lookup compares the decoded HRP exactly. A string that decoded
+   has already been reduced to that one lowercase spelling.
+
 ## Rationale
 
 Every new HRP is a permanent addition to the ecosystem: wallets must
