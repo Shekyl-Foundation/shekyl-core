@@ -187,33 +187,35 @@ fn with_no_confirmed_upload_only_not_found_counts() {
 }
 
 /// **An answer from a directory of the other descriptor proves nothing**
-/// (Rick, 2026-11-16; the control node's check). The fetch of a directory
-/// that took the next descriptor names the current one, which that
-/// directory never held, and gets `NOT_FOUND`; that directory is excluded,
-/// and its answer is not one of the control group's. The current
-/// descriptor's three confirmed directories are silent, so nothing silent
-/// counts. Fails if `silence_counts` takes an answer from any directory.
+/// (Rick, 2026-11-16; the control node's check). A fetch of a directory that
+/// took the next descriptor names the current one, which that directory
+/// never held, and gets `NOT_FOUND`, as at the control node's start 2; it
+/// arrives with no `REQUESTED` before it, so it is recorded and its
+/// directory excluded. Of the current descriptor's two confirmed
+/// directories one answers with our copy and one is silent: one of two is
+/// not more than half, so the silent ones are excluded and one of one holds
+/// our copy. Fails if `silence_counts` takes the other descriptor's
+/// directories into the control group (two of three answered: the seven
+/// silent ones would count, one of eight, a miss).
 #[test]
 fn an_answer_from_the_other_descriptors_directory_proves_nothing() {
     let mut fetches = sent(9..=9, "next", 0);
-    fetches.extend(round(1..=3, 4..=8));
+    fetches.extend(round(1..=2, 3..=8));
     let (mut core, asked) = checking(fetches);
     assert_eq!(asked.len(), 9);
-    core.on(
-        Input::DirectoryAsked {
-            hsdir: hsdir(9),
-            descriptor_id: "cur".to_owned(),
-        },
-        secs(16),
-    );
     core.on(answered(9, "cur", DirectoryAnswer::NotFound), secs(16));
+    core.on(answered(1, "cur", ours_held()), secs(16));
     core.on(arrival(secs(15), secs(18)), secs(18));
     let window = core.on_deadline(secs(75));
     let step = served(&mut core, window, secs(75));
-    assert!(unmatched(&step));
+    assert_eq!(refetches(&step), 0, "{:?}", settled(&step));
     assert_eq!(
         counted(&step, Counted::Excluded(Exclusion::OtherDescriptor)),
         [hsdir(9)]
+    );
+    assert_eq!(
+        counted(&step, Counted::Excluded(Exclusion::Silent)).len(),
+        7
     );
 }
 
@@ -269,8 +271,10 @@ const CONTROL_START_TWO: &str =
 /// descriptor's directories were silent, three confirmed among them: the
 /// check read Lost (0 of 8) and the probe was refetched. Fed as the driver
 /// feeds Tor's lines, with the check drawn where that run drew it, the
-/// silent eight are now excluded and the probe decides: Reachable. Fails if
-/// silence counts on that one other-descriptor answer, or at once.
+/// silent eight are now excluded and the probe decides: Reachable. The one
+/// other-descriptor answer came after its `REQUESTED` had excluded that
+/// directory, so it is not recorded at all. Fails if a silent fetch is
+/// decided as missing when its window passes (0 of 8, Lost).
 #[test]
 fn the_control_nodes_lost_check_replayed_reads_no_directory() {
     let address = ServiceId::parse("url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid")

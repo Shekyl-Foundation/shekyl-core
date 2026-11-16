@@ -1180,8 +1180,10 @@ mod tests {
     /// first (`hs_service.c:2138-2139`), and that order stands even when the
     /// next descriptor uploads first, as on the floor device's runs. Without
     /// a `CREATED`, the first `UPLOAD` sets it. A repeated `CREATED` moves
-    /// nothing. Fails if `see` reorders a descriptor already kept, or keys by
-    /// first upload when a `CREATED` came first.
+    /// nothing: at the next rotation the descriptor seen first is still the
+    /// one dropped. Fails if `see` reorders a descriptor already kept (the
+    /// next descriptor is dropped), or keys by first upload when a `CREATED`
+    /// came first.
     #[test]
     fn descriptors_are_kept_in_the_order_first_seen() {
         let mut rounds = tracker();
@@ -1196,6 +1198,11 @@ mod tests {
         assert_eq!(
             rounds.observe(&upload(2, "cur")),
             [RoundMark::Started { descriptor: FIRST }]
+        );
+        assert_eq!(
+            rounds.observe(&created("new")),
+            [RoundMark::Forgotten { descriptor: FIRST }],
+            "the descriptor seen first is still the one dropped"
         );
 
         let mut rounds = tracker();
