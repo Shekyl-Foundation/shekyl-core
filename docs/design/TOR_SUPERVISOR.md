@@ -1037,7 +1037,18 @@ for the next check or the next fact, and the check is due when the spacing
 has passed. One check runs at a time, and its result answers every waiting
 failure. While Tor says it cannot reach its network, the answer is
 impaired at once and no check runs. An on-demand check confirms no
-republish: only a republish's own round does.
+republish: only a republish's own round does. Whenever a want waits and no
+check starts, the next chance is due: a check in hand that ends with no
+fact (the probe alone decided, or the check was dropped) leaves the want
+asked again once the spacing from that check's start has passed.
+
+**When the check cannot run.** While the clock is named, or the latest
+round was refused, the probe stands down (§4.5), and the manager cannot
+answer from a check. That is not impaired: this node's own onion is
+unusable, which says nothing about its dials to others. A completed dial or
+a new inbound session still answers; otherwise the failure is excused when
+the wait runs out. The want is asked again one check's span later, so a
+check runs once standing down clears.
 
 **Values** (each an `Assumption` until the floor device measures it,
 `DAEMON_RELAY_PRIVACY.md` §97):
@@ -1060,8 +1071,11 @@ republish: only a republish's own round does.
   guard. At the spacing, no directory is asked for this onion more often
   than Tor's own client would ask it.
 - **`CHECK_LONGEST`, 240 s**: the two-miss rule's two probes, each at its
-  longest delay and its bound (§4.5); the directory fetches run inside the
-  first probe's span.
+  longest delay and its bound (§4.5). A typical bound, not a hard one: a
+  directory fetch's answer window runs from Tor's acceptance, and fetches
+  wait behind the request queue's replies, so a check can run longer when
+  Tor answers slowly. The wait errs toward excusing, so a reading after it
+  is not waited for.
 - **`READING_WAIT`, 19 minutes**, "Tor path-reading wait": the Tor
   connector's declared wait, the spacing plus one check. A failure just
   after a check began waits out the spacing, then one check. With no

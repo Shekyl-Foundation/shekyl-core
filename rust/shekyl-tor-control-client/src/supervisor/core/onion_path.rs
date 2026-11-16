@@ -45,10 +45,13 @@ use super::{duration_ns, Action, Core, Phase, PROBE_AFTER_MAX, PROBE_WITHIN};
 /// node's guard. Re-checked at every Tor re-pin.
 pub const CHECK_SPACING: Duration = Duration::from_secs(15 * 60);
 
-/// The longest one check runs, from its start to its verdict, 240 s: the
-/// two-miss rule's two probes, each at its longest delay and its bound
-/// (§4.5). The directory fetches run inside the first probe's span, each at
-/// most its own longest delay and its answer window.
+/// How long one check typically runs, from its start to its verdict,
+/// 240 s: the two-miss rule's two probes, each at its longest delay and its
+/// bound (§4.5). It is not a hard bound. A directory fetch's answer window
+/// runs from Tor's acceptance of it, and fetches wait their turn behind the
+/// request queue's replies, so a check can run longer when Tor answers
+/// slowly. The wait built on it errs toward excusing: a reading after it
+/// is not waited for.
 pub const CHECK_LONGEST: Duration = {
     let one_probe = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
     one_probe.saturating_add(one_probe)
@@ -143,25 +146,42 @@ impl Core {
     }
 
     /// Start the check a waiting failure wants, when one may run: none in
-    /// hand, and the last begun at least the spacing ago. Before then, the
-    /// check is due when the spacing has passed.
+    /// hand, and the last begun at least the spacing ago. Whenever a want
+    /// waits and no check starts now, the next instant one could is due:
+    ///
+    /// - **A check in hand** answers the want if it ends with a fact. If it
+    ///   ends without one (the probe alone decided, or the check was
+    ///   dropped), the want is asked again once the spacing from that
+    ///   check's start has passed.
+    /// - **Inside the spacing**, at the spacing's end.
+    /// - **The check's own gates refuse it** (a stop, or standing down while
+    ///   a republish cannot help, §4.5): asked again one check's span later,
+    ///   so a check runs once the gates clear. That is not a check, so the
+    ///   spacing does not move.
+    ///
+    /// Nothing is due again at an instant already past, so the deadline
+    /// never spins.
     fn start_wanted_check(&mut self, now: u64) -> Vec<Action> {
         let (Some(_), Some(draw)) = (self.path.wanted_after, self.path.draw) else {
             return Vec::new();
         };
-        if self.check_in_hand() {
-            return Vec::new();
-        }
+        let retry = now.saturating_add(duration_ns(CHECK_LONGEST));
         let spaced = self
             .path
             .last_check_began
-            .map(|began| began.saturating_add(duration_ns(CHECK_SPACING)));
-        if let Some(at) = spaced.filter(|at| now < *at) {
+            .map(|began| began.saturating_add(duration_ns(CHECK_SPACING)))
+            .filter(|at| now < *at);
+        if self.check_in_hand() {
+            self.path.due = Some(spaced.unwrap_or(retry));
+            return Vec::new();
+        }
+        if let Some(at) = spaced {
             self.path.due = Some(at);
             return Vec::new();
         }
-        self.path.due = None;
-        self.wanted_check(now, draw)
+        let actions = self.wanted_check(now, draw);
+        self.path.due = (!self.check_in_hand()).then_some(retry);
+        actions
     }
 
     /// When a check a failure wants is next due.

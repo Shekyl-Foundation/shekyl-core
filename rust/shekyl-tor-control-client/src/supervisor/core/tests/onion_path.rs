@@ -158,3 +158,67 @@ fn the_tor_wait_is_the_spacing_plus_one_check() {
     assert_eq!(super::super::READING_WAIT, CHECK_SPACING + CHECK_LONGEST);
     assert_eq!(super::super::READING_WAIT, Duration::from_secs(19 * 60));
 }
+
+/// **A want during a check that ends without a fact is asked again at the
+/// spacing** (the Tor lane's review of #1404, F1). A failure arrives while
+/// a round's check is in hand; that check is decided by the probe alone,
+/// which is no fact; once the spacing from its start has passed, a check
+/// runs for the waiting want, not the reading wait's end. The edit that
+/// makes this red is leaving a want deferred by a check in hand with
+/// nothing due.
+#[test]
+fn a_want_during_a_check_that_ends_without_a_fact_is_asked_again() {
+    use super::probe::{arrival, uploaded};
+    let mut core = published();
+    let ended = core.on(uploaded(0), secs(100));
+    assert_eq!(checks(&ended), 1, "the round's check began at 100 s");
+    let asked = core.on(want(secs(101)), secs(102));
+    assert_eq!(checks(&asked), 0, "the round's check is in hand");
+    run_to(&mut core, secs(115));
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(115),
+        },
+        secs(115),
+    );
+    let arrived = core.on(arrival(secs(115), secs(118)), secs(118));
+    assert!(
+        readings(&arrived).is_empty(),
+        "the probe alone decided: no fact, so the want still waits"
+    );
+    let due = secs(100) + duration_ns(CHECK_SPACING);
+    let step = run_to(&mut core, due);
+    assert_eq!(checks(&step), 1, "asked again once the spacing passed");
+}
+
+/// **While the check's gates refuse it, a want is asked again one check's
+/// span later** (F2). With the clock named the probe stands down (§4.5), so
+/// the manager cannot answer from a check; a completed dial still answers,
+/// and once the clock clears a check runs for the waiting want. The edits
+/// that make this red: a want left with nothing due, or one retried at an
+/// instant already past.
+#[test]
+fn while_the_check_stands_down_a_want_is_asked_again() {
+    const VALID_AFTER: u64 = 1_800_000_000;
+    let mut core = published();
+    core.on(
+        Input::ConsensusClock {
+            valid_after: VALID_AFTER,
+            wall: VALID_AFTER - 86_400,
+        },
+        secs(5),
+    );
+    let asked = core.on(want(secs(6)), secs(7));
+    assert_eq!(checks(&asked), 0, "no check while the clock is named");
+    assert!(readings(&asked).is_empty(), "and no impaired reading");
+    core.on(
+        Input::ConsensusClock {
+            valid_after: VALID_AFTER,
+            wall: VALID_AFTER,
+        },
+        secs(8),
+    );
+    let retry = secs(7) + duration_ns(CHECK_LONGEST);
+    let step = run_to(&mut core, retry);
+    assert_eq!(checks(&step), 1, "a check once the clock has cleared");
+}
