@@ -1,13 +1,12 @@
 # RT-W11 — the channel's clients and the tunnel: rule-26 pre-flight
 
-**Status:** Round 0 pre-flight. **RT-W11 authorized 2026-11-15** (Rick),
-one pull request off `dev`. The first rulings on its scope were given the
-same day and are recorded in §2. The substrate re-check is recorded (§3).
-The questions in §4 are **open**: `IG-Q108`…`IG-Q111` (the names the
-tunnel and a CLI on another host read) and `RT-O37` (the reserved slots).
-What was and was not executed is §3.10. The parts of §5 that no open
-question touches proceed once §3.10's runs are recorded; the parts that
-read an open question's answer wait for it.
+**Status:** Round 0 pre-flight — **questions RULED 2026-11-15** (Rick):
+`IG-Q108`…`IG-Q111` as recommended, and `RT-O37` as recommended, with the
+reason recorded in §4. The items decided here (§4, "Decided here") stand.
+**RT-W11 authorized 2026-11-15** (Rick), one pull request off `dev`.
+The substrate re-check is recorded (§3). Commits are pushed as they are
+made; step 4's tests at the ground (§3.10) gate review, not pushing
+(Rick, 2026-11-15).
 **Ground:** `shekyl-core` `dev` **`bc3df402f4`**. Every `file:line` below
 was read at that commit.
 **Parent:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (round R1, ruled
@@ -66,9 +65,9 @@ It is not:
    same thing in both, and it reuses existing names where they fit. The
    tunnel's listener is loopback-only, never a wildcard (RT-14).
 4. **A per-client cap.** `SESSIONS_PER_CLIENT = 4` in
-   `shekyl-rpc-channel`, an Assumption whose basis is that at a full pool
-   five clients and the console fit in 25 (`rpc-connections-max`'s
-   default). The daemon refuses a fingerprint's next session past it with
+   `shekyl-rpc-channel`, an Assumption. Its basis as first given was
+   that at a full pool five clients and the console fit in 25
+   (`rpc-connections-max`'s default); RT-O37 restates it (§4). The daemon refuses a fingerprint's next session past it with
    a typed refusal, and the tunnel's pool uses the same constant. The
    reason: the session index has no cap per fingerprint (§3.3), so one
    compromised enrolled key, such as the website's internet-facing tunnel,
@@ -224,8 +223,8 @@ operator's words (`ban …`) are in `console/operator.rs`. There is no
 
 - **Step 4's channel tests at the ground** (`shekyl-daemon-rpc`'s
   `channel::tests`, `shekyl-daemon`'s `service_rendezvous` and
-  `owner_socket`): to be run on a fleet host before the first production
-  commit, and recorded here.
+  `owner_socket`): run on a fleet host once RT-P5's measurement frees it,
+  and recorded here. They gate review, not pushing (Rick, 2026-11-15).
 - **The dependency gates the initiator's edge reaches.** Adding
   `shekyl-rpc-channel` under `shekyl-rpc-transport` puts the handshake,
   and with it ML-KEM decapsulation, into the graphs of `shekyl-cli`,
@@ -238,11 +237,12 @@ operator's words (`ban …`) are in `console/operator.rs`. There is no
 
 ---
 
-## 4. The questions
+## 4. The questions — RULED 2026-11-15 (Rick)
 
-Each states the problem, then the question, then a recommendation.
+Each states the problem, then the question, then the recommendation. Each
+was ruled as recommended.
 
-### IG-Q108 — the channel client's rows
+### IG-Q108 — the channel client's rows — RULED, as recommended
 
 **Problem.** The tunnel always speaks the channel. A CLI on another host
 speaks it when told to. Both need the daemon's address, the daemon's
@@ -274,7 +274,7 @@ and `rpc-key-file` move **only the five enrolment words** onto the
 channel. Every other console word, and the wallet session's daemon leg,
 stay where they are until RT-W12 moves them (§1).
 
-### IG-Q109 — making a client's key and showing its fingerprint
+### IG-Q109 — making a client's key and showing its fingerprint — RULED, as recommended
 
 **Problem.** §5: each endpoint generates its own bundle; the tunnel
 "generates and holds that host's static bundle; prints its fingerprint
@@ -293,7 +293,7 @@ already has on `shekyld` (IG-Q88): each does its act and exits. The
 fingerprint prints as `rpc client list` shows one, so the operator pastes
 it unchanged.
 
-### IG-Q110 — the tunnel's listener
+### IG-Q110 — the tunnel's listener — RULED, as recommended
 
 **Problem.** §8: the tunnel listens on the consumer's host, loopback
 only, through the listen classifier (RT-14: a specific address, never a
@@ -312,7 +312,7 @@ code `rpc-socket-dir` has there. The two are unconstructible together.
 The tunnel's own name gives `listen` its parent, as `shekyld`'s
 `rpc-listen` gives it `rpc`.
 
-### IG-Q111 — the tunnel's table
+### IG-Q111 — the tunnel's table — RULED, as recommended
 
 **Problem.** Rule 83: one table per binary, no environment input.
 
@@ -327,7 +327,16 @@ constant the daemon enforces (§2, item 4). The tunnel reports on start
 the grant it received ("Connected with GRANT; this client is enrolled for
 at most CEILING", §4.5) and its fingerprint.
 
-### RT-O37 — the reserved slots
+### RT-O37 — the reserved slots — RULED, as recommended
+
+**The reason (Rick, 2026-11-15).** Under the ruled posture the RPC port is
+reachable only from the operator's controlled network. The case the
+reserves defend is a compromised enrolled host on that network, the
+internet-facing website tunnel the likeliest: such a host can fill the
+connection limit with silent connections and lock the administrator out
+of revoking it. The owner's reserve also covers local accounts reaching
+the plaintext view listener until RT-W12. It is not a defence against
+strangers on the internet, which the posture keeps off the port.
 
 **Problem.** §3.4: the owner's socket and the console can be crowded out
 of the one tracker, by anyone who can reach a listener. Rick ruled
@@ -372,16 +381,16 @@ whether the reserves count inside `rpc-connections-max`.
   fixed path, as it finds the console key (§2, item 2). This replaces the
   service record's TCP address as the console's way in. The record keeps
   serving every other local client.
-- **The console keeps the cap**, as the basis states: four.
+- **The console keeps the cap**: four.
 - **The reserves are outside the operator's number.**
   `rpc-connections-max` bounds what every caller other than the host's
   administrator holds; the owner's leg and the console's leg each have
   `SESSIONS_PER_CLIENT` beyond it, drawn by their own listeners only.
-  The process's total is the operator's number plus eight. Under this
-  recommendation, the basis reads "five clients fit in 25 with five slots
-  to spare, and the console's four are its own".
+  The process's total is the operator's number plus eight.
+  `SESSIONS_PER_CLIENT`'s basis is "five clients fit in 25 with five to
+  spare; the console's four are its own" (Rick, 2026-11-15).
 
-### Decided here (no question)
+### Decided here (no question; they stand, Rick 2026-11-15)
 
 - **The typed refusal past the cap** is the bound class
   (`OverResourceBound`), code `bound.sessions`, by IG-Q79's rule that
@@ -429,15 +438,14 @@ One pull request. Commits in this order; each builds.
    `shekyl-os-account`; `record_path` moves to `shekyl-rpc-rendezvous`.
 3. `SESSIONS_PER_CLIENT` in `shekyl-rpc-channel`; the daemon's cap and
    `bound.sessions`; the wire's version.
-4. The reserves and, if ruled, the console's leg (after RT-O37 is
-   ruled).
+4. The reserves and the console's leg (RT-O37).
 5. The initiator in `shekyl-rpc-transport`: the handshake layer, the
    HTTP session, the pool, and a sync target for the CLI. Step 4's tests
    move onto it. The dependency gates of §3.10 run here.
 6. The CLI's five words, over `LocalTarget` or the service's record and
    console key (§2, item 2).
-7. `shekyl-rpc-tunnel` (after IG-Q108…IG-Q111 are ruled), and the CLI's
-   rows from IG-Q108 and IG-Q109.
+7. `shekyl-rpc-tunnel`, and the CLI's rows from IG-Q108 and IG-Q109;
+   the four questions move into `INPUT_GRAMMAR.md` as ruled.
 8. End-to-end tests against a real daemon: enrol, dial, call, revoke,
    and a refused call after revocation; the cap; the reserves; the
    submission's contract. Each names the edit that makes it fail.
