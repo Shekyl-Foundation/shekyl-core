@@ -24,7 +24,13 @@
 #     nothing);
 #   - every target of the weekly long run (`WEEKLY`) exists, and the
 #     nightly workflow reads its target list from this script
-#     (`--targets`), so a target cannot exist without being run.
+#     (`--targets`), so a target cannot exist without being run;
+#   - the nightly workflow's schedules and the job conditions that choose
+#     between them agree: every `github.event.schedule == '<cron>'` names
+#     a `cron:` the workflow declares (a condition on a cron that is not
+#     there never runs its job), and when there is more than one cron,
+#     every one is named by some condition (a cron no condition names
+#     runs every job, the fuzz lanes beside the rest).
 #
 # Modes:
 #   (none)        the check; exit 0, 1 on a finding, 2 when the question
@@ -58,7 +64,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import tomllib
 from pathlib import Path
 
@@ -81,6 +86,8 @@ WEEKLY = (
     "shekyl-wire/fuzz_tx_parse",
 )
 WORKSPACE_LOCK = "rust/Cargo.lock"
+CRON_RE = re.compile(r'^\s*-\s*cron:\s*"([^"]+)"', re.MULTILINE)
+SCHEDULE_RE = re.compile(r"github\.event\.schedule\s*[!=]=\s*'([^']+)'")
 # A change to any of these reaches every harness.
 EVERY_HARNESS = (
     WORKSPACE_LOCK,
@@ -221,11 +228,25 @@ def check(root: Path, weekly: tuple[str, ...] = WEEKLY) -> tuple[list[str], list
     nightly = root / NIGHTLY
     if not nightly.is_file():
         fails.append(f"{NIGHTLY} is missing: nothing runs the fuzz targets")
-    elif "check_fuzz_inventory.py --targets" not in nightly.read_text():
-        fails.append(
-            f"{NIGHTLY} does not read its fuzz targets from `check_fuzz_inventory.py --targets`, "
-            "so a target can exist that it does not run"
+    else:
+        text = nightly.read_text()
+        if "check_fuzz_inventory.py --targets" not in text:
+            fails.append(
+                f"{NIGHTLY} does not read its fuzz targets from `check_fuzz_inventory.py --targets`, "
+                "so a target can exist that it does not run"
+            )
+        crons = set(CRON_RE.findall(text))
+        named = set(SCHEDULE_RE.findall(text))
+        fails.extend(
+            f"{NIGHTLY}: a condition selects the schedule {cron!r}, which no `cron:` declares, so "
+            "its job never runs on a schedule"
+            for cron in sorted(named - crons)
         )
+        if len(crons) > 1:
+            fails.extend(
+                f"{NIGHTLY}: no condition selects the cron {cron!r}, so its run runs every job"
+                for cron in sorted(crons - named)
+            )
     workflow = root / WORKFLOW
     if not workflow.is_file():
         fails.append(f"{WORKFLOW} is missing: nothing compiles the fuzz crates")

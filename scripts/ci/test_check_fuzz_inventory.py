@@ -184,6 +184,25 @@ def selftest() -> int:
         "a nightly workflow that lists its own targets", 1, "does not read its fuzz targets",
         nightly="jobs:\n  fuzz:\n    strategy:\n      matrix:\n        target: [shekyl-a/fuzz_one]\n",
     )
+    on = "on:\n  schedule:\n    - cron: \"0 3 * * *\"\n    - cron: \"17 15 * * *\"\n"
+    r.expect(
+        "two schedules, each chosen by a condition", 0,
+        nightly=on + "jobs:\n  a:\n    if: ${{ github.event.schedule == '0 3 * * *' }}\n"
+        "  fuzz-targets:\n    if: ${{ github.event.schedule == '17 15 * * *' }}\n"
+        "    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n",
+    )
+    r.expect(
+        "a condition on a cron the workflow does not declare", 1,
+        "selects the schedule '17 16 * * *', which no `cron:` declares",
+        nightly=on + "jobs:\n  a:\n    if: ${{ github.event.schedule != '0 3 * * *' }}\n"
+        "  fuzz-targets:\n    if: ${{ github.event.schedule == '17 16 * * *' }}\n"
+        "    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n",
+    )
+    r.expect(
+        "a second cron no condition chooses", 1, "no condition selects the cron '17 15 * * *'",
+        nightly=on + "jobs:\n  a:\n    if: ${{ github.event.schedule == '0 3 * * *' }}\n"
+        "  fuzz-targets:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n",
+    )
     r.expect_listed("the nightly list is every target", "nightly", None, ["shekyl-a/fuzz_one", "shekyl-a/fuzz_two"])
     r.expect_listed("the weekly list is the weekly targets", "weekly", None, ["shekyl-a/fuzz_one"])
     r.expect_listed("one target narrows the list", "nightly", "shekyl-a/fuzz_two", ["shekyl-a/fuzz_two"])

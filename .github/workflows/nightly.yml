@@ -2,7 +2,19 @@ name: nightly/proptest-exhaustive
 
 on:
   schedule:
+    # The ignored-test lanes and the bench capture. GitHub starts a
+    # scheduled run late: this one began between 09:40 and 10:46 UTC every
+    # day of 2026-11-09..15 and was done by 12:31.
     - cron: "0 3 * * *"
+    # The fuzz lanes, every night, twelve hours from the cron above so the
+    # two never share the runners (ruled 2026-11-15): at the delay above
+    # they start near 22:00 UTC and are done near midnight; with none, they
+    # end long before 03:00. Off the hour, where GitHub's delays are worst.
+    - cron: "17 15 * * *"
+    # The weekly long fuzz run, Sundays, clear of both: at the delay above
+    # it starts after the nightly fuzz is done and ends before the 03:00
+    # run starts.
+    - cron: "17 19 * * 0"
   workflow_dispatch:
     inputs:
       job:
@@ -65,7 +77,7 @@ jobs:
   # branch and target: a fuzzer that starts from its seeds every night
   # spends its five minutes re-finding what it found the night before.
   proptest-exhaustive:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'proptest-exhaustive' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'proptest-exhaustive') }}
     # Scheduled workflows always execute from the default branch (main), so the
     # schedule picks up whichever version of this file is on main. The matrix
     # below makes each scheduled run cover both active branches in parallel.
@@ -135,7 +147,7 @@ jobs:
           cargo test --locked --release -p shekyl-hasher --lib -- --exact core::tests::random_sequences_hold_the_invariants_quiesce_to_the_list_and_grant_every_request --nocapture
 
   store-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored') }}
     # The chain store's `#[ignore]`d set: the shard-boundary deletion test
     # over real multi-input spends (`prune_tests::
     # the_boundary_batch_discards_closed_shards_on_real_spends`, minutes of
@@ -187,7 +199,7 @@ jobs:
         run: bash scripts/ci/ignored_set_chain_store.sh
 
   producer-gate:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate') }}
     # The bundle producer's gate (`SO-D12` increment 4c,
     # `ARCHIVAL_SETTLEMENT_WRITER.md` §16.11): a bundle the producer made is
     # admitted by the bundle verifier (CEN-J29 to J37) on a driven chain and
@@ -224,7 +236,7 @@ jobs:
         run: bash scripts/ci/producer_gate.sh
 
   economics-sim-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored') }}
     # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
     # against their committed fixtures (150 s and 100 s in release), the
     # secret draw at ESR-11's timing on ESR-13's loop, the per-mode reader
@@ -290,7 +302,7 @@ jobs:
         run: bash scripts/ci/ignored_set_economics_sim.sh
 
   staking-sim-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored') }}
     # The staking sim's `#[ignore]`d set: the five-seed L11/L13 pins on both
     # reward arms (EUP-3 check half). The registered plateau arm is the check
     # half's falsifier; the production arm is the default the documents
@@ -325,7 +337,7 @@ jobs:
         run: bash scripts/ci/ignored_set_staking_sim.sh
 
   chain-ingest-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored') }}
     # The chain-ingest crate's `#[ignore]`d set: the scenarios that fill
     # shards with real proofs (the emission claims, the levered slash chain,
     # the join, the pool-shim posts), the miner over real RandomX, the
@@ -372,7 +384,7 @@ jobs:
         run: bash scripts/ci/ignored_set_chain_ingest.sh
 
   hasher-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'hasher-ignored' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'hasher-ignored') }}
     # The hasher's `#[ignore]`d set (scripts/ci/ignored_set_hasher.sh): the
     # core's property test driven through the real shell, with threads and
     # hundreds of real 256 MiB RandomX derives
@@ -410,7 +422,7 @@ jobs:
         run: bash scripts/ci/ignored_set_hasher.sh
 
   wire-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored') }}
     # shekyl-wire's `#[ignore]`d set: the RT-W10 listed-tx parse harness,
     # run with RT_W10_OUT unset so it writes a few samples to a scratch
     # directory and removes it (the run proves the harness works; its
@@ -452,7 +464,7 @@ jobs:
         run: bash scripts/ci/ignored_set_wire.sh
 
   trybuild-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'trybuild-ignored' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'trybuild-ignored') }}
     # The trybuild harnesses of shekyl-chain-rules, shekyl-mempool and
     # shekyl-crypto-pq: programs compiled as a downstream crate whose whole
     # stderr must match a snapshot (the brand gate on `validate`, the pool
@@ -496,7 +508,7 @@ jobs:
         run: bash scripts/ci/ignored_set_trybuild.sh
 
   bench-full:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'bench-full' }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') }}
     # The block path's instruction counts on blocks at the weight limit:
     # `shekyl-chain-ingest` `benches/block_path_full_iai.rs`, the capture
     # script's nightly set. The shapes are DAEMON_REDB_STORE.md §1.3a.7's,
@@ -572,7 +584,7 @@ jobs:
           if-no-files-found: error
 
   bench-full-drift:
-    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') }}
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.event.schedule == '0 3 * * *') && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') }}
     # Tonight's full-block counts against the capture before tonight's of
     # the same branch, through compare.py's thresholds
     # (scripts/bench/nightly_drift.sh). A row past its fail threshold, or a
@@ -629,18 +641,18 @@ jobs:
           bash scripts/bench/nightly_drift.sh "$NAME" "${RUNNER_TEMP}/tonight/shekyl_rust_v0.json"
 
   fuzz-targets:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'fuzz' || inputs.job == 'fuzz-weekly' }}
-    # The fuzz targets to run tonight, read from the tree under test by the
+    if: ${{ github.event.schedule == '17 15 * * *' || github.event.schedule == '17 19 * * 0' || inputs.job == 'all' || inputs.job == 'fuzz' || inputs.job == 'fuzz-weekly' }}
+    # The fuzz targets to run, read from the tree under test by the
     # inventory script (`check_fuzz_inventory.py --targets`), so the list
-    # cannot drift from the crates. The inventory's own check and both
-    # scripts' selftests run first.
+    # cannot drift from the crates, and the crates those targets are in.
+    # The inventory's own check and both scripts' selftests run first.
     #
     # The fuzz lanes run over dev, the tree every change reaches first; a
-    # dispatch that names `ref` runs them over that ref instead. Every
-    # night runs every target for five minutes (`fuzz`); Sunday's night
-    # also runs the weekly four for thirty (`fuzz-weekly`), as does a
-    # dispatch of `fuzz-weekly`. A dispatch naming `fuzz_target` runs that
-    # one target alone.
+    # dispatch that names `ref` runs them over that ref instead. The 15:17
+    # schedule runs every target for five minutes (`fuzz`); Sunday's 19:17
+    # schedule runs the weekly targets for thirty (`fuzz-weekly`), as does
+    # a dispatch of `fuzz-weekly`. A dispatch naming `fuzz_target` runs
+    # that one target alone.
     runs-on: ubuntu-latest
     timeout-minutes: 10  # reads the tree and runs two selftests; no build
     strategy:
@@ -649,6 +661,7 @@ jobs:
     outputs:
       nightly: ${{ steps.lists.outputs.nightly }}
       weekly: ${{ steps.lists.outputs.weekly }}
+      crates: ${{ steps.lists.outputs.crates }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -663,56 +676,51 @@ jobs:
           python3 scripts/ci/check_fuzz_inventory.py
 
       - id: lists
-        name: The targets tonight
+        name: The targets and their crates
         env:
-          EVENT: ${{ github.event_name }}
-          JOB: ${{ inputs.job }}
+          NIGHTLY_RUN: ${{ github.event.schedule == '17 15 * * *' || inputs.job == 'all' || inputs.job == 'fuzz' }}
+          WEEKLY_RUN: ${{ github.event.schedule == '17 19 * * 0' || inputs.job == 'fuzz-weekly' }}
           ONLY: ${{ inputs.fuzz_target }}
         run: |
           set -euo pipefail
           nightly='[]'
           weekly='[]'
-          case "$EVENT:$JOB" in
-            schedule:*)
-              nightly=$(python3 scripts/ci/check_fuzz_inventory.py --targets nightly)
-              if [ "$(date -u +%u)" = 7 ]; then
-                weekly=$(python3 scripts/ci/check_fuzz_inventory.py --targets weekly)
-              fi
-              ;;
-            workflow_dispatch:all | workflow_dispatch:fuzz)
-              nightly=$(python3 scripts/ci/check_fuzz_inventory.py --targets nightly ${ONLY:+"$ONLY"})
-              ;;
-            workflow_dispatch:fuzz-weekly)
-              weekly=$(python3 scripts/ci/check_fuzz_inventory.py --targets weekly ${ONLY:+"$ONLY"})
-              ;;
-          esac
+          if [ "$NIGHTLY_RUN" = true ]; then
+            nightly=$(python3 scripts/ci/check_fuzz_inventory.py --targets nightly ${ONLY:+"$ONLY"})
+          fi
+          if [ "$WEEKLY_RUN" = true ]; then
+            weekly=$(python3 scripts/ci/check_fuzz_inventory.py --targets weekly ${ONLY:+"$ONLY"})
+          fi
+          crates=$(NIGHTLY="$nightly" WEEKLY="$weekly" python3 -c 'import json, os; print(json.dumps(sorted({t.split("/")[0] for k in ("NIGHTLY", "WEEKLY") for t in json.loads(os.environ[k])})))')
           echo "nightly=$nightly"
           echo "weekly=$weekly"
-          echo "nightly=$nightly" >> "$GITHUB_OUTPUT"
-          echo "weekly=$weekly" >> "$GITHUB_OUTPUT"
+          echo "crates=$crates"
+          {
+            echo "nightly=$nightly"
+            echo "weekly=$weekly"
+            echo "crates=$crates"
+          } >> "$GITHUB_OUTPUT"
 
-  fuzz:
+  fuzz-build:
     needs: fuzz-targets
-    if: ${{ needs.fuzz-targets.outputs.nightly != '[]' }}
-    # Every fuzz target, five minutes each (`scripts/ci/fuzz_run.py`). A
-    # leg is green only when it proves it fuzzed: no crash, a final `Done`
-    # line with at least 1,000 executions, a non-empty corpus and the
-    # committed lockfile untouched. A crash uploads its input as the
-    # `fuzz-crash-...` artifact; every leg uploads one line of figures
-    # (`fuzz-stats-...`), which `fuzz-summary` tabulates. The target's
-    # committed `fuzz/seeds/<target>/` is read when there is one.
+    if: ${{ needs.fuzz-targets.outputs.crates != '[]' }}
+    # Each fuzz crate the lists reach, built once: every target of the
+    # crate with the address sanitizer (`fuzz_run.py --build`), handed to
+    # the crate's `fuzz` and `fuzz-weekly` legs as the `fuzz-bin-...`
+    # artifact (ruled 2026-11-15; before this, each of the 37 legs built
+    # its own crate and its own cargo-fuzz). Red when the build fails, a
+    # target's binary is missing, or the build rewrote the committed
+    # `fuzz/Cargo.lock`.
     runs-on: ubuntu-latest
-    # The run is five minutes; the rest is the toolchain, cargo-fuzz from
-    # source (about two minutes) and the harness's sanitized release build
-    # from cold, which for the largest crates is several minutes more.
+    # cargo-fuzz from source (about two minutes) and the crate's sanitized
+    # release build from cold, which for the largest crates is several
+    # minutes more.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["dev"]') }}
-        target: ${{ fromJSON(needs.fuzz-targets.outputs.nightly) }}
-    env:
-      FUZZ_SECONDS: 300
+        crate: ${{ fromJSON(needs.fuzz-targets.outputs.crates) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -734,18 +742,77 @@ jobs:
         run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
 
       - id: names
-        name: Names for the corpus cache and the artifacts
+        name: The artifact's name
+        env:
+          BRANCH: ${{ matrix.branch }}
+          CRATE: ${{ matrix.crate }}
+        run: echo "bin=fuzz-bin-${BRANCH//\//_}-${CRATE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build every target of the crate
+        env:
+          CRATE: ${{ matrix.crate }}
+        run: python3 scripts/ci/fuzz_run.py --build "$CRATE" "$RUNNER_TEMP/bin"
+
+      - name: Hand the binaries to the crate's legs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.bin }}
+          path: ${{ runner.temp }}/bin
+          if-no-files-found: error
+          # The legs of this run read it; nothing after them does.
+          retention-days: 1
+
+  fuzz:
+    needs: [fuzz-targets, fuzz-build]
+    # A crate whose build failed leaves its own legs without binaries; the
+    # other crates' legs still run.
+    if: ${{ !cancelled() && needs.fuzz-targets.result == 'success' && needs.fuzz-targets.outputs.nightly != '[]' }}
+    # Every fuzz target, five minutes each (`scripts/ci/fuzz_run.py`), from
+    # its crate's `fuzz-build` binaries. A leg is green only when it proves
+    # it fuzzed: no crash, a final `Done` line with at least 1,000
+    # executions and a non-empty corpus. A crash uploads its input as the
+    # `fuzz-crash-<lane>-<branch>-<crate>_<target>` artifact; every leg
+    # uploads one line of figures (`fuzz-stats-...`), which `fuzz-summary`
+    # tabulates. The target's committed `fuzz/seeds/<target>/` is read
+    # when there is one.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20  # the five-minute run, a checkout and one download
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["dev"]') }}
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.nightly) }}
+    env:
+      FUZZ_SECONDS: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - id: names
+        name: Names for the binaries, the corpus cache and the artifacts
         env:
           TARGET: ${{ matrix.target }}
           BRANCH: ${{ matrix.branch }}
+          LANE: ${{ github.job }}
         run: |
           set -eu
           {
             echo "crate=${TARGET%%/*}"
             echo "bin=${TARGET#*/}"
-            echo "safe=${BRANCH//\//_}-${TARGET//\//_}-${FUZZ_SECONDS}"
+            echo "binaries=fuzz-bin-${BRANCH//\//_}-${TARGET%%/*}"
+            echo "safe=${LANE}-${BRANCH//\//_}-${TARGET//\//_}"
             echo "cache=fuzz-corpus-${BRANCH//\//_}-${TARGET//\//_}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: The crate's binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.binaries }}
+          path: ${{ runner.temp }}/bin
 
       - name: Restore the corpus
         uses: actions/cache/restore@v4
@@ -758,7 +825,8 @@ jobs:
         name: Fuzz
         env:
           TARGET: ${{ matrix.target }}
-        run: python3 scripts/ci/fuzz_run.py "$TARGET" "$FUZZ_SECONDS" "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/stats.json"
+          BIN: ${{ steps.names.outputs.bin }}
+        run: python3 scripts/ci/fuzz_run.py "$TARGET" "$FUZZ_SECONDS" "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/stats.json" "$RUNNER_TEMP/bin/$BIN"
 
       - name: Save the corpus
         if: ${{ always() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
@@ -783,15 +851,16 @@ jobs:
           path: ${{ runner.temp }}/stats.json
 
   fuzz-weekly:
-    needs: fuzz-targets
-    if: ${{ needs.fuzz-targets.outputs.weekly != '[]' }}
+    needs: [fuzz-targets, fuzz-build]
+    if: ${{ !cancelled() && needs.fuzz-targets.result == 'success' && needs.fuzz-targets.outputs.weekly != '[]' }}
     # The weekly long run (ruled 2026-11-15): the Noise handshake's reader,
-    # transaction decode, block decode and KEM decapsulation, thirty
-    # minutes each, under the same verdict as `fuzz`. The list is
-    # `WEEKLY` in `check_fuzz_inventory.py`, which refuses a name that is
-    # not a target.
+    # transaction decode, block decode, KEM decapsulation and the
+    # Bulletproofs+ prover-verifier round trip (whose five minutes are a few
+    # thousand executions), thirty minutes each, under the same verdict as
+    # `fuzz`. The list is `WEEKLY` in `check_fuzz_inventory.py`, which
+    # refuses a name that is not a target.
     runs-on: ubuntu-latest
-    timeout-minutes: 75  # the thirty-minute run, plus what `fuzz` budgets for setup and build
+    timeout-minutes: 45  # the thirty-minute run, a checkout and one download
     strategy:
       fail-fast: false
       matrix:
@@ -808,31 +877,27 @@ jobs:
           # credential to find in .git/config.
           persist-credentials: false
 
-      - name: Install the fuzzing toolchain
-        uses: ./.github/actions/install-rust
-        with:
-          toolchain: ${{ env.FUZZ_TOOLCHAIN }}
-          components: ''
-
-      - name: Install cargo-fuzz
-        # Outside rust/, so the stable pin there does not select the
-        # toolchain that builds it.
-        working-directory: ${{ runner.temp }}
-        run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
-
       - id: names
-        name: Names for the corpus cache and the artifacts
+        name: Names for the binaries, the corpus cache and the artifacts
         env:
           TARGET: ${{ matrix.target }}
           BRANCH: ${{ matrix.branch }}
+          LANE: ${{ github.job }}
         run: |
           set -eu
           {
             echo "crate=${TARGET%%/*}"
             echo "bin=${TARGET#*/}"
-            echo "safe=${BRANCH//\//_}-${TARGET//\//_}-${FUZZ_SECONDS}"
+            echo "binaries=fuzz-bin-${BRANCH//\//_}-${TARGET%%/*}"
+            echo "safe=${LANE}-${BRANCH//\//_}-${TARGET//\//_}"
             echo "cache=fuzz-corpus-${BRANCH//\//_}-${TARGET//\//_}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: The crate's binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.binaries }}
+          path: ${{ runner.temp }}/bin
 
       - name: Restore the corpus
         uses: actions/cache/restore@v4
@@ -845,7 +910,8 @@ jobs:
         name: Fuzz
         env:
           TARGET: ${{ matrix.target }}
-        run: python3 scripts/ci/fuzz_run.py "$TARGET" "$FUZZ_SECONDS" "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/stats.json"
+          BIN: ${{ steps.names.outputs.bin }}
+        run: python3 scripts/ci/fuzz_run.py "$TARGET" "$FUZZ_SECONDS" "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/stats.json" "$RUNNER_TEMP/bin/$BIN"
 
       - name: Save the corpus
         if: ${{ always() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
@@ -912,7 +978,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate, fuzz-targets, fuzz, fuzz-weekly, fuzz-summary]
+    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate, fuzz-targets, fuzz-build, fuzz, fuzz-weekly, fuzz-summary]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
@@ -924,21 +990,33 @@ jobs:
         with:
           script: |
             // A lane marked `perTarget` names its legs `<job> (<branch>, <target>)`:
-            // each target's red is its own issue.
+            // each target's red is its own issue, and `perTarget` is the word
+            // the issue puts before the target. A lane marked `crashArtifact`
+            // uploads a crashing input as `fuzz-crash-<job>-<branch>-<crate>_<target>`
+            // (`/` in a branch or target read as `_`): the issue links it.
             const fuzzLines = [
-              'A crash uploads its input as the run\'s `fuzz-crash-<branch>-<crate>_<target>-<seconds>` artifact. Reproduce it in `rust/<crate>` with `cargo +nightly fuzz run <target> <input>`. The fix lands with the input added to the crate\'s `fuzz/seeds/<target>/`, the committed regression corpus every run reads.',
-              'A red with no crash is a run that did not prove it fuzzed (under 1,000 executions, no final line, an empty corpus, a rewritten lockfile) or a harness that did not build; the job summary says which (`scripts/ci/fuzz_run.py`).',
+              'Reproduce a crash in `rust/<crate>` with `cargo +nightly fuzz run <target> <input>`, the input being the crash artifact linked above. The fix lands with the input added to the crate\'s `fuzz/seeds/<target>/`, the committed regression corpus every run reads.',
+              'A red with no crash is a run that did not prove it fuzzed (under 1,000 executions, no final line, an empty corpus) or a target whose crate did not build (its `fuzz-build` leg is red too); the job summary says which (`scripts/ci/fuzz_run.py`).',
             ];
             const lanes = {
               'fuzz': {
                 title: 'nightly fuzz RED',
-                perTarget: true,
+                perTarget: 'Target',
+                crashArtifact: true,
                 lines: ['The `fuzz` job (every fuzz target, five minutes each) failed for the target named above.', ...fuzzLines],
               },
               'fuzz-weekly': {
                 title: 'weekly fuzz RED',
-                perTarget: true,
-                lines: ['The `fuzz-weekly` job (the weekly four, thirty minutes each) failed for the target named above.', ...fuzzLines],
+                perTarget: 'Target',
+                crashArtifact: true,
+                lines: ['The `fuzz-weekly` job (the weekly targets, thirty minutes each) failed for the target named above.', ...fuzzLines],
+              },
+              'fuzz-build': {
+                title: 'nightly fuzz build RED',
+                perTarget: 'Crate',
+                lines: [
+                  'The `fuzz-build` job failed for the fuzz crate named above (`scripts/ci/fuzz_run.py --build`): `cargo fuzz build` failed, a target\'s binary was not written, or the build rewrote the committed `fuzz/Cargo.lock` (regenerate it: `scripts/ci/check_fuzz_inventory.py --regenerate`). Every target of the crate is red tonight with it.',
+                ],
               },
               'fuzz-targets': {
                 title: 'nightly fuzz target list RED',
@@ -1053,13 +1131,28 @@ jobs:
               state: 'open',
               per_page: 100,
             });
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner,
+              repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
             for (const [, lane, leg] of red) {
               const [branch, target] = lanes[lane].perTarget ? leg.split(', ') : [leg, null];
               const title = `${lanes[lane].title} (${leg})`;
+              const crash = [];
+              if (lanes[lane].crashArtifact) {
+                const name = `fuzz-crash-${lane}-${branch.replace(/\//g, '_')}-${target.replace(/\//g, '_')}`;
+                const found = artifacts.find((a) => a.name === name);
+                crash.push(found
+                  ? `Crash input: [${name}](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}/artifacts/${found.id})`
+                  : 'Crash input: none uploaded (the leg was red without a crash).');
+              }
               const body = [
                 `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
                 `Branch: ${branch}`,
-                ...(target ? [`Target: ${target}`] : []),
+                ...(target ? [`${lanes[lane].perTarget}: ${target}`] : []),
+                ...crash,
                 ...lanes[lane].lines,
               ].join('\n');
               const existing = open.find((i) => !i.pull_request && i.title === title);
