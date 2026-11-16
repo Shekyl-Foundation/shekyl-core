@@ -317,6 +317,17 @@ jobs:
         # workspace in one pass instead of stopping at the first crate's
         # first error, so reviewers see the full triage in one log.
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+      - name: cargo build --examples (workspace)
+        working-directory: rust
+        # CF-R8 (CHAIN_FORGE.md §11.1): the chain forge's runnable is a
+        # cargo example, and the release build never asks for examples.
+        # `clippy --all-targets` above checks an example but does not link
+        # it, so an example that stops linking would merge green; built
+        # here, it is red on the pull request that broke it.
+        # `shekyl-randomx-differential` is excluded as in the test build
+        # below: its examples and tests link the C reference, which this
+        # job does not build.
+        run: cargo build --locked --workspace --examples --exclude shekyl-randomx-differential
       - name: "cargo clippy: gf7-hooks harness lane (shekyl-engine-core)"
         working-directory: rust
         # The GF-7 sealing seam + harness (`pscan/start.rs` SealingRunOverrides,

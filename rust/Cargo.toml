@@ -237,6 +237,11 @@ members = [
     # or redb is in its closure — the spending half is a sibling crate.
     "shekyl-harness-wallet",
     "shekyl-harness-spender",
+    # The chain forge (CHAIN_FORGE.md §11): its library is the plan schema,
+    # the seed derivation, the manifest and blocks.txt; its executor is a
+    # test-kind target (an example and an integration test) over the
+    # scenario driver. NOT_SHIPPED: no shipped build links it.
+    "shekyl-chain-forge",
 
     # The daemon's block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1):
     # Source → form → sequence → validate+connect → sinks. Production code

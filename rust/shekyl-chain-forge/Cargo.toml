@@ -1,0 +1,40 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-forge"
+description = "The chain forge (CHAIN_FORGE.md §11): the plan schema, the seed derivation, a forged chain's manifest and blocks.txt, and the diff. The executor is a test-kind target over the scenario driver. Never a production dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The library's normal edges are the plan's and the manifest's formats and
+# the seed derivation, nothing else: no driver, no harness, no seeded
+# entry point (CHAIN_FORGE.md §11.1). A crate that reads a manifest takes
+# this library alone. No shipped build links this crate
+# (`scripts/ci/shipped_graph.py` classifies it NOT_SHIPPED, and the
+# production graph check refuses it in a shipped graph).
+[dependencies]
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+hex = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+
+# The test-kind targets: the cross-architecture probe of the seeded
+# primitives (`tests/primitives_across_architectures.rs`). `seeded-rng` is
+# TEST_ONLY (check_test_only_features.py); a dev edge enables it.
+[dev-dependencies]
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+rand_chacha = { workspace = true }
+
+[lints]
+workspace = true

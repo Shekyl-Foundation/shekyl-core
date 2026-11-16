@@ -1,0 +1,78 @@
+name: chain-forge
+
+# The chain forge's determinism check (CHAIN_FORGE.md §9, CF-1c): a forged
+# chain is a known answer, so the same plan at the same commit must give the
+# same bytes on every machine that forges it. Each leg runs on its own
+# architecture and holds its result to the answers committed in the tree;
+# two legs that both match the tree match each other.
+#
+# - x86_64 on GitHub's hosted `ubuntu-24.04`, aarch64 on the hosted
+#   `ubuntu-24.04-arm`. The Pi 4 floor device (rule 76) is aarch64 too; its
+#   run is fleet evidence recorded with the increment, not a CI leg.
+# - The seeded primitives first (seconds): when the legs disagree, this
+#   step names the primitive.
+#
+# Scope: the Rust tree, because a forged chain's bytes depend on the
+# consensus rules, the store, the driver and the crypto beneath them, and
+# on nothing outside `rust/`. Not a required check, so the `paths` filter
+# suppressing the workflow on other changes waits on nothing.
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/chain-forge.yml'
+      - '.github/actions/install-rust/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/chain-forge.yml'
+      - '.github/actions/install-rust/**'
+  workflow_dispatch:
+
+concurrency:
+  group: chain-forge-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_TERM_COLOR: never
+
+jobs:
+  determinism:
+    name: "chain forge: determinism (${{ matrix.arch }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - name: the runner
+        # The architecture this leg claims, checked, and the cores its
+        # times are read against.
+        run: |
+          echo "uname -m: $(uname -m)"
+          echo "nproc: $(nproc)"
+          test "$(uname -m)" = "${{ matrix.arch }}"
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: install Rust
+        uses: ./.github/actions/install-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: chain-forge-${{ matrix.arch }}
+      - name: the seeded primitives give x86_64's answers
+        working-directory: rust
+        run: cargo test --locked -p shekyl-chain-forge --test primitives_across_architectures
