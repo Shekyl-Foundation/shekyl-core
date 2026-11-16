@@ -86,7 +86,7 @@ fn pattern(n: usize) -> Vec<u8> {
 
 /// The genesis case: the mainnet genesis block as the daemon assembles it
 /// (the network table's genesis transaction under the genesis tool's
-/// fixed header), its hash as the seed and its PoW blob, plus a
+/// header at the table's mint time), its hash as the seed and its PoW blob, plus a
 /// blob-shaped input under the same seed.
 ///
 /// # Errors
