@@ -289,7 +289,7 @@ compares the 64 bytes with the published entry (constant-time). A mismatch,
 or a missing entry, is classified **received-but-unspendable** on the
 persisted row (`TransferDetails::unspendable`): the output is retained in the
 ledger with the sender's transaction named, excluded from coin selection and
-from `unlocked`, totalled separately (`get_balance.unspendable`) and shown
+from `spendable`, totalled separately (`get_balance.unspendable`) and shown
 as the wallet-RPC state `UNSPENDABLE` with an `unspendable_reason`
 (`FCMP_SPEND_LINKABILITY.md` §6.2, rule 82). The signer keeps a second
 check as defence in depth — the derived `CM.x` against the chain's leaf

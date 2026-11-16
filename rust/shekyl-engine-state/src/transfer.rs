@@ -202,9 +202,12 @@ impl postcard_schema::Schema for FcmpPrecomputedPath {
 /// publishes the output's `tx_extra` `0x07` entry (`CM ‖ record`) and only
 /// the recipient can check that it opens to its own derivation. An output
 /// classified here is **retained in the ledger** (the money is on chain and
-/// the row names the sender's transaction) but excluded from every
-/// spendable view — coin selection, `unlocked`, the RPC `CONFIRMED` state —
-/// because signing would fail at the leaf (`TxBuilderError::PqcLeafMismatch`).
+/// the row names the sender's transaction) but is never spendable: the
+/// classifier ([`crate::OutputState::Unspendable`]) keeps it out of coin
+/// selection and out of the balance's `spendable`, because signing would
+/// fail at the leaf (`TxBuilderError::PqcLeafMismatch`). The RPC's
+/// `get_transfers` states describe the chain, not spendability; this one is
+/// `UNSPENDABLE` there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, postcard_schema::Schema)]
 pub enum UnspendableReason {
     /// The published `0x07` entry is not this wallet's derivation of
@@ -366,7 +369,6 @@ pub struct TransferDetails {
     pub eligible_height: BlockHeight,
 
     // ── Engine management ──
-    pub frozen: bool,
     pub fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
 
     /// Received-but-unspendable classification (`PL-D3` §6.2, rule 82).
@@ -382,29 +384,21 @@ pub struct TransferDetails {
 }
 
 impl TransferDetails {
-    /// Whether this output is available for regular spending.
-    ///
-    /// Outputs below `eligible_height` are immature (no curve-tree path yet)
-    /// and cannot be spent. A received-but-unspendable output
-    /// ([`Self::unspendable`]) never is: its chain leaf does not open to the
-    /// wallet's derivation, so selecting it would fail at proving. Outputs with a network-exposed spend awaiting
-    /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
-    /// would build a second tx bearing the same key image. The lock map is
-    /// journal-derived (PR-SJ-1b — [`crate::SendJournalBlock::spend_locks`]
-    /// / [`crate::WalletLedger::spend_locks`]); taking [`InFlightSpendLocks`](crate::send_journal_block::InFlightSpendLocks) — a
-    /// type only that derivation can produce, not a free `bool` and not
-    /// a bare map — keeps the §7.1 self-link check tied to the
-    /// derivation at compile time.
+    /// Whether a send could use this output at `horizon`: the
+    /// [`Self::state`] classifier's `Spendable` (module
+    /// [`crate::output_state`]). The lock map is journal-derived
+    /// ([`crate::SendJournalBlock::spend_locks`]); taking
+    /// [`InFlightSpendLocks`](crate::send_journal_block::InFlightSpendLocks),
+    /// a type only that derivation can produce, keeps the §7.1 self-link
+    /// check tied to the derivation at compile time.
+    #[inline]
+    #[must_use]
     pub fn is_spendable(
         &self,
-        current_height: BlockHeight,
+        horizon: crate::output_state::SpendHorizon,
         spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> bool {
-        !self.spent
-            && !self.frozen
-            && self.unspendable.is_none()
-            && !spend_locks.contains(self.global_output_index)
-            && current_height >= self.eligible_height
+        self.state(horizon, spend_locks) == crate::output_state::OutputState::Spendable
     }
 
     /// The amount held in this output.
@@ -462,7 +456,6 @@ struct TransferDetailsSchema {
     source_ciphertext: Option<HybridCiphertext>,
     output_handle: Option<OutputHandle>,
     eligible_height: u64,
-    frozen: bool,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
     unspendable: Option<UnspendableReason>,
     receive_attribution: ReceiveAttribution,
@@ -506,7 +499,6 @@ impl Zeroize for TransferDetails {
         // `(view_secret, source_ciphertext)` and wipes them inside
         // its own boundary.
         self.eligible_height.zeroize();
-        self.frozen.zeroize();
         if let Some(ref mut path) = self.fcmp_precomputed_path {
             path.reference_block.zeroize();
             path.path_blob.zeroize();
@@ -530,7 +522,6 @@ impl std::fmt::Debug for TransferDetails {
             .field("amount", &self.amount())
             .field("spent", &self.spent)
             .field("eligible_height", &self.eligible_height)
-            .field("frozen", &self.frozen)
             .field("unspendable", &self.unspendable)
             .finish_non_exhaustive()
     }
@@ -598,7 +589,6 @@ mod tests {
             source_ciphertext: None,
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(110),
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),

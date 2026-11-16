@@ -346,6 +346,24 @@ fn parse_toml_strict(body_bytes: &[u8]) -> Result<WalletPrefs, PrefsError> {
                     return Err(PrefsError::bucket3(bucket3));
                 }
             }
+            // The version says which schema the body is written in, so it
+            // is read before the body is: an older file's values may not
+            // parse under this schema at all (version 4 wrote
+            // `default_priority = "medium"`), and its refusal must be the
+            // version's, which names the remedy, not the first value the
+            // strict parser trips on. A file without the key is this
+            // version's (the field's serde default).
+            if let Some(file) = table
+                .get("schema_version")
+                .and_then(toml::Value::as_integer)
+            {
+                if file != i64::from(crate::schema::PREFS_SCHEMA_VERSION) {
+                    return Err(PrefsError::UnsupportedSchemaVersion {
+                        file: u8::try_from(file).unwrap_or(u8::MAX),
+                        binary: crate::schema::PREFS_SCHEMA_VERSION,
+                    });
+                }
+            }
         }
         Ok(_) => {
             // TOML grammar says the top level is always a table; a
@@ -673,6 +691,35 @@ mod tests {
             }
             other => panic!("expected Tampered, got {other:?}"),
         }
+    }
+
+    /// A file version 4 wrote, with its own spelling of the fee tier
+    /// (`medium`, a value this schema does not have), is refused for its
+    /// version, and the message names the remedy, not the value. Bites if
+    /// the strict parse runs before the version check: the refusal would
+    /// then be a parse error naming `medium`.
+    #[test]
+    fn a_version_4_file_is_refused_for_its_version_with_the_remedy() {
+        let d = tempdir().unwrap();
+        let base = base_in(d.path());
+        let key = fixture_key();
+
+        let toml_body = "schema_version = 4\n\n[cosmetic]\ndefault_priority = \"medium\"\n";
+        let toml_path = prefs_toml_path_from(&base);
+        fs::write(&toml_path, toml_body).unwrap();
+        let tag = compute_hmac(&key, toml_body.as_bytes());
+        fs::write(prefs_hmac_path_from(&base), tag).unwrap();
+
+        match load_prefs(&base, &key).unwrap() {
+            LoadOutcome::Tampered { reason, .. } => {
+                assert!(reason.contains("schema_version 4"), "{reason}");
+                assert!(reason.contains("expects 5"), "{reason}");
+                assert!(reason.contains("built-in defaults are loaded"), "{reason}");
+                assert!(!reason.contains("medium"), "{reason}");
+            }
+            other => panic!("expected Tampered, got {other:?}"),
+        }
+        assert!(!toml_path.exists(), "the stale pair is quarantined");
     }
 
     #[test]

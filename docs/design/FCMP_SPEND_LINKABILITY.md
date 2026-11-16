@@ -1031,7 +1031,7 @@ Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
   (`shekyl-scanner` compares `CM ‖ record` with `derive_pqc_leaf`'s entry; a
   mismatch or a missing entry is classified received-but-unspendable on the
   persisted row — `TransferDetails::unspendable`, `LEDGER_BLOCK_VERSION 11`
-  — retained in the ledger, excluded from coin selection and `unlocked`,
+  — retained in the ledger, excluded from coin selection and `spendable`,
   surfaced as the wallet-RPC state `UNSPENDABLE` with `unspendable_reason`
   and the sender's `tx_hash`, and totalled in `get_balance.unspendable`;
   the persona funding extractor skips such an output rather than counting

@@ -24,11 +24,6 @@
 //! atomically, and `debug_assert!`-driven invariant checks fire
 //! after every mutation.
 //!
-//! Mutators that touch *only* the ledger (`freeze`, `thaw`) live as
-//! inherent methods on [`LedgerBlock`] in [`crate::ledger_block`] —
-//! there is no reason to take a `&mut LedgerIndexes` borrow when the
-//! indexes are never read.
-//!
 //! Read-only queries that need no index likewise live on
 //! [`LedgerBlock`] (`unspent_transfers`, `spendable_outputs`). They are
 //! not ledger-*only*: since PR-SJ-1b both take the journal-derived
@@ -275,22 +270,6 @@ impl LedgerIndexes {
                 self.check_invariants(ledger).unwrap_err()
             );
         }
-    }
-
-    /// Freeze an output by its key image.
-    pub fn freeze_by_key_image(&self, ledger: &mut LedgerBlock, key_image: &KeyImage) -> bool {
-        if let Some(&idx) = self.key_images.get(key_image) {
-            return ledger.freeze(idx);
-        }
-        false
-    }
-
-    /// Thaw an output by its key image.
-    pub fn thaw_by_key_image(&self, ledger: &mut LedgerBlock, key_image: &KeyImage) -> bool {
-        if let Some(&idx) = self.key_images.get(key_image) {
-            return ledger.thaw(idx);
-        }
-        false
     }
 
     /// Handle a blockchain reorg by removing transfers at or above
@@ -547,7 +526,6 @@ mod tests {
             source_ciphertext: None,
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(block_height) + SPENDABLE_AGE,
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),

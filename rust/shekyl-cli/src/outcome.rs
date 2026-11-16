@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn success_line_is_one_object_and_drops_a_nested_seed() {
-        let mut inner = json!({"unlocked": "1"});
+        let mut inner = json!({"spendable": "1"});
         inner
             .as_object_mut()
             .expect("object")
@@ -320,7 +320,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&line).expect("json");
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["command"], "balance");
-        assert_eq!(parsed["result"]["wallet"]["unlocked"], "1");
+        assert_eq!(parsed["result"]["wallet"]["spendable"], "1");
         assert!(parsed["result"]["wallet"]
             .get(concat!("mne", "monic"))
             .is_none());
