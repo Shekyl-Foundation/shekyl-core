@@ -67,3 +67,19 @@ jobs:
     timeout-minutes: 1
     steps:
       - run: "true"
+  skipped-after-needs-draft-name:
+    name: ${{ github.event.pull_request.draft && 'Probe G (draft - not run)' || 'Probe G' }}
+    needs: scope
+    if: needs.scope.outputs.work == 'run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: "true"
+  skipped-after-needs-output-name:
+    name: ${{ needs.scope.outputs.work == 'none' && 'Probe H (none)' || 'Probe H' }}
+    needs: scope
+    if: needs.scope.outputs.work == 'run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: "true"
