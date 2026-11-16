@@ -199,10 +199,12 @@ pub fn ranked_on(
 /// The ranked list (`RANDOMX_CACHE_ACTOR.md` §5.1, HA-R4). Pure.
 ///
 /// 1. The window's canonical seed, then its other seed.
-/// 2. The third: the seed of the most-work chain among the held forks and
-///    the frontier, when the window does not already name that seed. When
-///    it does there is no third, and the next-heaviest chain does not take
-///    the place: one rule decides the third (HA-R2).
+/// 2. The third: the seed of the most-work chain the window does not
+///    cover, among the held forks and the frontier (HA-R2). A chain whose
+///    seed the window names is set aside first, and the heaviest of the
+///    rest is listed: a synced node's frontier is a run on its own chain,
+///    always the heaviest and always in the window, and it does not keep
+///    a held fork from the place.
 ///
 /// Equal work is decided by a fixed order: a held fork before the
 /// frontier, and between forks the first in the alt table's key order. The
@@ -219,11 +221,13 @@ pub(crate) fn ranked_seeds(
     let gathered = gathered?;
     let window = gathered.window;
     let mut heaviest: Option<(BlockHash, CumulativeDifficulty, Class)> = None;
+    // The window's own seeds are set aside before the work is compared.
     let chains = gathered
         .forks
         .iter()
         .map(|fork| (fork.seed, fork.work, Class::Unsolicited))
-        .chain(frontier.map(|frontier| (frontier.seed, frontier.work, Class::HeaderPow)));
+        .chain(frontier.map(|frontier| (frontier.seed, frontier.work, Class::HeaderPow)))
+        .filter(|(seed, _, _)| !window.holds(seed));
     for chain in chains {
         // Strictly more work replaces: the first of equals stands, and the
         // forks come before the frontier.
@@ -231,9 +235,7 @@ pub(crate) fn ranked_seeds(
             heaviest = Some(chain);
         }
     }
-    let third = heaviest
-        .filter(|(seed, _, _)| !window.holds(seed))
-        .map(|(seed, _, class)| (seedhash(&seed), class));
+    let third = heaviest.map(|(seed, _, class)| (seedhash(&seed), class));
     Some(
         Ranked::new(
             seedhash(&window.canonical),
@@ -444,8 +446,10 @@ mod tests {
     /// the window, the held forks as (seed, work), the frontier, the list.
     ///
     /// Red edits, one per rule: rank the frontier before the forks
-    /// (`equal work` row); take the next-heaviest chain when the winner's
-    /// seed is in the window (`heaviest is in the window` row); give a
+    /// (`equal work` row); pick the heaviest chain before setting aside
+    /// the window's seeds (`heaviest is in the window` row); let a fork
+    /// outrank a heavier frontier outside the window (`heavier than a
+    /// held fork` row); give a
     /// fork `HeaderPow` (any fork row); list the lighter fork (`two forks`
     /// row).
     #[test]
@@ -521,10 +525,16 @@ mod tests {
                 list(None, None),
             ),
             (
-                "the heaviest is in the window: the next-heaviest does not take the place",
+                "the heaviest is in the window: the heaviest outside it is the third",
                 gathered(true, &[(7, 10)]),
                 Some(frontier(2, 50)),
-                list(Some(2), None),
+                list(Some(2), Some((7, fork))),
+            ),
+            (
+                "a frontier outside the window, heavier than a held fork: the frontier",
+                gathered(true, &[(7, 10)]),
+                Some(frontier(9, 50)),
+                list(Some(2), Some((9, ahead))),
             ),
         ];
         for (name, gathered, frontier, expected) in rows {
