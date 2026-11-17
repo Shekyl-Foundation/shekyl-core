@@ -4152,9 +4152,16 @@ the depth question the umbrella's §4.3 records. The family is
   - **The honest chain rests at** the ratio's mean over the 720 blocks
     before the declared step.
   - **The step's endpoints** are means over the window before the edge
-    and the trace's last window. The settle time is the per-block
-    series' first crossing of 95 % of that move. On steady traffic both
-    windows are flat, so §5.33.1's step figures are unchanged.
+    and the trace's last window. The settle time is that same window
+    mean, walked forward one block at a time, until it covers 95 % of
+    the move. A single block cannot settle a move the endpoints defined
+    as averages. On steady traffic the windows before the edge and at
+    the end of the trace are flat, so the endpoints still match
+    §5.33.1; the settle time is the window mean's crossing, which lags
+    a per-block crossing while the window fills.
+  - **2026-11-16.** The first reading (§5.34.1) settled on the per-block
+    series against those window-mean endpoints. The narrations regenerated
+    for this sentence read the window mean throughout.
   - **The measured honest median.** For each median arm on variable
     traffic, the window median's count over the step fold's first year,
     after the window's first fill (blocks 720 to the year's end, demand
@@ -4366,7 +4373,10 @@ count offered against the median carried.
   - The SMA reads 1.004 at every one.
   - `median-r` reads 1.80 down to 1.03 over the same range.
 - **On variable traffic the median follows an honest step within a
-  window.**
+  window.** The block counts in this bullet are the per-block crossing
+  of the window-mean move, the reading at `3066f51832`. The narrations
+  regenerated on 2026-11-16 settle on the window mean itself (§5.34,
+  "the step's endpoints").
   - Where there is room it covers 95 % of the step in 55 blocks at
     N = 60, 99 at the re-derived zone, 175 at N = 90 and 226 at N = 150.
   - The SMA takes 299, 266, 120 and 71.

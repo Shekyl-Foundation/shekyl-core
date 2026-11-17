@@ -23,6 +23,9 @@
 use std::collections::HashMap;
 use std::fmt;
 
+#[path = "jg_report.rs"]
+mod report;
+
 use serde::Serialize;
 use shekyl_tx_weight::{predict_weight, InputCount, OutputCount};
 use shekyl_wire::transaction::COINBASE_RESERVE;
@@ -36,14 +39,15 @@ use crate::esr10::{
     year_one_standard_fee,
 };
 use crate::eup4::skl;
+use crate::honest_step::honest_step;
 use crate::onset::at_horizon;
 use crate::rng::HONEST_SEEDS;
 use crate::scenarios::BASELINE_STEADY_STATE;
 use crate::stage2::{a1_year_aggs_probed, NoProbe};
 use crate::volume_window::VolumeSignal;
 use crate::window_stuffer::{
-    at_rest, fold_campaign, honest_step, scaled, Campaign, Folded, CAMPAIGN_START_YEARS,
-    MEASURED_BLOCKS, STUFFER_SHARES_PCT,
+    at_rest, fold_campaign, scaled, Campaign, Folded, CAMPAIGN_START_YEARS, MEASURED_BLOCKS,
+    STUFFER_SHARES_PCT,
 };
 
 /// The zone points the brief names, in 2-in/2-out spends beside the
@@ -155,6 +159,14 @@ impl Signal {
         !matches!((self, traffic), (Self::MedianRestated, Traffic::Steady))
     }
 
+    /// Whether the arm's unclamped ratio is one honest count.
+    const fn reads_a_count(self) -> bool {
+        matches!(
+            self,
+            Self::Median | Self::MedianEnforced | Self::MedianRestated
+        )
+    }
+
     /// The honest per-block count a median arm's unclamped ratio reads, or
     /// `None` for an arm that reads no single count.
     fn median_count(self, ratio: u64, baseline: u64) -> Option<u64> {
@@ -220,43 +232,43 @@ fn traffic_name(traffic: Traffic) -> String {
     }
 }
 
-/// The traffic kinds, each at its seeds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Steady,
-    Variable,
+/// Steady traffic, then variable traffic, each family in seed order.
+/// An empty family is omitted.
+fn families(traffic: &[Traffic]) -> Vec<Vec<Traffic>> {
+    let steady: Vec<Traffic> = traffic
+        .iter()
+        .copied()
+        .filter(|t| matches!(t, Traffic::Steady))
+        .collect();
+    let variable: Vec<Traffic> = traffic
+        .iter()
+        .copied()
+        .filter(|t| matches!(t, Traffic::Variable(_)))
+        .collect();
+    [steady, variable]
+        .into_iter()
+        .filter(|family| !family.is_empty())
+        .collect()
 }
 
-impl Kind {
-    const fn of(traffic: Traffic) -> Self {
-        match traffic {
-            Traffic::Steady => Self::Steady,
-            Traffic::Variable(_) => Self::Variable,
+/// `steady` or `variable`. A line is one family.
+fn family_name(traffic: &[Traffic]) -> &'static str {
+    assert!(!traffic.is_empty(), "a printed line names its traffic");
+    match traffic[0] {
+        Traffic::Steady => {
+            assert!(
+                traffic.iter().all(|t| matches!(t, Traffic::Steady)),
+                "a printed line is one family"
+            );
+            "steady"
         }
-    }
-
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Steady => "steady",
-            Self::Variable => "variable",
+        Traffic::Variable(_) => {
+            assert!(
+                traffic.iter().all(|t| matches!(t, Traffic::Variable(_))),
+                "a printed line is one family"
+            );
+            "variable"
         }
-    }
-}
-
-/// The lower-middle median of `values` and its range, or `None` when empty.
-fn spread(values: &[f64]) -> Option<(f64, f64, f64)> {
-    let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let mid = *sorted.get((sorted.len().max(1) - 1) / 2)?;
-    Some((mid, sorted[0], sorted[sorted.len() - 1]))
-}
-
-/// `values`' median, and its range in brackets when there is more than one.
-fn show(values: &[f64], digits: usize) -> String {
-    match spread(values) {
-        None => "-".into(),
-        Some((mid, _, _)) if values.len() == 1 => format!("{mid:.digits$}"),
-        Some((mid, lo, hi)) => format!("{mid:.digits$} [{lo:.digits$}, {hi:.digits$}]"),
     }
 }
 
@@ -386,18 +398,19 @@ fn honest_row(
         .iter()
         .find(|a| a.carried_txs() >= u128::from(load) * u128::from(bpy))
         .map(|a| a.year);
-    let step = &honest_step(&params)[0];
+    let step = honest_step(&params);
+    let up = &step.up;
     let baseline = params.economic().tx_volume_baseline;
     let derived = crate::rng::geometric_median(baseline);
     // A variable-traffic reading only: on steady traffic every block
     // carries the schedule's count, so there is no distribution to read.
-    let median_count = signal
-        .median_count(0, baseline)
-        .filter(|_| matches!(traffic, Traffic::Variable(_)))
-        .map(|_| {
+    let median_count =
+        (signal.reads_a_count() && matches!(traffic, Traffic::Variable(_))).then(|| {
             let (mut blocks, mut sum, mut below, mut at) = (0u64, 0u128, 0u64, 0u64);
-            for (&ratio, &n) in &step.ratio_counts {
-                let count = signal.median_count(ratio, baseline).expect("a median arm");
+            for (&ratio, &n) in &step.year_one_ratios {
+                let count = signal
+                    .median_count(ratio, baseline)
+                    .expect("a median arm reads its count");
                 blocks += n;
                 sum += u128::from(count) * u128::from(n);
                 if count + 1 == derived {
@@ -424,9 +437,9 @@ fn honest_row(
         over_ceiling: fee.map(|f| f as f64 / ceiling as f64),
         fill_a_day_skl: skl(u128::from(zone.bytes) * u128::from(floor) * u128::from(blocks_a_day)),
         design_load_year,
-        resting_ratio: step.resting_ratio,
-        step_m_r: (step.before, step.after),
-        step_settles_blocks: step.settles,
+        resting_ratio: up.resting_ratio,
+        step_m_r: (up.before, up.after),
+        step_settles_blocks: up.settles,
         median_count,
     }
 }
@@ -480,6 +493,51 @@ impl Scope {
     }
 }
 
+/// One honest line: one signal, one traffic family, one zone, one `w_ref`.
+struct HonestGroup {
+    signal: Signal,
+    traffic: Vec<Traffic>,
+    zone: usize,
+    w_ref: u64,
+}
+
+struct HonestJob {
+    group: usize,
+    signal: Signal,
+    traffic: Traffic,
+    zone: usize,
+    w_ref: u64,
+}
+
+/// One campaign line: the same, plus the year and the share.
+struct CampaignGroup {
+    signal: Signal,
+    traffic: Vec<Traffic>,
+    zone: usize,
+    w_ref: u64,
+    year: u64,
+    share: u64,
+}
+
+struct CampaignJob {
+    group: usize,
+    signal: Signal,
+    traffic: Traffic,
+    zone: usize,
+    w_ref: u64,
+    year: u64,
+    share: u64,
+}
+
+/// The seeds of `family` the arm runs on, in the family's order.
+fn seeds_of(signal: Signal, family: &[Traffic]) -> Vec<Traffic> {
+    family
+        .iter()
+        .copied()
+        .filter(|&traffic| signal.runs_on(traffic))
+        .collect()
+}
+
 /// The grid at `scope`.
 ///
 /// # Errors
@@ -513,167 +571,106 @@ pub fn run(
         })
         .collect();
     let derived = crate::rng::geometric_median(base.economic().tx_volume_baseline);
-    let kinds: Vec<Kind> = [Kind::Steady, Kind::Variable]
-        .into_iter()
-        .filter(|&k| traffic.iter().any(|&t| Kind::of(t) == k))
-        .collect();
-    writeln!(
-        out,
-        "J x G — THE VOLUME SIGNAL CROSSED WITH THE ZONE (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.33, §5.34).\n\
-         Measures only. Signals: SMA (production's window sum), median (the window's lower-middle\n\
-         per-block count against the shipped baseline), median-r (the median against the baseline\n\
-         restated as the median of variable traffic at the baseline's mean, {derived}; variable traffic\n\
-         only), median+floor (the median, the stuffer paying the relay floor on its own bodies),\n\
-         decoupled (the baseline in place of volume: release, the burn and C read none), rails-only\n\
-         (release rails at 1.0; the burn and C still read the sum). Traffic: steady (the schedule's\n\
-         demand every block) or variable (a geometric count around it drawn at the block's height:\n\
-         Poisson arrivals over exponential block intervals; the pool carries what a block does not\n\
-         list), at seeds {}, each figure its median across them and [its range]. Zone: N 2-in/2-out\n\
-         spends of {reference} B (genesis depth and Standard fee) plus the coinbase reserve ({} B), beside\n\
-         the inherited and re-derived zones; w_ref at {} and {} B, each fixed across N. Not re-derived:\n\
-         TX_WEIGHT_LIMIT (the sim does not read it; it caps one transaction, not a count) and\n\
-         COINBASE_RESERVE (it does not depend on the zone). A ratio is the operand over the baseline\n\
-         before the release rails clamp it to [0.8, 1.3].",
-        seeds.join(", "),
-        COINBASE_RESERVE,
-        w_refs[0],
-        w_refs[1]
-    )?;
-    // The honest chain, per signal, traffic, zone and w_ref.
-    let honest_jobs: Vec<(Signal, Traffic, usize, u64)> = honest_signals
-        .iter()
-        .flat_map(|&s| {
-            traffic
-                .iter()
-                .filter(move |&&t| s.runs_on(t))
-                .map(move |&t| (s, t))
-        })
-        .flat_map(|(s, t)| {
-            (0..zone_axis.len()).flat_map(move |z| w_refs.into_iter().map(move |w| (s, t, z, w)))
-        })
-        .collect();
-    let honest = crate::parallel::map(&honest_jobs, |&(s, t, z, w)| {
-        honest_row(base, s, t, &zone_axis[z], w)
-    });
-    writeln!(
-        out,
-        "\nTHE HONEST CHAIN. Per signal, traffic, zone and w_ref: the ratio the chain rests at (the window\n\
-         before the step), the year-1 Standard fee (SKL, and over the ceiling), a day's blocks filled to\n\
-         the zone at the year-1 relay floor (SKL), the first year blocks carry the design load\n\
-         ({DESIGN_LOAD_SPENDS} spends, {} ordinary transactions a block), the declared step's up-edge (M_r over the\n\
-         window before it and the trace's last window, and the blocks to 95 % of that move), and for a\n\
-         median arm on variable traffic its count over year 1 after the window's first fill, per seed:\n\
-         the mean, and the share of blocks at {} and at {derived}, the derived median.",
-        design_load_txs(base),
-        derived - 1
-    )?;
+    let families = families(&traffic);
+    report::write_opening(out, derived, reference, w_refs, &seeds)?;
+    let mut honest_groups: Vec<HonestGroup> = Vec::new();
+    let mut honest_jobs: Vec<HonestJob> = Vec::new();
     for &signal in &honest_signals {
-        for &kind in &kinds {
-            for (z, zone) in zone_axis.iter().enumerate() {
-                for &w in &w_refs {
-                    let rows: Vec<&HonestRow> = honest_jobs
-                        .iter()
-                        .zip(&honest)
-                        .filter(|(&(s, t, zz, ww), _)| {
-                            s == signal && Kind::of(t) == kind && zz == z && ww == w
-                        })
-                        .map(|(_, row)| row)
-                        .collect();
-                    if rows.is_empty() {
-                        continue;
+        for family in &families {
+            let seeds = seeds_of(signal, family);
+            if seeds.is_empty() {
+                continue;
+            }
+            for zone in 0..zone_axis.len() {
+                for &w_ref in &w_refs {
+                    let group = honest_groups.len();
+                    for &traffic in &seeds {
+                        honest_jobs.push(HonestJob {
+                            group,
+                            signal,
+                            traffic,
+                            zone,
+                            w_ref,
+                        });
                     }
-                    // A figure every seed has, as its spread; one some seed
-                    // lacks, seed by seed ("-" where it is absent); `None`
-                    // when no seed has it.
-                    let pick = |f: &dyn Fn(&HonestRow) -> Option<f64>, d: usize| {
-                        let values: Vec<Option<f64>> = rows.iter().map(|r| f(r)).collect();
-                        let present: Vec<f64> = values.iter().flatten().copied().collect();
-                        if present.is_empty() {
-                            None
-                        } else if present.len() == values.len() {
-                            Some(show(&present, d))
-                        } else {
-                            Some(
-                                values
-                                    .iter()
-                                    .map(|v| v.map_or("-".into(), |v| format!("{v:.d$}")))
-                                    .collect::<Vec<_>>()
-                                    .join("/"),
-                            )
-                        }
-                    };
-                    let fee = match (
-                        pick(&|r| r.year_one_standard_fee_skl, 4),
-                        pick(&|r| r.over_ceiling, 2),
-                    ) {
-                        (Some(f), Some(c)) => format!("{f} ({c}x)"),
-                        _ => "none carried".into(),
-                    };
-                    let settles = pick(&|r| r.step_settles_blocks.map(|b| b as f64), 0)
-                        .map_or("no move".into(), |b| format!("{b} blocks"));
-                    let always = |f: &dyn Fn(&HonestRow) -> f64, d: usize| {
-                        show(&rows.iter().map(|r| f(r)).collect::<Vec<_>>(), d)
-                    };
-                    let years: Vec<String> = rows
-                        .iter()
-                        .map(|r| {
-                            r.design_load_year
-                                .map_or("never".into(), |y| format!("y{y}"))
-                        })
-                        .collect();
-                    write!(
-                        out,
-                        "  {:<12} {:<8} {:<12} {:>9} B w_ref {:>5}: rests {} ; fee {fee} ; fill a day {} ; design load {} ; step M_r {}->{} in {settles}",
-                        signal.name(),
-                        kind.name(),
-                        zone.label,
-                        zone.bytes,
-                        w,
-                        always(&|r| r.resting_ratio, 3),
-                        always(&|r| r.fill_a_day_skl, 1),
-                        years.join("/"),
-                        always(&|r| r.step_m_r.0, 3),
-                        always(&|r| r.step_m_r.1, 3),
-                    )?;
-                    if kind == Kind::Variable {
-                        for row in &rows {
-                            if let Some(c) = row.median_count {
-                                write!(
-                                    out,
-                                    " ; {} count {:.2} ({}: {:.1} %, {}: {:.1} %)",
-                                    row.traffic,
-                                    c.mean,
-                                    c.derived - 1,
-                                    c.below_pct,
-                                    c.derived,
-                                    c.at_pct
-                                )?;
-                            }
-                        }
-                    }
-                    writeln!(out)?;
+                    honest_groups.push(HonestGroup {
+                        signal,
+                        traffic: seeds.clone(),
+                        zone,
+                        w_ref,
+                    });
                 }
             }
         }
     }
-    // The campaigns: one unstuffed span per honest signal, traffic, zone,
-    // w_ref and start, then each campaign.
+    let honest_rows = crate::parallel::map(&honest_jobs, |job| {
+        honest_row(
+            base,
+            job.signal,
+            job.traffic,
+            &zone_axis[job.zone],
+            job.w_ref,
+        )
+    });
+    let mut honest_by_group: Vec<Vec<HonestRow>> = honest_groups
+        .iter()
+        .map(|group| Vec::with_capacity(group.traffic.len()))
+        .collect();
+    for (job, row) in honest_jobs.iter().zip(honest_rows) {
+        honest_by_group[job.group].push(row);
+    }
+    report::write_honest(
+        out,
+        base,
+        derived,
+        &zone_axis,
+        &honest_groups,
+        &honest_by_group,
+    )?;
+    // One unstuffed span per honest signal, seed, zone, w_ref and start.
+    // Each printed line is the seeds of one family.
     type Key = (Signal, Traffic, usize, u64, u64);
     let mut bases: Vec<Key> = Vec::new();
     let mut base_index: HashMap<Key, usize> = HashMap::new();
-    let mut cells: Vec<(Key, u64)> = Vec::new();
-    for z in 0..zone_axis.len() {
-        for &w in &w_refs {
-            for &t in &traffic {
-                for &signal in signals.iter().filter(|s| s.runs_on(t)) {
+    let mut campaign_groups: Vec<CampaignGroup> = Vec::new();
+    let mut campaign_jobs: Vec<CampaignJob> = Vec::new();
+    for zone in 0..zone_axis.len() {
+        for &w_ref in &w_refs {
+            for family in &families {
+                for &signal in &signals {
+                    let seeds = seeds_of(signal, family);
+                    if seeds.is_empty() {
+                        continue;
+                    }
                     for &year in &starts {
-                        let key = (signal.honest(), t, z, w, year);
-                        base_index.entry(key).or_insert_with(|| {
-                            bases.push(key);
-                            bases.len() - 1
-                        });
+                        for &traffic in &seeds {
+                            let key = (signal.honest(), traffic, zone, w_ref, year);
+                            base_index.entry(key).or_insert_with(|| {
+                                bases.push(key);
+                                bases.len() - 1
+                            });
+                        }
                         for &share in &shares {
-                            cells.push(((signal, t, z, w, year), share));
+                            let group = campaign_groups.len();
+                            for &traffic in &seeds {
+                                campaign_jobs.push(CampaignJob {
+                                    group,
+                                    signal,
+                                    traffic,
+                                    zone,
+                                    w_ref,
+                                    year,
+                                    share,
+                                });
+                            }
+                            campaign_groups.push(CampaignGroup {
+                                signal,
+                                traffic: seeds.clone(),
+                                zone,
+                                w_ref,
+                                year,
+                                share,
+                            });
                         }
                     }
                 }
@@ -681,8 +678,8 @@ pub fn run(
         }
     }
     let start = |params: &SimParams, year: u64| (year - 1) * params.blocks_per_year();
-    let base_runs = crate::parallel::map(&bases, |&(signal, t, z, w, year)| {
-        let params = cell(base, signal, t, zone_axis[z].bytes, w);
+    let base_runs = crate::parallel::map(&bases, |&(signal, traffic, zone, w_ref, year)| {
+        let params = cell(base, signal, traffic, zone_axis[zone].bytes, w_ref);
         let span = start(&params, year);
         fold_campaign(
             &params,
@@ -690,146 +687,68 @@ pub fn run(
             Campaign::uniform(EVERY_MINER, span, None, MEASURED_BLOCKS),
         )
     });
-    let campaign_runs = crate::parallel::map(&cells, |&((signal, t, z, w, year), share)| {
-        let params = cell(base, signal, t, zone_axis[z].bytes, w);
+    let campaign_runs = crate::parallel::map(&campaign_jobs, |job| {
+        let params = cell(
+            base,
+            job.signal,
+            job.traffic,
+            zone_axis[job.zone].bytes,
+            job.w_ref,
+        );
         // Every share holds for the whole measured span: M_r at rest is then
         // where a stuffer holding that share keeps it, and a majority holds
         // over half the window throughout (§5.33.1).
         let campaign = Campaign::uniform(
-            share,
-            start(&params, year),
-            Some(signal.own_fee()),
+            job.share,
+            start(&params, job.year),
+            Some(job.signal.own_fee()),
             MEASURED_BLOCKS,
         );
-        (campaign, fold_campaign(&params, year, campaign))
+        (campaign, fold_campaign(&params, job.year, campaign))
     });
-    let mut campaigns = Vec::new();
-    for (&((signal, t, z, w, year), share), (campaign, run)) in cells.iter().zip(&campaign_runs) {
+    let mut rows_by_group: Vec<Vec<CampaignRow>> = campaign_groups
+        .iter()
+        .map(|group| Vec::with_capacity(group.traffic.len()))
+        .collect();
+    for (job, (campaign, run)) in campaign_jobs.iter().zip(&campaign_runs) {
         let base_run: &Folded = &base_runs[*base_index
-            .get(&(signal.honest(), t, z, w, year))
+            .get(&(
+                job.signal.honest(),
+                job.traffic,
+                job.zone,
+                job.w_ref,
+                job.year,
+            ))
             .expect("every cell has its unstuffed span")];
         let (longest, _) = crate::window_stuffer::longest_run_above_one(&run.m_r);
         let mean = run.m_r.iter().map(|&m| u128::from(m)).sum::<u128>() as f64
             / run.m_r.len().max(1) as f64
             / shekyl_economics::params::SCALE as f64;
-        campaigns.push(CampaignRow {
-            signal: signal.name(),
-            traffic: traffic_name(t),
-            zone: zone_axis[z].label.clone(),
-            w_ref: w,
-            start_year: year,
-            share_pct: share,
+        let row = CampaignRow {
+            signal: job.signal.name(),
+            traffic: traffic_name(job.traffic),
+            zone: zone_axis[job.zone].label.clone(),
+            w_ref: job.w_ref,
+            start_year: job.year,
+            share_pct: job.share,
             bodies: run.listed,
             m_r_last: run.m_r.last().map_or(0.0, |&m| scaled(m)),
             m_r_at_rest: scaled(at_rest(&run.m_r)),
-            ratio_at_rest: scaled(at_rest(&run.ratio)),
+            ratio_at_rest: scaled(run.ratio_at_rest),
             mean_m_r: mean,
             longest_run_blocks: longest,
             net_gain_skl: run.net_gain(base_run, *campaign) as f64 / crate::burden::COIN as f64,
             break_even_burn_pct: run
                 .break_even_burn(base_run, *campaign)
-                .map(|b| 100.0 * b as f64 / shekyl_economics::params::SCALE as f64),
+                .map(|burn| 100.0 * burn as f64 / shekyl_economics::params::SCALE as f64),
             burn_last_pct: 100.0 * scaled(run.burn_and_c.0),
             c_last: scaled(run.burn_and_c.1),
-        });
+        };
+        rows_by_group[job.group].push(row);
     }
-    writeln!(
-        out,
-        "\nTHE STUFFER. Per signal, traffic, zone, w_ref and start: a stuffer holding its share (100 = every\n\
-         miner) for the whole measured span ({MEASURED_BLOCKS} blocks from the start of the year); the bodies\n\
-         listed, M_r at the span's last block, M_r and the ratio over its last window (at rest), M_r's mean\n\
-         over the span, the longest run of M_r > 1.0, the stuffer's payout less its fees against no\n\
-         stuffing (SKL), the break-even burn (the burn rate on its own fees, had its bodies paid the\n\
-         relay floor, at which that payout is zero: its gain before the burn of its own fees over the\n\
-         floor fees on its bodies, percent; over 100 % no burn of floor fees deters it; - with no\n\
-         bodies), and the burn and C at the span's last block. A share is an even proportion of the\n\
-         blocks; the bodies are the ordinary 1-in/2-out, the lightest valid shape (CEN-I1)."
-    )?;
-    for (z, zone) in zone_axis.iter().enumerate() {
-        for &w in &w_refs {
-            for &kind in &kinds {
-                writeln!(
-                    out,
-                    "== {} ({} B) | w_ref {w} | {}\n  {:<12} {:>3} {:>5} {:>7} {:>7} {:>7} {:>7} {:>7} {:>6} {:>12} {:>9} {:>7} {:>7}",
-                    zone.label,
-                    zone.bytes,
-                    kind.name(),
-                    "signal",
-                    "y",
-                    "share",
-                    "bodies",
-                    "last",
-                    "at rest",
-                    "ratio",
-                    "mean",
-                    "run",
-                    "net gain SKL",
-                    "break-even",
-                    "burn %",
-                    "C"
-                )?;
-                for &signal in &signals {
-                    for &year in &starts {
-                        for &share in &shares {
-                            let rows: Vec<&CampaignRow> = cells
-                                .iter()
-                                .zip(&campaigns)
-                                .filter(|(&((s, t, zz, ww, y), sh), _)| {
-                                    s == signal
-                                        && Kind::of(t) == kind
-                                        && zz == z
-                                        && ww == w
-                                        && y == year
-                                        && sh == share
-                                })
-                                .map(|(_, row)| row)
-                                .collect();
-                            if rows.is_empty() {
-                                continue;
-                            }
-                            let pick = |f: &dyn Fn(&CampaignRow) -> f64, d: usize| {
-                                show(&rows.iter().map(|r| f(r)).collect::<Vec<_>>(), d)
-                            };
-                            // Every seed's, as its spread; seed by seed where
-                            // some seed listed no bodies ("-").
-                            let even: Vec<f64> =
-                                rows.iter().filter_map(|r| r.break_even_burn_pct).collect();
-                            let even = if even.len() == rows.len() {
-                                show(&even, 0)
-                            } else if even.is_empty() {
-                                "-".to_string()
-                            } else {
-                                rows.iter()
-                                    .map(|r| {
-                                        r.break_even_burn_pct
-                                            .map_or("-".into(), |b| format!("{b:.0}"))
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("/")
-                            };
-                            writeln!(
-                                out,
-                                "  {:<12} {:>3} {:>4}% {:>7} {:>7} {:>7} {:>7} {:>7} {:>6} {:>12} {:>9} {:>7} {:>7}",
-                                signal.name(),
-                                year,
-                                share,
-                                pick(&|r| r.bodies as f64, 0),
-                                pick(&|r| r.m_r_last, 4),
-                                pick(&|r| r.m_r_at_rest, 4),
-                                pick(&|r| r.ratio_at_rest, 3),
-                                pick(&|r| r.mean_m_r, 4),
-                                pick(&|r| r.longest_run_blocks as f64, 0),
-                                pick(&|r| r.net_gain_skl, 2),
-                                even,
-                                pick(&|r| r.burn_last_pct, 3),
-                                pick(&|r| r.c_last, 4),
-                            )?;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    report::write_campaigns(out, &zone_axis, &campaign_groups, &rows_by_group)?;
+    let campaigns = rows_by_group.into_iter().flatten().collect();
+    let honest = honest_by_group.into_iter().flatten().collect();
     Ok(Summary {
         reference_spend_weight: reference,
         honest,
@@ -964,11 +883,28 @@ mod tests {
     }
 
     /// A figure across the seeds is its lower-middle median and its range.
+    /// A figure some seed lacks is written seed by seed; none at all is the
+    /// absence word.
     #[test]
     fn a_spread_is_the_median_and_the_range() {
-        assert_eq!(show(&[1.5], 2), "1.50");
-        assert_eq!(show(&[3.0, 1.0, 2.0], 1), "2.0 [1.0, 3.0]");
-        assert_eq!(show(&[], 1), "-");
+        assert_eq!(report::show(&[1.5], 2), "1.50");
+        assert_eq!(report::show(&[3.0, 1.0, 2.0], 1), "2.0 [1.0, 3.0]");
+        assert_eq!(report::show(&[], 1), "-");
+        assert_eq!(report::figure(&[Some(1.5)], 2, "no move"), "1.50");
+        assert_eq!(
+            report::figure(&[Some(3.0), Some(1.0), Some(2.0)], 1, "no move"),
+            "2.0 [1.0, 3.0]"
+        );
+        assert_eq!(report::figure(&[None, None], 1, "no move"), "no move");
+        assert_eq!(
+            report::figure(&[Some(1.0), None, Some(3.0)], 0, "no move"),
+            "1/-/3"
+        );
+        assert_eq!(report::same_label(&["y1".into(), "y1".into()]), "y1");
+        assert_eq!(
+            report::same_label(&["y1".into(), "never".into()]),
+            "y1/never"
+        );
     }
 
     fn path(scope: Scope) -> &'static str {
