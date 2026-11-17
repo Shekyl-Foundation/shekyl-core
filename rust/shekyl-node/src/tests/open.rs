@@ -77,35 +77,34 @@ fn the_blocking_pool_exceeds_the_permits_and_the_window() {
 }
 /// Stop closes the store, withdraws the board, and a second stop is a
 /// no-op. A handle held past stop is not ready. Red edit: leave the
-/// facts slot filled, or skip the second stop.
+/// facts slot filled, or skip the second stop, or drop the follower's
+/// stop guard (the board is then never withdrawn as `Stopped`).
 #[test]
 fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_at(dir.path(), Arc::new(|| {}));
-    let (block, _) = pinned_genesis(Network::Regtest).expect("genesis");
-    // The follower's first word, so it does not withdraw the job below:
-    // no mine-address, no template.
+    // The follower owns the board. On regtest, with a mine-address, it
+    // posts the template and leaves that job up until stop.
+    let node = open_posted(dir.path(), &[]);
     let mut posting = node.posting();
-    wait_for_posting(&mut posting, &Posting::Withdrawn(NoJob::NoAddress));
-    node.mining.board.publish(Job {
-        offsets: block
-            .blob_offsets()
-            .expect("genesis reserves the extra nonce"),
-        next_seed: None,
-        reward: shekyl_units::AtomicUnits::ZERO,
-        median_weight: 0,
-        already_generated: shekyl_units::AtomicUnits::ZERO,
-        listed: Vec::new(),
-        block,
-        height: BlockHeight::from_raw(1),
-        seed: BlockHash::from_bytes([1; 32]),
-        difficulty: Difficulty::ONE,
-    });
-    assert!(node.mining.board.posted().is_some(), "the job was posted");
+    assert!(
+        matches!(*posting.borrow_and_update(), Posting::Posted(_)),
+        "the follower left its job posted"
+    );
+    assert!(
+        node.mining.board.posted().is_some(),
+        "the job is on the board"
+    );
     node.stop();
     assert!(
         node.mining.board.posted().is_none(),
         "stop withdraws the board"
+    );
+    // Only the follower's stop guard posts `Stopped`, and it withdraws
+    // the board as it does.
+    assert_eq!(
+        *posting.borrow(),
+        Posting::Withdrawn(NoJob::Stopped),
+        "stop withdraws the board through the follower's guard"
     );
     node.stop();
     let rules = ChainRules::new(Network::Regtest, None, CappedEpoch::PRODUCTION).expect("rules");

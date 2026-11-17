@@ -926,7 +926,7 @@ impl Instrument {
 pub struct Summary {
     miner_income: Option<Vec<MinerIncomeRow>>,
     predictability: Option<Vec<PredictabilityRow>>,
-    step_response: Option<Vec<crate::window_stuffer::StepRow>>,
+    step_response: Option<Vec<crate::step_response::StepRow>>,
     window_edge_stuffer: Option<Vec<crate::window_stuffer::StufferRow>>,
     every_miner_stuffs: Option<Vec<crate::window_stuffer::AllMinersRow>>,
     capacity: Option<Vec<CapacityRow>>,
@@ -1066,7 +1066,7 @@ pub fn run_scoped(
             )
         });
     if runs(Instrument::DemandResponse) {
-        summary.step_response = Some(crate::window_stuffer::write_step_response(out, &arms)?);
+        summary.step_response = Some(crate::step_response::write_step_response(out, &arms)?);
         if let Some(rows) = summary.window_edge_stuffer.as_deref() {
             crate::window_stuffer::write_stuffer(out, rows)?;
         }
