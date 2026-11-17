@@ -541,7 +541,7 @@ Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** rem
 | — | `config-file` | path | the account root (IG-13) + `shekyl-cli-<network>.toml` | CLI | | N (IG-Q29) |
 | `wallet-dir` (alias `engine-dir`) | `wallet-dir` | path | the account root + `wallets/<network>` | both | | K; the alias goes (IG-5) |
 | `wallet` (alias `engine-file`) | `wallet-file` | path | unset | both | | R (IG-3: a path ends in `file`); the alias goes |
-| `daemon-address` | `daemon-endpoint` | peer-endpoint | `127.0.0.1:<row rpc port>` | both | | R (IG-Q31): an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname or URL is refused |
+| `daemon-address` | `daemon-endpoint` | peer-endpoint | unset: "this computer" (RT-15) | both | | R (IG-Q31, default amended by RT-W10 step 5, Rick 2026-11-17: unset is the node this account runs, on its owner's leg, never a plaintext port; a wallet beside a service is told the service's view listener to set): an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname or URL is refused |
 | (`daemon-address` `uds://`) | `daemon-socket-file` | path | unset | both | | N; RT-15's local leg; unconstructible together with `daemon-endpoint` |
 | — | `daemon-bundle-file` | path | unset | both | | N (IG-Q108): the node's bundle as `rpc bundle show` prints it; set, the enrollment words reach the node at an explicit `daemon-endpoint` over the channel (the row's default is the plaintext listener, and `rpc-listen` has no default port); unconstructible together with `daemon-socket-file` |
 | — | `rpc-key-file` | path | the account root + `rpc-shekyl-cli-<network>.key` | both | | N (IG-Q108, IG-Q109): this client's channel key, readable by this account alone; a file anyone else can read is refused |
@@ -627,7 +627,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `rpc-bind` (`uds://`) | `rpc-socket-file` | path | unset | both | | N; Unix only; refused on Windows |
 | `rpc-login` | `rpc-username`, `rpc-password` | secret | unset | file | | R (IG-Q29); both set or neither |
 | `disable-rpc-login` | — | | | | | – (IG-4): no credentials is the absence of the two rows, accepted on loopback or a socket |
-| `daemon-address` | `daemon-endpoint`, `daemon-socket-file` | peer-endpoint; path | `127.0.0.1:<row rpc port>`; unset | both | | R (IG-Q31) |
+| `daemon-address` | `daemon-endpoint`, `daemon-socket-file` | peer-endpoint; path | unset: "this computer" (RT-15); unset | both | | R (IG-Q31; default amended by RT-W10 step 5, Rick 2026-11-17, as `shekyl-cli`'s row) |
 | `proxy` | `daemon-socks` | endpoint | unset | both | | R |
 | `log-file` | `log-file`, with `log-level`, `log-category`, `log-size-max` | as §5 | the file `shekyl-wallet-rpc-<network>.log` | both | | K; the daemon's rows apply |
 

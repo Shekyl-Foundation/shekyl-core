@@ -841,9 +841,10 @@ daemon owns the mining threads, so mining keeps running after you close
 the CLI. Rewards pay the daemon's `mine-address`. The shell sends only
 the thread count; you do not pass an address.
 
-`mine` does not require an open wallet. It does require the unrestricted
-RPC listener and a daemon on the same network as the CLI. The silent
-default is a daemon on this machine. A remote `--daemon-address` is
+`mine` does not require an open wallet. It does require a leg that holds
+the mining grant and a daemon on the same network as the CLI. The silent
+default is this computer's node, reached on its own socket (or, for a node
+run as a service, its console leg, an administrator's). A remote `--daemon-address` is
 allowed: `mine start` reminds you that mining will run on that machine's
 CPU, then continues.
 If the daemon is still syncing, `mine start` refuses — the daemon will not
