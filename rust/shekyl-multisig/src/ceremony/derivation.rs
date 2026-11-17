@@ -8,9 +8,11 @@
 //!
 //! A member builds the group's transaction from the validated intent and
 //! its own ledger's records of the outputs the intent spends
-//! ([`GroupOutput`], looked up through [`GroupOutputs`]). A record holds
-//! public values and the output's `0x06` ciphertext only; the spend
-//! secrets are re-derived from that ciphertext under the group's key
+//! ([`GroupOutputRecord`]). The ledger hands each out through
+//! [`GroupOutputs`] with its membership path assembled to the intent's
+//! reference block ([`GroupOutput`], R-26). A record holds public values
+//! and the output's `0x06` ciphertext only; the spend secrets are
+//! re-derived from that ciphertext under the group's key
 //! (`shekyl_crypto_pq::multisig_output::recover_group_spend`) and checked
 //! against the record's key image and leaf point. The outputs, their `tx_extra` and the committed base
 //! come from the builder every spend uses (`shekyl_tx_builder::outputs`),
@@ -66,7 +68,7 @@ use shekyl_crypto_pq::multisig_output::{
 use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_curve_primitives::Commitment;
-use shekyl_curve_tree::{AssembledPath, TreeContext};
+use shekyl_curve_tree::{AssembledPath, ClientError, TreeContext};
 use shekyl_fcmp::frost_sal::{FrostSalError, SalSigningParams, SpentOutput};
 use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::PqcLeafScalar;
@@ -74,18 +76,20 @@ use shekyl_network::NetworkId;
 use shekyl_tx_builder::outputs::{
     BuildSpendError, BuiltSpend, Payee, Recipient, RecipientKeys, SpendOutputs,
 };
-use shekyl_types::{KeyImage, TxSignableHash};
+use shekyl_types::{BlockHash, KeyImage, TxSignableHash};
 use shekyl_wire::{CtBase, Output};
 use zeroize::Zeroizing;
 
 use crate::intent::ResolvedPayee;
 use crate::invariants::ValidatedIntent;
 
-/// A spendable output paid to the group, as this member's ledger records
+/// A spendable output paid to the group, as this member's ledger stores
 /// it: public values, the `0x06` ciphertext its secrets are re-derived
-/// from, and this member's own `0x0D` ciphertexts. Nothing secret.
+/// from, and this member's own `0x0D` ciphertexts. No path and nothing
+/// secret (R-26): a path is assembled to the intent's reference block when
+/// the output is spent ([`GroupOutputs::output`]).
 #[derive(Clone)]
-pub struct GroupOutput {
+pub struct GroupOutputRecord {
     /// The output's global index, by which an intent names it.
     pub global_index: u64,
     /// The output's index in its transaction (the derivations bind it).
@@ -108,12 +112,9 @@ pub struct GroupOutput {
     pub own_x25519_ct: [u8; X25519_KEM_CT_LEN],
     /// This member's own `0x0D` ML-KEM-768 ciphertext for the output.
     pub own_ml_kem_ct: Vec<u8>,
-    /// The output's membership path to the curve tree at the intent's
-    /// reference block, public material only, with that tree's context.
-    pub path: AssembledPath,
 }
 
-impl GroupOutput {
+impl GroupOutputRecord {
     fn source(&self) -> GroupOutputSource<'_> {
         GroupOutputSource {
             output_index: self.output_index,
@@ -125,16 +126,48 @@ impl GroupOutput {
     }
 }
 
-/// A member's ledger of the group's spendable outputs, as [`DerivedSpend::derive`]
-/// reads it: one record per global index, its path assembled to the
-/// intent's reference block.
-///
-/// `derive` checks that every path names the intent's reference block hash
-/// and one tree.
+/// A ledger record with its membership path, assembled to the block the
+/// lookup was asked for: what [`DerivedSpend::derive`] spends.
+#[derive(Clone)]
+pub struct GroupOutput {
+    /// The ledger's record.
+    pub record: GroupOutputRecord,
+    /// The output's membership path to the curve tree at the reference
+    /// block, as the checked assembler sealed it (R-25).
+    pub path: AssembledPath,
+}
+
+/// Why a ledger cannot hand [`DerivedSpend::derive`] an input.
+#[derive(Debug, thiserror::Error)]
+pub enum GroupOutputLookupError {
+    /// The group does not hold the output spendable in this ledger.
+    #[error("the output is not in this member's ledger")]
+    NotHeld,
+    /// The ledger holds the output, but its path to the reference block
+    /// does not assemble.
+    #[error("the output's path to the reference block does not assemble: {0:?}")]
+    NoPath(ClientError),
+}
+
+/// A member's ledger of the group's spendable outputs, as
+/// [`DerivedSpend::derive`] reads it: one record per global index, handed
+/// out with its path assembled to the block it is asked for (R-26).
+/// `derive` asks at the intent's own reference block, and checks that every
+/// path names one tree.
 pub trait GroupOutputs {
-    /// The record of the output at `global_index`, if the group holds it
-    /// spendable.
-    fn output(&self, global_index: u64) -> Option<&GroupOutput>;
+    /// The output at `global_index`, its path assembled to the block whose
+    /// hash is `reference_block`.
+    ///
+    /// # Errors
+    ///
+    /// [`GroupOutputLookupError::NotHeld`] when the group does not hold the
+    /// output spendable; [`GroupOutputLookupError::NoPath`] when its path
+    /// to that block does not assemble.
+    fn output(
+        &self,
+        global_index: u64,
+        reference_block: &BlockHash,
+    ) -> Result<GroupOutput, GroupOutputLookupError>;
 }
 
 /// One spent input, as this member signs it: its ledger record, the
@@ -151,12 +184,12 @@ impl InputContext {
     /// The input's key image.
     #[must_use]
     pub fn key_image(&self) -> KeyImage {
-        self.output.key_image
+        self.output.record.key_image
     }
 
     /// The committed form the spent output's leaf binds.
     pub(crate) fn committed_form(&self) -> &MultisigCommittedForm {
-        &self.output.committed_form
+        &self.output.record.committed_form
     }
 
     /// The input's signing parameters over `signable`. Every signer builds
@@ -168,8 +201,8 @@ impl InputContext {
         SalSigningParams::new(
             &self.rerandomization_seed,
             &SpentOutput {
-                output_key: &self.output.output_key,
-                commitment: &self.output.commitment,
+                output_key: &self.output.record.output_key,
+                commitment: &self.output.record.commitment,
                 spend_scalar: self.secrets.spend_scalar(),
                 y_kem: self.secrets.y_kem(),
                 commitment_mask: self.secrets.commitment_mask(),
@@ -192,7 +225,7 @@ impl InputContext {
                 .collect()
         };
         ProveInputLeafChunk {
-            pqc_leaf_commitment: self.output.leaf_point,
+            pqc_leaf_commitment: self.output.record.leaf_point,
             pqc_leaf_blind: *self.secrets.leaf_blind(),
             leaf_outputs: path
                 .leaf_chunk()
@@ -216,8 +249,8 @@ impl InputContext {
     pub(crate) fn own_ciphertext(&self, n: u8) -> MemberOwnCiphertext<'_> {
         MemberOwnCiphertext {
             n,
-            own_x25519_ct: &self.output.own_x25519_ct,
-            own_ml_kem_ct: &self.output.own_ml_kem_ct,
+            own_x25519_ct: &self.output.record.own_x25519_ct,
+            own_ml_kem_ct: &self.output.record.own_ml_kem_ct,
         }
     }
 }
@@ -257,6 +290,15 @@ pub enum DeriveError {
     /// An input of the intent is not in this member's ledger.
     #[error("input {global_index} is not in this member's ledger")]
     MissingInput { global_index: u64 },
+    /// An input is in this member's ledger, but its path to the intent's
+    /// reference block does not assemble.
+    #[error(
+        "input {global_index}'s path to the intent's reference block does not assemble: {fault:?}"
+    )]
+    NoPath {
+        global_index: u64,
+        fault: ClientError,
+    },
     /// An input's secrets do not re-derive from its record.
     #[error("input {global_index}'s secrets do not derive: {source}")]
     Secrets {
@@ -271,9 +313,6 @@ pub enum DeriveError {
     /// An input's record names a leaf point its secrets do not derive.
     #[error("input {global_index}'s recorded leaf is not the one its secrets derive")]
     Leaf { global_index: u64 },
-    /// An input's path is not to the tree at the intent's reference block.
-    #[error("input {global_index}'s path is not to the intent's reference block")]
-    Reference { global_index: u64 },
     /// Two inputs' paths name different trees at the reference block.
     #[error("input {global_index}'s path names another tree than the other inputs'")]
     Tree { global_index: u64 },
@@ -336,13 +375,14 @@ impl DerivedSpend {
         key: &MultisigGroupKey<'_>,
         network_id: NetworkId,
     ) -> Result<Self, DeriveError> {
+        let reference = BlockHash::from_bytes(intent.intent().reference_block_hash);
         let records = intent
             .intent()
             .input_global_indices
             .iter()
-            .map(|&global_index| spendable(ledger, key, global_index))
+            .map(|&global_index| spendable(ledger, key, global_index, &reference))
             .collect::<Result<Vec<_>, _>>()?;
-        let tree = one_tree(&intent, &records)?;
+        let tree = one_tree(&records)?;
         let seed = &intent.intent().kem_randomness_seed;
         let tx_key = TxKey::from_intent_seed(seed);
         // A single-signer recipient's keys, mapped once; the payees borrow
@@ -447,54 +487,57 @@ impl DerivedSpend {
     }
 }
 
-/// The ledger's record of input `global_index` and the secrets `key`
-/// re-derives from it, checked against the record's key image and leaf.
+/// Input `global_index` from the ledger, its path assembled to
+/// `reference`, and the secrets `key` re-derives from it, checked against
+/// the record's key image and leaf.
 fn spendable(
     ledger: &impl GroupOutputs,
     key: &MultisigGroupKey<'_>,
     global_index: u64,
+    reference: &BlockHash,
 ) -> Result<(GroupOutput, GroupSpendSecrets), DeriveError> {
     let output = ledger
-        .output(global_index)
-        .ok_or(DeriveError::MissingInput { global_index })?;
+        .output(global_index, reference)
+        .map_err(|fault| match fault {
+            GroupOutputLookupError::NotHeld => DeriveError::MissingInput { global_index },
+            GroupOutputLookupError::NoPath(fault) => DeriveError::NoPath {
+                global_index,
+                fault,
+            },
+        })?;
+    let record = &output.record;
     let secrets =
-        recover_group_spend(key, &output.source()).map_err(|source| DeriveError::Secrets {
+        recover_group_spend(key, &record.source()).map_err(|source| DeriveError::Secrets {
             global_index,
             source,
         })?;
-    if secrets.key_image() != output.key_image {
+    if secrets.key_image() != record.key_image {
         return Err(DeriveError::KeyImage { global_index });
     }
-    if secrets.leaf_point() != &output.leaf_point {
+    if secrets.leaf_point() != &record.leaf_point {
         return Err(DeriveError::Leaf { global_index });
     }
-    let cm_x = PqcLeafScalar::from_commitment_point(&output.leaf_point)
+    let cm_x = PqcLeafScalar::from_commitment_point(&record.leaf_point)
         .ok_or(DeriveError::Leaf { global_index })?;
     // Consensus does not forbid two leaves with one `(O, C)` in a chunk;
     // `CM.x` names the spent one.
     if !output.path.leaf_chunk().iter().any(|leaf| {
-        leaf.output_key.to_bytes() == output.output_key
-            && leaf.commitment.to_bytes() == output.commitment
+        leaf.output_key.to_bytes() == record.output_key
+            && leaf.commitment.to_bytes() == record.commitment
             && leaf.cm_x == cm_x.0
     }) {
         return Err(DeriveError::Path { global_index });
     }
-    Ok((output.clone(), secrets))
+    Ok((output, secrets))
 }
 
-/// The one tree every input's path is to: the intent's reference block's.
-fn one_tree(
-    intent: &ValidatedIntent,
-    records: &[(GroupOutput, GroupSpendSecrets)],
-) -> Result<TreeContext, DeriveError> {
-    let reference = intent.intent().reference_block_hash;
+/// The one tree every input's path is to: each was assembled to the
+/// intent's reference block (R-26), and they must name one tree.
+fn one_tree(records: &[(GroupOutput, GroupSpendSecrets)]) -> Result<TreeContext, DeriveError> {
     let mut tree = None;
     for (output, _) in records {
-        let global_index = output.global_index;
+        let global_index = output.record.global_index;
         let this = *output.path.tree();
-        if *this.reference_block.as_bytes() != reference {
-            return Err(DeriveError::Reference { global_index });
-        }
         if *tree.get_or_insert(this) != this {
             return Err(DeriveError::Tree { global_index });
         }
@@ -727,10 +770,9 @@ mod tests {
                     committed_form,
                     key_image: KeyImage::from_bytes([0; 32]),
                 };
-                paid.key_image =
-                    recover_group_spend(&g.key(), &record(&paid, 0, &path(&[])).source())
-                        .unwrap()
-                        .key_image();
+                paid.key_image = recover_group_spend(&g.key(), &record(&paid, 0).source())
+                    .unwrap()
+                    .key_image();
                 paid
             })
             .collect()
@@ -767,10 +809,10 @@ mod tests {
         })
     }
 
-    /// `member`'s ledger record of `paid`, its path `path`.
-    fn record(paid: &Paid, member: u8, path: &AssembledPath) -> GroupOutput {
+    /// `member`'s ledger record of `paid`.
+    fn record(paid: &Paid, member: u8) -> GroupOutputRecord {
         let (own_x25519_ct, own_ml_kem_ct) = own_ciphertexts(&paid.output, member);
-        GroupOutput {
+        GroupOutputRecord {
             global_index: paid.global_index,
             output_index: PAID_OUTPUT_INDEX,
             output_key: paid.output.output_key,
@@ -782,24 +824,44 @@ mod tests {
             committed_form: paid.committed_form.clone(),
             own_x25519_ct,
             own_ml_kem_ct,
-            path: path.clone(),
         }
     }
 
-    /// A member's ledger, looked up by global index.
-    struct Ledger(Vec<GroupOutput>);
+    /// A member's ledger, looked up by global index: its records, and the
+    /// one tree it assembles their paths in, to whatever block it is asked
+    /// for.
+    struct Ledger {
+        records: Vec<GroupOutputRecord>,
+        tree: PathParts,
+    }
 
     impl GroupOutputs for Ledger {
-        fn output(&self, global_index: u64) -> Option<&GroupOutput> {
-            self.0.iter().find(|out| out.global_index == global_index)
+        fn output(
+            &self,
+            global_index: u64,
+            reference_block: &BlockHash,
+        ) -> Result<GroupOutput, GroupOutputLookupError> {
+            let record = self
+                .records
+                .iter()
+                .find(|r| r.global_index == global_index)
+                .ok_or(GroupOutputLookupError::NotHeld)?;
+            let mut parts = self.tree.clone();
+            parts.tree.reference_block = *reference_block;
+            Ok(GroupOutput {
+                record: record.clone(),
+                path: AssembledPath::from_parts_unchecked(parts),
+            })
         }
     }
 
     /// `member`'s ledger of `paid`: its own ciphertexts differ from every
     /// other member's.
     fn ledger(paid: &[Paid], member: u8) -> Ledger {
-        let path = path(paid);
-        Ledger(paid.iter().map(|p| record(p, member, &path)).collect())
+        Ledger {
+            records: paid.iter().map(|p| record(p, member)).collect(),
+            tree: path(paid).into_parts(),
+        }
     }
 
     /// Two members holding one intent derive one spend from their own
@@ -826,7 +888,7 @@ mod tests {
                 assert_eq!(x.key_image(), y.key_image());
                 assert!(*x.pseudo_out_blind == *y.pseudo_out_blind);
                 assert_eq!(rerandomized(x), rerandomized(y));
-                assert_ne!(x.output.own_x25519_ct, y.output.own_x25519_ct);
+                assert_ne!(x.output.record.own_x25519_ct, y.output.record.own_x25519_ct);
             }
             assert!(a
                 .inputs

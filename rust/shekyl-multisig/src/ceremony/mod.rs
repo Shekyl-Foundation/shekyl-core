@@ -68,7 +68,8 @@ pub mod roles;
 
 pub use context::{ContextError, SigningContext};
 pub use derivation::{
-    DeriveError, DerivedSpend, GroupOutput, GroupOutputs, InputContext, UnsignedSpend,
+    DeriveError, DerivedSpend, GroupOutput, GroupOutputLookupError, GroupOutputRecord,
+    GroupOutputs, InputContext, UnsignedSpend,
 };
 pub use files::{import, Authenticated, BodyError, ImportError, Incoming};
 pub use nonce::{

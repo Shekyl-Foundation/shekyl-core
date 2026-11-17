@@ -21,6 +21,7 @@ use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
+use shekyl_curve_tree::{AssembledPath, PathParts};
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_multisig::ceremony::nonce::InputInUse;
@@ -28,8 +29,9 @@ use shekyl_multisig::intent::{
     ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
-    import, DerivedSpend, GroupOutput, GroupOutputs, HeldNonceStore, Incoming, LedgerView,
-    LiveCeremonies, MemberFile, SigningContext, ValidatedIntent,
+    import, DerivedSpend, GroupOutput, GroupOutputLookupError, GroupOutputRecord, GroupOutputs,
+    HeldNonceStore, Incoming, LedgerView, LiveCeremonies, MemberFile, SigningContext,
+    ValidatedIntent,
 };
 use shekyl_tx_weight::{
     predict_spend_weight, GroupSize, InputCount, OutputCount, Signer, SpendShape,
@@ -181,12 +183,32 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
 }
 
 /// A member's ledger of the group's outputs, as a test hands it to the
-/// derivation: the records in any order, looked up by global index.
-pub struct Ledger(pub Vec<GroupOutput>);
+/// derivation: the records in any order, looked up by global index, each
+/// beside the parts of its path in the test's tree. The lookup builds the
+/// path to whatever block it is asked for, as a ledger assembling from
+/// its own tree does (R-26).
+pub struct Ledger(pub Vec<Held>);
+
+/// One output a test ledger holds: its record and its path's parts.
+pub type Held = (GroupOutputRecord, PathParts);
 
 impl GroupOutputs for Ledger {
-    fn output(&self, global_index: u64) -> Option<&GroupOutput> {
-        self.0.iter().find(|out| out.global_index == global_index)
+    fn output(
+        &self,
+        global_index: u64,
+        reference_block: &BlockHash,
+    ) -> Result<GroupOutput, GroupOutputLookupError> {
+        let (record, parts) = self
+            .0
+            .iter()
+            .find(|(record, _)| record.global_index == global_index)
+            .ok_or(GroupOutputLookupError::NotHeld)?;
+        let mut parts = parts.clone();
+        parts.tree.reference_block = *reference_block;
+        Ok(GroupOutput {
+            record: record.clone(),
+            path: AssembledPath::from_parts_unchecked(parts),
+        })
     }
 }
 
@@ -202,7 +224,7 @@ pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
             .zip(GLOBAL_INDICES)
             .map(|((((out, output_index, _), s), path), global_index)| {
                 let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
-                GroupOutput {
+                let record = GroupOutputRecord {
                     global_index,
                     output_index: *output_index,
                     output_key: out.output_key,
@@ -214,8 +236,8 @@ pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
                     committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
                     own_x25519_ct: x25519.try_into().unwrap(),
                     own_ml_kem_ct: ml_kem.to_vec(),
-                    path: path.clone(),
-                }
+                };
+                (record, path.clone().into_parts())
             })
             .collect(),
     )

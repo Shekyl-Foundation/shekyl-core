@@ -14,10 +14,12 @@ mod common;
 
 use rand_core::OsRng;
 
-use common::wallet::{context, import_for, intent, ledger, validate, verify_from_the_wire, Live};
+use common::wallet::{
+    context, import_for, intent, ledger, validate, verify_from_the_wire, Held, Live,
+};
 use common::{found_group, pay_group_twice, Paid, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
-use shekyl_curve_tree::{AssembledPath, PathParts};
+use shekyl_curve_tree::{BlockHeight, ClientError};
 use shekyl_fcmp::frost_sal::{participant, FrostError};
 use shekyl_multisig::ceremony::context::ContextError;
 use shekyl_multisig::ceremony::files::{Body, Commitment, FinalTx, SignatureShare, SigningSet};
@@ -25,8 +27,9 @@ use shekyl_multisig::ceremony::nonce::InputInUse;
 use shekyl_multisig::ceremony::roles::{Committed, SharesPending};
 use shekyl_multisig::intent::SpendIntent;
 use shekyl_multisig::{
-    import, seal_envelope, CeremonyError, Cosigner, DeriveError, DerivedSpend, HeldNonceStore,
-    Holder, ImportError, MemberFile, Proposer, Responder, ResponderInput, SigningContext,
+    import, seal_envelope, CeremonyError, Cosigner, DeriveError, DerivedSpend, GroupOutput,
+    GroupOutputLookupError, GroupOutputs, HeldNonceStore, Holder, ImportError, MemberFile,
+    Proposer, Responder, ResponderInput, SigningContext,
 };
 use shekyl_types::{BlockHash, CurveTreeRoot};
 
@@ -49,14 +52,6 @@ struct Members {
 struct Caps {
     store: HeldNonceStore,
     live: Live,
-}
-
-/// `path` with one of its parts edited: a recorded path tampered with,
-/// which only the test-only constructor can write (R-25).
-fn retree(path: &mut AssembledPath, edit: impl FnOnce(&mut PathParts)) {
-    let mut parts = path.clone().into_parts();
-    edit(&mut parts);
-    *path = AssembledPath::from_parts_unchecked(parts);
 }
 
 fn setup() -> (Spend, Members, Caps, Caps, Caps) {
@@ -329,9 +324,7 @@ fn a_final_tx_that_is_not_the_intents_is_refused_before_signing() {
     // under that root: the proposer's honest proof is not over it.
     let mut elsewhere = ledger(&m.b, &s.paid);
     for output in &mut elsewhere.0 {
-        retree(&mut output.path, |p| {
-            p.tree.tree_root = CurveTreeRoot::EMPTY
-        });
+        output.1.tree.tree_root = CurveTreeRoot::EMPTY;
     }
     let other = DerivedSpend::derive(
         validate(&m.b, s.intent.clone()),
@@ -678,7 +671,7 @@ fn a_context_needs_a_layer_count_a_spend_proves_under() {
     for layers in [0, 1, shekyl_fcmp::MAX_TREE_DEPTH + 1] {
         let mut held = ledger(&m.b, &s.paid);
         for output in &mut held.0 {
-            retree(&mut output.path, |p| p.tree.tree_depth = layers);
+            output.1.tree.tree_depth = layers;
         }
         let derived = DerivedSpend::derive(
             validate(&m.b, s.intent.clone()),
@@ -722,7 +715,7 @@ fn a_derivation_orders_its_inputs_by_key_image() {
 #[test]
 fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
     let (s, m, ..) = setup();
-    let derive_from = |edit: &dyn Fn(&mut Vec<shekyl_multisig::GroupOutput>)| {
+    let derive_from = |edit: &dyn Fn(&mut Vec<Held>)| {
         let mut held = ledger(&m.b, &s.paid);
         edit(&mut held.0);
         DerivedSpend::derive(
@@ -735,7 +728,7 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
     };
     assert!(derive_from(&|l| {
         let mut unspent = l[0].clone();
-        unspent.global_index = 99;
+        unspent.0.global_index = 99;
         l.push(unspent);
     })
     .is_none());
@@ -745,42 +738,61 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
         }),
         Some(DeriveError::MissingInput { .. })
     ));
+    // A ledger that holds the output but cannot assemble its path to the
+    // intent's reference block: refused by name, not as a missing input.
+    struct Unassembled(common::wallet::Ledger);
+    impl GroupOutputs for Unassembled {
+        fn output(
+            &self,
+            global_index: u64,
+            reference_block: &BlockHash,
+        ) -> Result<GroupOutput, GroupOutputLookupError> {
+            self.0.output(global_index, reference_block)?;
+            Err(GroupOutputLookupError::NoPath(ClientError::RootMismatch {
+                height: BlockHeight::from_raw(1),
+                expected: CurveTreeRoot::EMPTY,
+                got: CurveTreeRoot::from_bytes([1; 32]),
+            }))
+        }
+    }
     assert!(matches!(
-        derive_from(&|l| l[0].key_image = l[1].key_image),
+        DerivedSpend::derive(
+            validate(&m.b, s.intent.clone()),
+            &Unassembled(ledger(&m.b, &s.paid)),
+            &m.b.group_key(),
+            NET,
+        )
+        .err(),
+        Some(DeriveError::NoPath { .. })
+    ));
+    assert!(matches!(
+        derive_from(&|l| l[0].0.key_image = l[1].0.key_image),
         Some(DeriveError::KeyImage { .. })
     ));
     assert!(matches!(
-        derive_from(&|l| l[0].leaf_point = l[1].leaf_point),
+        derive_from(&|l| l[0].0.leaf_point = l[1].0.leaf_point),
         Some(DeriveError::Leaf { .. })
     ));
     assert!(matches!(
         derive_from(&|l| {
-            l[0].source_x25519_ct = l[1].source_x25519_ct;
-            l[0].source_ml_kem_ct = l[1].source_ml_kem_ct.clone();
+            l[0].0.source_x25519_ct = l[1].0.source_x25519_ct;
+            l[0].0.source_ml_kem_ct = l[1].0.source_ml_kem_ct.clone();
         }),
         Some(DeriveError::KeyImage { .. })
     ));
-    // A path to another block, to another tree than the other input's, or
-    // one whose leaf chunk does not hold the output.
+    // A path to another tree than the other input's, or one whose leaf
+    // chunk does not hold the output. Every path is assembled to the
+    // intent's reference block (R-26), so none can name another block.
     assert!(matches!(
-        derive_from(&|l| retree(&mut l[0].path, |p| {
-            p.tree.reference_block = BlockHash::from_bytes([0; 32]);
-        })),
-        Some(DeriveError::Reference { .. })
-    ));
-    assert!(matches!(
-        derive_from(&|l| retree(&mut l[1].path, |p| {
-            p.tree.tree_root = CurveTreeRoot::EMPTY;
-        })),
+        derive_from(&|l| l[1].1.tree.tree_root = CurveTreeRoot::EMPTY),
         Some(DeriveError::Tree { .. })
     ));
     assert!(matches!(
         derive_from(&|l| {
-            let spent = l[0].output_key;
-            retree(&mut l[0].path, |p| {
-                p.leaf_chunk
-                    .retain(|leaf| leaf.output_key.to_bytes() != spent);
-            });
+            let spent = l[0].0.output_key;
+            l[0].1
+                .leaf_chunk
+                .retain(|leaf| leaf.output_key.to_bytes() != spent);
         }),
         Some(DeriveError::Path { .. })
     ));
@@ -788,9 +800,9 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
     // output key paid twice): both records derive, to one key image.
     assert!(matches!(
         derive_from(&|l| {
-            let global_index = l[1].global_index;
+            let global_index = l[1].0.global_index;
             l[1] = l[0].clone();
-            l[1].global_index = global_index;
+            l[1].0.global_index = global_index;
         }),
         Some(DeriveError::DuplicateKeyImage)
     ));
