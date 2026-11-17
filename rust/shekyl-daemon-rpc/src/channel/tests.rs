@@ -384,13 +384,32 @@ fn pool_to(served: &Served, key: StaticKeypair, request: GrantSet) -> Arc<client
             NETWORK,
             served.bundle(),
             key,
-            client::Leg::Network {
-                endpoint: served.addr.to_string(),
-                socks: None,
-            },
+            client::Leg::ip(served.addr, None),
         ),
         request,
     )
+}
+
+/// A session parked at open stays open past the handshake deadline. The
+/// daemon finishes the handshake only when the client's first record
+/// arrives; `version` is that record. Red edit: remove `confirm` from
+/// `Session::start`, and this session is gone after the deadline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_parked_session_outlives_the_handshake_deadline() {
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    let fingerprint = *key.public().fingerprint().as_bytes();
+    served.enrol(&key, &[CeilingWord::View]);
+    let pool = pool_to(&served, key, Preset::View.grants());
+    pool.open_kept().await.expect("the kept session");
+    assert_eq!(served.channel.sessions.open(&fingerprint), 1);
+    tokio::time::sleep(shekyl_rpc_channel::deadline::HANDSHAKE_DEADLINE + Duration::from_secs(1))
+        .await;
+    assert_eq!(
+        served.channel.sessions.open(&fingerprint),
+        1,
+        "the daemon closed the parked session at the handshake deadline"
+    );
 }
 
 /// **The pool reuses a session, holds at most `SESSIONS_PER_CLIENT`, and a

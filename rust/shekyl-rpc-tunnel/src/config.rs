@@ -18,6 +18,7 @@ use shekyl_daemon_config::{file, paths, Logging, Platform, Resolved, RunMode};
 use shekyl_options::{read_cli, read_file, Code, Diagnostic, PeerEndpoint, Source, Value};
 use shekyl_rpc_channel::handshake::StaticPublic;
 use shekyl_rpc_grants::GrantSet;
+use shekyl_rpc_transport::channel::Leg;
 use shekyl_rpc_types::wire::rpc::CeilingWord;
 
 use crate::table::TABLE;
@@ -50,10 +51,8 @@ pub enum Listen {
 pub struct Config {
     /// The node's network.
     pub network: Network,
-    /// The node's channel listener, `host:port`.
-    pub endpoint: String,
-    /// The SOCKS5 proxy, if any.
-    pub socks: Option<SocketAddr>,
+    /// The node's channel.
+    pub leg: Leg,
     /// The node's public bundle.
     pub bundle: StaticPublic,
     /// This tunnel's key file.
@@ -135,9 +134,24 @@ fn build(
     key_file: PathBuf,
 ) -> Result<Config, Vec<Diagnostic>> {
     let mut faults = Vec::new();
-    let endpoint = match resolved.get("daemon-endpoint") {
-        Some(Value::Peer(PeerEndpoint::Ip(addr))) => Some(addr.to_string()),
-        Some(Value::Peer(PeerEndpoint::Onion { host, port })) => Some(format!("{host}:{port}")),
+    let proxy = match resolved.get("daemon-socks") {
+        Some(Value::Endpoint(addr)) => Some(*addr),
+        _ => None,
+    };
+    // The table has already parsed the peer. An onion's proxy is part of
+    // the leg; an IP keeps the proxy only when one was given.
+    let leg = match resolved.get("daemon-endpoint") {
+        Some(Value::Peer(PeerEndpoint::Ip(addr))) => Some(Leg::ip(*addr, proxy)),
+        Some(Value::Peer(PeerEndpoint::Onion { host, port })) => match proxy {
+            Some(proxy) => Some(Leg::onion(host.clone(), *port, proxy)),
+            None => {
+                faults.push(requires(
+                    "daemon-endpoint",
+                    "daemon-socks, to reach an onion",
+                ));
+                None
+            }
+        },
         _ => {
             faults.push(requires(
                 "daemon-endpoint",
@@ -146,18 +160,6 @@ fn build(
             None
         }
     };
-    let socks = match resolved.get("daemon-socks") {
-        Some(Value::Endpoint(addr)) => Some(*addr),
-        _ => None,
-    };
-    if let (Some(endpoint), None) = (&endpoint, socks) {
-        if endpoint.parse::<SocketAddr>().is_err() {
-            faults.push(requires(
-                "daemon-endpoint",
-                "daemon-socks, to reach an onion",
-            ));
-        }
-    }
     let bundle = match path_of(resolved, "daemon-bundle-file") {
         None => {
             faults.push(requires(
@@ -227,14 +229,13 @@ fn build(
             None
         }
     };
-    match (endpoint, bundle, listen, logging, request) {
-        (Some(endpoint), Some(bundle), Some(listen), Some(logging), Some(request))
+    match (leg, bundle, listen, logging, request) {
+        (Some(leg), Some(bundle), Some(listen), Some(logging), Some(request))
             if faults.is_empty() =>
         {
             Ok(Config {
                 network,
-                endpoint,
-                socks,
+                leg,
                 bundle,
                 key_file,
                 request,
@@ -368,7 +369,14 @@ mod tests {
         let Ok(Action::Run(config)) = action else {
             panic!("a configuration");
         };
-        assert_eq!(config.endpoint, "203.0.113.5:29501");
+        assert!(
+            matches!(
+                config.leg,
+                Leg::Ip { addr, proxy: None } if addr.port() == 29501 && addr.ip().to_string() == "203.0.113.5"
+            ),
+            "{:?}",
+            config.leg
+        );
         assert!(config.request.names(shekyl_rpc_grants::Grant::Submit));
         assert!(config.request.holds(shekyl_rpc_grants::Grant::Chain));
         assert!(matches!(config.listen, Listen::Tcp(addr) if addr.port() == 29600));

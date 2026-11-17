@@ -32,6 +32,7 @@ use shekyl_cli::resolve::Enrol;
 use shekyl_daemon_config::{Network, Platform};
 use shekyl_rpc_client::wire;
 use shekyl_rpc_rendezvous::Instance;
+use shekyl_rpc_transport::channel::Leg;
 use shekyl_rpc_transport::local::LocalTarget;
 use shekyl_rpc_types::hash::HashHex;
 use shekyl_rpc_types::kinds::NoParams;
@@ -167,18 +168,21 @@ fn wait_for_owner(daemon: &mut Running, dir: &Path) -> (LocalTarget, String) {
 /// One JSON-RPC call through the tunnel's loopback listener, as a plain
 /// HTTP/1.1 consumer that closes after each request: the status and body.
 fn consumer_call(listen: &str, method: &str) -> (u16, String) {
+    try_consumer_call(listen, method).expect("the tunnel listens")
+}
+
+fn try_consumer_call(listen: &str, method: &str) -> std::io::Result<(u16, String)> {
     let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{{}}}}"#);
-    let mut tcp = std::net::TcpStream::connect(listen).expect("the tunnel listens");
-    tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let mut tcp = std::net::TcpStream::connect(listen)?;
+    tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
     write!(
         tcp,
         "POST /json_rpc HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
          content-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
-    )
-    .unwrap();
+    )?;
     let mut reply = String::new();
-    tcp.read_to_string(&mut reply).expect("a reply");
+    tcp.read_to_string(&mut reply)?;
     let status = reply
         .split(' ')
         .nth(1)
@@ -189,7 +193,7 @@ fn consumer_call(listen: &str, method: &str) -> (u16, String) {
         .nth(1)
         .unwrap_or_default()
         .to_owned();
-    (status, body)
+    Ok((status, body))
 }
 
 /// **Enrol, dial, call, revoke, and a refused call after the revocation**
@@ -230,8 +234,7 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
     let cli = EnrolOptions {
         network: Network::Regtest,
         remote: Some(Remote {
-            endpoint: channel_listen.clone(),
-            socks: None,
+            leg: Leg::ip(channel_listen.parse().expect("the channel listener"), None),
             bundle_file: bundle_file.clone(),
         }),
         key_file: dir.path().join("admin.key"),
@@ -365,20 +368,34 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
     )
     .expect("rpc client remove");
 
-    // A refused call after the revocation, and the tunnel ends on it.
+    // The revocation ends the tunnel. A call that meets it is answered
+    // with the node's reason. A tunnel with no further call ends the same
+    // way, from the pool's keeper, once the daemon has closed the session.
     let deadline = Instant::now() + READY;
     let refused = loop {
-        let (status, body) = consumer_call(&listen, "version");
-        if status == 502 && body.contains("revoked") {
-            break body;
+        if tunnel_run.child.try_wait().expect("the tunnel").is_some() {
+            break None;
         }
-        assert!(
-            Instant::now() < deadline,
-            "the tunnel kept being served after the revocation: {status} {body}"
-        );
+        match try_consumer_call(&listen, "version") {
+            Ok((status, body)) if status == 502 && body.contains("revoked") => break Some(body),
+            Ok((status, body)) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "the tunnel kept being served after the revocation: {status} {body}"
+                );
+            }
+            Err(_) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "the tunnel neither answered the revocation nor ended"
+                );
+            }
+        }
         std::thread::sleep(POLL);
     };
-    assert_eq!(refused, "The node revoked this client's enrolment.");
+    if let Some(refused) = refused {
+        assert_eq!(refused, "The node revoked this client's enrolment.");
+    }
     let deadline = Instant::now() + Duration::from_secs(30);
     let ended = loop {
         if let Some(status) = tunnel_run.child.try_wait().expect("the tunnel") {

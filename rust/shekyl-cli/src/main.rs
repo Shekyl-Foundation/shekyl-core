@@ -112,14 +112,16 @@ pub struct ReplArgs {
 
     /// The node's public bundle, as `rpc bundle show` prints it on that
     /// node. Set, the enrolment words reach the node at --daemon-address
-    /// over the channel, as this client's key (--rpc-key-file); unset, they
-    /// reach this computer's node (`INPUT_GRAMMAR.md` IG-Q108).
+    /// over the channel, as this client's key (--rpc-key-file). The address
+    /// is required then: it is the channel listener, and the usual daemon
+    /// port is the plaintext listener. Unset, the enrolment words reach
+    /// this computer's node (`INPUT_GRAMMAR.md` IG-Q108).
     #[arg(long, global = true, value_name = "PATH")]
     daemon_bundle_file: Option<std::path::PathBuf>,
 
     /// This client's channel key, readable by this account alone (made with
-    /// `rpc key create`). Default: ~/.shekyl/rpc-shekyl-cli-<network>.key
-    /// (IG-Q108, IG-Q109).
+    /// `rpc key create`). Default: the account root and
+    /// `rpc-shekyl-cli-<network>.key` (IG-Q108, IG-Q109).
     #[arg(long, global = true, value_name = "PATH")]
     rpc_key_file: Option<std::path::PathBuf>,
 
@@ -192,36 +194,16 @@ impl ReplArgs {
         let network = parse_network(self.network_name())?;
         let key_file = match &self.rpc_key_file {
             Some(path) => path.clone(),
-            None => dirs::home_dir()
-                .ok_or("cannot determine the home directory; pass --rpc-key-file explicitly")?
-                .join(".shekyl")
-                .join(format!("rpc-shekyl-cli-{}.key", network.name())),
+            None => shekyl_cli::enrol::default_key_file(network)?,
         };
         let remote = match &self.daemon_bundle_file {
             None => None,
             Some(bundle_file) => {
-                let address = self.daemon_address()?;
-                let endpoint = address
-                    .split_once("://")
-                    .map_or(address.as_str(), |(_, rest)| rest)
-                    .trim_end_matches('/')
-                    .to_owned();
-                let socks = match &self.proxy {
-                    None => None,
-                    Some(proxy) => {
-                        let bare = proxy
-                            .split_once("://")
-                            .map_or(proxy.as_str(), |(_, rest)| rest);
-                        Some(bare.parse().map_err(|_| {
-                            format!(
-                                "--proxy {proxy}: the channel's SOCKS proxy is an IP and a port"
-                            )
-                        })?)
-                    }
+                let Some(address) = &self.daemon_address else {
+                    return Err(shekyl_cli::enrol::CHANNEL_ADDRESS_REQUIRED.to_owned());
                 };
                 Some(shekyl_cli::enrol::Remote {
-                    endpoint,
-                    socks,
+                    leg: shekyl_cli::enrol::channel_leg(address, self.proxy.as_deref())?,
                     bundle_file: bundle_file.clone(),
                 })
             }

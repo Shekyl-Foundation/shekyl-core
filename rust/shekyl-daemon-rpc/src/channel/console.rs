@@ -97,7 +97,7 @@ pub(crate) fn install(
         StaticKeypair::generate().map_err(|error| ConsoleFault::Generate(error.to_string()))?;
     let fingerprint = fingerprint_of(&key);
     let live = dir.join(files::CONSOLE_KEY_FILE);
-    let journal = StagedWrite::create(&live, &key.to_key_file(), Access::OwnerOnly)
+    let journal = StagedWrite::create(&live, &key.to_key_file(), Access::Console)
         .map_err(|error| FileRefused::Io(private_file::staged_path(&live), error))?;
     if let Err(error) = store.commit_console(&fingerprint, reset_at) {
         // The cell was not moved. The journal is not a key of record.
@@ -180,7 +180,7 @@ struct Seen {
 }
 
 fn seen(path: &Path) -> Seen {
-    match files::read_key(path) {
+    match files::read_console_key(path) {
         Ok(None) => Seen {
             material: KeyMaterial::Absent,
             fault: None,

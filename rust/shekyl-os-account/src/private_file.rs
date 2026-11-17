@@ -62,6 +62,11 @@ pub enum Access {
     /// Every account may read it; only this one may write it. A service's
     /// rendezvous record.
     WorldReadable,
+    /// A service's console file. On Unix this is mode `0600`, which the
+    /// owning account and the superuser can read. On Windows the owner may
+    /// read and write it and BUILTIN\Administrators may read it, with the
+    /// no-read-up label set in the creating call.
+    Console,
 }
 
 /// Why a private file cannot be used.
@@ -98,12 +103,32 @@ impl std::error::Error for PrivateFileError {}
 /// [`PrivateFileError::Exposed`] when another account can read it, it is
 /// not this account's, or it is a link.
 pub fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>, PrivateFileError> {
+    read_checked(path, check_private)
+}
+
+/// The bytes of a service's console file at `path`: the owning account, or
+/// an administrator of this machine ([`Access::Console`]). `None` when
+/// there is none. A file another account can read is refused.
+///
+/// # Errors
+///
+/// [`PrivateFileError::Io`] when it cannot be read;
+/// [`PrivateFileError::Exposed`] when it is a link, another account can
+/// read it, or the caller is neither its owner nor an administrator.
+pub fn read_console(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>, PrivateFileError> {
+    read_checked(path, check_console)
+}
+
+fn read_checked(
+    path: &Path,
+    check: fn(&Path) -> Result<(), PrivateFileError>,
+) -> Result<Option<Zeroizing<Vec<u8>>>, PrivateFileError> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => Zeroizing::new(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(PrivateFileError::Io(path.to_path_buf(), e)),
     };
-    check_private(path)?;
+    check(path)?;
     Ok(Some(bytes))
 }
 
@@ -126,7 +151,20 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> 
 ///
 /// [`PrivateFileError::Io`] when a step fails.
 pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> {
-    let journal = StagedWrite::create(path, bytes, Access::OwnerOnly)
+    replace(path, bytes, Access::OwnerOnly)
+}
+
+/// Replace the console file at `path` with `bytes` ([`Access::Console`]).
+///
+/// # Errors
+///
+/// [`PrivateFileError::Io`] when a step fails.
+pub fn replace_console(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> {
+    replace(path, bytes, Access::Console)
+}
+
+fn replace(path: &Path, bytes: &[u8], access: Access) -> Result<(), PrivateFileError> {
+    let journal = StagedWrite::create(path, bytes, access)
         .map_err(|error| PrivateFileError::Io(staged_path(path), error))?;
     journal
         .commit()
@@ -142,6 +180,23 @@ pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError
 /// [`PrivateFileError::Exposed`] otherwise.
 #[cfg(unix)]
 pub fn check_private(path: &Path) -> Result<(), PrivateFileError> {
+    check_unix(path, false)
+}
+
+/// Whether `path` is a service's console file this process may read: mode
+/// `0600`, not a link, owned by this account or read by the superuser.
+///
+/// # Errors
+///
+/// [`PrivateFileError::Io`] when it cannot be read;
+/// [`PrivateFileError::Exposed`] otherwise.
+#[cfg(unix)]
+pub fn check_console(path: &Path) -> Result<(), PrivateFileError> {
+    check_unix(path, true)
+}
+
+#[cfg(unix)]
+fn check_unix(path: &Path, allow_superuser: bool) -> Result<(), PrivateFileError> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let meta =
         std::fs::symlink_metadata(path).map_err(|e| PrivateFileError::Io(path.to_path_buf(), e))?;
@@ -150,7 +205,8 @@ pub fn check_private(path: &Path) -> Result<(), PrivateFileError> {
         return exposed("is a symbolic link".to_owned());
     }
     let me = crate::effective_uid();
-    if meta.uid() != me {
+    let superuser = allow_superuser && me == 0;
+    if meta.uid() != me && !superuser {
         return exposed(format!(
             "is owned by uid {}, not this account (uid {me})",
             meta.uid()
@@ -172,6 +228,18 @@ pub fn check_private(path: &Path) -> Result<(), PrivateFileError> {
 #[cfg(windows)]
 pub fn check_private(path: &Path) -> Result<(), PrivateFileError> {
     shekyl_win_sec::rendezvous::check_owner_only_labelled(path)
+        .map_err(|e| PrivateFileError::Exposed(path.to_path_buf(), e.to_string()))
+}
+
+/// Whether `path` is a service's console file: protected, no-read-up, and
+/// readable by its owner and by administrators of this machine.
+///
+/// # Errors
+///
+/// [`PrivateFileError::Exposed`] when it is not.
+#[cfg(windows)]
+pub fn check_console(path: &Path) -> Result<(), PrivateFileError> {
+    shekyl_win_sec::rendezvous::check_console_labelled(path)
         .map_err(|e| PrivateFileError::Exposed(path.to_path_buf(), e.to_string()))
 }
 
@@ -313,7 +381,7 @@ fn parent(path: &Path) -> &Path {
 fn create(path: &Path, access: Access) -> std::io::Result<File> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mode = match access {
-        Access::OwnerOnly => OWNER_ONLY_MODE,
+        Access::OwnerOnly | Access::Console => OWNER_ONLY_MODE,
         Access::WorldReadable => WORLD_READABLE_MODE,
     };
     let file = std::fs::OpenOptions::new()
@@ -332,6 +400,9 @@ fn create(path: &Path, access: Access) -> std::io::Result<File> {
         // (RT-O34), set in the creating call.
         Access::OwnerOnly => {
             shekyl_win_sec::rendezvous::create_rendezvous_file(path).map_err(std::io::Error::other)
+        }
+        Access::Console => {
+            shekyl_win_sec::rendezvous::create_console_file(path).map_err(std::io::Error::other)
         }
         Access::WorldReadable => std::fs::OpenOptions::new()
             .write(true)
@@ -424,6 +495,31 @@ mod tests {
         replace_private(&path, b"new").unwrap();
         assert_eq!(read_private(&path).unwrap().unwrap().as_slice(), b"new");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// The superuser reads a service-owned console file. Another account's
+    /// mode `0600` file is refused to anyone else, and a mode that admits
+    /// the group is refused to the superuser too. Red edit: drop
+    /// `allow_superuser` in `check_unix`, and this read fails.
+    #[test]
+    fn an_administrator_reads_a_service_owned_console_file() {
+        if crate::effective_uid() != 0 {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rpc-console.key");
+        write_private(&path, b"console").unwrap();
+        std::os::unix::fs::chown(&path, Some(65534), None).unwrap();
+        assert!(
+            read_private(&path).is_err(),
+            "a personal key stays this account's"
+        );
+        assert_eq!(read_console(&path).unwrap().unwrap().as_slice(), b"console");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(matches!(
+            read_console(&path),
+            Err(PrivateFileError::Exposed(..))
+        ));
     }
 }
 

@@ -5,6 +5,7 @@
 
 //! The tunnel's entry: read the options, then do what they ask.
 
+use std::io::Write;
 use std::process::ExitCode;
 
 use shekyl_rpc_transport::channel::{create_client_key, fingerprint_hex, read_client_key};
@@ -19,6 +20,16 @@ fn refuse(diagnostics: &[shekyl_options::Diagnostic]) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // The first statement is the process hardening (rule 35): no core and
+    // no same-account tracer, before an argument is read or the key is.
+    // A packaged unit's sandbox does not cover a tunnel started by hand.
+    if let Err(error) = shekyl_process::harden::harden_process() {
+        drop(writeln!(
+            std::io::stderr(),
+            "shekyl-rpc-tunnel: process hardening {error}; not starting"
+        ));
+        return ExitCode::FAILURE;
+    }
     let platform = shekyl_process::platform::current();
     let action = match config::load(std::env::args_os().skip(1), &platform) {
         Ok(action) => action,

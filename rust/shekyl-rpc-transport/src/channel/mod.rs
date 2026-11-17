@@ -11,8 +11,9 @@
 //!
 //! Four layers, each in its own module and usable alone:
 //!
-//! - [`Leg`]: where the daemon is, an address or an onion (through a SOCKS
-//!   proxy), a socket, or a Windows pipe; dialed into a [`LegStream`].
+//! - [`Leg`]: where the daemon is. An IP may be direct or through a SOCKS
+//!   proxy. An onion carries its proxy. A service's console leg is a
+//!   socket or a Windows pipe. Dialed into a [`LegStream`].
 //! - [`handshake_over`]: the client's side of the handshake over any
 //!   stream, ending in the record stream and the ceiling message 4 carried.
 //!   [`ChannelTarget::open`] dials and runs it under §4.3's policy: the

@@ -66,10 +66,31 @@ impl From<PrivateFileError> for FileRefused {
 ///
 /// [`FileRefused`]: unreadable, readable by another account, or not a key.
 pub fn read_key(path: &Path) -> Result<Option<StaticKeypair>, FileRefused> {
-    let Some(bytes) = private_file::read_private(path)? else {
+    read_key_with(path, private_file::read_private)
+}
+
+/// The console key at `path`. An administrator of this machine may read
+/// it, as well as the account that wrote it ([`private_file::read_console`]).
+///
+/// # Errors
+///
+/// [`FileRefused`], as [`read_key`].
+pub fn read_console_key(path: &Path) -> Result<Option<StaticKeypair>, FileRefused> {
+    read_key_with(path, private_file::read_console)
+}
+
+fn read_key_with<B>(
+    path: &Path,
+    read: fn(&Path) -> Result<Option<B>, PrivateFileError>,
+) -> Result<Option<StaticKeypair>, FileRefused>
+where
+    B: std::ops::Deref,
+    B::Target: AsRef<[u8]>,
+{
+    let Some(bytes) = read(path)? else {
         return Ok(None);
     };
-    StaticKeypair::from_key_file(&bytes)
+    StaticKeypair::from_key_file(bytes.deref().as_ref())
         .map(Some)
         .map_err(|e| FileRefused::Key(path.to_path_buf(), e))
 }

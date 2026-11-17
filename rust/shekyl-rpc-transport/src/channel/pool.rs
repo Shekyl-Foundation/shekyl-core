@@ -12,7 +12,7 @@ use hyper::body::Bytes;
 use shekyl_rpc_channel::deadline::HANDSHAKE_DEADLINE;
 use shekyl_rpc_channel::SESSIONS_PER_CLIENT;
 use shekyl_rpc_grants::GrantSet;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 
 use super::handshake::ChannelTarget;
 use super::session::Session;
@@ -176,7 +176,11 @@ impl Pool {
     ///
     /// [`ChannelFault`], as [`Self::lend`].
     pub async fn open_kept(&self) -> Result<(GrantSet, GrantSet), ChannelFault> {
-        let lent = self.lend().await?;
+        let mut lent = self.lend().await?;
+        // Nothing else will be sent until a caller arrives. The daemon
+        // closes a session that sends no record within the handshake
+        // deadline, so the kept session confirms itself before it is parked.
+        lent.session.confirm().await?;
         let granted = (lent.session.ceiling(), lent.session.granted());
         self.give_back(lent);
         Ok(granted)
@@ -268,11 +272,15 @@ impl Pool {
 
     /// Close extras idle longer than [`EXTRA_SESSION_IDLE`], keeping one,
     /// and open the kept session again when the daemon has closed it.
-    /// Returns when the pool stops.
-    pub async fn keep(self: Arc<Self>) {
+    ///
+    /// When the pool stops, `ended` receives the fault and this returns.
+    /// A revocation found here, with no request in flight, is the same
+    /// stop a request would report.
+    pub async fn keep(self: Arc<Self>, ended: watch::Sender<Option<ChannelFault>>) {
         loop {
             tokio::time::sleep(KEEPER_TICK).await;
-            if self.stopped().is_some() {
+            if let Some(fault) = self.stopped() {
+                ended.send_replace(Some(fault));
                 return;
             }
             let reopen = {
@@ -284,8 +292,24 @@ impl Pool {
             };
             if reopen {
                 match self.lend().await {
-                    Ok(lent) => self.give_back(lent),
+                    Ok(mut lent) => {
+                        if let Err(fault) = lent.session.confirm().await {
+                            if let Some(stopped) = self.stopped() {
+                                ended.send_replace(Some(stopped));
+                                return;
+                            }
+                            tracing::warn!(
+                                "the channel's kept session did not open again: {fault}"
+                            );
+                        } else {
+                            self.give_back(lent);
+                        }
+                    }
                     Err(fault) => {
+                        if let Some(stopped) = self.stopped() {
+                            ended.send_replace(Some(stopped));
+                            return;
+                        }
                         tracing::warn!("the channel's kept session did not open again: {fault}");
                     }
                 }

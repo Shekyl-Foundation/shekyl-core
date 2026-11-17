@@ -201,8 +201,12 @@ impl Channel {
                 key
             }
         };
-        files::replace_private(&dir.join(files::BUNDLE_FILE), &bundle(&key))
-            .map_err(|e| e.to_string())?;
+        shekyl_os_account::private_file::replace_console(
+            &dir.join(files::BUNDLE_FILE),
+            &bundle(&key),
+        )
+        .map_err(files::FileRefused::from)
+        .map_err(|e| e.to_string())?;
         let store = Store::open(dir).map_err(|e| e.to_string())?;
         // The console key's file and its cell are one change. A start
         // finishes a commit the last process did not rename, and only then

@@ -12,6 +12,7 @@ use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use shekyl_rpc_grants::GrantSet;
 use shekyl_rpc_stream::SubmissionMark;
+use shekyl_rpc_types::method::RpcMethod;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::handshake::Opened;
@@ -24,6 +25,10 @@ pub struct Session {
     mark: SubmissionMark,
     ceiling: GrantSet,
     granted: GrantSet,
+    /// The daemon has opened this session's first record. A session that
+    /// will sit idle must send one (`version`) before it is parked; a
+    /// session whose caller sends at once uses that request as the record.
+    confirmed: bool,
 }
 
 /// Whether a JSON-RPC body calls `tx_submit`: the one method whose message
@@ -43,9 +48,14 @@ pub fn is_submission(body: &[u8]) -> bool {
 }
 
 impl Session {
-    /// Start HTTP over `opened`. `idle` is how long the session may wait
-    /// between records before the stream closes it; `None` keeps the
-    /// stream's own limit.
+    /// Start HTTP over `opened`. The first record is not sent here: the
+    /// daemon finishes the handshake, and starts the session's idle, only
+    /// when that record arrives (`RPC_CHANNEL.md` §4.3). A caller that
+    /// sends at once uses its request as the record. A caller that parks
+    /// the session sends one first, with [`Self::confirm`].
+    ///
+    /// `idle` is how long the session may wait between records before the
+    /// stream closes it; `None` keeps the stream's own limit.
     ///
     /// # Errors
     ///
@@ -76,7 +86,38 @@ impl Session {
             mark,
             ceiling,
             granted,
+            confirmed: false,
         })
+    }
+
+    /// Send the first record when this session would otherwise sit idle.
+    ///
+    /// The record is `version`, which every admitted key may call. A
+    /// session that has already sent is left as it is. The daemon closes a
+    /// session that never sends one, at the handshake deadline, so a parked
+    /// session would be opened again forever.
+    ///
+    /// # Errors
+    ///
+    /// [`ChannelFault::Closed`] when the node drops the session before
+    /// `version` is answered. [`ChannelFault::Local`] when the request
+    /// cannot be built.
+    pub async fn confirm(&mut self) -> Result<(), ChannelFault> {
+        if self.confirmed {
+            return Ok(());
+        }
+        let body = serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": shekyl_rpc_types::wire::Version::NAME,
+            "params": {}
+        }))
+        .map_err(|error| ChannelFault::Local(error.to_string()))?;
+        // Any completed response means the first record opened and the
+        // node finished the handshake. A close before that is `Closed`.
+        self.post("json_rpc", body).await?;
+        self.confirmed = true;
+        Ok(())
     }
 
     /// This client's ceiling on the daemon.
@@ -127,6 +168,7 @@ impl Session {
             .await
             .map_err(|_| ChannelFault::Closed)?
             .to_bytes();
+        self.confirmed = true;
         Ok(hyper::Response::from_parts(parts, body))
     }
 

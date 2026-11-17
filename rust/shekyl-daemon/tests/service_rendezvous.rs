@@ -281,15 +281,7 @@ fn a_listening_service_publishes_its_rendezvous_and_a_client_reaches_it() {
         .join("shekyl")
         .join("regtest")
         .join("rpc-console.key");
-    let reply = call_over_the_channel(
-        Leg::Network {
-            endpoint: addr.to_string(),
-            socks: None,
-        },
-        &daemon,
-        &console_file,
-        "version",
-    );
+    let reply = call_over_the_channel(Leg::ip(addr, None), &daemon, &console_file, "version");
     assert!(
         reply["result"].is_object(),
         "{reply}\n{}",

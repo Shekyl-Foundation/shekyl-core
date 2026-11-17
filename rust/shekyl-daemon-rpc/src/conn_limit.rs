@@ -135,9 +135,12 @@ impl ConnLimits {
 #[derive(Debug)]
 pub struct ConnTracker {
     limits: ConnLimits,
-    /// Live connections in each reserve, indexed by [`Reserve::index`].
-    /// Mutated only under `per_ip`'s lock, as `total` is.
-    reserved: [AtomicU64; 2],
+    /// Live connections in the owner's reserve and the console's reserve.
+    /// Mutated only under `per_ip`'s lock, as `total` is. Each counter is
+    /// named: a new reserve is a new field, and [`Reserve::slots`] does
+    /// not compile until it is.
+    owner: AtomicU64,
+    console: AtomicU64,
     /// Live connection total. Mutated only while `per_ip`'s lock is held so it
     /// stays coherent with the map; read lock-free for the `daemon_status` metric.
     total: AtomicU64,
@@ -151,7 +154,8 @@ impl ConnTracker {
     pub fn new(limits: ConnLimits) -> Arc<Self> {
         Arc::new(Self {
             limits,
-            reserved: [AtomicU64::new(0), AtomicU64::new(0)],
+            owner: AtomicU64::new(0),
+            console: AtomicU64::new(0),
             total: AtomicU64::new(0),
             per_ip: Mutex::new(HashMap::new()),
         })
@@ -160,11 +164,7 @@ impl ConnTracker {
     /// Current number of live connections — the value reported as
     /// `rpc_connections_count`.
     pub fn active_total(&self) -> u64 {
-        self.reserved
-            .iter()
-            .fold(self.total.load(Ordering::Relaxed), |sum, held| {
-                sum + held.load(Ordering::Relaxed)
-            })
+        self.total.load(Ordering::Relaxed) + self.reserved_total()
     }
 
     /// Admit a connection on a leg with `reserve`: from the shared pool
@@ -182,7 +182,7 @@ impl ConnTracker {
             .per_ip
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let held = &self.reserved[reserve.index()];
+        let held = self.slots(reserve);
         if held.load(Ordering::Relaxed) >= RESERVED_SLOTS {
             return None;
         }
@@ -241,7 +241,7 @@ impl ConnTracker {
             Held::Shared(ip) => ip,
             Held::Reserve(reserve) => {
                 // Held only while counted, so this cannot wrap.
-                self.reserved[reserve.index()].fetch_sub(1, Ordering::Relaxed);
+                self.slots(reserve).fetch_sub(1, Ordering::Relaxed);
                 return;
             }
         };
@@ -276,12 +276,17 @@ pub enum Reserve {
     Console,
 }
 
-impl Reserve {
-    const fn index(self) -> usize {
-        match self {
-            Self::Owner => 0,
-            Self::Console => 1,
+impl ConnTracker {
+    fn slots(&self, reserve: Reserve) -> &AtomicU64 {
+        match reserve {
+            Reserve::Owner => &self.owner,
+            Reserve::Console => &self.console,
         }
+    }
+
+    fn reserved_total(&self) -> u64 {
+        self.slots(Reserve::Owner).load(Ordering::Relaxed)
+            + self.slots(Reserve::Console).load(Ordering::Relaxed)
     }
 }
 

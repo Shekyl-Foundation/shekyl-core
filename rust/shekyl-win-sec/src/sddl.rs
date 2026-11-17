@@ -190,6 +190,22 @@ impl OwnerOnlyDescriptor {
         Self::from_sddl(&sddl)
     }
 
+    /// A service's console file (`RPC_CHANNEL.md` RT-O37): the console key,
+    /// the node's public bundle, and the pipe's name. The owning account
+    /// may read and write it. BUILTIN\Administrators may read it, which is
+    /// how an administrator reaches the console. The DACL is protected and
+    /// the no-read-up label is set in the creating call. On Unix the same
+    /// reach is mode `0600`: the superuser reads it, and no other account
+    /// does.
+    pub fn console_file(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;;FA;;;{o})(A;;FR;;;BA)S:(ML;;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
+        Self::from_sddl(&sddl)
+    }
+
     /// A service's console pipe (`RPC_CHANNEL.md` RT-O37, Rick
     /// 2026-11-15): owned by `owner`, the service account; access for that
     /// account and the built-in Administrators, the data home's ruled ACL

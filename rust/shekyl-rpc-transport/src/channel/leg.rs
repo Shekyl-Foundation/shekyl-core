@@ -4,6 +4,11 @@
 // BSD-3-Clause
 
 //! Where a daemon's channel is, and the stream a dial produces.
+//!
+//! A leg is the route, not a string to be parsed again. An IP may be
+//! direct or through a SOCKS5 proxy. An onion has no direct route, so its
+//! proxy is part of the leg. A service's console leg is a Unix socket or a
+//! Windows pipe.
 
 use std::net::SocketAddr;
 
@@ -14,13 +19,23 @@ use super::ChannelFault;
 /// Where the daemon's channel is.
 #[derive(Clone, Debug)]
 pub enum Leg {
-    /// An address or an onion, `host:port`, dialed directly or through a
-    /// SOCKS5 proxy, which resolves the name (an onion needs one).
-    Network {
-        /// `host:port`: an IP address or an onion.
-        endpoint: String,
-        /// The SOCKS5 proxy, if any.
-        socks: Option<SocketAddr>,
+    /// An IP address and a port. `proxy` is set when that address is
+    /// reached through a SOCKS5 proxy.
+    Ip {
+        /// The node's address.
+        addr: SocketAddr,
+        /// The SOCKS5 proxy, when there is one.
+        proxy: Option<SocketAddr>,
+    },
+    /// A v3 onion and a port, reached through `proxy`. An onion without a
+    /// proxy is not a leg.
+    Onion {
+        /// The onion host, without a port.
+        host: String,
+        /// The onion's port.
+        port: u16,
+        /// The SOCKS5 proxy, which resolves the name.
+        proxy: SocketAddr,
     },
     /// A Unix socket: a service's console leg (RT-O37).
     #[cfg(unix)]
@@ -30,10 +45,25 @@ pub enum Leg {
     Pipe(String),
 }
 
+impl Leg {
+    /// An IP address, directly or through `proxy`.
+    #[must_use]
+    pub fn ip(addr: SocketAddr, proxy: Option<SocketAddr>) -> Self {
+        Self::Ip { addr, proxy }
+    }
+
+    /// An onion through `proxy`.
+    #[must_use]
+    pub fn onion(host: String, port: u16, proxy: SocketAddr) -> Self {
+        Self::Onion { host, port, proxy }
+    }
+}
+
 impl std::fmt::Display for Leg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Network { endpoint, .. } => f.write_str(endpoint),
+            Self::Ip { addr, .. } => write!(f, "{addr}"),
+            Self::Onion { host, port, .. } => write!(f, "{host}:{port}"),
             #[cfg(unix)]
             Self::Socket(path) => write!(f, "{}", path.display()),
             #[cfg(windows)]
@@ -112,38 +142,20 @@ impl Leg {
             cause,
         };
         match self {
-            Self::Network {
-                endpoint,
-                socks: None,
-            } => {
-                let addr: SocketAddr = endpoint
-                    .parse()
-                    .map_err(|_| unreachable("an onion is reached through a SOCKS proxy".into()))?;
-                tokio::net::TcpStream::connect(addr)
-                    .await
-                    .map(LegStream::Tcp)
-                    .map_err(|e| unreachable(e.to_string()))
-            }
-            Self::Network {
-                endpoint,
-                socks: Some(proxy),
-            } => {
-                let (host, port) = endpoint
-                    .rsplit_once(':')
-                    .and_then(|(host, port)| Some((host, port.parse::<u16>().ok()?)))
-                    .ok_or_else(|| unreachable("not host:port".into()))?;
-                let host = host.trim_start_matches('[').trim_end_matches(']');
-                let mut tcp = tokio::net::TcpStream::connect(proxy)
-                    .await
-                    .map_err(|e| unreachable(format!("the SOCKS proxy {proxy}: {e}")))?;
-                shekyl_socks::connect(
-                    &mut tcp,
-                    shekyl_socks::Isolation::Principal,
-                    shekyl_socks::Destination::Name { host, port },
-                )
+            Self::Ip { addr, proxy: None } => tokio::net::TcpStream::connect(addr)
                 .await
-                .map_err(|e| unreachable(format!("the SOCKS proxy {proxy}: {e}")))?;
-                Ok(LegStream::Tcp(tcp))
+                .map(LegStream::Tcp)
+                .map_err(|e| unreachable(e.to_string())),
+            Self::Ip {
+                addr,
+                proxy: Some(proxy),
+            } => {
+                self.through_proxy(proxy, shekyl_socks::Destination::Ip(*addr))
+                    .await
+            }
+            Self::Onion { host, port, proxy } => {
+                self.through_proxy(proxy, shekyl_socks::Destination::Name { host, port: *port })
+                    .await
             }
             #[cfg(unix)]
             Self::Socket(path) => tokio::net::UnixStream::connect(path)
@@ -156,5 +168,26 @@ impl Leg {
                 .map(LegStream::Pipe)
                 .map_err(|e| unreachable(e.to_string())),
         }
+    }
+
+    async fn through_proxy(
+        &self,
+        proxy: &SocketAddr,
+        destination: shekyl_socks::Destination<'_>,
+    ) -> Result<LegStream, ChannelFault> {
+        let mut tcp =
+            tokio::net::TcpStream::connect(proxy)
+                .await
+                .map_err(|e| ChannelFault::Unreachable {
+                    at: self.to_string(),
+                    cause: format!("the SOCKS proxy {proxy}: {e}"),
+                })?;
+        shekyl_socks::connect(&mut tcp, shekyl_socks::Isolation::Principal, destination)
+            .await
+            .map_err(|e| ChannelFault::Unreachable {
+                at: self.to_string(),
+                cause: format!("the SOCKS proxy {proxy}: {e}"),
+            })?;
+        Ok(LegStream::Tcp(tcp))
     }
 }

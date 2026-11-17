@@ -88,7 +88,7 @@ pub fn bind(dir: &Path) -> std::io::Result<ConsoleListener> {
     );
     let listener = shekyl_win_sec::OwnerOnlyPipeListener::bind_console(name.clone())
         .map_err(|e| std::io::Error::other(format!("the console's pipe: {e}")))?;
-    shekyl_os_account::private_file::replace_private(&place(dir), name.as_bytes())
+    shekyl_os_account::private_file::replace_console(&place(dir), name.as_bytes())
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     Ok(crate::owner::OwnerListener::from(listener))
 }

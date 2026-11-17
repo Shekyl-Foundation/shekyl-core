@@ -543,7 +543,7 @@ Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** rem
 | `wallet` (alias `engine-file`) | `wallet-file` | path | unset | both | | R (IG-3: a path ends in `file`); the alias goes |
 | `daemon-address` | `daemon-endpoint` | peer-endpoint | `127.0.0.1:<row rpc port>` | both | | R (IG-Q31): an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname or URL is refused |
 | (`daemon-address` `uds://`) | `daemon-socket-file` | path | unset | both | | N; RT-15's local leg; unconstructible together with `daemon-endpoint` |
-| — | `daemon-bundle-file` | path | unset | both | | N (IG-Q108): the node's bundle as `rpc bundle show` prints it; set, the enrolment words reach the node at `daemon-endpoint` over the channel; unconstructible together with `daemon-socket-file` |
+| — | `daemon-bundle-file` | path | unset | both | | N (IG-Q108): the node's bundle as `rpc bundle show` prints it; set, the enrolment words reach the node at an explicit `daemon-endpoint` over the channel (the row's default is the plaintext listener, and `rpc-listen` has no default port); unconstructible together with `daemon-socket-file` |
 | — | `rpc-key-file` | path | the account root + `rpc-shekyl-cli-<network>.key` | both | | N (IG-Q108, IG-Q109): this client's channel key, readable by this account alone; a file anyone else can read is refused |
 | `rpc-url` | `wallet-rpc-endpoint` | peer-endpoint | unset | both | | R (IG-Q31); set means an external `shekyl-wallet-rpc`, not self-hosting |
 | (`rpc-url` `uds://`) | `wallet-rpc-socket-file` | path | unset | both | | N; unconstructible together with `wallet-rpc-endpoint` |
@@ -1668,7 +1668,11 @@ rows move only the five enrolment words onto the channel; the CLI's
 other words and the wallet session's daemon leg stay until RT-W12. An
 enrolment word asks for every grant, and the node clamps the request to
 the key's ceiling: RT-O9.1 bounds what a key may enrol, list or remove
-by its effective grant.
+by its effective grant. While `daemon-bundle-file` is set, the enrolment
+words require an explicit `daemon-endpoint`: `rpc-listen` has no default
+port, and `daemon-endpoint`'s default is the plaintext listener. The
+values are the peer-endpoint and endpoint kinds (IG-Q31); a URL or a
+hostname is refused.
 
 **IG-Q109 — making a client's key and showing its fingerprint — RULED
 2026-11-15, as recommended.** A key is made only when asked, never as a

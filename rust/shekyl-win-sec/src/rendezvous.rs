@@ -161,9 +161,26 @@ pub fn ensure_rendezvous_dir(dir: &Path) -> Result<(), RendezvousError> {
 pub fn create_rendezvous_file(path: &Path) -> Result<File, RendezvousError> {
     let owner = current_user_sid()?;
     let descriptor = OwnerOnlyDescriptor::rendezvous_file(&owner)?;
+    create_new_file(path, &descriptor)
+}
+
+/// Create a service's console file `path` (`CREATE_NEW`): the owner and
+/// BUILTIN\Administrators may read it, and the no-read-up label is set in
+/// the creating call ([`OwnerOnlyDescriptor::console_file`]).
+///
+/// # Errors
+/// The owner or the descriptor could not be had, or the create failed.
+pub fn create_console_file(path: &Path) -> Result<File, RendezvousError> {
+    let owner = current_user_sid()?;
+    let descriptor = OwnerOnlyDescriptor::console_file(&owner)?;
+    create_new_file(path, &descriptor)
+}
+
+/// `CREATE_NEW` of `path` under `descriptor`.
+fn create_new_file(path: &Path, descriptor: &OwnerOnlyDescriptor) -> Result<File, RendezvousError> {
     let w = wide(path);
     // SAFETY: as for `create_dir`; `CreateFileW` reads both pointers only
-    // during the call.
+    // during the call, and `descriptor` outlives that call.
     let handle = unsafe {
         CreateFileW(
             w.as_ptr(),
@@ -216,6 +233,47 @@ pub fn check_owner_only_labelled(path: &Path) -> Result<(), RendezvousError> {
     if let Some(sid) = foreign(reads).or_else(|| foreign(writes)) {
         return Err(RendezvousError::Refused(format!(
             "its access list admits {sid}"
+        )));
+    }
+    match read.label_policy()? {
+        Some(policy) if policy & SYSTEM_MANDATORY_LABEL_NO_READ_UP != 0 => Ok(()),
+        Some(_) => Err(RendezvousError::Refused(
+            "its mandatory label does not refuse a reader below its integrity (no NR)".to_owned(),
+        )),
+        None => Err(RendezvousError::Refused(
+            "it carries no mandatory label".to_owned(),
+        )),
+    }
+}
+
+/// A service's console file: protected, no-read-up, and readable by its
+/// owner and by BUILTIN\Administrators (and the platform principals the
+/// DACL reader already treats as this machine's own). A grant to anyone
+/// else is refused. The caller is not required to be the owner: an
+/// administrator reads the console key the service account wrote.
+///
+/// # Errors
+/// [`RendezvousError::Refused`] naming the condition that failed, or the
+/// descriptor could not be read.
+pub fn check_console_labelled(path: &Path) -> Result<(), RendezvousError> {
+    let read = SecurityRead::of(path)?;
+    let owner = read.owner()?;
+    if !read.dacl_protected() {
+        return Err(RendezvousError::Refused(
+            "its access list inherits from its parent".to_owned(),
+        ));
+    }
+    let allowed = |grantee: &crate::dacl::Grantee| match grantee {
+        crate::dacl::Grantee::Permitted => true,
+        crate::dacl::Grantee::Other(sid) => sid == owner.as_str(),
+    };
+    let reads =
+        crate::dacl::read_grantees(path).map_err(|e| RendezvousError::Refused(e.to_string()))?;
+    let writes =
+        crate::dacl::write_grantees(path).map_err(|e| RendezvousError::Refused(e.to_string()))?;
+    if let Some(grantee) = reads.iter().chain(writes.iter()).find(|g| !allowed(g)) {
+        return Err(RendezvousError::Refused(format!(
+            "its access list admits {grantee:?}"
         )));
     }
     match read.label_policy()? {

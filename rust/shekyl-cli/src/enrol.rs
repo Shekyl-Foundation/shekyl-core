@@ -31,7 +31,6 @@
 //! that effective grant (`RPC_CHANNEL.md` §5, RT-O9.1), so a session asking
 //! for `enrol` alone could enrol nothing beyond `enrol`.
 
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use shekyl_daemon_config::{paths, RunMode};
@@ -63,13 +62,75 @@ pub struct EnrolOptions {
 /// A node on another host (IG-Q108).
 #[derive(Clone, Debug)]
 pub struct Remote {
-    /// `daemon-endpoint`: an address or an onion, `host:port`.
-    pub endpoint: String,
-    /// `daemon-socks`.
-    pub socks: Option<SocketAddr>,
+    /// The node's channel. Built from a peer-endpoint and, for an onion,
+    /// an endpoint (`INPUT_GRAMMAR.md` IG-Q31).
+    pub leg: Leg,
     /// `daemon-bundle-file`: the node's bundle, as `rpc bundle show` prints
     /// it.
     pub bundle_file: PathBuf,
+}
+
+/// The channel address an enrolment needs when `daemon-bundle-file` is set.
+///
+/// The CLI's daemon address otherwise defaults to the plaintext RPC port.
+/// `rpc-listen` has no default port, so that default is not a channel.
+pub const CHANNEL_ADDRESS_REQUIRED: &str = "This command reaches the node over its channel, so it \
+     needs the channel's address (--daemon-address): an IP and a port, or an onion and a port. \
+     The usual daemon port is the plaintext listener, which is not the channel.";
+
+/// This client's key file when `--rpc-key-file` is unset: the account root
+/// and `rpc-shekyl-cli-<network>.key` (IG-Q108). The root is the daemon's
+/// (`paths::root`), not a home directory joined by hand.
+///
+/// # Errors
+///
+/// The account has no home (`config.path.no-home`).
+pub fn default_key_file(network: Network) -> Result<PathBuf, String> {
+    let platform = shekyl_process::platform::current();
+    let root = paths::root(&platform, RunMode::User, "rpc-key-file").map_err(|d| d.render())?;
+    Ok(root.join(format!("rpc-shekyl-cli-{}.key", network.name())))
+}
+
+/// The channel leg for an enrolment on another host.
+///
+/// `address` is a peer-endpoint and `proxy`, when set, an endpoint: the
+/// kinds `daemon-endpoint` and `daemon-socks` have. A URL, a hostname, or
+/// an onion without a proxy is refused with that kind's diagnostic.
+///
+/// # Errors
+///
+/// The value is not the kind, or the onion has no proxy.
+pub fn channel_leg(address: &str, proxy: Option<&str>) -> Result<Leg, String> {
+    use shekyl_options::{EndpointRule, Kind, PeerEndpoint, PeerRule, Source, Value};
+    let peer = Kind::PeerEndpoint(PeerRule::Any)
+        .parse_text(address)
+        .map_err(|fault| fault.at("--daemon-address", Source::Cli).render())?;
+    let proxy = match proxy {
+        None => None,
+        Some(text) => match Kind::Endpoint(EndpointRule::Any)
+            .parse_text(text)
+            .map_err(|fault| fault.at("--proxy", Source::Cli).render())?
+        {
+            Value::Endpoint(addr) => Some(addr),
+            _ => unreachable!("an endpoint kind produces an endpoint"),
+        },
+    };
+    match peer {
+        Value::Peer(PeerEndpoint::Ip(addr)) => Ok(Leg::ip(addr, proxy)),
+        Value::Peer(PeerEndpoint::Onion { host, port }) => {
+            let Some(proxy) = proxy else {
+                return Err(shekyl_options::Diagnostic::new(
+                    shekyl_options::Code::ValueRequires,
+                    shekyl_options::Source::Cli,
+                )
+                .option("--daemon-address")
+                .param("requires", "--proxy, an IP and a port, to reach an onion")
+                .render());
+            };
+            Ok(Leg::onion(host, port, proxy))
+        }
+        _ => unreachable!("a peer-endpoint kind produces a peer"),
+    }
 }
 
 /// §4.5's console-key failure, in its words.
@@ -177,10 +238,7 @@ impl EnrolLeg {
                 options.network.network_id(),
                 daemon,
                 key,
-                Leg::Network {
-                    endpoint: remote.endpoint.clone(),
-                    socks: remote.socks,
-                },
+                remote.leg.clone(),
             );
             return ChannelDaemon::connect(&target, request)
                 .map(Self::Channel)
@@ -229,11 +287,8 @@ fn service_console(network: Network, request: GrantSet) -> Result<Option<EnrolLe
         return Ok(None);
     }
     // A service runs here: from now on, no other leg (§4.5).
-    let console = read_client_key(&dir.join(shekyl_rpc_rendezvous::CONSOLE_KEY_FILE))
-        .ok()
-        .flatten()
-        .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())?;
-    let daemon = std::fs::read(dir.join(shekyl_rpc_rendezvous::CHANNEL_BUNDLE_FILE))
+    let console = read_console_key(&dir.join(shekyl_rpc_rendezvous::CONSOLE_KEY_FILE))?;
+    let daemon = read_console_bytes(&dir.join(shekyl_rpc_rendezvous::CHANNEL_BUNDLE_FILE))
         .ok()
         .and_then(|bytes| bundle_from_bytes(&bytes))
         .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())?;
@@ -255,12 +310,28 @@ fn console_leg_of(place: &Path) -> Result<Leg, String> {
 
 #[cfg(windows)]
 fn console_leg_of(place: &Path) -> Result<Leg, String> {
-    let name = shekyl_os_account::private_file::read_private(place)
+    let name = read_console_bytes(place)
         .ok()
-        .flatten()
         .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
         .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())?;
     Ok(Leg::Pipe(name))
+}
+
+/// A service's console file: the owning account, or an administrator of
+/// this machine. Anything else, including a file another account can read,
+/// is the console-key failure. The bytes are wiped on drop.
+fn read_console_bytes(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+    shekyl_os_account::private_file::read_console(path)
+        .ok()
+        .flatten()
+        .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())
+}
+
+/// The console key, read as [`read_console_bytes`].
+fn read_console_key(path: &Path) -> Result<shekyl_rpc_channel::handshake::StaticKeypair, String> {
+    let bytes = read_console_bytes(path)?;
+    shekyl_rpc_channel::handshake::StaticKeypair::from_key_file(&bytes)
+        .map_err(|_| CONSOLE_KEY_FAILURE.to_owned())
 }
 
 /// `rpc key create`: a new key at `path`, this account's alone, refused if
@@ -316,5 +387,26 @@ mod tests {
                 CONSOLE_KEY_FAILURE
             );
         }
+    }
+
+    /// The channel leg is a peer-endpoint. A URL and a hostname are refused
+    /// by that kind, and an onion without a proxy is refused. Red edit:
+    /// strip `://` and a trailing slash in `channel_leg`, and the URL is
+    /// dialed.
+    #[test]
+    fn the_channel_leg_is_a_peer_endpoint() {
+        let ip = channel_leg("203.0.113.5:29501", None).expect("an address");
+        assert!(matches!(ip, Leg::Ip { proxy: None, .. }));
+        let proxied =
+            channel_leg("203.0.113.5:29501", Some("127.0.0.1:9050")).expect("through a proxy");
+        assert!(matches!(proxied, Leg::Ip { proxy: Some(_), .. }));
+        assert!(channel_leg("http://203.0.113.5:29501/json_rpc", None).is_err());
+        assert!(channel_leg("node.example:29501", None).is_err());
+        assert!(channel_leg("socks5h://127.0.0.1:9050", None).is_err());
+        let onion = "gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiyd.onion:14021";
+        let missing = channel_leg(onion, None).expect_err("an onion needs a proxy");
+        assert!(missing.contains("proxy"), "{missing}");
+        assert!(channel_leg(onion, Some("not-an-endpoint")).is_err());
+        assert!(channel_leg(onion, Some("127.0.0.1:9050")).is_ok());
     }
 }

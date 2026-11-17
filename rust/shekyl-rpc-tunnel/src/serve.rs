@@ -19,16 +19,26 @@
 //!   again; the tunnel answers the request that met it, stops accepting,
 //!   and exits with the node's reason, so a supervisor shows it.
 
+use std::future::Future;
+use std::io::{self, IoSlice};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::{Bytes, Incoming};
+use hyper::server::conn::http1;
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
+use shekyl_rpc_channel::deadline::MESSAGE1_DEADLINE;
+use shekyl_rpc_channel::SESSIONS_PER_CLIENT;
 use shekyl_rpc_grants::GrantSet;
-use shekyl_rpc_transport::channel::{ChannelFault, ChannelTarget, Leg, Pool};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::watch;
+use shekyl_rpc_stream::{READ_STALL, WRITE_STALL};
+use shekyl_rpc_transport::channel::{ChannelFault, ChannelTarget, Pool};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::{watch, Semaphore};
+use tokio::time::{sleep, Sleep};
 
 use crate::config::{Config, Listen};
 
@@ -61,17 +71,14 @@ pub async fn run(
         config.network.network_id(),
         config.bundle.clone(),
         key,
-        Leg::Network {
-            endpoint: config.endpoint.clone(),
-            socks: config.socks,
-        },
+        config.leg.clone(),
     );
     let pool = Pool::new(target, config.request);
     let (ceiling, granted) = pool.open_kept().await.map_err(|fault| fault.to_string())?;
     tracing::info!(
         target: "global",
         "connected to {} as {fingerprint} with {}; this client is enrolled for at most {}",
-        config.endpoint,
+        config.leg,
         names(granted),
         names(ceiling)
     );
@@ -80,8 +87,12 @@ pub async fn run(
         names(granted),
         names(ceiling)
     ));
-    let keeper = tokio::spawn(Arc::clone(&pool).keep());
     let (ended_tx, ended_rx) = watch::channel(None::<ChannelFault>);
+    let keeper = tokio::spawn(Arc::clone(&pool).keep(ended_tx.clone()));
+    // One local connection per channel session. Another caller on this
+    // host is closed: accepting it would hold a socket and a body with no
+    // session to carry it.
+    let local = Arc::new(Semaphore::new(SESSIONS_PER_CLIENT));
     let result = match &config.listen {
         Listen::Tcp(addr) => {
             listen_check(*addr)?;
@@ -95,6 +106,7 @@ pub async fn run(
             accept_loop(
                 || async { listener.accept().await.map(|(io, _)| io) },
                 &pool,
+                &local,
                 ended_tx,
                 ended_rx,
             )
@@ -107,6 +119,7 @@ pub async fn run(
             let served = accept_loop(
                 || async { listener.accept().await.map(|(io, _)| io) },
                 &pool,
+                &local,
                 ended_tx,
                 ended_rx,
             )
@@ -122,6 +135,7 @@ pub async fn run(
 async fn accept_loop<F, Fut, S>(
     mut accept: F,
     pool: &Arc<Pool>,
+    local: &Arc<Semaphore>,
     ended_tx: watch::Sender<Option<ChannelFault>>,
     mut ended_rx: watch::Receiver<Option<ChannelFault>>,
 ) -> Result<(), String>
@@ -142,13 +156,22 @@ where
                         continue;
                     }
                 };
+                let Ok(permit) = Arc::clone(local).try_acquire_owned() else {
+                    tracing::debug!(
+                        "a local connection was closed: every session this client may hold is \
+                         already in use"
+                    );
+                    continue;
+                };
                 let pool = Arc::clone(pool);
                 let ended = Arc::clone(&ended_tx);
                 serving.spawn(async move {
+                    let _permit = permit;
                     let service = hyper::service::service_fn(move |request| {
                         forward(Arc::clone(&pool), Arc::clone(&ended), request)
                     });
-                    if let Err(error) = hyper::server::conn::http1::Builder::new()
+                    let io = StallWrite::new(io, WRITE_STALL);
+                    if let Err(error) = local_builder()
                         .serve_connection(TokioIo::new(io), service)
                         .await
                     {
@@ -206,15 +229,23 @@ async fn forward(
     request: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let (parts, body) = request.into_parts();
-    let body = match Limited::new(body, shekyl_rpc_stream::SUBMISSION_CAP)
-        .collect()
-        .await
+    let body = match tokio::time::timeout(
+        READ_STALL,
+        Limited::new(body, shekyl_rpc_stream::SUBMISSION_CAP).collect(),
+    )
+    .await
     {
-        Ok(body) => body.to_bytes(),
-        Err(_) => {
+        Ok(Ok(body)) => body.to_bytes(),
+        Ok(Err(_)) => {
             return Ok(answer(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "the request is larger than the node accepts",
+            ))
+        }
+        Err(_) => {
+            return Ok(answer(
+                StatusCode::REQUEST_TIMEOUT,
+                "the request was not received in time",
             ))
         }
     };
@@ -281,6 +312,114 @@ fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, Strin
         Err(e) => return Err(format!("{}: {e}", path.display())),
     }
     tokio::net::UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Header-read bound for a local consumer: the channel's message-1
+/// deadline. Hyper arms it again while it waits for the next request, so
+/// a connection that sends nothing does not hold a local slot.
+fn local_builder() -> http1::Builder {
+    let mut builder = http1::Builder::new();
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(Some(MESSAGE1_DEADLINE));
+    builder
+}
+
+/// Closes a local connection whose response write makes no progress for
+/// `bound`. The bound is [`WRITE_STALL`], the same one the daemon's
+/// listeners use.
+struct StallWrite<T> {
+    inner: T,
+    bound: Duration,
+    wait: Option<Pin<Box<Sleep>>>,
+}
+
+impl<T> StallWrite<T> {
+    fn new(inner: T, bound: Duration) -> Self {
+        Self {
+            inner,
+            bound,
+            wait: None,
+        }
+    }
+
+    fn poll_pending(&mut self, cx: &mut Context<'_>) -> Poll<io::Error> {
+        if self.wait.is_none() {
+            self.wait = Some(Box::pin(sleep(self.bound)));
+        }
+        let wait = self.wait.as_mut().expect("the stall sleep was just armed");
+        if wait.as_mut().poll(cx).is_ready() {
+            self.wait = None;
+            Poll::Ready(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the response write made no progress",
+            ))
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn drive<R>(
+        &mut self,
+        cx: &mut Context<'_>,
+        poll: impl FnOnce(Pin<&mut T>, &mut Context<'_>) -> Poll<io::Result<R>>,
+    ) -> Poll<io::Result<R>>
+    where
+        T: Unpin,
+    {
+        match poll(Pin::new(&mut self.inner), cx) {
+            Poll::Pending => match self.poll_pending(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(error) => Poll::Ready(Err(error)),
+            },
+            ready => {
+                self.wait = None;
+                ready
+            }
+        }
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for StallWrite<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for StallWrite<T> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.get_mut()
+            .drive(cx, |inner, cx| inner.poll_write(cx, buf))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.get_mut().drive(cx, AsyncWrite::poll_flush)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.get_mut().drive(cx, AsyncWrite::poll_shutdown)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        self.get_mut()
+            .drive(cx, |inner, cx| inner.poll_write_vectored(cx, bufs))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
 }
 
 /// The one listen classifier every Shekyl listener passes (§8, RT-14),
