@@ -16,8 +16,8 @@ half lives at
 
 ## Status
 
-**Run every night in CI.** The nightly workflow's `fuzz` job
-(`.github/workflows/nightly.yml`) runs this target, like every fuzz
+**Run every night in CI.** The nightly fuzz workflow's `fuzz` job
+(`.github/workflows/fuzz-nightly.yml`) runs this target, like every fuzz
 target in the tree, for five minutes on the pinned nightly toolchain,
 and `ci/fuzz-harness` type-checks it on stable for every change that
 reaches it. The crate stays excluded from the parent workspace

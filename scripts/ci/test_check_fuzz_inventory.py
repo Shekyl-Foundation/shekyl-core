@@ -60,7 +60,13 @@ FLOORS = (
     "# target\tcov\trun\tcommit\tsecond_cov\tsecond_run\ttolerance\n"
     f"shekyl-a/fuzz_one\t182\t43772973669\t{COMMIT}\t180\t43772976347\t90\n"
 )
-NIGHTLY = "jobs:\n  fuzz-targets:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n"
+FUZZ_WORKFLOW_TEXT = (
+    "on:\n  schedule:\n"
+    '    - cron: "17 15 * * *"\n'
+    '    - cron: "17 19 * * 0"\n'
+    "jobs:\n  fuzz-targets:\n    steps:\n"
+    "      - run: python3 scripts/ci/check_fuzz_inventory.py --plan\n"
+)
 # The planted trees' weekly run: the one target they have.
 WEEKLY = ("shekyl-a/fuzz_one",)
 
@@ -89,7 +95,7 @@ def tree(
     rand="0.8.5",
     lock=True,
     workflow=WORKFLOW,
-    nightly=NIGHTLY,
+    fuzz_workflow=FUZZ_WORKFLOW_TEXT,
     seeds=(),
     fuzz=True,
     floors=FLOORS,
@@ -107,8 +113,8 @@ def tree(
             write(root, f"rust/shekyl-a/fuzz/seeds/{name}/seed1", "seed\n")
     if workflow is not None:
         write(root, gate.WORKFLOW, workflow)
-    if nightly is not None:
-        write(root, gate.NIGHTLY, nightly)
+    if fuzz_workflow is not None:
+        write(root, gate.FUZZ_WORKFLOW, fuzz_workflow)
     if floors is not None:
         write(root, gate.FLOORS, floors)
     subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
@@ -213,29 +219,21 @@ def selftest() -> int:
         "the weekly long run names shekyl-a/fuzz_gone, which is not a fuzz target",
         weekly=("shekyl-a/fuzz_one", "shekyl-a/fuzz_gone"),
     )
-    r.expect("no nightly workflow", 1, "nightly.yml is missing: nothing runs", nightly=None)
+    r.expect("no fuzz workflow", 1, "fuzz-nightly.yml is missing: nothing runs", fuzz_workflow=None)
     r.expect(
-        "a nightly workflow that lists its own targets", 1, "does not read its fuzz targets",
-        nightly="jobs:\n  fuzz:\n    strategy:\n      matrix:\n        target: [shekyl-a/fuzz_one]\n",
-    )
-    on = "on:\n  schedule:\n    - cron: \"0 3 * * *\"\n    - cron: \"17 15 * * *\"\n"
-    r.expect(
-        "two schedules, each chosen by a condition", 0,
-        nightly=on + "jobs:\n  a:\n    if: ${{ github.event.schedule == '0 3 * * *' }}\n"
-        "  fuzz-targets:\n    if: ${{ github.event.schedule == '17 15 * * *' }}\n"
-        "    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n",
+        "a fuzz workflow that does not read its plan", 1, "does not read its run",
+        fuzz_workflow="jobs:\n  fuzz:\n    steps:\n      - run: echo hi\n",
     )
     r.expect(
-        "a condition on a cron the workflow does not declare", 1,
-        "selects the schedule '17 16 * * *', which no `cron:` declares",
-        nightly=on + "jobs:\n  a:\n    if: ${{ github.event.schedule != '0 3 * * *' }}\n"
-        "  fuzz-targets:\n    if: ${{ github.event.schedule == '17 16 * * *' }}\n"
-        "    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n",
+        "a cron the planner does not run", 1, "declares the cron '0 3 * * *'",
+        fuzz_workflow=FUZZ_WORKFLOW_TEXT.replace(
+            '    - cron: "17 19 * * 0"\n',
+            '    - cron: "17 19 * * 0"\n    - cron: "0 3 * * *"\n',
+        ),
     )
     r.expect(
-        "a second cron no condition chooses", 1, "no condition selects the cron '17 15 * * *'",
-        nightly=on + "jobs:\n  a:\n    if: ${{ github.event.schedule == '0 3 * * *' }}\n"
-        "  fuzz-targets:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n",
+        "the nightly cron missing", 1, "does not declare the cron '17 15 * * *'",
+        fuzz_workflow=FUZZ_WORKFLOW_TEXT.replace('    - cron: "17 15 * * *"\n', ""),
     )
     r.expect(
         "a compile workflow that does not check the floors", 1, "does not check the coverage floors",
@@ -270,8 +268,17 @@ def selftest() -> int:
     )
     r.expect_floors(
         "a floor that moved without the run that measured it", 1,
-        "floor moved 182 -> 120 with the run and commit unchanged",
+        "floor moved 182 -> 120 with the run unchanged",
         parent=FLOORS, floors=floor(cov=120, second=119),
+    )
+    r.expect_floors(
+        "a floor that moved when the commit changed and the run did not", 1,
+        "floor moved 182 -> 120 with the run unchanged",
+        parent=FLOORS, floors=floor(cov=120, commit=OTHER_COMMIT, second=119),
+    )
+    r.expect_floors(
+        "a commit corrected without moving the floor", 0,
+        parent=FLOORS, floors=floor(commit=OTHER_COMMIT),
     )
     r.expect_floors("the old four-field row", 1, "not the seven", floors=f"shekyl-a/fuzz_one\t182\t1\t{COMMIT}\n")
     r.expect_floors("no second run", 1, "is not a second workflow run id", floors=floor(second_run=43772973669))
@@ -293,6 +300,61 @@ def selftest() -> int:
     r.expect_listed("one target narrows the list", "nightly", "shekyl-a/fuzz_two", ["shekyl-a/fuzz_two"])
     r.expect_listed("a target outside the list is refused", "weekly", "shekyl-a/fuzz_two", None)
     r.expect_listed("an unknown list is refused", "hourly", None, None)
+
+    def expect_resolved(why: str, schedule: str, requested: str, want: str) -> None:
+        try:
+            got = gate.resolve_plan(schedule, requested)
+        except gate.GateError as exc:
+            got = f"error: {exc}"
+        if got != want:
+            r.failures.append(f"{why}: wanted {want!r}, got {got!r}")
+        else:
+            r.passed += 1
+
+    expect_resolved("the nightly cron is the nightly run", gate.NIGHTLY_CRON, "weekly", "nightly")
+    expect_resolved("the weekly cron is the weekly run", gate.WEEKLY_CRON, "", "weekly")
+    expect_resolved("a dispatch names the nightly run", "", "nightly", "nightly")
+    expect_resolved("a dispatch names the weekly run", "", "weekly", "weekly")
+    expect_resolved("a foreign cron is refused", "0 3 * * *", "", "error: the schedule '0 3 * * *' is not a fuzz run")
+    expect_resolved("a dispatch with no plan is refused", "", "", "error: a dispatch names its plan, nightly or weekly")
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        tree(root, bins=("fuzz_one", "fuzz_two"), files=("fuzz_one", "fuzz_two"))
+        nightly = gate.build_plan(root, "nightly", None, WEEKLY)
+        weekly = gate.build_plan(root, "weekly", "shekyl-a/fuzz_one", WEEKLY)
+        one = gate.build_plan(root, "nightly", "shekyl-a/fuzz_two", WEEKLY)
+        if nightly["crates"] != ["shekyl-a"] or nightly["weekly"] or "shekyl-a/fuzz_one" not in nightly["nightly"]:
+            r.failures.append(f"the nightly plan: {nightly}")
+        elif weekly["weekly"] != ["shekyl-a/fuzz_one"] or weekly["nightly"] or weekly["crates"] != ["shekyl-a"]:
+            r.failures.append(f"the weekly plan: {weekly}")
+        elif one["nightly"] != ["shekyl-a/fuzz_two"] or one["crates"] != ["shekyl-a"]:
+            r.failures.append(f"a narrowed plan: {one}")
+        elif nightly["nightly_seconds"] != gate.NIGHTLY_SECONDS or weekly["weekly_seconds"] != gate.WEEKLY_SECONDS:
+            r.failures.append("the plan's seconds are not the module's")
+        else:
+            r.passed += 1
+        try:
+            gate.build_plan(root, "weekly", "shekyl-a/fuzz_two", WEEKLY)
+            r.failures.append("a weekly target outside the list was accepted")
+        except gate.GateError:
+            r.passed += 1
+        emitted = Path(raw) / "out"
+        gate.emit_plan(nightly, "ci/fuzz-nightly-runs", COMMIT, emitted)
+        text = emitted.read_text()
+        if (
+            f"commit={COMMIT}\n" not in text
+            or 'branches=["ci/fuzz-nightly-runs"]\n' not in text
+            or "shekyl-a/fuzz_one" not in text
+            or f"nightly_seconds={gate.NIGHTLY_SECONDS}\n" not in text
+        ):
+            r.failures.append(f"the emitted plan: {text}")
+        else:
+            r.passed += 1
+        try:
+            gate.emit_plan(nightly, "", COMMIT, emitted)
+            r.failures.append("an emit with no branch was accepted")
+        except gate.GateError:
+            r.passed += 1
     r.expect_matrix("a change the closure reaches", "shekyl-a", ["rust/shekyl-a/src/lib.rs"], ["shekyl-a"])
     r.expect_matrix("a change it does not reach", "shekyl-b", ["rust/shekyl-b/src/lib.rs"], [])
     r.expect_matrix("the fuzz crate's own file", "none", ["rust/shekyl-a/fuzz/fuzz_targets/fuzz_one.rs"], ["shekyl-a"])

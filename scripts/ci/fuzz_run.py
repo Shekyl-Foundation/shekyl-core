@@ -6,8 +6,9 @@
 #
 # Build a fuzz crate's targets once, run one target for a fixed time, and
 # judge the run (the CI lane's fuzz brief, Part B, ruled 2026-11-15). The
-# nightly workflow's `fuzz-build` legs build, one per crate, and its `fuzz`
-# and `fuzz-weekly` legs run, one per target.
+# fuzz workflow's `fuzz-build` legs build, one per crate, and its `fuzz`
+# and `fuzz-weekly` legs run, one per target
+# (`.github/workflows/fuzz-nightly.yml`).
 #
 #   fuzz_run.py --build <crate> <bin-dir>
 #   fuzz_run.py <crate>/<target> <seconds> <corpus-dir> <stats-file> <binary>
@@ -94,6 +95,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_fuzz_inventory  # noqa: E402
+
+from check_fuzz_inventory import NIGHTLY_SECONDS, WEEKLY_SECONDS  # noqa: E402
+
 # The execution floor (ruled 2026-11-15): at least this many executions in
 # the run's time, or the job is red.
 FLOOR = 1000
@@ -200,10 +205,40 @@ def judge(outcome: Outcome, cov_floor: tuple[int, int] | None, floor: int = FLOO
     )
 
 
+def slash_as_underscore(part: str) -> str:
+    """`/` is not an artifact-name character. The reporter applies the same map."""
+    return part.replace("/", "_")
+
+
+def build_artifact(branch: str, crate: str) -> str:
+    """The artifact of one crate's built binaries, shared by every lane."""
+    return f"fuzz-bin-{slash_as_underscore(branch)}-{crate}"
+
+
+def leg_names(lane: str, branch: str, target: str) -> dict[str, str]:
+    """Names for one leg.
+
+    The red-issue reporter rebuilds `crash` as
+    `fuzz-crash-<lane>-<branch>-<target>`, with each `/` read as `_`.
+    `cache` has no lane, so the weekly run continues the nightly corpus.
+    """
+    crate, _, binary = target.partition("/")
+    safe_branch = slash_as_underscore(branch)
+    safe_target = slash_as_underscore(target)
+    stamp = f"{lane}-{safe_branch}-{safe_target}"
+    return {
+        "crate": crate,
+        "bin": binary,
+        "binaries": build_artifact(branch, crate),
+        "safe": stamp,
+        "cache": f"fuzz-corpus-{safe_branch}-{safe_target}",
+        "crash": f"fuzz-crash-{stamp}",
+        "stats": f"fuzz-stats-{stamp}",
+    }
+
+
 def every_target() -> list[str]:
     """Every fuzz target, as `<crate>/<target>`, from the inventory."""
-    import check_fuzz_inventory  # noqa: PLC0415
-
     return check_fuzz_inventory.targets(ROOT)
 
 
@@ -264,8 +299,6 @@ def run(name: str, seconds: int, corpus: Path, stats: Path, binary: Path) -> int
     if not binary.is_file():
         print(f"FAIL: {name}: no built binary at {binary}; its crate's fuzz-build leg says why — missing subject (rule 47)")
         return 2
-    import check_fuzz_inventory  # noqa: PLC0415
-
     try:
         row = check_fuzz_inventory.floors(ROOT).get(name)
     except check_fuzz_inventory.GateError as exc:
@@ -318,10 +351,6 @@ def run(name: str, seconds: int, corpus: Path, stats: Path, binary: Path) -> int
             out.write(f"**{name}** ({seconds} s): {mark}, {verdict.says}\n")
     print(("ok: " if verdict.green else "FAIL: ") + f"{name}: {verdict.says}")
     return 0 if verdict.green else 1
-
-
-NIGHTLY_SECONDS = 300
-WEEKLY_SECONDS = 1800
 
 
 def tabulate(records: list[dict], nightly: list[str], weekly: list[str]) -> tuple[list[str], list[str]]:
@@ -489,12 +518,26 @@ def selftest() -> int:
         _, got = tabulate(records, nightly, weekly)
         if len(got) != len(want) or any(w not in g for w, g in zip(want, got)):
             failures.append(f"summary, {why}: wanted {want}, got {got}")
+    names = leg_names("fuzz", "ci/fuzz-nightly-runs", "shekyl-wire/fuzz_tx_parse")
+    want_names = {
+        "crate": "shekyl-wire",
+        "bin": "fuzz_tx_parse",
+        "binaries": "fuzz-bin-ci_fuzz-nightly-runs-shekyl-wire",
+        "safe": "fuzz-ci_fuzz-nightly-runs-shekyl-wire_fuzz_tx_parse",
+        "cache": "fuzz-corpus-ci_fuzz-nightly-runs-shekyl-wire_fuzz_tx_parse",
+        "crash": "fuzz-crash-fuzz-ci_fuzz-nightly-runs-shekyl-wire_fuzz_tx_parse",
+        "stats": "fuzz-stats-fuzz-ci_fuzz-nightly-runs-shekyl-wire_fuzz_tx_parse",
+    }
+    if names != want_names:
+        failures.append(f"leg names: wanted {want_names}, got {names}")
+    if names["binaries"] != build_artifact("ci/fuzz-nightly-runs", "shekyl-wire"):
+        failures.append("the leg's binary artifact is not the build's")
     if failures:
         print("SELFTEST FAIL:")
         for failure in failures:
             print("  " + failure)
         return 1
-    print(f"fuzz run selftest: {len(cases) + 4 + 3 + len(tables)} cases pass")
+    print(f"fuzz run selftest: {len(cases) + 4 + 4 + 3 + len(tables) + 2} cases pass")
     return 0
 
 
@@ -506,10 +549,18 @@ def main() -> int:
         return summary(Path(args[1]))
     if len(args) == 3 and args[0] == "--build":
         return build(args[1], Path(args[2]))
+    if len(args) == 4 and args[0] == "--names":
+        for key, value in leg_names(args[1], args[2], args[3]).items():
+            print(f"{key}={value}")
+        return 0
+    if len(args) == 3 and args[0] == "--build-name":
+        print(build_artifact(args[1], args[2]))
+        return 0
     if len(args) != 5 or not args[1].isdigit():
         print(
             f"usage: {sys.argv[0]} <crate>/<target> <seconds> <corpus-dir> <stats-file> <binary> "
-            "| --build <crate> <bin-dir> | --summary <stats-dir> | --selftest",
+            "| --build <crate> <bin-dir> | --build-name <branch> <crate> "
+            "| --names <lane> <branch> <crate>/<target> | --summary <stats-dir> | --selftest",
             file=sys.stderr,
         )
         return 2

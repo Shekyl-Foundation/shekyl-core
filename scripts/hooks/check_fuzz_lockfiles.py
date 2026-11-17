@@ -20,7 +20,9 @@
 # when the pushed range changes a `Cargo.lock` or a `Cargo.toml` under
 # `rust/` (a manifest is where a dependency changes), and from a checkout
 # of the pushed commit, not the working tree (rule 08: the tested tree is
-# the shipped tree).
+# the shipped tree). The working directory is that tree's `rust/`: rustup
+# selects the toolchain from the process directory, and the pin is
+# `rust/rust-toolchain.toml`. `--manifest-path` does not.
 #
 #   check_fuzz_lockfiles.py --range <base> <head>   the pre-push check
 #   check_fuzz_lockfiles.py --tree <dir>            every fuzz crate in <dir>
@@ -67,6 +69,7 @@ def check_tree(tree: Path) -> list[str]:
     for crate in crates:
         done = subprocess.run(
             ["cargo", "metadata", "--locked", "--format-version", "1", "--manifest-path", str(crate / "Cargo.toml")],
+            cwd=tree / "rust",
             capture_output=True,
             text=True,
             check=False,

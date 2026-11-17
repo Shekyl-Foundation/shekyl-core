@@ -23,14 +23,11 @@
 #     its targets (a seed directory whose target was renamed seeds
 #     nothing);
 #   - every target of the weekly long run (`WEEKLY`) exists, and the
-#     nightly workflow reads its target list from this script
-#     (`--targets`), so a target cannot exist without being run;
-#   - the nightly workflow's schedules and the job conditions that choose
-#     between them agree: every `github.event.schedule == '<cron>'` names
-#     a `cron:` the workflow declares (a condition on a cron that is not
-#     there never runs its job), and when there is more than one cron,
-#     every one is named by some condition (a cron no condition names
-#     runs every job, the fuzz lanes beside the rest).
+#     fuzz workflow reads the run it owes from this script (`--plan`),
+#     so a target cannot exist without being run;
+#   - that workflow declares exactly the two crons this script plans
+#     (`NIGHTLY_CRON`, `WEEKLY_CRON`). The planner is the one place a
+#     cron becomes the nightly run or the weekly run.
 #
 # Modes:
 #   (none)        the check; exit 0, 1 on a finding, 2 when the question
@@ -42,11 +39,19 @@
 #                 weekly long run's, as a JSON list of `<crate>/<target>`;
 #                 naming one target narrows the list to it (refused, exit
 #                 2, when it is not in the list).
+#   --plan [nightly|weekly [<crate>/<target>]] [--emit]
+#                 the run this event owes: the target lists, the crates to
+#                 build, and the seconds. With no run named, `FUZZ_SCHEDULE`
+#                 (a cron) wins and otherwise `FUZZ_PLAN` (a dispatch) is
+#                 `nightly` or `weekly`; `FUZZ_TARGET` narrows it. `--emit`
+#                 appends that plan, plus `FUZZ_BRANCH` and `FUZZ_COMMIT`,
+#                 to `GITHUB_OUTPUT` for the fuzz workflow.
 #   --floors      the coverage floors (`FLOORS`, below): every target has
 #                 exactly one row, every row names a target, its tolerance
 #                 is the one its two runs' spread gives (`tolerance`,
-#                 below), and a floor that moved since the parent commit
-#                 moved with the run and commit it was measured on. The
+#                 below), and a floor or a second coverage that moved since
+#                 the parent commit moved with the run that measured it.
+#                 The recorded commit may be corrected on its own. The
 #                 per-PR compile workflow runs it; the nightly does not, so
 #                 a branch dispatch can measure a new target's first floor.
 #   --regenerate  rewrite every fuzz crate's `Cargo.lock` from the
@@ -77,7 +82,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ".github/workflows/fuzz-harness.yml"
-NIGHTLY = ".github/workflows/nightly.yml"
+# The fuzz lanes. Their own workflow, so nightly.yml keeps one cron.
+FUZZ_WORKFLOW = ".github/workflows/fuzz-nightly.yml"
+# Twelve hours from nightly.yml's 03:00 cron, and off the hour, where
+# GitHub's start delay is worst. Sunday's weekly run is after the nightly
+# fuzz and before 03:00. The workflow declares these and no others.
+NIGHTLY_CRON = "17 15 * * *"
+WEEKLY_CRON = "17 19 * * 0"
+# How long a leg of each run fuzzes. The workflow's hang bound is the
+# runner's own slack around this, not a second copy of it.
+NIGHTLY_SECONDS = 300
+WEEKLY_SECONDS = 1800
 # The weekly long run, thirty minutes each (ruled 2026-11-15): the parsers
 # that take bytes from anyone before anything about the sender is known,
 # and the target five minutes cannot exercise. The Noise handshake's
@@ -106,7 +121,6 @@ FULL_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 DEFAULT_TOLERANCE = 90
 SPREAD_LIMIT = 5
 CRON_RE = re.compile(r'^\s*-\s*cron:\s*"([^"]+)"', re.MULTILINE)
-SCHEDULE_RE = re.compile(r"github\.event\.schedule\s*[!=]=\s*'([^']+)'")
 # A change to any of these reaches every harness.
 EVERY_HARNESS = (
     WORKSPACE_LOCK,
@@ -179,6 +193,28 @@ def targets(root: Path, files: list[str] | None = None) -> list[str]:
     return sorted(out)
 
 
+def fuzz_workflow_findings(text: str) -> list[str]:
+    """The fuzz workflow declares exactly the crons the planner runs, and
+    reads the run from this script."""
+    fails = []
+    if "check_fuzz_inventory.py --plan" not in text:
+        fails.append(
+            f"{FUZZ_WORKFLOW} does not read its run from `check_fuzz_inventory.py --plan`, "
+            "so a target can exist that it does not run"
+        )
+    declared = set(CRON_RE.findall(text))
+    wanted = {NIGHTLY_CRON, WEEKLY_CRON}
+    fails.extend(
+        f"{FUZZ_WORKFLOW} declares the cron {cron!r}, which the planner does not run"
+        for cron in sorted(declared - wanted)
+    )
+    fails.extend(
+        f"{FUZZ_WORKFLOW} does not declare the cron {cron!r} the planner runs"
+        for cron in sorted(wanted - declared)
+    )
+    return fails
+
+
 def check(root: Path, weekly: tuple[str, ...] = WEEKLY) -> tuple[list[str], list[str], int]:
     """Findings, the crates, and the number of targets."""
     files = tracked(root)
@@ -244,28 +280,11 @@ def check(root: Path, weekly: tuple[str, ...] = WEEKLY) -> tuple[list[str], list
         for name in weekly
         if name not in every
     )
-    nightly = root / NIGHTLY
-    if not nightly.is_file():
-        fails.append(f"{NIGHTLY} is missing: nothing runs the fuzz targets")
+    fuzz_workflow = root / FUZZ_WORKFLOW
+    if not fuzz_workflow.is_file():
+        fails.append(f"{FUZZ_WORKFLOW} is missing: nothing runs the fuzz targets")
     else:
-        text = nightly.read_text()
-        if "check_fuzz_inventory.py --targets" not in text:
-            fails.append(
-                f"{NIGHTLY} does not read its fuzz targets from `check_fuzz_inventory.py --targets`, "
-                "so a target can exist that it does not run"
-            )
-        crons = set(CRON_RE.findall(text))
-        named = set(SCHEDULE_RE.findall(text))
-        fails.extend(
-            f"{NIGHTLY}: a condition selects the schedule {cron!r}, which no `cron:` declares, so "
-            "its job never runs on a schedule"
-            for cron in sorted(named - crons)
-        )
-        if len(crons) > 1:
-            fails.extend(
-                f"{NIGHTLY}: no condition selects the cron {cron!r}, so its run runs every job"
-                for cron in sorted(crons - named)
-            )
+        fails.extend(fuzz_workflow_findings(fuzz_workflow.read_text()))
     workflow = root / WORKFLOW
     if not workflow.is_file():
         fails.append(f"{WORKFLOW} is missing: nothing compiles the fuzz crates")
@@ -397,9 +416,9 @@ def floor_findings(root: Path) -> list[str]:
         before, _ = parse_floors(parent.stdout)
         for name, row in sorted(rows.items()):
             was = before.get(name)
-            if was and was.cov != row.cov and (was.run, was.commit) == (row.run, row.commit):
+            if was and was.cov != row.cov and was.run == row.run:
                 fails.append(
-                    f"{FLOORS}: {name}'s floor moved {was.cov} -> {row.cov} with the run and commit "
+                    f"{FLOORS}: {name}'s floor moved {was.cov} -> {row.cov} with the run "
                     "unchanged: a floor moves only with the run that measured it"
                 )
             if was and was.second_cov != row.second_cov and was.second_run == row.second_run:
@@ -460,6 +479,57 @@ def regenerate(root: Path) -> int:
     return 0
 
 
+def resolve_plan(schedule: str, requested: str) -> str:
+    """Which run this event owes. A schedule is the run. A dispatch names one."""
+    if schedule == NIGHTLY_CRON:
+        return "nightly"
+    if schedule == WEEKLY_CRON:
+        return "weekly"
+    if schedule:
+        raise GateError(f"the schedule {schedule!r} is not a fuzz run")
+    if requested in ("nightly", "weekly"):
+        return requested
+    raise GateError("a dispatch names its plan, nightly or weekly")
+
+
+def build_plan(root: Path, which: str, only: str | None = None, weekly: tuple[str, ...] = WEEKLY) -> dict:
+    """The lists a fuzz run owes: the targets, the crates to build, the seconds."""
+    if which == "nightly":
+        nightly = listed(root, "nightly", only, weekly)
+        weekly_targets: list[str] = []
+    elif which == "weekly":
+        nightly = []
+        weekly_targets = listed(root, "weekly", only, weekly)
+    else:
+        raise GateError(f"a fuzz plan is nightly or weekly, not {which!r}")
+    crates = sorted({name.partition("/")[0] for name in (nightly or weekly_targets)})
+    return {
+        "nightly": nightly,
+        "weekly": weekly_targets,
+        "crates": crates,
+        "nightly_seconds": NIGHTLY_SECONDS,
+        "weekly_seconds": WEEKLY_SECONDS,
+    }
+
+
+def emit_plan(plan: dict, branch: str, commit: str, out: Path) -> None:
+    """Append the plan the workflow's later jobs read. One line per key."""
+    if not branch or not commit:
+        raise GateError("a plan emit needs the branch and the commit")
+    lines = {
+        "nightly": json.dumps(plan["nightly"]),
+        "weekly": json.dumps(plan["weekly"]),
+        "crates": json.dumps(plan["crates"]),
+        "nightly_seconds": str(plan["nightly_seconds"]),
+        "weekly_seconds": str(plan["weekly_seconds"]),
+        "commit": commit,
+        "branches": json.dumps([branch]),
+    }
+    with out.open("a") as handle:
+        for key, value in lines.items():
+            handle.write(f"{key}={value}\n")
+
+
 def listed(root: Path, which: str, only: str | None, weekly: tuple[str, ...] = WEEKLY) -> list[str]:
     """`--targets`: every target, or the weekly run's, narrowed to `only`."""
     every = targets(root)
@@ -516,6 +586,35 @@ def main() -> int:
             print(f"FAIL: {exc}", file=sys.stderr)
             return 2
         return 0
+    if args[:1] == ["--plan"]:
+        emit = "--emit" in args[1:]
+        rest = [arg for arg in args[1:] if arg != "--emit"]
+        try:
+            if not rest:
+                which = resolve_plan(os.environ.get("FUZZ_SCHEDULE", ""), os.environ.get("FUZZ_PLAN", ""))
+                only = os.environ.get("FUZZ_TARGET") or None
+            elif rest[0] in ("nightly", "weekly") and len(rest) in (1, 2):
+                which = rest[0]
+                only = rest[1] if len(rest) == 2 else None
+            else:
+                raise GateError(f"--plan takes nightly or weekly, not {' '.join(rest)!r}")
+            planned = build_plan(ROOT, which, only)
+            if emit:
+                output = os.environ.get("GITHUB_OUTPUT", "")
+                if not output:
+                    raise GateError("--emit needs GITHUB_OUTPUT")
+                emit_plan(
+                    planned,
+                    os.environ.get("FUZZ_BRANCH", ""),
+                    os.environ.get("FUZZ_COMMIT", ""),
+                    Path(output),
+                )
+            else:
+                print(json.dumps(planned))
+        except GateError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 2
+        return 0
     if args == ["--regenerate"]:
         return regenerate(ROOT)
     if args == ["--floors"]:
@@ -523,6 +622,7 @@ def main() -> int:
     if args:
         print(
             f"usage: {sys.argv[0]} [--matrix | --targets nightly|weekly [<crate>/<target>] "
+            "| --plan [nightly|weekly [<crate>/<target>]] [--emit] "
             "| --floors | --regenerate | --selftest]",
             file=sys.stderr,
         )

@@ -17,7 +17,7 @@
 //!
 //! This crate is excluded from the parent workspace (see
 //! `rust/Cargo.toml`) because `libfuzzer-sys` requires nightly Rust
-//! and the sanitizer runtime. The nightly workflow's `fuzz` job runs
+//! and the sanitizer runtime. The nightly fuzz workflow's `fuzz` job runs
 //! it, as `cargo +nightly fuzz run region2_parser` from inside this
 //! directory; see `README.md` for the invocation.
 
