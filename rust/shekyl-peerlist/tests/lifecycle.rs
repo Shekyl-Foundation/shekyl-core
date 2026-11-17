@@ -331,7 +331,7 @@ fn an_excused_failure_with_no_count_waits_the_outage_retry() {
     );
     assert_eq!(list.failed_tests(&peer), 0);
     assert!(list.is_cooling(&peer));
-    let retry = shekyl_peerlist::dial_profile(CLEARNET).judging.outage_retry;
+    let retry = shekyl_peerlist::dial_profile(CLEARNET).outage_retry;
     list.white_count(
         CLEARNET,
         at(retry.base_nanos - 1),

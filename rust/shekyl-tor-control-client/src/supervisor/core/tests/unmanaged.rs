@@ -38,9 +38,6 @@ fn a_tor_this_node_does_not_run_is_never_launched() {
                 tor: 3,
             }),
             Input::DialEvidence(DialTally {
-                opened: 1,
-                unopened: 0,
-                last_sign_of_life: Some(1),
                 failed_attempt_began: None,
                 census: TorCensus::Held { seats: 1, since: 0 },
             }),

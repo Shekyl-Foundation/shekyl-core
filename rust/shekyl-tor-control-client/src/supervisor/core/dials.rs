@@ -3,26 +3,21 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What this node's own Tor dials show (`TOR_SUPERVISOR.md` §4.2, "every Tor
-//! dial's outcome"). Display only: never a cause, never a respawn
-//! (`TSR-Q14`, Tor does Tor).
+//! The quiet line (`TOR_SUPERVISOR.md` §4.2; `DIALER_OUTAGE_EVIDENCE.md`
+//! §6, as ruled 2026-11-15): display only, never a cause, never a respawn
+//! (`TSR-Q14`).
 //!
-//! The posture line reports the dialer judge's last sign that the Tor link
-//! worked (`DIALER_OUTAGE_EVIDENCE.md` §6): a stream that opened, or a byte
-//! a Tor session received. When none has come for Tor's window plus the
-//! judge's bracket, the line says what the dialer's census holds. An empty
-//! census says no peer is known. A non-empty run says peers are known and
-//! none has answered, for the time since that run began or since the quiet
-//! stretch, whichever is later, and only after a Tor dial launched in that
-//! span failed. A census that has not arrived says nothing. The line is a
-//! neutral fact with no fix: not "this machine cannot reach the Tor
-//! network", which Tor alone may say, and which a planted onion could
-//! otherwise make the node say.
-
-use std::time::Duration;
+//! The line stands only when the manager's own onion-path reading is
+//! impaired, peers are known, and a Tor dial launched since that reading
+//! failed. What the line needs from the dialer, whether peers are known
+//! and when a failed dial was launched, is the Tor connector's copy of the
+//! dialer's per-connector tally. The line is a neutral fact with no fix:
+//! not "this machine cannot reach the Tor network", which Tor alone may
+//! say, and which it says through its own cause.
 
 use super::super::posture::{Cause, TorQuiet};
-use super::{Action, Core, Phase, Policy};
+use super::onion_path::{OnionPath, PathReading};
+use super::{Action, Core, Phase};
 
 /// The Tor connector's census, on the supervisor's clock
 /// (`DIALER_OUTAGE_EVIDENCE.md` §6). The dialer's census mapped at the
@@ -42,53 +37,14 @@ pub enum TorCensus {
     Held { seats: u32, since: u64 },
 }
 
-/// The fact a quiet line states. [`TorQuiet::Unanswered`]'s start is when
-/// that fact began. A longer span of the same fact is not said again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QuietFact {
-    NoPeersKnown,
-    Unanswered,
-}
-
-fn quiet_fact(line: TorQuiet) -> QuietFact {
-    match line {
-        TorQuiet::NoPeersKnown => QuietFact::NoPeersKnown,
-        TorQuiet::Unanswered { .. } => QuietFact::Unanswered,
-    }
-}
-
-/// [`TorQuiet::Unanswered`] when a dial launched inside the held span
-/// failed and that span has reached `quiet_after`. The span starts at the
-/// later of the quiet stretch and the non-empty run.
-fn unanswered(
-    tally: DialTally,
-    now: u64,
-    stretch: u64,
-    held_since: u64,
-    policy: &Policy,
-) -> Option<TorQuiet> {
-    let from = stretch.max(held_since);
-    let span = Duration::from_nanos(now.saturating_sub(from));
-    let failed = tally
-        .failed_attempt_began
-        .is_some_and(|began| began >= from);
-    (span >= policy.quiet_after && failed).then_some(TorQuiet::Unanswered { since: from })
-}
-
-/// The dialer's tally of this node's Tor dials. The supervisor never sees
-/// an address or a reply code.
+/// The Tor connector's copy of the dialer's tally. The supervisor never
+/// sees an address or a reply code.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DialTally {
-    /// Tor dials whose stream opened. Only grows.
-    pub opened: u64,
-    /// Tor dials that ended without a stream since the last one opened.
-    pub unopened: u32,
-    /// When the dialer's judge last saw the Tor link work, in nanoseconds on
-    /// the process clock the supervisor runs on. `None` until the first.
-    pub last_sign_of_life: Option<u64>,
-    /// The latest launch among Tor dials that ended without a stream, on
-    /// that same clock (`attempt_began`, `DIALER_OUTAGE_EVIDENCE.md` §6.1).
-    /// `None` until the first.
+    /// The latest launch among Tor dials that ended without a stream, in
+    /// nanoseconds on the process clock the supervisor runs on
+    /// (`attempt_began`, `DIALER_OUTAGE_EVIDENCE.md` §6.1). `None` until
+    /// the first.
     pub failed_attempt_began: Option<u64>,
     /// The Tor connector's latest census. [`TorCensus::Pending`] until the
     /// first.
@@ -114,63 +70,42 @@ impl Dials {
         }
     }
 
-    /// Fold a tally. The cell keeps only the latest one, so it can carry a
-    /// failure and a later sign of life together; each is read by its own
-    /// instant, never by when the tally arrived. The tally already in the
-    /// cell when this supervisor started is folded the same way: its
-    /// failures were launched before this supervisor's Tor ran, and the
-    /// stretch rule leaves them out on its own.
+    /// Fold a tally. The cell keeps only the latest one; its failure is
+    /// read by its launch, never by when the tally arrived.
     pub(super) fn fold(&mut self, tally: DialTally) {
         self.last = tally;
     }
 
-    /// A Tor reached Running, or the node woke: the clock starts now.
+    /// A Tor reached Running, or the node woke: a reading or a failure from
+    /// before it does not stand the line.
     pub(super) fn restart(&mut self, now: u64) {
         self.running_at = now;
         self.line = None;
     }
 
-    /// Re-read the span at `now`.
+    /// Re-read the line against the manager's `path` reading.
     ///
-    /// The quiet stretch runs from the judge's last sign of life or from
-    /// [`Self::restart`], whichever is later (`DIALER_OUTAGE_EVIDENCE.md`
-    /// §6.1). A dial sent to the Tor before a respawn, or before a wake,
-    /// runs out its window inside the stretch and did not test the link
-    /// since. Only failures are filtered by launch. A stream that opens
-    /// counts through the sign of life whatever its launch.
+    /// It stands as [`TorQuiet::Unreached`] when the reading is impaired and
+    /// learned since [`Self::restart`], the census holds peers, and a Tor
+    /// dial launched at or after the later of the reading and the census's
+    /// run failed (`DIALER_OUTAGE_EVIDENCE.md` §6.1: only failures are
+    /// filtered by launch). The line carries the reading's instant.
     ///
-    /// The census then picks the line, once the stretch has reached
-    /// `quiet_after`:
-    ///
-    /// - [`TorCensus::Pending`] says nothing. A failed dial is not a census.
-    /// - [`TorCensus::Empty`] stands as [`TorQuiet::NoPeersKnown`]. There
-    ///   is nothing to dial, so no failure is required.
-    /// - [`TorCensus::Held`] stands as [`TorQuiet::Unanswered`] when a Tor
-    ///   dial launched at or after `max(stretch start, run start)` has
-    ///   failed, and that span has reached `quiet_after`. The line carries
-    ///   the span's start: the spoken duration is time peers have been held
-    ///   without an answer, not time that passed while the census was
-    ///   empty, and it is taken when the status is asked.
-    ///
-    /// Returns `true` when the line's fact has just begun or has changed
-    /// from the other fact. A longer duration of the same fact is the same
-    /// line and is not said again.
-    pub(super) fn evaluate(&mut self, now: u64, policy: &Policy) -> bool {
-        let stretch = self
-            .last
-            .last_sign_of_life
-            .map_or(self.running_at, |life| life.max(self.running_at));
-        let quiet = Duration::from_nanos(now.saturating_sub(stretch));
-        let line = if quiet < policy.quiet_after {
-            None
-        } else {
-            match self.last.census {
-                TorCensus::Pending => None,
-                TorCensus::Empty => Some(TorQuiet::NoPeersKnown),
-                TorCensus::Held { since, .. } => unanswered(self.last, now, stretch, since, policy),
-            }
-        };
-        let began = line.map(quiet_fact) != self.line.map(quiet_fact) && line.is_some();
+    /// Returns `true` when the line has just begun.
+    pub(super) fn evaluate(&mut self, path: Option<PathReading>) -> bool {
+        let line = path
+            .filter(|reading| reading.path == OnionPath::Impaired && reading.at >= self.running_at)
+            .and_then(|reading| match self.last.census {
+                TorCensus::Held { since, .. } => {
+                    let from = reading.at.max(since);
+                    self.last
+                        .failed_attempt_began
+                        .is_some_and(|began| began >= from)
+                        .then_some(TorQuiet::Unreached { since: reading.at })
+                }
+                TorCensus::Pending | TorCensus::Empty => None,
+            });
+        let began = line.is_some() && self.line.is_none();
         self.line = line;
         began
     }
@@ -184,20 +119,19 @@ impl Dials {
 impl Core {
     /// The dialer's tally moved. Display only (`TSR-Q14`): which reply a
     /// failed onion dial gets is the destination's to choose as much as the
-    /// link's, so this never sets a cause. While nothing comes through a
-    /// running Tor, the posture line says so once.
-    pub(super) fn dial_evidence(&mut self, tally: DialTally, now: u64) -> Vec<Action> {
+    /// path's, so this never sets a cause.
+    pub(super) fn dial_evidence(&mut self, tally: DialTally) -> Vec<Action> {
         self.dials.fold(tally);
-        self.quiet_line(now)
+        self.quiet_line()
     }
 
-    /// Re-read the quiet span. The line is said when its fact begins, and
-    /// again when the fact changes, and only while no cause is named.
-    pub(super) fn quiet_line(&mut self, now: u64) -> Vec<Action> {
+    /// Re-read the quiet line. It is said when it begins, and only while
+    /// no cause is named.
+    pub(super) fn quiet_line(&mut self) -> Vec<Action> {
         if !matches!(self.phase, Phase::Running { .. }) {
             return Vec::new();
         }
-        if self.dials.evaluate(now, &self.policy) && self.cause == Cause::None {
+        if self.dials.evaluate(self.path.latest()) && self.cause == Cause::None {
             vec![Action::SayProgress]
         } else {
             Vec::new()

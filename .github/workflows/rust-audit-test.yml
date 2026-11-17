@@ -221,6 +221,11 @@ jobs:
       # graph; each banned name is asserted to be a real workspace package.
       - name: "chain-rules: no store handle in the resolved graph (G1)"
         run: scripts/ci/check_chain_rules_no_store.sh
+      # Same placement reason: reads `cargo tree`. The dialer knows no
+      # connector (DIALER_OUTAGE_EVIDENCE.md §3.3, Rick 2026-11-15): no
+      # `shekyl-tor*` crate on its shipped graph. Fails closed, like G1.
+      - name: "dialer: no Tor crate in the resolved graph"
+        run: scripts/ci/check_dialer_no_tor.sh
       - name: verify x86_64 architecture
         run: |
           ARCH=$(uname -m)

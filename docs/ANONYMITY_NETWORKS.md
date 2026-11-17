@@ -112,6 +112,13 @@ configuration file ([`USER_GUIDE.md`](USER_GUIDE.md), "Configuration file").
 through it, and publishes a per-boot onion for inbound. There is nothing to
 configure.
 
+The daemon checks that its own onion can be reached through the Tor
+network: once each time Tor republishes the onion, and, when a dial fails
+and the daemon needs to know whether the onion network is working, at most
+once every 15 minutes. Your Tor's entry guard can see the shape of these
+checks and learn that this computer runs an onion service, which the
+service's own traffic already shows it.
+
 ### Your own Tor: outbound
 
 `tor = operator` dials through a Tor you run, named by its SOCKS endpoint:
@@ -123,6 +130,13 @@ configure.
 Without `tor-onion` this is dial-only over Tor. If that SOCKS port asks for a
 username and password, set `tor-socks-username` and `tor-socks-password` in the
 configuration file; they are not accepted on the command line.
+
+With your own Tor the daemon cannot check whether the onion network is
+working, because it has no control of that Tor. It learns that only from dials
+that succeed and from peers that connect to it. So an onion address that has
+gone dead leaves the daemon's peer list more slowly than it does with the
+managed Tor: each failed dial to it is set aside, not held against it, until
+the daemon sees the network working again.
 
 Peers can be named. Repeat the option for more than one:
 

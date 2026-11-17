@@ -6,7 +6,7 @@
   "origination": "connecting",
   "sync_connector": [],
   "tor_quiet": {
-    "failing": {
+    "unreached": {
       "age": 130
     }
   },
