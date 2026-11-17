@@ -1,0 +1,29 @@
+#!/bin/sh
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Pre-push checks that cost seconds and need no runner (ruled 2026-11-16: a
+# check that does not earn a CI job goes here). Install in a clone with
+#   cp scripts/hooks/pre-push scripts/hooks/check_fuzz_lockfiles.py \
+#      "$(git rev-parse --git-common-dir)/hooks/"
+# The copy beside the hook is the fallback for a push of a tree that
+# predates the script.
+#
+# Each pushed ref: the fuzz lockfiles still resolve with --locked, when the
+# range changes a Cargo.toml or Cargo.lock under rust/
+# (check_fuzz_lockfiles.py).
+set -eu
+root=$(git rev-parse --show-toplevel)
+script="$root/scripts/hooks/check_fuzz_lockfiles.py"
+if [ ! -f "$script" ]; then
+    script=$(dirname "$0")/check_fuzz_lockfiles.py
+fi
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue  # a branch deletion pushes no tree
+    python3 "$script" --range "$remote_sha" "$local_sha" || status=1
+done
+exit "$status"
