@@ -21,26 +21,30 @@ name: chain-forge
 #   request that touches the crypto beneath the chain's bytes
 #   (shekyl-crypto-pq, shekyl-fcmp, shekyl-tx-builder).
 # - Nightly, at dev's HEAD (§9): both legs, and on x86_64 the forged-chain
-#   test (the identity test's four locks and the receipt tamper test) and the
+#   test (the identity test's four locks and the receipt tamper test), the
 #   negative controls (each source of randomness drawn from the OS, the chain
-#   must differ). A red nightly reaches `report-dev-red`.
+#   must differ), and the producer audit (two processes at the plan's spread,
+#   then the live settlement comparison). A red nightly reaches `report-dev-red`.
 #
-# Scope: the Rust tree, because a forged chain's bytes depend on the
-# consensus rules, the store, the driver and the crypto beneath them, and on
-# nothing outside `rust/`. Not a required check, so the `paths` filter
-# suppressing the workflow on other changes waits on nothing.
+# Scope: the Rust tree and `config/`, because a forged chain's bytes depend
+# on the consensus rules, the store, the driver and the crypto beneath them,
+# and on the economics and consensus JSON the build reads. Not a required
+# check, so the `paths` filter suppressing the workflow on other changes
+# waits on nothing.
 
 on:
   push:
     branches: [dev, main]
     paths:
       - 'rust/**'
+      - 'config/**'
       - '.github/workflows/chain-forge.yml'
       - '.github/actions/install-rust/**'
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - 'rust/**'
+      - 'config/**'
       - '.github/workflows/chain-forge.yml'
       - '.github/actions/install-rust/**'
   schedule:
@@ -91,7 +95,10 @@ jobs:
   x86_64:
     name: "chain forge: determinism (x86_64)"
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # The nightly adds the producer plan: two forgings of about 6,000 blocks,
+    # then the live settlement comparison. 300 covers that on top of the
+    # small plan. A pull request runs only the small plan.
+    timeout-minutes: 300
     steps:
       - name: the runner
         # The architecture this leg claims, checked, and the cores its
@@ -132,6 +139,20 @@ jobs:
           cargo test --locked --release -p shekyl-chain-forge --test determinism --
           --ignored --nocapture --test-threads=1
           each_source_drawn_from_the_os_moves_the_chain
+      - name: the producer plan forges the same bytes in two processes (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        working-directory: rust
+        run: >-
+          cargo test --locked --release -p shekyl-chain-forge --test determinism --
+          --ignored --nocapture --test-threads=1
+          the_producer_plan_forges_the_same_bytes_in_two_processes
+      - name: a live producer run settles as the planned one (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        working-directory: rust
+        run: >-
+          cargo test --locked --release -p shekyl-chain-forge --test producer_audit --
+          --ignored --nocapture --test-threads=1
+          a_live_producer_run_settles_as_the_planned_one
 
   aarch64:
     name: "chain forge: determinism (aarch64)"
