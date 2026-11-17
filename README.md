@@ -401,9 +401,7 @@ Then you need to increase the data ulimit size to 2GB and try again: `ulimit -d 
 
 ### On NetBSD:
 
-Check that the dependencies are present: `pkg_info -c git-base gmake cmake rust | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.
-
-Clone the Shekyl repository recursively and checkout the most recent release as described above. Then build: `gmake release`. The resulting executables can be found in `build/NetBSD/[Release version]/Release/bin/`.
+NetBSD is not a supported target: no CI job builds it, and a NetBSD build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
 ### On Solaris:
 
