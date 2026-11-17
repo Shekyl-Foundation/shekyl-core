@@ -250,8 +250,10 @@ suspended. On Linux the reading is `Instant` (`CLOCK_MONOTONIC`). On
 macOS the reading is `Instant` (`CLOCK_UPTIME_RAW`). On Windows `Instant`
 counts through every sleep, so the reading is
 `QueryUnbiasedInterruptTimePrecise`, which leaves out S3 sleep and
-hibernation but not Modern Standby (S0): through a standby it counts on, as
-measured on 2026-11-11 (`TOR_SUPERVISOR.md` §10, `TSR-M8`).
+hibernation, as Windows documents, and most of the time a Modern Standby
+(S0) spends in DRIPS, its deep idle. It counts the standby's active time, so
+how much of a standby it leaves out depends on how long the platform holds
+DRIPS (measured, `TOR_SUPERVISOR.md` §10, `TSR-M8`).
 The transport layer and the dialer use this clock. They do not keep their own.
 
 The engine thread sleeps on `Clock::wait_for`. It does not link tokio. A
