@@ -630,6 +630,7 @@ jobs:
         # lists release (the trybuild lane debug, its header says why) and
         # runs the tests. Each script keeps its own rule.
         run: |
+          bash scripts/ci/ignored_set_chain_forge.sh --check
           bash scripts/ci/ignored_set_chain_ingest.sh --check
           bash scripts/ci/ignored_set_chain_store.sh --check
           bash scripts/ci/ignored_set_economics_sim.sh --check

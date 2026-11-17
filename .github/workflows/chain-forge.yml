@@ -13,10 +13,14 @@ name: chain-forge
 #   run is fleet evidence recorded with the increment, not a CI leg.
 # - The seeded primitives first (seconds): when the legs disagree, that step
 #   names the primitive.
+# - Each ignored test runs through scripts/ci/ignored_set_chain_forge.sh,
+#   which holds the crate's ignored set exact and runs one subject by its
+#   exact name.
 # - Cost (measured at CF-1c): one forging of the small plan is about 29
-#   CPU-minutes, 222 s on a 16-vCPU build VM, so about 8 minutes on a
-#   4-vCPU hosted runner; a leg forges twice. That is over the five minutes
-#   a leg that runs on every pull request may take, so the x86_64 leg runs
+#   CPU-minutes, 228 s on a 16-vCPU build VM. On the hosted runners the two
+#   forgings took 316 s and 281 s (x86_64) and 204 s and 145 s (aarch64), a
+#   whole leg 14.7 and 11.2 minutes. That is over the five minutes a leg
+#   that runs on every pull request may take, so the x86_64 leg runs
 #   on every pull request in scope and the aarch64 leg nightly and on a pull
 #   request that touches the crypto beneath the chain's bytes
 #   (shekyl-crypto-pq, shekyl-fcmp, shekyl-tx-builder).
@@ -121,38 +125,19 @@ jobs:
         working-directory: rust
         run: cargo test --locked --release -p shekyl-chain-forge --test primitives_across_architectures
       - name: the small plan, forged in two processes, is the committed chain
-        working-directory: rust
-        run: >-
-          cargo test --locked --release -p shekyl-chain-forge --test determinism --
-          --ignored --nocapture --test-threads=1
-          the_small_plan_forges_the_same_bytes_in_two_processes
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_small_plan_forges_the_same_bytes_in_two_processes
       - name: the forged chain is regtest's alone, and refuses a tampered receipt (nightly)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        working-directory: rust
-        run: >-
-          cargo test --locked --release -p shekyl-chain-forge --test forged_chain --
-          --ignored --nocapture
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run forged_chain::the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt
       - name: each source of randomness, drawn from the OS, moves the chain (nightly)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        working-directory: rust
-        run: >-
-          cargo test --locked --release -p shekyl-chain-forge --test determinism --
-          --ignored --nocapture --test-threads=1
-          each_source_drawn_from_the_os_moves_the_chain
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::each_source_drawn_from_the_os_moves_the_chain
       - name: the producer plan forges the same bytes in two processes (nightly)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        working-directory: rust
-        run: >-
-          cargo test --locked --release -p shekyl-chain-forge --test determinism --
-          --ignored --nocapture --test-threads=1
-          the_producer_plan_forges_the_same_bytes_in_two_processes
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_producer_plan_forges_the_same_bytes_in_two_processes
       - name: a live producer run settles as the planned one (nightly)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        working-directory: rust
-        run: >-
-          cargo test --locked --release -p shekyl-chain-forge --test producer_audit --
-          --ignored --nocapture --test-threads=1
-          a_live_producer_run_settles_as_the_planned_one
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run producer_audit::a_live_producer_run_settles_as_the_planned_one
 
   aarch64:
     name: "chain forge: determinism (aarch64)"
@@ -180,11 +165,7 @@ jobs:
         working-directory: rust
         run: cargo test --locked --release -p shekyl-chain-forge --test primitives_across_architectures
       - name: the small plan, forged in two processes, is the committed chain
-        working-directory: rust
-        run: >-
-          cargo test --locked --release -p shekyl-chain-forge --test determinism --
-          --ignored --nocapture --test-threads=1
-          the_small_plan_forges_the_same_bytes_in_two_processes
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_small_plan_forges_the_same_bytes_in_two_processes
 
   report-dev-red:
     needs: [scope, x86_64, aarch64]
