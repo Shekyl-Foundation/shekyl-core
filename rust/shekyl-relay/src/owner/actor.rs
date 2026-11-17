@@ -620,14 +620,14 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                     tracing::debug!(?peer, "a fluff batch was not written; the session is gone");
                 }
             }
+            // The log never names a stem's successor or its transactions
+            // (`RPC_CHANNEL.md` §6.4, RT-O9.3): it sits on disk, at any
+            // level a runtime option may raise.
             Effect::Stem { peer, blobs } => {
                 if self.send_batch(peer, &blobs, false) {
-                    tracing::debug!(?peer, count = blobs.len(), "a reshape stem was written");
+                    tracing::debug!(count = blobs.len(), "a reshape stem was written");
                 } else {
-                    tracing::debug!(
-                        ?peer,
-                        "a reshape stem was not written; the next fire fluffs"
-                    );
+                    tracing::debug!("a reshape stem was not written; the next fire fluffs");
                 }
             }
             Effect::Published { txs } => {
@@ -700,7 +700,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             }
             // A forwarded stem the carrier dropped takes the failed-stem
             // fallback: it fluffs, which is what moves it along.
-            tracing::debug!(tx = ?pending.tx, "the carrier discarded a forwarded stem; fluffing");
+            tracing::debug!("the carrier discarded a forwarded stem; fluffing");
             self.fluff_and_record(&one, pending.source);
             return;
         }
@@ -901,7 +901,6 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         let sent = self.send_batch(destination, &blobs, false);
         if sent {
             tracing::debug!(
-                ?destination,
                 count = txs.len(),
                 txs = measured_ids(txs).as_deref(),
                 "a stem was forwarded"
@@ -923,8 +922,13 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         });
         match session.send(&message) {
             Ok(()) => true,
+            // A stem's successor is not named (§6.4); a fluff's peer is.
+            Err(refused) if fluff => {
+                tracing::debug!(?peer, %refused, "a fluff batch was not sent");
+                false
+            }
             Err(refused) => {
-                tracing::debug!(?peer, %refused, "a transaction batch was not sent");
+                tracing::debug!(%refused, "a stem batch was not sent");
                 false
             }
         }
