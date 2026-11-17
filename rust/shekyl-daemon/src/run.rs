@@ -89,6 +89,22 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         Ok(owning) => owning,
         Err(d) => return refuse(&[d]),
     };
+    // A second handle, held until this function returns and never read or
+    // written. The watch drops its own handle when it sees the close, at
+    // the start of the stop; this one keeps the daemon's end open through
+    // the teardown, the lock's release and the log's flush. So the
+    // starting process reads end of stream when the daemon is gone, not
+    // when its stop began, and may start the next daemon on that read.
+    let _owning_to_exit = match owning.as_ref().map(OwningConnection::try_clone).transpose() {
+        Ok(held) => held,
+        Err(e) => {
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: the owning connection could not be held: {e}"),
+            );
+            return EXIT_FAILED;
+        }
+    };
     // The build identity, from the one home every binary reads (DC-Q20).
     let release_name = shekyl_version::RELEASE_NAME;
     let version_full = shekyl_version::VERSION_FULL;
