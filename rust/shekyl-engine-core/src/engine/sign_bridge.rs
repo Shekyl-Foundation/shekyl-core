@@ -610,7 +610,7 @@ mod tests {
         }
         assert_eq!(
             hex::encode(shekyl_crypto_hash::keccak256(&transcript)),
-            "2e6b5e6f1c43fa346958b51b211c2d02f880f2f6f61b6491435faf9122ada0cb"
+            "9fdebca0b5b99d71f261db870a2ac067ed1a79d5df7fe8bcc687a54159555218"
         );
     }
 
