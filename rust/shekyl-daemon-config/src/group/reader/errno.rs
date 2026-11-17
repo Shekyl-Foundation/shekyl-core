@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The account walk's next entry by `getpwent` (musl, macOS and iOS). The
+//! The account walk's next entry by `getpwent` (musl and macOS). The
 //! libc crate declares no `getpwent_r` for these targets, and musl defines
 //! none.
 //! The entry is the library's own storage, read before the next call and
@@ -62,7 +62,7 @@ fn clear_errno() {
         {
             *libc::__errno_location() = 0;
         }
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(target_os = "macos")]
         {
             *libc::__error() = 0;
         }
@@ -71,9 +71,5 @@ fn clear_errno() {
 
 /// The targets [`clear_errno`] knows how to clear. A target added to the
 /// errno reader in `sys` without an accessor arm stops the build here.
-#[cfg(not(any(
-    all(target_os = "linux", target_env = "musl"),
-    target_os = "macos",
-    target_os = "ios"
-)))]
+#[cfg(not(any(all(target_os = "linux", target_env = "musl"), target_os = "macos")))]
 compile_error!("group: name this target's errno accessor as the libc crate declares it");

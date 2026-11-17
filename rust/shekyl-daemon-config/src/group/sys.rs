@@ -224,12 +224,8 @@ impl Drop for WalkCursor {
 #[path = "reader/reentrant.rs"]
 mod reader;
 
-/// musl, macOS and iOS.
-#[cfg(any(
-    all(target_os = "linux", target_env = "musl"),
-    target_os = "macos",
-    target_os = "ios"
-))]
+/// musl and macOS.
+#[cfg(any(all(target_os = "linux", target_env = "musl"), target_os = "macos"))]
 #[path = "reader/errno.rs"]
 mod reader;
 
@@ -237,8 +233,7 @@ mod reader;
     all(target_os = "linux", target_env = "gnu"),
     all(target_os = "linux", target_env = "musl"),
     target_os = "freebsd",
-    target_os = "macos",
-    target_os = "ios"
+    target_os = "macos"
 )))]
 compile_error!(
     "group: name this target's account walk, getpwent_r and its end-of-list convention, \

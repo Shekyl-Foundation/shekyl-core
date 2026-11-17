@@ -23,7 +23,7 @@
 //!   (`lib/libc/gen/getpwent.c`). `ERANGE` refuses. Its files and compat
 //!   backends move past an entry before checking that it fits, so
 //!   a retry would skip that account and the check would fail open.
-//! - musl, macOS and iOS (`getpwent`): the libc crate declares no
+//! - musl and macOS (`getpwent`): the libc crate declares no
 //!   `getpwent_r` for them (musl defines none, `include/pwd.h`). No result with
 //!   `errno` clear is the end. `getpwent` leaves `errno` alone at the end of
 //!   the list (musl `src/passwd/getpwent_a.c`), so the reader clears it
