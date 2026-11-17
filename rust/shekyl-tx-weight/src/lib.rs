@@ -8,7 +8,7 @@
 //! [`predict_weight`] mirrors `shekyl_wire::Transaction::write` byte-for-byte
 //! (and adds the same Bp+ clawback), so it equals the post-build
 //! `Transaction::weight()` **without constructing a transaction** — pinned by
-//! [`predict_weight_matches_wire_weight`](crate::tests) (the single-source
+//! the `predict_weight_matches_wire_weight` test (the single-source
 //! guarantee). The `fcmp_proof_size` term reads the measured 2a-3 KAT table.
 //! [`predict_spend_weight`] is the same field model for any spend's
 //! [`SpendShape`]: its [`Signer`] (a single signer, or a multisig group
@@ -546,7 +546,7 @@ pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, tree_depth: u8
 /// from these counts, as one `(size, weight)` pair.
 ///
 /// The two differ by exactly the Bp+ verification clawback
-/// ([`bp_plus_clawback_weight`], zero for `n_padded <= 2`): `weight` is what the
+/// (`bp_plus_clawback_weight`, zero for `n_padded <= 2`): `weight` is what the
 /// fee model charges ([`predict_weight`], equal to `Transaction::weight()`),
 /// `size` is the wire bytes (`Transaction::write`'s length). Derived by
 /// subtraction from the one predictor rather than re-summing the field model, so

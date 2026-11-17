@@ -52,10 +52,10 @@ pub struct WireEncodeInput {
     /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
     /// consume), NOT the on-chain `curve_trees_tree_depth`. The name is distinct
     /// on purpose: the consensus prunable field is the LMDB depth `L − 1`, so
-    /// [`build_wire_tx`] serializes `fcmp_layers - 1` and the daemon reconstructs
+    /// `build_wire_tx` serializes `fcmp_layers - 1` and the daemon reconstructs
     /// `fcmp_layers = curve_trees_tree_depth + 1` (`blockchain.cpp:4119`). Pass
     /// the layer count here (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4); a spendable
-    /// tx needs `L >= 2` (see [`build_wire_tx`]). The old shekyl-oxide encoder
+    /// tx needs `L >= 2` (see `build_wire_tx`). The old shekyl-oxide encoder
     /// omitted it (it put `reference_block` in the prunable instead — divergence
     /// §3.2/§3.3).
     pub fcmp_layers: u8,
