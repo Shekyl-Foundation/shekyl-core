@@ -50,6 +50,7 @@ use rand_core::SeedableRng;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_tree::{
     AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
@@ -68,7 +69,7 @@ const RNG_SEED: u64 = 0x504c_2d44_3120_6631; // "PL-D1 f1"
 /// its own per-output hybrid key, its own `0x07` entry.
 fn real_output(rng: &mut ChaCha20Rng, amount: u64) -> OutputData {
     let recipient = random_wallet(rng);
-    let tx_secret = Scalar::random(rng).to_bytes();
+    let tx_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
     construct_output(
         &tx_secret,
         &recipient.x25519_pk,
@@ -88,7 +89,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     let spent_index: u64 = 0;
 
     // ── Our output, at genesis vout 0 ─────────────────────────────────────
-    let tx_secret = Scalar::random(&mut rng).to_bytes();
+    let tx_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let spent = construct_output(
         &tx_secret,
         &wallet.x25519_pk,
@@ -240,7 +241,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     // signs, and the auth is what reveals the key.
     let recipient = random_wallet(&mut rng);
     let payment = construct_output(
-        &Scalar::random(&mut rng).to_bytes(),
+        &TxKey::seeded(Scalar::random(&mut rng).to_bytes()),
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,

@@ -43,7 +43,8 @@ use shekyl_crypto_pq::account::{normalize_seed, MASTER_SEED_BYTES, SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_scanner::bench_fixtures::{
-    bound, build_typical_case_scannable_block, fixture_prunable, scannable_block_for_recipient,
+    bound, build_typical_case_scannable_block, fixture_prunable, fresh_tx_key,
+    scannable_block_for_recipient,
 };
 use shekyl_scanner::ScannableBlock;
 use shekyl_types::{BlockHash, BlockHeight, PSlot};
@@ -106,7 +107,7 @@ fn funding_block(keys: &ArchivalPKeys) -> ScannableBlock {
         x25519: keys.x25519_pk,
         ml_kem: keys.ml_kem_ek.to_vec(),
     };
-    scannable_block_for_recipient(1, &kem, keys.spend_pk.as_canonical_bytes())
+    scannable_block_for_recipient(1, &kem, keys.spend_pk.as_canonical_bytes(), &fresh_tx_key())
 }
 
 /// Recompute a block's committed tx hashes and set its `previous` pointer —
@@ -125,7 +126,7 @@ fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
 /// A block whose first tx additionally spends `key_image` (an FCMP++ `ToKey`
 /// input) — the on-chain spend of the watched output.
 fn spend_block(key_image: [u8; 32]) -> ScannableBlock {
-    let mut block = build_typical_case_scannable_block(1);
+    let mut block = build_typical_case_scannable_block(1, &fresh_tx_key());
     let mut tx = block.transactions.remove(0).into_tx();
     tx.prefix
         .inputs
@@ -211,7 +212,10 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
 
     // Shared chain: filler (h0), funding (h1) — chained for the real
     // exhaustiveness gate from the genesis anchor.
-    let b0 = chain(build_typical_case_scannable_block(1), BlockHash::NULL);
+    let b0 = chain(
+        build_typical_case_scannable_block(1, &fresh_tx_key()),
+        BlockHash::NULL,
+    );
     let b1 = chain(funding_block(&keys), b0.block.hash());
 
     // ---- Scenario A: cross-step (watch-cache path). --------------------
@@ -379,8 +383,14 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
         .map_err(|e| format!("derive wallet persona: {e}"))?;
     let scanner = crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona(&keys)
         .map_err(|e| format!("scanner: {e}"))?;
-    let b0 = chain(build_typical_case_scannable_block(1), BlockHash::NULL);
-    let b1 = chain(build_typical_case_scannable_block(1), b0.block.hash());
+    let b0 = chain(
+        build_typical_case_scannable_block(1, &fresh_tx_key()),
+        BlockHash::NULL,
+    );
+    let b1 = chain(
+        build_typical_case_scannable_block(1, &fresh_tx_key()),
+        b0.block.hash(),
+    );
     let blocks = vec![b0, b1];
     let verified = verify_exhaustive(BlockHeight::from_raw(0), BlockHash::NULL, &blocks)
         .map_err(|e| format!("exhaustiveness: {e}"))?;

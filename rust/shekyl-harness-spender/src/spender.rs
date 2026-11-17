@@ -14,6 +14,9 @@ use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, scan_output, OutputData,
 };
+#[cfg(feature = "seeded-rng")]
+use shekyl_crypto_pq::tx_key::TX_KEY_LEN;
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_tree::{
     AssembleInput, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock, TargetKind,
     TxLeafInputs,
@@ -908,7 +911,15 @@ struct SpendShape<'a> {
     /// The seeds the caller drew for this one spend. `None` draws from the
     /// OS, as the production signers do.
     seeds: Option<SpendSeeds>,
-    /// The height the block listing this spend connects at.
+    /// The height the block listing this spend connects at. The seeded
+    /// transaction-key pin reads it; an unseeded build draws from the OS.
+    #[cfg_attr(
+        not(feature = "seeded-rng"),
+        allow(
+            dead_code,
+            reason = "the seeded transaction-key pin is the only reader of the connecting height"
+        )
+    )]
     connecting: BlockHeight,
     /// The fee paid to the chain.
     fee: u64,
@@ -922,6 +933,69 @@ struct SpendShape<'a> {
     twist: Twist,
 }
 
+/// Mixed into the low eight bytes of a seeded spend's pin. A small height
+/// stays non-zero, and the tag is not the coinbase harness's `0x0A` fill.
+#[cfg(feature = "seeded-rng")]
+const SPEND_TX_KEY_HEIGHT_TAG: u64 = 0x5e00_0000_0000_0000;
+
+/// The group order is `2^252 + …`. Clearing the top four bits of a scalar
+/// encoding keeps it below `2^252`, so the bytes are already canonical and
+/// [`TxKey::seeded`] stores them unchanged.
+#[cfg(feature = "seeded-rng")]
+const CANONICAL_SCALAR_TOP_MASK: u8 = 0x0F;
+
+/// The transaction key of one spend.
+///
+/// A seeded plan pins the key from the connecting height and the spend's
+/// first key image, so a chain built twice is the same chain and two spends
+/// in one block are not built from one key. The plan's own bytes stay the
+/// proof nonces ([`SpendSeeds`]); they are not this key. Its presence is
+/// what selects the pin. An absent plan draws from the OS, as a build
+/// without `seeded-rng` does for every spend.
+///
+/// The first key image is the spend's identity after the CEN-I5 sort — the
+/// largest, and no two spends share one. Height alone is not enough: two
+/// spends in one block to one recipient would derive the same output keys.
+///
+/// # Panics
+///
+/// When the OS's random source fails on the unpinned path. A harness with
+/// no randomness builds nothing.
+#[cfg(feature = "seeded-rng")]
+fn spend_tx_key(
+    seeds: Option<&SpendSeeds>,
+    connecting: BlockHeight,
+    first_key_image: &KeyImage,
+) -> TxKey {
+    if seeds.is_some() {
+        TxKey::seeded(spend_tx_key_bytes(connecting, first_key_image))
+    } else {
+        TxKey::random().expect("the OS draws a key")
+    }
+}
+
+/// Height in the low eight bytes, the first key image in the rest, the top
+/// four bits clear ([`CANONICAL_SCALAR_TOP_MASK`]).
+#[cfg(feature = "seeded-rng")]
+fn spend_tx_key_bytes(connecting: BlockHeight, first_key_image: &KeyImage) -> [u8; TX_KEY_LEN] {
+    let mut pinned = [0u8; TX_KEY_LEN];
+    pinned[..8].copy_from_slice(&(SPEND_TX_KEY_HEIGHT_TAG ^ connecting.to_raw()).to_le_bytes());
+    pinned[8..].copy_from_slice(&first_key_image.as_bytes()[8..]);
+    pinned[TX_KEY_LEN - 1] &= CANONICAL_SCALAR_TOP_MASK;
+    pinned
+}
+
+/// Every spend draws from the OS. The seeded pin does not exist in this build.
+///
+/// # Panics
+///
+/// When the OS's random source fails. A harness with no randomness builds
+/// nothing.
+#[cfg(not(feature = "seeded-rng"))]
+fn spend_tx_key() -> TxKey {
+    TxKey::random().expect("the OS draws a key")
+}
+
 impl SpendShape<'_> {
     /// The spend of `sourced` in this shape — one or more inputs, every path assembled
     /// against the same reference — paying `fee` to the chain and the rest
@@ -930,12 +1004,15 @@ impl SpendShape<'_> {
     fn spend(self, mut sourced: Vec<Sourced>) -> Transaction {
         let SpendShape {
             seeds,
-            connecting,
             fee,
             bond,
             recipient,
             outputs,
             twist,
+            #[cfg(feature = "seeded-rng")]
+            connecting,
+            #[cfg(not(feature = "seeded-rng"))]
+                connecting: _,
         } = self;
         assert!(
             (2..=shekyl_wire::transaction::MAX_OUTPUTS).contains(&outputs),
@@ -1002,24 +1079,13 @@ impl SpendShape<'_> {
                 }
             })
             .collect();
-        // The transaction key is a seed (`derive_kem_seed` hashes it), so
-        // any 32 bytes serve; what matters is that two spends are never
-        // built from one. Keyed on the connecting height alone, two spends
-        // in one block to one recipient derived identical output keys —
-        // the same seed, the same keys, the same indices — and a block
-        // listing both carried a duplicate output, not two bodies. The
-        // spent outputs' key images are the spend's own identity, so the
-        // first (the largest, after the CEN-I5 sort — no two spends share
-        // one) is mixed in.
-        let tx_secret = {
-            let mut s = [0u8; 32];
-            s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting.to_raw()).to_le_bytes());
-            s[8..].copy_from_slice(&key_images[0].as_bytes()[8..]);
-            s
-        };
+        #[cfg(feature = "seeded-rng")]
+        let tx_key = spend_tx_key(seeds.as_ref(), connecting, &key_images[0]);
+        #[cfg(not(feature = "seeded-rng"))]
+        let tx_key = spend_tx_key();
         let pay = |amount: u64, index: u64| -> OutputData {
             construct_output(
-                &tx_secret,
+                &tx_key,
                 &recipient.x25519_pk,
                 &recipient.ml_kem_ek,
                 &recipient.spend_public,
@@ -1216,5 +1282,59 @@ impl SpendShape<'_> {
             .encode(extra_signatures)
             .expect("the production encoder emits the spend");
         Transaction::from_bytes(&bytes).expect("the encoder's bytes parse as a transaction")
+    }
+}
+
+/// The seeded pin stays the bytes it was built from, including when the key
+/// image's top bits sit above the group order.
+#[cfg(all(test, feature = "seeded-rng"))]
+mod spend_tx_key_pin {
+    use super::{spend_tx_key, spend_tx_key_bytes, CANONICAL_SCALAR_TOP_MASK, TX_KEY_LEN};
+    use shekyl_crypto_pq::TxKey;
+    use shekyl_types::{BlockHeight, KeyImage};
+    use zeroize::Zeroizing;
+
+    use crate::draw::SpendSeeds;
+
+    fn image(byte: u8) -> KeyImage {
+        KeyImage::from_bytes([byte; 32])
+    }
+
+    fn plan() -> SpendSeeds {
+        SpendSeeds {
+            sign: Zeroizing::new([1; 32]),
+            open: Zeroizing::new([2; 32]),
+        }
+    }
+
+    #[test]
+    fn a_high_key_image_stays_canonical_and_rebuilds() {
+        let height = BlockHeight::from_raw(7);
+        let first = image(0xFF);
+        let bytes = spend_tx_key_bytes(height, &first);
+        assert_eq!(bytes[TX_KEY_LEN - 1] & !CANONICAL_SCALAR_TOP_MASK, 0);
+        assert_eq!(
+            bytes[TX_KEY_LEN - 1],
+            CANONICAL_SCALAR_TOP_MASK,
+            "a 0xFF key image keeps its low nibble"
+        );
+        let seeds = plan();
+        let key = spend_tx_key(Some(&seeds), height, &first);
+        assert_eq!(key.public_bytes(), TxKey::seeded(bytes).public_bytes());
+        assert_eq!(
+            spend_tx_key(Some(&seeds), height, &first).public_bytes(),
+            key.public_bytes()
+        );
+    }
+
+    #[test]
+    fn height_and_key_image_each_change_the_pin() {
+        let seeds = plan();
+        let first = image(0x11);
+        let at_one = spend_tx_key(Some(&seeds), BlockHeight::from_raw(1), &first);
+        let at_two = spend_tx_key(Some(&seeds), BlockHeight::from_raw(2), &first);
+        let other_image = spend_tx_key(Some(&seeds), BlockHeight::from_raw(1), &image(0x22));
+        assert_ne!(at_one.public_bytes(), at_two.public_bytes());
+        assert_ne!(at_one.public_bytes(), other_image.public_bytes());
     }
 }

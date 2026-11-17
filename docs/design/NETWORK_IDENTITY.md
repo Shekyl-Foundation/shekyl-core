@@ -48,7 +48,7 @@ Each network's genesis is built by the genesis tool from its own definition:
 
 - its own **recipients file** (`config/genesis_recipients.<network>.json`); regtest's carries a committed deterministic test recipient whose key is published and marked test-only;
 - its own **genesis transaction key**;
-- **its name in the genesis transaction key** (NI-R12): the key is derived from a message that starts with the row's name and carries every recipient's keys and amount (`shekyl-genesis-tool/src/txkey.rs`). Two networks can't collide even with identical recipients, and a tool identifies a genesis by matching its hash against the table, or by recomputing the key from each known name. There is no coinbase field: the coinbase grammar (CEN-I20) is the same at every height.
+- **its name in the genesis transaction key** (NI-R12): the key is derived from a message that starts with the row's name and carries every recipient's keys and amount (`shekyl-genesis-tool/src/txkey.rs` writes it; `shekyl_crypto_pq::TxKey::from_genesis_seed` frames and reduces it). Two networks can't collide even with identical recipients, and a tool identifies a genesis by matching its hash against the table, or by recomputing the key from each known name. There is no coinbase field: the coinbase grammar (CEN-I20) is the same at every height.
 
 Regtest then shares **no state** with mainnet: no output, no curve-tree leaf, no root.
 

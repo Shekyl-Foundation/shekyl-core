@@ -54,6 +54,7 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_PQC_AUTH_TX,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
     AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
@@ -218,7 +219,7 @@ fn tree_with(
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
     let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     for index in 0..max_spent as u64 {
-        let tx_secret = Scalar::random(rng).to_bytes();
+        let tx_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
         let data = construct_output(
             &tx_secret,
             &wallet.x25519_pk,
@@ -390,7 +391,7 @@ fn measure(
     let payment_amount = (total_in - fee) / 2;
     let change_amount = total_in - fee - payment_amount;
     let recipient = random_wallet(rng);
-    let dest_secret = Scalar::random(rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
     let payment = construct_output(
         &dest_secret,
         &recipient.x25519_pk,

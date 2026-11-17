@@ -66,6 +66,14 @@
 //! suspect and the F11-S decision should not bind until the anomaly
 //! is investigated.
 //!
+//! ## The transaction key
+//!
+//! Every builder takes the key. [`fresh_tx_key`] is the draw for a block
+//! that is built once. A test that rebuilds a block passes one
+//! [`TxKey::seeded`](shekyl_crypto_pq::TxKey::seeded) pin into both builds;
+//! the same recipient, output count and key are the same block. The fixture
+//! does not draw a key of its own.
+//!
 //! ## Sanity-check tests
 //!
 //! `tests::worst_case_first_output_returns_full_recovery` and
@@ -96,18 +104,12 @@ use shekyl_crypto_pq::{
     },
     leaf_commitment::PQC_LEAF_ENTRY_LEN,
     output::construct_output,
+    TxKey,
 };
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
 use crate::{extra::Extra, view_pair::ViewPair, ScannableBlock};
 use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot, TxHash};
-
-/// Fixed per-transaction key for deterministic fixture construction.
-/// Real transactions use a fresh random `tx_key`; here we pin a
-/// constant so identical bench runs produce byte-identical
-/// transactions (modulo the wallet keypair, which is generated per
-/// call to [`make_bench_wallet`]).
-const BENCH_TX_KEY: [u8; 32] = [0x42; 32];
 
 /// Fixed per-output amount; arbitrary positive value (the bench is
 /// invariant to the specific amount thanks to constant-time amount
@@ -258,6 +260,7 @@ fn assemble_scannable_block(
     n_outputs: usize,
     recipient_pk: &HybridKemPublicKey,
     recipient_spend_pub: &[u8; 32],
+    tx_key: &TxKey,
 ) -> ScannableBlock {
     // Pre-allocate the on-wire fields.
     let mut outputs: Vec<Output> = Vec::with_capacity(n_outputs);
@@ -269,7 +272,7 @@ fn assemble_scannable_block(
 
     for output_index in 0..n_outputs {
         let out = construct_output(
-            &BENCH_TX_KEY,
+            tx_key,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             recipient_spend_pub,
@@ -318,8 +321,7 @@ fn assemble_scannable_block(
     // packing mismatch") stayed invisible to the bench sanity tests.
     // The scanner re-parses the byte slice via `Extra::read` at scan
     // time, mirroring the production daemon → scanner path.
-    let tx_pubkey = Scalar::from_bytes_mod_order(BENCH_TX_KEY) * ED25519_BASEPOINT_POINT;
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, per_output_kem_cts);
+    let mut extra = Extra::for_hybrid_transfer(tx_key.public(), per_output_kem_cts);
     extra.push_pqc_leaf_entries(leaf_entries);
     let extra_serialized = extra.serialize();
 
@@ -451,17 +453,39 @@ pub fn bound(tx: &Transaction) -> shekyl_wire::BoundTx {
 /// `G`), so the per-output cost is exactly full-slow-path with no
 /// post-recovery key-image overhead.
 ///
+/// `tx_key` builds every output. The same key and wallet rebuild the same
+/// block; [`fresh_tx_key`] draws one for a block that is built once.
+///
 /// **F11-S binding:** the per-output cost measured against this
 /// fixture is the adversarial-daemon worst-case under PR 4 §3.1.
 pub fn build_worst_case_scannable_block(
     n_outputs: usize,
     wallet_keys: &BenchWalletKeys,
+    tx_key: &TxKey,
 ) -> ScannableBlock {
     assemble_scannable_block(
         n_outputs,
         &wallet_keys.wallet_kem_pk,
         &fake_spend_key_bytes(),
+        tx_key,
     )
+}
+
+/// A transaction key from the OS, for a block that is built once.
+///
+/// A rebuild passes the same `&TxKey` into both builds. [`TxKey::seeded`]
+/// of a canonical pin is that key when the test must come out the same;
+/// this draw is the key when it need not.
+///
+/// # Panics
+///
+/// When the OS random source fails. A fixture with no randomness builds
+/// nothing.
+///
+/// [`TxKey::seeded`]: shekyl_crypto_pq::TxKey::seeded
+#[must_use]
+pub fn fresh_tx_key() -> TxKey {
+    TxKey::random().expect("the OS draws a fixture transaction key")
 }
 
 /// Build a [`ScannableBlock`] of `n_outputs` outputs addressed to a
@@ -473,6 +497,9 @@ pub fn build_worst_case_scannable_block(
 /// e.g. an archival persona's `(x25519_pk, ml_kem_ek)` and `spend_pk` — so a
 /// scanner built from the *matching* secrets recovers the output, and one built
 /// from any other secrets does not. Used to prove view-key/scanner adapters.
+///
+/// `tx_key` builds every output. The same key, recipient and count rebuild
+/// the same block; [`fresh_tx_key`] draws one for a block that is built once.
 ///
 /// # Preconditions (test fixture — fails loud, does not return `Result`)
 ///
@@ -488,8 +515,9 @@ pub fn scannable_block_for_recipient(
     n_outputs: usize,
     recipient_kem: &HybridKemPublicKey,
     recipient_spend_pub: &[u8; 32],
+    tx_key: &TxKey,
 ) -> ScannableBlock {
-    assemble_scannable_block(n_outputs, recipient_kem, recipient_spend_pub)
+    assemble_scannable_block(n_outputs, recipient_kem, recipient_spend_pub, tx_key)
 }
 
 /// Build a [`ScannableBlock`] whose single non-miner transaction
@@ -500,16 +528,25 @@ pub fn scannable_block_for_recipient(
 /// view tag diverges from the wallet's derivation and every output
 /// exits via fast-path filter rejection.
 ///
+/// `tx_key` builds every output ([`fresh_tx_key`] draws one for a block
+/// that is built once). The unrelated recipient wallet is still drawn per
+/// call, so two typical-case blocks differ even under one key.
+///
 /// **Not F11-S binding:** the per-output cost measured against this
 /// fixture is the typical-case UX cost (most outputs aren't for the
 /// wallet) and serves as the sanity-check denominator for the
 /// worst-case-to-typical-case cost ratio.
-pub fn build_typical_case_scannable_block(n_outputs: usize) -> ScannableBlock {
+pub fn build_typical_case_scannable_block(n_outputs: usize, tx_key: &TxKey) -> ScannableBlock {
     // Encapsulate against an unrelated wallet's public key. The bench
     // wallet's view-pair never sees a matching view-tag, so every
     // output exits via fast-path rejection.
     let other = make_bench_wallet();
-    assemble_scannable_block(n_outputs, &other.wallet_kem_pk, &fake_spend_key_bytes())
+    assemble_scannable_block(
+        n_outputs,
+        &other.wallet_kem_pk,
+        &fake_spend_key_bytes(),
+        tx_key,
+    )
 }
 
 #[cfg(test)]
@@ -534,7 +571,7 @@ mod tests {
     /// per-output `OutputData` after writing it into the wire fields).
     fn first_output_data(recipient_pk: &HybridKemPublicKey) -> OutputData {
         construct_output(
-            &BENCH_TX_KEY,
+            &fresh_tx_key(),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &fake_spend_key_bytes(),
@@ -696,7 +733,7 @@ mod tests {
     fn worst_case_block_count_matches_requested_n_outputs() {
         let wallet = make_bench_wallet();
         for &n in &[1usize, 4, 8, 16] {
-            let sb = build_worst_case_scannable_block(n, &wallet);
+            let sb = build_worst_case_scannable_block(n, &wallet, &fresh_tx_key());
             assert_eq!(
                 sb.transactions.len(),
                 1,
@@ -713,7 +750,7 @@ mod tests {
     #[test]
     fn typical_case_block_count_matches_requested_n_outputs() {
         for &n in &[1usize, 4, 8, 16] {
-            let sb = build_typical_case_scannable_block(n);
+            let sb = build_typical_case_scannable_block(n, &fresh_tx_key());
             assert_eq!(
                 sb.transactions.len(),
                 1,
@@ -769,7 +806,12 @@ mod tests {
         )
         .expect("scalar * basepoint is torsion-free");
 
-        let block = scannable_block_for_recipient(2, &kem_pk, &spend_point.compress().to_bytes());
+        let block = scannable_block_for_recipient(
+            2,
+            &kem_pk,
+            &spend_point.compress().to_bytes(),
+            &fresh_tx_key(),
+        );
 
         let mut scanner = Scanner::new(view_pair, Zeroizing::new(spend_scalar.to_bytes()));
         let outputs = scanner

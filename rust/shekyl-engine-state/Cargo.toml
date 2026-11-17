@@ -63,6 +63,9 @@ shekyl-units = { path = "../shekyl-units", features = ["schema"] }
 shekyl-types = { path = "../shekyl-types", features = ["schema"] }
 
 [dev-dependencies]
+# `seeded-rng` (TEST_ONLY): the fixtures' stored transaction keys are made
+# from pinned keys (`TxKey::seeded`, R-21); a dev edge only.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 serde_json = "1"
 proptest = "1"
 

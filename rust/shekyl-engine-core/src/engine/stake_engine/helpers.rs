@@ -61,7 +61,7 @@ pub(crate) struct ConstructedVouts {
 /// parallel construction site.
 pub(crate) fn construct_vouts_to_base(
     keys: &ArchivalPKeys,
-    tx_key_secret: &Zeroizing<[u8; 32]>,
+    tx_key: &shekyl_crypto_pq::TxKey,
     amounts: &[u64],
     error_site: &'static str,
     mut capture: impl FnMut(usize, &shekyl_crypto_pq::output::OutputData),
@@ -75,7 +75,7 @@ pub(crate) fn construct_vouts_to_base(
     };
     for (idx, &amount) in amounts.iter().enumerate() {
         let constructed = construct_output(
-            tx_key_secret,
+            tx_key,
             &keys.x25519_pk,
             &keys.ml_kem_ek,
             keys.spend_pk.as_canonical_bytes(),

@@ -354,10 +354,11 @@ pub(super) async fn assemble_drain_tx(
 
     // Both outputs built by the transfer path's `build_output` primitive, so a
     // drain vout is bit-for-bit an ordinary transfer vout.
-    let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
+    let tx_key = shekyl_crypto_pq::TxKey::random()
+        .map_err(|e| DrainAssemblyError::build("drain transaction key", e))?;
 
     let vout0 = build_output(
-        &tx_key_secret,
+        &tx_key,
         spec0.spend_pk,
         spec0.x25519_pk,
         spec0.ml_kem_ek,
@@ -367,7 +368,7 @@ pub(super) async fn assemble_drain_tx(
     )
     .map_err(|e| DrainAssemblyError::build("drain vout0 construction", e))?;
     let vout1 = build_output(
-        &tx_key_secret,
+        &tx_key,
         spec1.spend_pk,
         spec1.x25519_pk,
         spec1.ml_kem_ek,
@@ -387,7 +388,7 @@ pub(super) async fn assemble_drain_tx(
     // ── Step 3: tx_extra — tx pubkey + per-output KEM blobs + the `0x07` PQC
     // leaf entries (identical layout + order to the transfer path; consensus
     // refuses a transaction with outputs that lacks the field). ──
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
+    let mut extra = Extra::for_hybrid_transfer(tx_key.public(), kem_blobs);
     extra.push_pqc_leaf_entries(leaf_entry_blob);
     let tx_extra = extra.serialize();
 

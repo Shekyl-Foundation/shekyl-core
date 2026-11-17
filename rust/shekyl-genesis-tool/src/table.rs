@@ -30,7 +30,7 @@ use crate::builder::{build_genesis_tx, genesis_block};
 use crate::recipients::{
     load_and_validate, RecipientEntry, RecipientsFile, GENESIS_RECIPIENT_AMOUNT_ATOMIC,
 };
-use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
+use crate::txkey::genesis_tx_key;
 use crate::wallets::wallets_from_seeds;
 use crate::{invalid, GenesisToolError};
 
@@ -154,7 +154,7 @@ pub fn rebuild(
     timestamp: GenesisTimestamp,
 ) -> Result<Rebuilt, GenesisToolError> {
     let recipients = load_and_validate(path, net)?;
-    let tx_pub = tx_pubkey(&derive_genesis_tx_secret(net, &recipients));
+    let tx_pub = genesis_tx_key(net, &recipients).public_bytes();
     let built = build_genesis_tx(net, &recipients)?;
     let block = genesis_block(built.tx, timestamp)?;
     Ok(Rebuilt {

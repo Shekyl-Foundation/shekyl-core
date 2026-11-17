@@ -88,7 +88,8 @@ features_for() {
 run_tests='shekyl-chain-rules:a_verdict_connects_under_the_view_it_was_judged_against_and_no_other
 shekyl-mempool:a_verdict_judged_over_the_pool_view_does_not_connect
 shekyl-mempool:a_block_arrival_and_an_unfiltered_read_are_not_public
-shekyl-crypto-pq:an_unencrypted_output_field_cannot_be_constructed_downstream'
+shekyl-crypto-pq:an_unencrypted_output_field_cannot_be_constructed_downstream
+shekyl-crypto-pq:a_transaction_key_cannot_be_made_from_bytes_downstream'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`

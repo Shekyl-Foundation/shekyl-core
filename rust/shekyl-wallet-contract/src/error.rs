@@ -4014,7 +4014,7 @@ mod tests {
         let sentence = between(
             grammar,
             "`-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set:",
-            "(the wallet state signing reads)",
+            "(the wallet state signing reads",
         );
         let listed: BTreeSet<&str> = sentence.split('`').skip(1).step_by(2).collect();
         assert_eq!(listed, emitted, "INPUT_GRAMMAR.md's -29119 keywords");

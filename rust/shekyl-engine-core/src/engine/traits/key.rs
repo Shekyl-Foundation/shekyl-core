@@ -599,11 +599,10 @@ pub(crate) struct FcmpPlusPlusContext {
 /// for final wire encode in `LocalSigner`, plus the per-tx secret
 /// scalar retained for OUTBOUND tx proofs (WI-RPC-3).
 ///
-/// **Not `Clone`** — `tx_key_secret` refuses duplication
-/// ([`TxSecretKey`] is deliberately non-`Clone`); the struct moves
-/// through the actor reply channel and the signer, never fans out.
-/// `Debug` stays derivable because `TxSecretKey`'s own `Debug` is
-/// redacted.
+/// **Not `Clone`** — `tx_key` refuses duplication
+/// ([`shekyl_crypto_pq::TxKey`] is deliberately non-`Clone`); the struct
+/// moves through the actor reply channel and the signer, never fans out.
+/// `Debug` stays derivable because `TxKey`'s own `Debug` is redacted.
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) struct TxSignatures {
@@ -629,7 +628,7 @@ pub(crate) struct TxSignatures {
     /// submit-ACCEPTED (`docs/api/wallet_rpc.yaml` OUTBOUND
     /// PREREQUISITE, lifecycle pin 1). Zeroizes on drop; every
     /// build-then-discard path wipes it structurally.
-    pub tx_key_secret: shekyl_engine_state::TxSecretKey,
+    pub tx_key: shekyl_crypto_pq::TxKey,
 }
 
 /// Per-input public signature bundle (§3.9).
