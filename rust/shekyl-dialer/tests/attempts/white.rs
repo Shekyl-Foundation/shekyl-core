@@ -19,7 +19,7 @@ use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
 use shekyl_timing_engine::{Clock, ManualClock};
 use shekyl_transport_layer::{DialEnd, SocketId};
 
-use super::life::Life;
+use super::path::ScriptedPath;
 use super::rig::{Answer, Rig};
 use super::{onions, peer, reply, CLEARNET, NETWORK, TOR, TOR_WINDOW};
 
@@ -32,7 +32,6 @@ struct WhiteRig {
     dialer: Arc<Dialer<ManualClock>>,
     connector: ConnectorId,
     white: Vec<NetworkAddress>,
-    life: Life,
     rng: SplitMix64,
 }
 
@@ -44,7 +43,6 @@ impl WhiteRig {
             .answer_each(count, || Answer::Answered(reply(NETWORK)));
         let dialer = Arc::clone(&rig.dialer);
         dialer.set_window(TOR, Some(TOR_WINDOW));
-        let life = Life::install(&dialer, &clock);
         let mut rng = SplitMix64::new(seed);
         let addresses: Vec<NetworkAddress> = match connector {
             ConnectorId::Tor => onions(count),
@@ -69,7 +67,6 @@ impl WhiteRig {
             dialer,
             connector,
             white: addresses,
-            life,
             rng,
         };
         for id in rig.rig.opened() {
@@ -145,16 +142,14 @@ impl WhiteRig {
         (id, failing)
     }
 
-    /// Past the bracket of the last failure, and its verdict performed. A
-    /// wake one second in looks at the link first, as the owner loop's
-    /// wakes do: a sign of life counts only inside the bracket.
-    fn close_the_bracket(&mut self) {
-        let bracket = shekyl_peerlist::dial_profile(self.connector)
-            .judging
-            .bracket_nanos;
-        self.advance(Duration::from_secs(1));
-        self.dialer.apply_verdicts(&mut self.rng);
-        self.advance(Duration::from_nanos(bracket));
+    /// The connector's path works from now on: its reading counts every
+    /// uncertain failure.
+    fn path_works(&mut self) {
+        ScriptedPath::working(&self.dialer, self.connector);
+    }
+
+    /// The waiting verdicts performed.
+    fn settle_verdicts(&mut self) {
         self.dialer.apply_verdicts(&mut self.rng);
     }
 
@@ -171,16 +166,16 @@ impl WhiteRig {
 const PAST_EVERY_RETRY_WAIT: Duration = Duration::from_secs(31);
 
 /// **A white address failing its test is gray and cooling** (white is
-/// known-working, Rick 2026-10-26), on a link a held session shows works.
-/// On clearnet after its one redial: the first failure only waits; on Tor
-/// after its three attempts, or at once when the attempt used Tor's whole
-/// window. The verdict waits for its bracket to close.
+/// known-working, Rick 2026-10-26), on a path its connector reads as
+/// working. On clearnet after its one redial: the first failure only
+/// waits; on Tor after its three attempts, or at once when the attempt used
+/// Tor's whole window.
 #[test]
 fn a_white_address_failing_its_test_is_gray_and_cooling() {
     let dial_failed = shekyl_clearnet::Observed::ConnectRefused.end();
     let mut rig = WhiteRig::new(CLEARNET, 71, 2);
     let (_, address) = rig.hold_one();
-    rig.life.keep_alive();
+    rig.path_works();
     rig.attempt(dial_failed, Duration::ZERO);
     assert!(
         rig.is_white(&address),
@@ -201,7 +196,7 @@ fn a_white_address_failing_its_test_is_gray_and_cooling() {
     let early = shekyl_tor::reply_end(0xF0);
     let mut rig = WhiteRig::new(TOR, 72, 2);
     let (_, address) = rig.hold_one();
-    rig.life.keep_alive();
+    rig.path_works();
     for attempt in 1..=2 {
         rig.attempt(early, Duration::from_secs(5));
         assert!(
@@ -211,7 +206,7 @@ fn a_white_address_failing_its_test_is_gray_and_cooling() {
         rig.advance(PAST_EVERY_RETRY_WAIT);
     }
     rig.attempt(early, Duration::from_secs(5));
-    rig.close_the_bracket();
+    rig.settle_verdicts();
     assert!(
         !rig.is_white(&address) && rig.is_cooling(&address),
         "Tor: after its three"
@@ -219,9 +214,9 @@ fn a_white_address_failing_its_test_is_gray_and_cooling() {
 
     let mut rig = WhiteRig::new(TOR, 73, 2);
     let (_, address) = rig.hold_one();
-    rig.life.keep_alive();
+    rig.path_works();
     rig.attempt(shekyl_tor::reply_end(0x06), TOR_WINDOW);
-    rig.close_the_bracket();
+    rig.settle_verdicts();
     assert!(
         !rig.is_white(&address) && rig.is_cooling(&address),
         "Tor: a full-window failure is already retried"
@@ -246,17 +241,15 @@ fn a_clearnet_white_address_whose_redial_succeeds_stays_white() {
     );
 }
 
-/// **With no sign of life a white failure is excused**: nothing held, and
-/// nothing opened or received within the bracket before the failure, so
-/// the failure says nothing about the address. It stays white, with no
-/// verdict waiting. Both connectors. The edit that makes this red is
-/// counting an uncorroborated failure.
+/// **With no path reading a white failure is excused**: the connector has
+/// no reading after the failure, so the failure says nothing about the
+/// address. It stays white, with no verdict waiting. Both connectors. The
+/// edit that makes this red is counting a failure no reading backs.
 #[test]
-fn with_no_sign_of_life_a_white_failure_is_excused() {
+fn with_no_path_reading_a_white_failure_is_excused() {
     for (connector, seed) in [(TOR, 75), (CLEARNET, 76)] {
         let mut rig = WhiteRig::new(connector, seed, 1);
         let address = rig.white[0].clone();
-        // The keeps' streams opened at the start: past the bracket now.
         rig.advance(PAST_EVERY_RETRY_WAIT);
         rig.fail_one_test();
         assert_eq!(rig.dialer.pending_verdicts(connector), 0, "{connector:?}");
@@ -283,7 +276,7 @@ fn a_clearnet_white_redial_is_decided_by_the_clearnet_window() {
     let deadline = Duration::from_nanos(profile.dial_deadline_nanos);
     let mut rig = WhiteRig::new(CLEARNET, 79, 2);
     let (_, address) = rig.hold_one();
-    rig.life.keep_alive();
+    rig.path_works();
     assert_eq!(rig.dialer.window(CLEARNET), Some(deadline));
     rig.dialer
         .set_window(CLEARNET, Some(Duration::from_secs(600)));
@@ -293,7 +286,7 @@ fn a_clearnet_white_redial_is_decided_by_the_clearnet_window() {
         "a publish does not move the deadline"
     );
     rig.attempt(shekyl_clearnet::Observed::Deadline.end(), deadline);
-    rig.close_the_bracket();
+    rig.settle_verdicts();
     assert!(
         !rig.is_white(&address) && rig.is_cooling(&address),
         "a full-window timeout demotes with no redial"

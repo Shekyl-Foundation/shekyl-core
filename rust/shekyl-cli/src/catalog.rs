@@ -12,6 +12,7 @@
 //! new command that is missing from either side fails to compile or
 //! fails the tree test.
 
+use shekyl_economics::FeePriority;
 use std::fmt::Write as _;
 
 /// One node of the command language.
@@ -288,7 +289,7 @@ impl Flag {
 const NO_FLAGS: &[Flag] = &[];
 const YES: &[Flag] = &[Flag::switch("--yes")];
 const SEND_FLAGS: &[Flag] = &[
-    Flag::one_of("--priority", &["economy", "standard", "high"]),
+    Flag::one_of("--priority", &FeePriority::NAMES),
     Flag::switch("--yes"),
 ];
 const ADDRESS_FLAGS: &[Flag] = &[Flag::switch("--full"), Flag::value("--out")];

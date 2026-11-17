@@ -15,23 +15,8 @@
 
 use shekyl_types::Timestamp;
 
-/// Named send-fee tier. The wire spellings are the OpenAPI `FeePriority` values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeePriority {
-    Economy,
-    Standard,
-    High,
-}
-
-impl FeePriority {
-    pub(crate) fn wire(self) -> &'static str {
-        match self {
-            Self::Economy => "ECONOMY",
-            Self::Standard => "STANDARD",
-            Self::High => "PRIORITY",
-        }
-    }
-}
+/// The send-fee tier: the one tier set, defined beside the fee ladder.
+pub use shekyl_economics::FeePriority;
 
 /// Which payment requests `request list` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -584,6 +569,12 @@ pub(crate) fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String>
              isolation the workflow claims. Rejected permanently \
              (V3_WALLET_DECISION_LOG.md 2026-09-07). Cold storage is your \
              seed phrase.",
+        ),
+        "freeze" | "thaw" | "frozen" => Some(
+            "the wallet has no user-set hold on outputs: FCMP++ hides which \
+             outputs a spend uses, and the wallet's own reservations keep \
+             built and staking-held outputs out of selection. Rejected \
+             (V3_WALLET_DECISION_LOG.md 2026-11-15).",
         ),
         _ => None,
     };

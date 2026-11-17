@@ -555,19 +555,19 @@ pub(crate) fn write_capacity(
 
 // ---------------------------------------------------------------- EI-6
 
-/// The Priority cells EI-6 runs: Priority at 5 %, 2.5 %, 1 % and 0, the
+/// The High cells EI-6 runs: High at 5 %, 2.5 %, 1 % and 0, the
 /// share it gives up moved to Standard, and the elastic arm at 5 %.
-pub(crate) const PRIORITY_CELLS: [RungMix; 5] = [
+pub(crate) const HIGH_CELLS: [RungMix; 5] = [
     RungMix::DEFAULTED,
-    RungMix::defaulted_with_priority(25),
-    RungMix::defaulted_with_priority(10),
-    RungMix::ZERO_PRIORITY,
-    RungMix::DEFAULTED.priority_elastic(),
+    RungMix::defaulted_with_high(25),
+    RungMix::defaulted_with_high(10),
+    RungMix::ZERO_HIGH,
+    RungMix::DEFAULTED.high_elastic(),
 ];
 
 /// EI-6's summary row.
 #[derive(Debug, Clone, Serialize)]
-pub struct PriorityRow {
+pub struct HighRow {
     arm: &'static str,
     mix: String,
     scenario: String,
@@ -581,19 +581,19 @@ pub struct PriorityRow {
     owed_per_block_skl: Vec<f64>,
 }
 
-/// EI-6: Priority's demand share, fixed and elastic, on both arms over
+/// EI-6: High's demand share, fixed and elastic, on both arms over
 /// `scenarios`.
-pub(crate) fn write_priority_elasticity(
+pub(crate) fn write_high_elasticity(
     out: &mut impl fmt::Write,
     arms: &[Arm],
     cells: &[RungMix],
     scenarios: &[String],
     years: u64,
-) -> Result<Vec<PriorityRow>, fmt::Error> {
+) -> Result<Vec<HighRow>, fmt::Error> {
     writeln!(
         out,
-        "\nEI-6 — PRIORITY ELASTICITY. The 15/80/5 mix with Priority's share at 5, 2.5, 1 and 0 %, the\n\
-         share it gives up moved to Standard, and an elastic arm (a declared behaviour): Priority keeps\n\
+        "\nEI-6 — HIGH ELASTICITY. The 15/80/5 mix with High's share at 5, 2.5, 1 and 0 %, the\n\
+         share it gives up moved to Standard, and an elastic arm (a declared behaviour): High keeps\n\
          5 % x min(1, P0/P), P its fee and P0 its fee at the fold's first block, unit elasticity.\n\
          Per cell: A1's onset (flat-25, best), its fee leg at the flat-25 onset, and miner income\n\
          per block at the sampled years (SKL)."
@@ -653,7 +653,7 @@ pub(crate) fn write_priority_elasticity(
             fmt_onset(onsets.best),
             income.join(" ")
         )?;
-        rows.push(PriorityRow {
+        rows.push(HighRow {
             arm: arm.which.name(),
             mix: mix.to_string(),
             scenario: scenario.to_string(),
@@ -891,7 +891,7 @@ pub enum Instrument {
     DemandResponse,
     Capacity,
     StuffingEnvelope,
-    PriorityElasticity,
+    HighElasticity,
     MedianPath,
 }
 
@@ -902,7 +902,7 @@ impl Instrument {
         Self::DemandResponse,
         Self::Capacity,
         Self::StuffingEnvelope,
-        Self::PriorityElasticity,
+        Self::HighElasticity,
         Self::MedianPath,
     ];
 
@@ -915,7 +915,7 @@ impl Instrument {
             Self::DemandResponse => "--demand-response",
             Self::Capacity => "--capacity",
             Self::StuffingEnvelope => "--stuffing-envelope",
-            Self::PriorityElasticity => "--priority-elasticity",
+            Self::HighElasticity => "--high-elasticity",
             Self::MedianPath => "--median-path",
         }
     }
@@ -931,7 +931,7 @@ pub struct Summary {
     every_miner_stuffs: Option<Vec<crate::window_stuffer::AllMinersRow>>,
     capacity: Option<Vec<CapacityRow>>,
     stuffing: Option<Vec<crate::window_stuffer::StuffingRow>>,
-    priority_elasticity: Option<Vec<PriorityRow>>,
+    high_elasticity: Option<Vec<HighRow>>,
     median_path: Option<Vec<MedianPathRow>>,
 }
 
@@ -1081,20 +1081,19 @@ pub fn run_scoped(
             )?);
         }
     }
-    if runs(Instrument::PriorityElasticity) {
+    if runs(Instrument::HighElasticity) {
         let scenarios = if instrument.is_none() {
             vec![BASELINE_STEADY_STATE.to_string()]
         } else {
             every.clone()
         };
         let cells: &[RungMix] = match scope {
-            Scope::Full => &PRIORITY_CELLS,
+            Scope::Full => &HIGH_CELLS,
             #[cfg(test)]
-            Scope::Nightly => &PRIORITY_CELLS,
+            Scope::Nightly => &HIGH_CELLS,
         };
-        summary.priority_elasticity = Some(write_priority_elasticity(
-            out, &arms, cells, &scenarios, years,
-        )?);
+        summary.high_elasticity =
+            Some(write_high_elasticity(out, &arms, cells, &scenarios, years)?);
     }
     if runs(Instrument::MedianPath) {
         let blips = match scope {

@@ -376,6 +376,7 @@ impl Rig {
                 relay: port.clone(),
                 probes: Some(others.clone()),
                 sessions: None,
+                established: None,
             },
             connectors: loopback.clone(),
             timing: timing.clone(),

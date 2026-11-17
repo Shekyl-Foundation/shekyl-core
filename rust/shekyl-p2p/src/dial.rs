@@ -20,12 +20,14 @@ use std::sync::{Arc, Mutex};
 use shekyl_clearnet::{ChannelChoice, HandshakeTally};
 use shekyl_p2p_session::{Channel, ConnectFuture, Dial, Endpoint, SessionLayer};
 use shekyl_socks::Proxy;
-use shekyl_timing_engine::{Handle, MonotonicClock, Tick};
+use shekyl_timing_engine::{Clock, Handle, MonotonicClock, Tick};
 use shekyl_transport_layer::{
     spans, CloseCause, ConnectorId, DialEnd, DialFailure, Direction, Links, NetworkAddress, Route,
     Sockets, StreamEnd,
 };
 use tokio::sync::{mpsc, oneshot};
+
+use crate::path::{PathFact, PathFactsSink};
 
 /// The backoff between a failed `accept` and the next, on both connectors.
 pub(crate) const ACCEPT_BACKOFF: std::time::Duration = std::time::Duration::from_millis(1);
@@ -79,6 +81,10 @@ pub(crate) struct Connectors {
     /// The Tor proxy as configured (operator) or published (managed). A
     /// Tor dial presents it when the link's route is at the same address.
     pub tor_proxy: Mutex<Option<Proxy>>,
+    /// Where the Tor connector tells the Tor Manager each outbound onion
+    /// dial that completed (`TOR_SUPERVISOR.md` §4.5a). `None` when no
+    /// manager runs.
+    pub path_facts: Option<PathFactsSink>,
 }
 
 impl Connectors {
@@ -195,15 +201,23 @@ impl Connectors {
             .runtime
             .spawn(shekyl_tor::dial_one(dial, self.engine.clone()));
         let key = *key;
+        let facts = self.path_facts.clone();
+        let clock = self.engine.clock().clone();
         Ok(until_admitted(
             spawned,
             admitted_rx,
             fail_rx,
-            move |admitted: shekyl_tor::Admitted| Channel {
-                open: admitted.open,
-                session: admitted.bytes,
-                endpoint: Endpoint::Tor { key, port },
-                gap: Some(admitted.gap),
+            move |admitted: shekyl_tor::Admitted| {
+                // The stream to the onion opened: the onion path worked.
+                if let Some(facts) = &facts {
+                    facts(PathFact::OnionDialOpened(clock.stamp()));
+                }
+                Channel {
+                    open: admitted.open,
+                    session: admitted.bytes,
+                    endpoint: Endpoint::Tor { key, port },
+                    gap: Some(admitted.gap),
+                }
             },
         ))
     }

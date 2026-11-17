@@ -80,7 +80,7 @@ fn fee_estimates_from_reply(reply: &wire::chain::Fee) -> Result<FeeEstimates, Rp
     Ok(FeeEstimates {
         economy: rate(&reply.economy)?,
         standard: rate(&reply.standard)?,
-        priority: rate(&reply.high)?,
+        high: rate(&reply.high)?,
     })
 }
 
@@ -305,12 +305,10 @@ impl DaemonEngine for DaemonClient {
 
     /// Atomic single-RPC fee snapshot (§3.3).
     ///
-    /// Issues **one** `fee` JSON-RPC call and maps its
-    /// response onto all three non-`Custom`
-    /// [`FeePriority`](super::FeePriority) tiers via
-    /// [`GetFeeEstimateResponse`] — not three
-    /// per-tier [`Rpc::get_fee_rate`] calls, so the tier band carries no
-    /// tier-vs-tier skew from interleaved reads.
+    /// Issues **one** `fee` JSON-RPC call and maps its reply onto the
+    /// three [`FeePriority`](shekyl_economics::FeePriority) tiers — not
+    /// one call per tier, so the tier band carries no tier-vs-tier skew
+    /// from interleaved reads.
     fn get_fee_estimates(&self) -> impl Send + Future<Output = Result<FeeEstimates, Self::Error>> {
         async move {
             // No parameters: the ladder is a function of chain state alone
@@ -837,15 +835,15 @@ mod tests {
         );
     }
 
-    /// The named tiers map onto `economy`, `standard` and `priority`.
+    /// The reply's tiers map onto `economy`, `standard` and `high`.
     #[test]
     fn fee_estimates_map_the_three_named_tiers() {
         let result = json!({ "economy": "100", "standard": "200", "high": "400" });
         let est = fee_estimates_from_value(&result).expect("well-formed fee tiers");
         assert_eq!(est.economy, FeeRate::new(100).unwrap());
         assert_eq!(est.standard, FeeRate::new(200).unwrap());
-        assert_eq!(est.priority, FeeRate::new(400).unwrap());
-        assert_ne!(est.economy, est.priority);
+        assert_eq!(est.high, FeeRate::new(400).unwrap());
+        assert_ne!(est.economy, est.high);
     }
 
     /// A reply missing a tier, or carrying a scalar in their place, is

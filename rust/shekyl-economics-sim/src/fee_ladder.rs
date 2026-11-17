@@ -55,15 +55,15 @@ pub(crate) const FULL_REWARD_ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
 /// this instrument measuring a span the chain no longer uses.
 const VOLUME_WINDOW: u64 = TX_VOLUME_WINDOW;
 
-/// [`FeeLadder::as_slots`] order: economy, standard, priority.
+/// [`FeeLadder::as_slots`] order: economy, standard, high.
 const ECONOMY_RUNG: usize = 0;
 const STANDARD_RUNG: usize = 1;
-const PRIORITY_RUNG: usize = 2;
+const HIGH_RUNG: usize = 2;
 
 /// Served-ladder arity, taken from the production owner.
 const SERVED_SLOTS: usize = FeeLadder::SATURATED.as_slots().len();
 const _: () = assert!(
-    ECONOMY_RUNG < SERVED_SLOTS && STANDARD_RUNG < SERVED_SLOTS && PRIORITY_RUNG < SERVED_SLOTS
+    ECONOMY_RUNG < SERVED_SLOTS && STANDARD_RUNG < SERVED_SLOTS && HIGH_RUNG < SERVED_SLOTS
 );
 
 /// Registered chain ages, in years. Supply on the projected trajectory is
@@ -224,7 +224,7 @@ pub struct XServedRow {
     /// `x_i = f_i·M/R` per rung, in millionths: the expansion of the
     /// median that rung funds on an average-cost basis.
     pub x_millionths: [u64; SERVED_SLOTS],
-    /// Adjacent-rung ratios ×1000: standard/economy, then priority/standard.
+    /// Adjacent-rung ratios ×1000: standard/economy, then high/standard.
     pub adjacent_ratio_milli: [u64; SERVED_SLOTS - 1],
 }
 
@@ -253,7 +253,7 @@ fn x_served_row(
         x_millionths: x,
         adjacent_ratio_milli: [
             ratio(f[STANDARD_RUNG], f[ECONOMY_RUNG]),
-            ratio(f[PRIORITY_RUNG], f[STANDARD_RUNG]),
+            ratio(f[HIGH_RUNG], f[STANDARD_RUNG]),
         ],
     }
 }
@@ -317,7 +317,7 @@ fn lowest_share_height(params: &EconomicParams) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Rung tables at representative states
+// FeePriority tables at representative states
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -899,7 +899,7 @@ mod tests {
             params.tx_volume_baseline
         );
         println!("base_reward = {}", genesis.base_reward);
-        println!("median | x(economy) x(standard) x(priority) | std/eco pri/std");
+        println!("median | x(economy) x(standard) x(high) | std/eco high/std");
         for &factor in &MEDIAN_ZONE_FACTORS {
             let row = x_served_row(genesis.base_reward, factor * zone, c, &params);
             let x = row.x_millionths;
@@ -909,7 +909,7 @@ mod tests {
                 row.median,
                 x[ECONOMY_RUNG] as f64 / 10_000.0,
                 x[STANDARD_RUNG] as f64 / 10_000.0,
-                x[PRIORITY_RUNG] as f64 / 10_000.0,
+                x[HIGH_RUNG] as f64 / 10_000.0,
                 r[0] as f64 / 1000.0,
                 r[1] as f64 / 1000.0,
             );

@@ -1026,7 +1026,8 @@ mod tests {
             params: economic,
             relay: params.relay(),
         };
-        let honest_tx: OrdinaryTx = params.fee.rung_txs(&at)[crate::rung_mix::Rung::Standard]
+        let honest_tx: OrdinaryTx = params.fee.rung_txs(&at)
+            [shekyl_economics::FeePriority::Standard]
             .expect("every arm prices Standard");
         let medians = medians_from(zone, zone, economic);
         let mut fill = Fill::empty(

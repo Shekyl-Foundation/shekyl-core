@@ -173,15 +173,18 @@ fn verdict_reaches_the_ledger_row_and_the_balance() {
         td.tx_hash, sender_tx_hash,
         "the row names the sender's transaction (rule 82)"
     );
-    assert!(!td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &no_locks()));
+    assert!(!td.is_spendable(
+        shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+        &no_locks()
+    ));
 
     let amount = td.amount();
     let summary = BalanceSummary::compute(
         &ledger.transfers,
-        shekyl_types::BlockHeight::from_raw(u64::MAX),
-        &no_locks(),
+        shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+        &shekyl_engine_state::SendJournalBlock::empty(),
     );
-    assert_eq!(summary.total, amount);
-    assert_eq!(summary.unspendable, amount);
-    assert_eq!(summary.unlocked, AtomicUnits::ZERO);
+    assert_eq!(summary.unspendable, amount, "beside the balance");
+    assert_eq!(summary.balance(), AtomicUnits::ZERO, "never in it");
+    assert_eq!(summary.spendable, AtomicUnits::ZERO);
 }

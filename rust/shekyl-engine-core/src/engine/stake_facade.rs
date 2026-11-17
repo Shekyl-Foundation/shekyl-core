@@ -351,10 +351,8 @@ mod tests {
             .stake()
             .balance_view()
             .expect("a non-staker glance is honest zeros");
-        assert_eq!(view.liquid, AtomicUnits::ZERO);
-        assert_eq!(view.unlocked, view.liquid);
-        assert_eq!(view.pending, AtomicUnits::ZERO);
-        assert_eq!(view.unspendable, AtomicUnits::ZERO);
+        assert_eq!(view.legs, shekyl_scanner::BalanceSummary::default());
+        assert_eq!(view.legs.balance(), AtomicUnits::ZERO);
         assert_eq!(
             view.staking,
             Some(StakedTotals {

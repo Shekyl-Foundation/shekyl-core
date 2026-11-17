@@ -1,0 +1,60 @@
+# Copyright (c) 2026, The Shekyl Foundation
+# All rights reserved.
+# BSD-3-Clause
+#
+# The floor device's control node, 2026-11-15, start 2 (unshaped link): the
+# daemon's own debug lines, verbatim, from the republish's CREATED (18:15:08Z)
+# to the last line before its check was judged Lost (18:18:24Z). Copied from
+# shekyl-dev data/tsr-acceptance/2026-11-15-pi-upload-cut/runs/control-2/
+# shekyld.log, every line naming a descriptor event, this onion's current
+# descriptor, a directory's copy, or the probe. The probe arrived at
+# 18:17:40Z; at 18:17:50Z Tor warned that a guard was failing a very large
+# share of its circuits. The run kept no raw HS_DESC lines. The directories
+# are public relays; the descriptor ids are the blinded keys of a per-boot
+# onion whose key is gone.
+2026-11-15T18:15:08.115435Z DEBUG tor: Tor's descriptor event action=Created hsdir=None descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:08.115657Z DEBUG tor: Tor's descriptor event action=Created hsdir=None descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:12.361985Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($B6F6A56C5DB1CFB18692695923B3E429758C9A3A)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:12.362105Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($29D5F14175B024940663EE02628F60AA6F74F041)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:12.362135Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($2F1C6B1E8DCA531C126B95CD8E9D0C468CF7BDFF)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:12.362161Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($7CA64075C4B9AC6BBF786DAF09B15969D8993D47)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:12.362184Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($FE80763FE024582DAB183E04F837BEFC293A1D65)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:12.362209Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($87364288BFD2D2C0078976EA454BBA61198CDC64)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:12.362242Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($0B53297F0BD687103A00A514E7D2AB83C70F3700)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:12.362314Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($B156EC72893ADE84DC22E7C127C54E125DE9A55A)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:19.377385Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($2F1C6B1E8DCA531C126B95CD8E9D0C468CF7BDFF)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:22.163249Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($21310F48066A4CAADEB2BFD324F0B38F8E1448D6)) descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:22.163310Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($6905D16ABADE07B7130BAC7D0E182C9541262825)) descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:22.163337Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($78EF4738F4BF3F6B537CC25D6CAB6B77C4BACEAB)) descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:22.163363Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($F9246DEF2B653807236DA134F2AEAB103D58ABFE)) descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:22.163391Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($99E467FCF2F7F4442B9C1AE6A08BD93FC9140DCE)) descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:22.163418Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($8FEE8DB02DC885D775318CC7765FF21D102E6981)) descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:22.163448Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($CF1D2203811278C2E201378FE4DC1A9678899018)) descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:22.163474Z DEBUG tor: Tor's descriptor event action=Upload hsdir=Some(RelayFingerprint($0228731E36C96325F11BB9714286901B0990EE30)) descriptor_id=Some("bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8") reason=None
+2026-11-15T18:15:24.517136Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($8FEE8DB02DC885D775318CC7765FF21D102E6981)) descriptor_id=None reason=None
+2026-11-15T18:15:27.333344Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($78EF4738F4BF3F6B537CC25D6CAB6B77C4BACEAB)) descriptor_id=None reason=None
+2026-11-15T18:15:28.131067Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($6905D16ABADE07B7130BAC7D0E182C9541262825)) descriptor_id=None reason=None
+2026-11-15T18:15:28.913545Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($21310F48066A4CAADEB2BFD324F0B38F8E1448D6)) descriptor_id=None reason=None
+2026-11-15T18:15:31.525442Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($87364288BFD2D2C0078976EA454BBA61198CDC64)) descriptor_id=None reason=None
+2026-11-15T18:15:32.891735Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($CF1D2203811278C2E201378FE4DC1A9678899018)) descriptor_id=None reason=None
+2026-11-15T18:15:35.538263Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($7CA64075C4B9AC6BBF786DAF09B15969D8993D47)) descriptor_id=None reason=None
+2026-11-15T18:15:41.864669Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($0228731E36C96325F11BB9714286901B0990EE30)) descriptor_id=None reason=None
+2026-11-15T18:15:43.301751Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($F9246DEF2B653807236DA134F2AEAB103D58ABFE)) descriptor_id=None reason=None
+2026-11-15T18:15:54.697570Z DEBUG tor: Tor's descriptor event action=Received hsdir=Some(RelayFingerprint($2F1C6B1E8DCA531C126B95CD8E9D0C468CF7BDFF)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:15:54.697622Z DEBUG tor: a directory's copy of this onion's descriptor hsdir=Some(RelayFingerprint($2F1C6B1E8DCA531C126B95CD8E9D0C468CF7BDFF)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") revision_counter=Some(2146202729)
+2026-11-15T18:15:55.255028Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($99E467FCF2F7F4442B9C1AE6A08BD93FC9140DCE)) descriptor_id=None reason=None
+2026-11-15T18:15:56.070847Z DEBUG tor: Tor's descriptor event action=Uploaded hsdir=Some(RelayFingerprint($2F1C6B1E8DCA531C126B95CD8E9D0C468CF7BDFF)) descriptor_id=None reason=None
+2026-11-15T18:16:24.523316Z DEBUG tor: this onion's current descriptor, for the directory check descriptor_id=bDatADU9oAHOrC9MqkqM3JaHw/CibsZRHoyVRo1ziJ8 revision_counter=4978087822
+2026-11-15T18:16:48.058576Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($78EF4738F4BF3F6B537CC25D6CAB6B77C4BACEAB)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:16:50.575436Z DEBUG tor: Tor's descriptor event action=Failed hsdir=Some(RelayFingerprint($78EF4738F4BF3F6B537CC25D6CAB6B77C4BACEAB)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=Some("NOT_FOUND")
+2026-11-15T18:16:50.575668Z DEBUG tor: a directory's copy of this onion's descriptor hsdir=Some(RelayFingerprint($78EF4738F4BF3F6B537CC25D6CAB6B77C4BACEAB)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") revision_counter=None
+2026-11-15T18:16:53.993884Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($B156EC72893ADE84DC22E7C127C54E125DE9A55A)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:16:55.242620Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($2F1C6B1E8DCA531C126B95CD8E9D0C468CF7BDFF)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:17:07.748699Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($B6F6A56C5DB1CFB18692695923B3E429758C9A3A)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:17:10.412292Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($0B53297F0BD687103A00A514E7D2AB83C70F3700)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:17:15.986250Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($29D5F14175B024940663EE02628F60AA6F74F041)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:17:16.254396Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($7CA64075C4B9AC6BBF786DAF09B15969D8993D47)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:17:16.450812Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($FE80763FE024582DAB183E04F837BEFC293A1D65)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:17:17.825808Z  INFO tor: probing this node's onion
+2026-11-15T18:17:24.482652Z DEBUG tor: Tor's descriptor event action=Requested hsdir=Some(RelayFingerprint($87364288BFD2D2C0078976EA454BBA61198CDC64)) descriptor_id=Some("cyCVL+US/aiWYmHNRTN9NXfS6Zw+toBDpWEkJVRigXM") reason=None
+2026-11-15T18:17:40.719588Z  INFO tor: this node's onion probe arrived

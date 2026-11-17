@@ -2276,7 +2276,6 @@ dependencies = [
  "shekyl-economics",
  "shekyl-rpc-types",
  "shekyl-types",
- "shekyl-units",
  "std-shims",
  "thiserror",
  "zeroize",

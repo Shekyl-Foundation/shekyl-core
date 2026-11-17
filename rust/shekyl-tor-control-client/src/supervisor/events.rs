@@ -222,33 +222,40 @@ pub const CERTIFICATE_OUT_OF_DATE: [&str; 3] = [
 /// closed the connection (`orconn_end_reason_to_control_string`, `DONE`).
 const HANDSHAKE_CLOSED_REASON: &str = "DONE";
 
-/// The inputs a round's marks carry (§4.5, §4.4). A round's end is
-/// [`Input::UploadRoundEnded`], with one `draw()` for the probe's delay: a
-/// round with an upload that succeeded schedules the probe, and one with
-/// none is not uploaded. The tally carries how many reached a directory,
-/// how many of the uploads that began were refused, and how many began.
-/// More than half of those that began refused is the clock's signature,
-/// and no republish follows it (Rick, 2026-11-01). Uploads that never
-/// reported an end count among those that began and not among the refused: a
-/// refusal is reported within seconds (the clock VM run of 2026-11-01), so
-/// an unfinished upload is unknown, and a round that is not a refused
-/// majority on what it reported is not called one. A round's start and its first upload
-/// are inputs too: the probe follows the round's end, or
-/// `Policy::round_wait` after its first upload, whichever comes first
+/// The inputs a round's marks carry (§4.5, §4.4). Each names the descriptor
+/// its round uploads: the two descriptors' rounds run apart (`UploadRounds`).
+/// A round's end is [`Input::UploadRoundEnded`], with one `draw()` for the
+/// probe's delay: a round with an upload that succeeded schedules the probe,
+/// and one with none is not uploaded. The tally carries how many reached a
+/// directory, how many of the uploads that began were refused, and how many
+/// began. More than half of those that began refused is the clock's
+/// signature, and no republish follows it (Rick, 2026-11-01). Uploads that
+/// never reported an end count among those that began and not among the
+/// refused: a refusal is reported within seconds (the clock VM run of
+/// 2026-11-01), so an unfinished upload is unknown, and a round that is not
+/// a refused majority on what it reported is not called one. A round's start
+/// and its first upload are inputs too: the probe follows the round's end,
+/// or `Policy::round_wait` after its first upload, whichever comes first
 /// (Rick, 2026-10-29), and a round open too long is counted. Each of the
-/// first upload and the end carries its own draw.
+/// first upload and the end carries its own draw. A round forgotten with its
+/// descriptor is neither.
 pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<Input> {
     marks
         .iter()
         .map(|mark| match *mark {
-            RoundMark::Started => Input::UploadRoundStarted,
-            RoundMark::FirstUploaded => Input::FirstUploaded { draw: draw() },
+            RoundMark::Started { descriptor } => Input::UploadRoundStarted { descriptor },
+            RoundMark::FirstUploaded { descriptor } => Input::FirstUploaded {
+                descriptor,
+                draw: draw(),
+            },
             RoundMark::Ended {
+                descriptor,
                 uploaded,
                 failed,
                 refused,
                 unfinished,
             } => Input::UploadRoundEnded {
+                descriptor,
                 tally: RoundTally {
                     uploaded,
                     refused,
@@ -256,6 +263,7 @@ pub fn round_inputs(marks: &[RoundMark], mut draw: impl FnMut() -> u64) -> Vec<I
                 },
                 draw: draw(),
             },
+            RoundMark::Forgotten { descriptor } => Input::UploadRoundForgotten { descriptor },
         })
         .collect()
 }
@@ -284,59 +292,69 @@ mod tests {
         clock_evidence_of, directory_content_input_of, directory_input_of, input_of, round_inputs,
         CERTIFICATE_OUT_OF_DATE,
     };
-    use crate::control::RoundMark;
     use crate::control::{
         Bootstrap, BootstrapProblem, ClientStatus, Liveness, Recommendation, Severity, TorEvent,
     };
+    use crate::control::{DescriptorKey, RoundMark};
     use crate::supervisor::{Input, RoundTally};
 
     /// A round's marks become the core's inputs: its start, its first upload
-    /// and its end, each upload and end with a draw of its own. A round with a
+    /// and its end, each upload and end with a draw of its own, each naming
+    /// its descriptor; a forgotten round, with no draw. A round with a
     /// success ends as the probe's trigger, and one without as not uploaded.
     /// Each end carries every upload the round began, and the refused ones
     /// among the failed: the core weighs the refusals against all of them
     /// (Rick, 2026-11-01). Fails if `round_inputs` counts only the ended
     /// uploads (a resync's open ones then let a minority of refusals pass as
-    /// a majority), or drops `refused`.
+    /// a majority), drops `refused`, or loses a mark's descriptor.
     #[test]
     fn a_rounds_marks_are_its_start_first_upload_and_end() {
+        let one = DescriptorKey::new(0);
+        let two = DescriptorKey::new(1);
         let mut draws = 0_u64..;
         let mut draw = || draws.next().expect("endless");
         let inputs = round_inputs(
             &[
-                RoundMark::Started,
-                RoundMark::FirstUploaded,
+                RoundMark::Started { descriptor: one },
+                RoundMark::FirstUploaded { descriptor: one },
                 RoundMark::Ended {
-                    uploaded: 12,
+                    descriptor: one,
+                    uploaded: 6,
                     failed: 1,
                     refused: 0,
-                    unfinished: 3,
+                    unfinished: 1,
                 },
+                RoundMark::Forgotten { descriptor: two },
             ],
             &mut draw,
         );
         assert_eq!(
             inputs,
             [
-                Input::UploadRoundStarted,
-                Input::FirstUploaded { draw: 0 },
+                Input::UploadRoundStarted { descriptor: one },
+                Input::FirstUploaded {
+                    descriptor: one,
+                    draw: 0
+                },
                 Input::UploadRoundEnded {
+                    descriptor: one,
                     tally: RoundTally {
-                        uploaded: 12,
+                        uploaded: 6,
                         refused: 0,
-                        begun: 16,
+                        begun: 8,
                     },
                     draw: 1
-                }
+                },
+                Input::UploadRoundForgotten { descriptor: two },
             ]
         );
-        // The clock VM run's rounds: 7 of 8 refused per descriptor, one
-        // accepted.
+        // The clock VM run's rounds: 7 of 8 refused, one accepted.
         let refused = round_inputs(
             &[RoundMark::Ended {
-                uploaded: 2,
-                failed: 14,
-                refused: 14,
+                descriptor: two,
+                uploaded: 1,
+                failed: 7,
+                refused: 7,
                 unfinished: 0,
             }],
             &mut draw,
@@ -344,10 +362,11 @@ mod tests {
         assert_eq!(
             refused,
             [Input::UploadRoundEnded {
+                descriptor: two,
                 tally: RoundTally {
-                    uploaded: 2,
-                    refused: 14,
-                    begun: 16,
+                    uploaded: 1,
+                    refused: 7,
+                    begun: 8,
                 },
                 draw: 2
             }]
@@ -356,27 +375,25 @@ mod tests {
         // They count among the round's uploads.
         let open = round_inputs(
             &[RoundMark::Ended {
+                descriptor: one,
                 uploaded: 0,
-                failed: 6,
-                refused: 6,
-                unfinished: 10,
+                failed: 3,
+                refused: 3,
+                unfinished: 5,
             }],
             &mut draw,
         );
         assert_eq!(
             open,
             [Input::UploadRoundEnded {
+                descriptor: one,
                 tally: RoundTally {
                     uploaded: 0,
-                    refused: 6,
-                    begun: 16,
+                    refused: 3,
+                    begun: 8,
                 },
                 draw: 3
             }]
-        );
-        assert_eq!(
-            round_inputs(&[RoundMark::FirstUploaded], &mut draw),
-            [Input::FirstUploaded { draw: 4 }]
         );
     }
 
@@ -607,8 +624,9 @@ mod tests {
     /// reads them, from the lines the VM run of 2026-11-01 recorded: a
     /// `REQUESTED` names the descriptor asked for; `FAILED` with an id is an
     /// answer, `NOT_FOUND` the only reason that says the directory lacks it;
-    /// an upload's refusal is not an answer, and a fetch's `UNEXPECTED` says
-    /// nothing about the descriptor. `RECEIVED` is not an
+    /// an upload's refusal is not an answer, and a fetch's `UNEXPECTED`,
+    /// `BAD_DESC` or `QUERY_REJECTED` says nothing about the descriptor.
+    /// `RECEIVED` is not an
     /// answer either: the copy's `HS_DESC_CONTENT`, with its counter, is
     /// (`a_directorys_copy_is_the_checks_answer`). Mapping every `FAILED` to
     /// `NotFound`, reading an upload's end as an answer, or answering at
@@ -658,16 +676,23 @@ mod tests {
                 answer: DirectoryAnswer::NotFound,
             })
         );
-        assert_eq!(
-            read(format!(
-                "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=QUERY_RATE_LIMITED"
-            )),
-            Some(Input::DirectoryAnswered {
-                hsdir,
-                descriptor_id: Some(key.to_owned()),
-                answer: DirectoryAnswer::Other,
-            })
-        );
+        // The fetch's other failures at tor 0.4.9.14: a copy that did not
+        // decode (`BAD_DESC`, `hs_client.c:1700`) and a refused query
+        // (`QUERY_REJECTED`, `hs_client.c:1744`). Neither says the directory
+        // lacks the descriptor.
+        for reason in ["BAD_DESC", "QUERY_REJECTED"] {
+            assert_eq!(
+                read(format!(
+                    "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON={reason}"
+                )),
+                Some(Input::DirectoryAnswered {
+                    hsdir,
+                    descriptor_id: Some(key.to_owned()),
+                    answer: DirectoryAnswer::Other,
+                }),
+                "{reason} says nothing about the descriptor"
+            );
+        }
         assert_eq!(
             read(format!(
                 "650 HS_DESC FAILED {onion} NO_AUTH {dir} {key} REASON=UPLOAD_REJECTED"
