@@ -1227,7 +1227,7 @@ const HELP_GROUPS: &[(&str, &[CommandId])] = &[
         ],
     ),
     (
-        "Clients of the node (enrolment, over the channel or the owner's leg)",
+        "Clients of the node (enrollment, over the channel or the owner's leg)",
         &[
             CommandId::RpcClientAdd,
             CommandId::RpcClientSet,

@@ -13,7 +13,7 @@
 use crate::catalog::{self, split_flags, usage, CommandId, Split, Walk};
 use crate::resolve::{
     diag, parse_flag_str, parse_invoice_expiry, raw_remainder, reject_removed_command,
-    reject_removed_flags, unix_now, BlockRef, Enrol, FeePriority, FlagValue, RequestFilter,
+    reject_removed_flags, unix_now, BlockRef, Enroll, FeePriority, FlagValue, RequestFilter,
     ResolvedCommand, View,
 };
 use shekyl_rpc_types::wire::rpc::CeilingWord;
@@ -136,25 +136,25 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         OptionSet => parse_option_set(args),
         OptionShow => parse_option_show(args),
         RpcClientAdd => parse_client_ceiling(RpcClientAdd, args, |fingerprint, ceiling| {
-            Enrol::ClientAdd {
+            Enroll::ClientAdd {
                 fingerprint,
                 ceiling,
             }
         }),
         RpcClientSet => parse_client_ceiling(RpcClientSet, args, |fingerprint, ceiling| {
-            Enrol::ClientSet {
+            Enroll::ClientSet {
                 fingerprint,
                 ceiling,
             }
         }),
         RpcClientRemove => one_word(id, args, |word| match parse_hash(word) {
-            Ok(fingerprint) => ResolvedCommand::Enrol(Enrol::ClientRemove { fingerprint }),
+            Ok(fingerprint) => ResolvedCommand::Enroll(Enroll::ClientRemove { fingerprint }),
             Err(message) => diag(message),
         }),
-        RpcClientList => bare(id, args, ResolvedCommand::Enrol(Enrol::ClientList)),
-        RpcBundleShow => bare(id, args, ResolvedCommand::Enrol(Enrol::BundleShow)),
-        RpcKeyCreate => bare(id, args, ResolvedCommand::Enrol(Enrol::KeyCreate)),
-        RpcKeyShow => bare(id, args, ResolvedCommand::Enrol(Enrol::KeyShow)),
+        RpcClientList => bare(id, args, ResolvedCommand::Enroll(Enroll::ClientList)),
+        RpcBundleShow => bare(id, args, ResolvedCommand::Enroll(Enroll::BundleShow)),
+        RpcKeyCreate => bare(id, args, ResolvedCommand::Enroll(Enroll::KeyCreate)),
+        RpcKeyShow => bare(id, args, ResolvedCommand::Enroll(Enroll::KeyShow)),
         DaemonStop => bare(id, args, ResolvedCommand::Daemon(View::DaemonStop)),
         TxRelay => one_word(id, args, parse_tx_relay),
         Version => bare(id, args, ResolvedCommand::Version),
@@ -361,7 +361,7 @@ fn host_token(word: &str) -> bool {
 fn parse_client_ceiling(
     id: CommandId,
     args: &[&str],
-    build: impl FnOnce(String, Vec<CeilingWord>) -> Enrol,
+    build: impl FnOnce(String, Vec<CeilingWord>) -> Enroll,
 ) -> ResolvedCommand {
     let split = match flags(id, args) {
         Ok(split) => split,
@@ -394,7 +394,7 @@ fn parse_client_ceiling(
             }
         }
     }
-    ResolvedCommand::Enrol(build(fingerprint, ceiling))
+    ResolvedCommand::Enroll(build(fingerprint, ceiling))
 }
 
 fn parse_ban_add(args: &[&str]) -> ResolvedCommand {
@@ -979,17 +979,17 @@ fn parse_verify(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
 mod tests {
     use super::*;
 
-    /// The enrolment words (IG-Q87): a ceiling is the flag repeated
+    /// The enrollment words (IG-Q87): a ceiling is the flag repeated
     /// (IG-6), each a grant or a preset, and at least one; the fingerprint
     /// a hash. Red edit: let `record` refuse a repeated `List` flag, and the
     /// two-word ceiling is "given twice".
     #[test]
-    fn the_enrolment_words_take_a_hash_and_a_repeated_ceiling() {
+    fn the_enrollment_words_take_a_hash_and_a_repeated_ceiling() {
         let fingerprint = "ab".repeat(32);
         match parse(&format!(
             "rpc client add {fingerprint} --ceiling view --ceiling submit"
         )) {
-            ResolvedCommand::Enrol(Enrol::ClientAdd {
+            ResolvedCommand::Enroll(Enroll::ClientAdd {
                 fingerprint: got,
                 ceiling,
             }) => {
@@ -1000,11 +1000,11 @@ mod tests {
         }
         assert!(matches!(
             parse(&format!("rpc client set {fingerprint} --ceiling admin")),
-            ResolvedCommand::Enrol(Enrol::ClientSet { .. })
+            ResolvedCommand::Enroll(Enroll::ClientSet { .. })
         ));
         assert!(matches!(
             parse(&format!("rpc client remove {fingerprint}")),
-            ResolvedCommand::Enrol(Enrol::ClientRemove { .. })
+            ResolvedCommand::Enroll(Enroll::ClientRemove { .. })
         ));
         for words in [
             "rpc client list",
@@ -1012,7 +1012,10 @@ mod tests {
             "rpc key create",
             "rpc key show",
         ] {
-            assert!(matches!(parse(words), ResolvedCommand::Enrol(_)), "{words}");
+            assert!(
+                matches!(parse(words), ResolvedCommand::Enroll(_)),
+                "{words}"
+            );
         }
         for refused in [
             format!("rpc client add {fingerprint}"),
@@ -1021,7 +1024,7 @@ mod tests {
             "rpc client".to_owned(),
         ] {
             assert!(
-                !matches!(parse(&refused), ResolvedCommand::Enrol(_)),
+                !matches!(parse(&refused), ResolvedCommand::Enroll(_)),
                 "{refused}"
             );
         }

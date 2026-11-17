@@ -11,8 +11,8 @@
 //! **One lock decides.** Admission looks the fingerprint up before message 4,
 //! and the session joins this index only after its first record opens. A
 //! removal between the two would leave a session no index entry names. So
-//! a session registers under the index's lock, checking the enrolment again
-//! there ([`Sessions::register`]), and every change to an enrolment is made
+//! a session registers under the index's lock, checking the enrollment again
+//! there ([`Sessions::register`]), and every change to an enrollment is made
 //! under the same lock ([`Sessions::change`]): whichever comes second sees
 //! the first.
 //!
@@ -69,7 +69,7 @@ impl Drop for Session {
 pub enum Registration {
     /// The session joined the index.
     Registered(Session),
-    /// The enrolment no longer admits it: removed, or its ceiling lowered.
+    /// The enrollment no longer admits it: removed, or its ceiling lowered.
     NotAdmitted,
     /// The key already holds [`SESSIONS_PER_CLIENT`] sessions.
     AtCap,
@@ -126,7 +126,7 @@ impl Sessions {
         })
     }
 
-    /// Change an enrolment under the index's lock: `change` writes the store
+    /// Change an enrollment under the index's lock: `change` writes the store
     /// and closes what it must.
     pub fn change<T>(&self, change: impl FnOnce(&mut Changing<'_>) -> T) -> T {
         let mut changing = Changing { index: self.lock() };

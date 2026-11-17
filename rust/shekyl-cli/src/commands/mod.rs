@@ -95,7 +95,7 @@ pub enum CommandSource {
 pub fn run(
     rpc: RpcSession,
     daemon_client: Option<&DaemonClient>,
-    enrol: &crate::enrol::EnrolOptions,
+    enroll: &crate::enroll::EnrollOptions,
     network: Network,
     presentation: Presentation,
     source: CommandSource,
@@ -461,10 +461,10 @@ pub fn run(
                 daemon_view::command(daemon_client, &view),
                 |text| println!("{text}"),
             ),
-            ResolvedCommand::Enrol(word) => present(
+            ResolvedCommand::Enroll(word) => present(
                 &presentation,
                 word.label(),
-                crate::enrol::run(enrol, &word).map_err(crate::outcome::refusal),
+                crate::enroll::run(enroll, &word).map_err(crate::outcome::refusal),
                 |text| println!("{text}"),
             ),
 

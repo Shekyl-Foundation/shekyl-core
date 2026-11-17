@@ -543,7 +543,7 @@ Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** rem
 | `wallet` (alias `engine-file`) | `wallet-file` | path | unset | both | | R (IG-3: a path ends in `file`); the alias goes |
 | `daemon-address` | `daemon-endpoint` | peer-endpoint | `127.0.0.1:<row rpc port>` | both | | R (IG-Q31): an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname or URL is refused |
 | (`daemon-address` `uds://`) | `daemon-socket-file` | path | unset | both | | N; RT-15's local leg; unconstructible together with `daemon-endpoint` |
-| — | `daemon-bundle-file` | path | unset | both | | N (IG-Q108): the node's bundle as `rpc bundle show` prints it; set, the enrolment words reach the node at an explicit `daemon-endpoint` over the channel (the row's default is the plaintext listener, and `rpc-listen` has no default port); unconstructible together with `daemon-socket-file` |
+| — | `daemon-bundle-file` | path | unset | both | | N (IG-Q108): the node's bundle as `rpc bundle show` prints it; set, the enrollment words reach the node at an explicit `daemon-endpoint` over the channel (the row's default is the plaintext listener, and `rpc-listen` has no default port); unconstructible together with `daemon-socket-file` |
 | — | `rpc-key-file` | path | the account root + `rpc-shekyl-cli-<network>.key` | both | | N (IG-Q108, IG-Q109): this client's channel key, readable by this account alone; a file anyone else can read is refused |
 | `rpc-url` | `wallet-rpc-endpoint` | peer-endpoint | unset | both | | R (IG-Q31); set means an external `shekyl-wallet-rpc`, not self-hosting |
 | (`rpc-url` `uds://`) | `wallet-rpc-socket-file` | path | unset | both | | N; unconstructible together with `wallet-rpc-endpoint` |
@@ -659,7 +659,7 @@ The catalog `shekyl-cli` serves (IG-Q25). The C++ console is deleted (R8, DC-N2,
 | `stop_daemon`, `exit` | `daemon stop` | | IG-Q33: no bare word in the shared shell stops the daemon |
 | `save`, `flush_cache [bad-txs] [bad-blocks]` | — | | –: LMDB and C++ cache internals |
 | `version` | `version` | | |
-| — | `rpc client add <fingerprint> --ceiling <grants>`, `rpc client set <fingerprint> --ceiling <grants>`, `rpc client remove <fingerprint>`, `rpc client list`, `rpc bundle show` | a hash; a list of grant and preset keywords | built by RT-W10 step 4 (IG-Q87): enrolment over the channel, under the `enrol` grant |
+| — | `rpc client add <fingerprint> --ceiling <grants>`, `rpc client set <fingerprint> --ceiling <grants>`, `rpc client remove <fingerprint>`, `rpc client list`, `rpc bundle show` | a hash; a list of grant and preset keywords | built by RT-W10 step 4 (IG-Q87): enrollment over the channel, under the `enroll` grant |
 | — | `rpc key create`, `rpc key show` | | IG-Q109: this client's channel key, made only when asked and refused if one is there; each prints the fingerprint as `rpc client list` does |
 
 ## 14. The utilities and the tools
@@ -828,9 +828,9 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `set_bans` | `ban_add`, `ban_remove` | `host`; `duration` for `ban_add` | bans | one verb per change; IG-Q44 |
 | `get_bans`, `banned` | `ban_list`, `ban_show` | `host` for `ban_show` | bans | IG-Q46 |
 | `/get_stem_tallies` | `relay_stats` | — | host-only (RT-O9.3) | |
-| — | `rpc_client_add`, `rpc_client_set` | `fingerprint`, `ceiling` | enrol | IG-Q87; built by RT-W10 step 4 |
-| — | `rpc_client_remove` | `fingerprint` | enrol | IG-Q87; closes the fingerprint's sessions |
-| — | `rpc_client_list`, `rpc_bundle_show` | — | enrol | IG-Q87 |
+| — | `rpc_client_add`, `rpc_client_set` | `fingerprint`, `ceiling` | enroll | IG-Q87; built by RT-W10 step 4 |
+| — | `rpc_client_remove` | `fingerprint` | enroll | IG-Q87; closes the fingerprint's sessions |
+| — | `rpc_client_list`, `rpc_bundle_show` | — | enroll | IG-Q87 |
 | `generateblocks` | `dev_block_generate` | `count` | armed lever (RT-O9.2) | IG-Q49; IG-F23 |
 | `/pop_blocks` | `dev_chain_pop` | `count` | armed lever (RT-O9.2) | IG-Q49 |
 | `save_bc`, `flush_cache`, `inject_archival_serve_credit`, `/set_log_hash_rate` | — | — | — | deleted (`DRS_X_STORE_FLIP.md` DX-Q3) |
@@ -1102,7 +1102,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | client | rpc | a client identity enrolled on this daemon: a fingerprint and its ceiling (IG-Q87) | |
 | bundle | rpc, daemon | this daemon's static public keys, given to a client that will be enrolled; under `daemon`, the node's, as a client holds it (IG-Q108) | |
 | fingerprint | client | the client's static-key fingerprint, a hash (`RPC_CHANNEL.md` RT-O14) | |
-| ceiling | client | the grants an enrolment may hold, stored expanded | |
+| ceiling | client | the grants an enrollment may hold, stored expanded | |
 | console | rpc | the console key: the host administrator's credential in service mode (IG-Q88) | |
 | reset | key | *verb* — replace the console key, offline, under the data home's lock | key:verb |
 | bootstrap | tor | how a bootstrap is going, as the supervisor reads it against its own window (IG-Q98) | |
@@ -1124,9 +1124,9 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | endpoint | connection, peer, session | §11's `endpoint`: the peer's | |
 | version | header, daemon, protocol, template | the version of what its parent names: under `header` and `template`, the block format's; under `protocol`, the P2P protocol's; under `daemon`, the RPC contract's, the field RW-Q6 freezes. Bare, §3's `version` is the binary's, so none of these is a reference to it | |
 | blocks | span | a length in blocks | |
-| add | client | *verb* — §11's `add`: enrol a client | client:verb |
+| add | client | *verb* — §11's `add`: enroll a client | client:verb |
 | set | client | *verb* — §11's `set`: assign an enrolled client's ceiling | client:verb |
-| remove | client | *verb* — §11's `remove`: revoke an enrolment | client:verb |
+| remove | client | *verb* — §11's `remove`: revoke an enrollment | client:verb |
 | offset | nonce | where its bytes start | |
 | body | block, template, tx, section | a block's, transaction's or bundle's serialized bytes, kind `bytes` | |
 | complete | bond | the whole corpus | |
@@ -1429,7 +1429,7 @@ Keywords whose spelling IG-Q86 rules: the sync modes `past_cap` and `evidence_ca
 
 ### 25.3 Names the next slice builds
 
-RT-W10 step 4 builds enrolment over the channel. Its method names are ruled here (IG-Q87, IG-Q88) so that step 4's submission contract and route-to-grant table are written once. The rows join §13 marked "built by RT-W10 step 4". They do not join the method table in the rename PR, whose gate requires every row to be served.
+RT-W10 step 4 builds enrollment over the channel. Its method names are ruled here (IG-Q87, IG-Q88) so that step 4's submission contract and route-to-grant table are written once. The rows join §13 marked "built by RT-W10 step 4". They do not join the method table in the rename PR, whose gate requires every row to be served.
 
 One question is step 4's own and is not ruled here. Only the host is told `held` or `overdue` for a transaction it submitted (IG-Q75). A wallet reaching a service-mode daemon over the channel is a bounded key, so it loses that read for its own transactions. Telling the submitting fingerprint would let a stem successor that shares the fingerprint, as strangers behind a relaying site do, resubmit bytes this node sent it and learn that this node originated them. Any disclosure is therefore a ceiling bit given only to a single-owner device, never implied by `wallet`, and it is posed with step 4's grant work.
 
@@ -1520,25 +1520,25 @@ The `pow` switch on a header read has no code (IG-F24), and a bounded `chain_coi
 - **No keyword and no code segment is a term IG-4 refuses**, as Part E refused `not-installed`: `reference_not_found` is `reference-unknown`, `no_view` is `unpeered`.
 - **A diagnostic code is dotted segments**, each lowercase and `-`-joined, none an IG-4 term. The first names what refused: a glossary subject (`mine`, `block`, `tx`, `txpool`, `p2p`, `daemon`), or `grant` or `bound` for RW-Q3's two classes that belong to no method. The rename PR rewrites every RPC code to that form and lists each in the registry `RPC_WIRE.md` RW-Q3 keeps: `mine.no_address` is `mine.address.unset`, and `rpc.grant.host_only` is `grant.host-only`. A code names one source. `node.not_ready` is raised for several today — a handle not yet supplied, a pool that was never supplied, a retired pool, a relay with no driver (`D/handles.rs:124-151`) — and each takes its own code; none is labelled with another's cause. The full list is the PR's error-code mapping, reviewed with it.
 
-**IG-Q87 — enrolment's names — RULED 2026-11-10, as recommended.** `RPC_CHANNEL.md` §5 names enrolment `shekyld rpc-enrol FINGERPRINT --ceiling GRANTS` and `shekyld rpc-revoke FINGERPRINT`. Both contradict landed rulings. IG-Q8 (2026-11-03): a bare word on `shekyld` is `config.cli.syntax`, and daemon commands are `shekyl-cli` words. IG-3: a command is a path, not a hyphenated verb. And §5 itself says enrolment runs over the channel, so each act is a method with a grant (`enrol`), and its `shekyl-cli` word is that method's path. *Question:* names for five acts: enrol a fingerprint with a ceiling; change an enrolled ceiling; revoke; list the enrolled set; show this daemon's public bundle. *Recommended:* the `ban` pattern, one verb per change (IG-Q44):
+**IG-Q87 — enrollment's names — RULED 2026-11-10, as recommended.** `RPC_CHANNEL.md` §5 names enrollment `shekyld rpc-enroll FINGERPRINT --ceiling GRANTS` and `shekyld rpc-revoke FINGERPRINT`. Both contradict landed rulings. IG-Q8 (2026-11-03): a bare word on `shekyld` is `config.cli.syntax`, and daemon commands are `shekyl-cli` words. IG-3: a command is a path, not a hyphenated verb. And §5 itself says enrollment runs over the channel, so each act is a method with a grant (`enroll`), and its `shekyl-cli` word is that method's path. *Question:* names for five acts: enroll a fingerprint with a ceiling; change an enrolled ceiling; revoke; list the enrolled set; show this daemon's public bundle. *Recommended:* the `ban` pattern, one verb per change (IG-Q44):
 
 | Word | Method | Parameters | Grant |
 |---|---|---|---|
-| `rpc client add <fingerprint> --ceiling <grants>` | `rpc_client_add` | `fingerprint`, `ceiling` | enrol |
-| `rpc client set <fingerprint> --ceiling <grants>` | `rpc_client_set` | `fingerprint`, `ceiling` | enrol |
-| `rpc client remove <fingerprint>` | `rpc_client_remove` | `fingerprint` | enrol |
-| `rpc client list` | `rpc_client_list` | — | enrol |
-| `rpc bundle show` | `rpc_bundle_show` | — | enrol |
+| `rpc client add <fingerprint> --ceiling <grants>` | `rpc_client_add` | `fingerprint`, `ceiling` | enroll |
+| `rpc client set <fingerprint> --ceiling <grants>` | `rpc_client_set` | `fingerprint`, `ceiling` | enroll |
+| `rpc client remove <fingerprint>` | `rpc_client_remove` | `fingerprint` | enroll |
+| `rpc client list` | `rpc_client_list` | — | enroll |
+| `rpc bundle show` | `rpc_bundle_show` | — | enroll |
 
-- `add` on an enrolled fingerprint is refused and names `set`; `set` on one not enrolled is refused and names `add`. Each call is bounded by §5's rule: the ceiling given, and the ceiling of the key being changed or removed, lie within the caller's effective grant. `list` returns the enrolments whose ceiling lies within it; the others are absent.
+- `add` on an enrolled fingerprint is refused and names `set`; `set` on one not enrolled is refused and names `add`. Each call is bounded by §5's rule: the ceiling given, and the ceiling of the key being changed or removed, lie within the caller's effective grant. `list` returns the enrollments whose ceiling lies within it; the others are absent.
 - `remove` closes every live session the fingerprint holds, and so does a `set` that lowers the ceiling (`RPC_CHANNEL.md` §5): the client reconnects to receive the new grant.
 - A ceiling is stored and listed as its expanded grants, never as a preset's name. A request may name presets. A record that kept the name would widen every key enrolled under it when the preset's definition changed.
-- The console key is not an enrolment (§5). It is never in `rpc_client_list`, and `rpc_client_remove` and `rpc_client_set` cannot name it.
+- The console key is not an enrollment (§5). It is never in `rpc_client_list`, and `rpc_client_remove` and `rpc_client_set` cannot name it.
 - `fingerprint` is kind `hash`: 32 bytes (RT-O14). `ceiling` is a list of one-of the grant and preset keywords of `RPC_CHANNEL.md` §6.1. `rpc_bundle_show`'s reply is `{"bundle": b}`, kind `bytes`.
 - New terms: `client` under `rpc`, "a client identity enrolled on this daemon: a fingerprint and its ceiling"; `bundle` under `rpc`, "this daemon's static public keys, given to a client that will be enrolled"; `fingerprint` and `ceiling` under `client`. `add`, `set`, `remove` and `list` gain the parent `client`; `show` gains `bundle`.
 - `client` is used nowhere else as a term. `bundle` appears in prose for the Tor bundle and the witness bundle; neither is a name in any table, so the term has one meaning.
 
-**IG-Q88 — the console key's reset — RULED 2026-11-10, as recommended.** `RPC_CHANNEL.md` §5 rules an offline, local reset of the console key that takes the data home's exclusive lock, so by design it cannot run over the channel, and it is therefore no method and no `shekyl-cli` word. Under IG-Q8 `shekyld` has no command words. *Question:* where does it live? *Recommended:* a `shekyld` switch, `--rpc-console-key-reset`, given on the command line only (IG-7), the shape `config-verify` already has (IG-Q58): a switch that selects what the process does and exits. It takes the lock, replaces the console enrolment, writes the new private half and exits without starting the node; it is refused in a run mode that has no console key, and while the lock is held. IG-Q8 refuses bare words, not a one-shot switch. New terms: `console` under `rpc`, "the console key: the host administrator's credential in service mode"; `reset`, a verb under `key`; `key` gains the parent `console` and its meaning widens from "only in `key image`" to "a key: under `spent`, in `key image`; under `console`, the console key".
+**IG-Q88 — the console key's reset — RULED 2026-11-10, as recommended.** `RPC_CHANNEL.md` §5 rules an offline, local reset of the console key that takes the data home's exclusive lock, so by design it cannot run over the channel, and it is therefore no method and no `shekyl-cli` word. Under IG-Q8 `shekyld` has no command words. *Question:* where does it live? *Recommended:* a `shekyld` switch, `--rpc-console-key-reset`, given on the command line only (IG-7), the shape `config-verify` already has (IG-Q58): a switch that selects what the process does and exits. It takes the lock, replaces the console enrollment, writes the new private half and exits without starting the node; it is refused in a run mode that has no console key, and while the lock is held. IG-Q8 refuses bare words, not a one-shot switch. New terms: `console` under `rpc`, "the console key: the host administrator's credential in service mode"; `reset`, a verb under `key`; `key` gains the parent `console` and its meaning widens from "only in `key image`" to "a key: under `spent`, in `key image`; under `console`, the console key".
 
 **IG-Q89 — what a re-offer and a flush answer — RULED 2026-11-10, as recommended.** `relay_tx` and `flush_txpool` name ids and reply `status` alone (`D/pool_methods.rs:184-208`). Both hold the `node` grant, and a `node` key is bounded; entries not yet public are host-only (RT-O9.3). A reply that lets a bounded caller tell "held here, unpublished" from "not here" tells it this node originated the transaction, and so does a re-offer the caller can watch arrive on the network. *Question:* the reply, and what a bounded caller may cause. *Recommended:* each replies a list in selector order (IG-Q53): the id where the act was done, `{"missing": null}` where the pool the caller may see holds no such entry (IG-Q73). For a caller without the host's view an unpublished entry is not in that pool: its slot is `{"missing": null}` and the daemon neither re-offers nor removes it. The host's administrator sees and acts on every entry. A retired pool refuses the whole call (`NotReady`, `txpool.retired`). `txpool_flush` with no `id` removes every entry the caller may see and replies their ids.
 
@@ -1664,11 +1664,11 @@ another can read it and never repaired; its default is the account root
 and `rpc-<binary>-<network>.key`. `rpc-grant`, the tunnel's only: the
 grants its sessions ask for, grant and preset words, the option repeated
 (IG-6), default `view` (`RPC_CHANNEL.md` §6.2). In RT-W11 the two new
-rows move only the five enrolment words onto the channel; the CLI's
+rows move only the five enrollment words onto the channel; the CLI's
 other words and the wallet session's daemon leg stay until RT-W12. An
-enrolment word asks for every grant, and the node clamps the request to
-the key's ceiling: RT-O9.1 bounds what a key may enrol, list or remove
-by its effective grant. While `daemon-bundle-file` is set, the enrolment
+enrollment word asks for every grant, and the node clamps the request to
+the key's ceiling: RT-O9.1 bounds what a key may enroll, list or remove
+by its effective grant. While `daemon-bundle-file` is set, the enrollment
 words require an explicit `daemon-endpoint`: `rpc-listen` has no default
 port, and `daemon-endpoint`'s default is the plaintext listener. The
 values are the peer-endpoint and endpoint kinds (IG-Q31); a URL or a

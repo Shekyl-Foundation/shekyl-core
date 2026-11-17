@@ -3,14 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! RT-W11 end to end, against a real daemon (Rick, 2026-11-15): enrol,
+//! RT-W11 end to end, against a real daemon (Rick, 2026-11-15): enroll,
 //! dial, call, revoke, and a refused call after the revocation.
 //!
 //! A daemon runs in a child of this test binary, as `shekyl-daemon`'s own
 //! tests run one, listening on the channel on loopback, with its owner's
 //! leg in a private socket directory. The owner reads the node's bundle
-//! (`rpc bundle show`) and enrols an administrator's key with an `enrol`
-//! ceiling; the administrator then runs `shekyl-cli`'s enrolment words (the
+//! (`rpc bundle show`) and enrolls an administrator's key with an `enroll`
+//! ceiling; the administrator then runs `shekyl-cli`'s enrollment words (the
 //! library) as a CLI on another host does: the node's bundle in a file and
 //! its key file. The tunnel is this crate's binary. A consumer is a plain
 //! HTTP client of the tunnel's loopback listener.
@@ -27,8 +27,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use shekyl_cli::enrol::{self, EnrolOptions, Remote};
-use shekyl_cli::resolve::Enrol;
+use shekyl_cli::enroll::{self, EnrollOptions, Remote};
+use shekyl_cli::resolve::Enroll;
 use shekyl_daemon_config::{Network, Platform};
 use shekyl_rpc_client::wire;
 use shekyl_rpc_rendezvous::Instance;
@@ -196,9 +196,9 @@ fn try_consumer_call(listen: &str, method: &str) -> std::io::Result<(u16, String
     Ok((status, body))
 }
 
-/// **Enrol, dial, call, revoke, and a refused call after the revocation**
+/// **Enroll, dial, call, revoke, and a refused call after the revocation**
 /// (RT-W11, against a real daemon). An administrator the owner enrolled
-/// enrols the tunnel's key with `rpc client add` over the channel; the tunnel reports its grant and
+/// enrolls the tunnel's key with `rpc client add` over the channel; the tunnel reports its grant and
 /// serves a consumer's call; `rpc client remove` revokes it; the next call
 /// is refused, the tunnel exits naming the revocation, and `rpc client
 /// list` no longer lists it. A second tunnel ends cleanly on SIGTERM, as a
@@ -211,8 +211,8 @@ fn try_consumer_call(listen: &str, method: &str) -> std::io::Result<(u16, String
 /// revocation. The
 /// submission's padding is `shekyl-daemon-rpc`'s submission test.
 #[test]
-fn enrol_dial_call_revoke_and_a_refused_call_after() {
-    const NAME: &str = "enrol_dial_call_revoke_and_a_refused_call_after";
+fn enroll_dial_call_revoke_and_a_refused_call_after() {
+    const NAME: &str = "enroll_dial_call_revoke_and_a_refused_call_after";
     run_child_if_requested();
     let dir = workdir();
     let channel_listen = format!("127.0.0.1:{}", free_port());
@@ -230,8 +230,8 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
     std::fs::write(&bundle_file, bundle).unwrap();
 
     // The CLI as an administrator on another host: the bundle in a file,
-    // its own key (`rpc key create`), which the owner enrols to enrol.
-    let cli = EnrolOptions {
+    // its own key (`rpc key create`), which the owner enrolls to enroll.
+    let cli = EnrollOptions {
         network: Network::Regtest,
         remote: Some(Remote {
             leg: Leg::ip(channel_listen.parse().expect("the channel listener"), None),
@@ -239,13 +239,13 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
         }),
         key_file: Some(dir.path().join("admin.key")),
     };
-    let admin = enrol::run(&cli, &Enrol::KeyCreate).expect("rpc key create");
+    let admin = enroll::run(&cli, &Enroll::KeyCreate).expect("rpc key create");
     owner
         .call::<wire::RpcClientAdd>(&ClientCeiling {
             fingerprint: HashHex::from_hex(&admin).expect("a fingerprint"),
-            ceiling: vec![CeilingWord::Enrol, CeilingWord::View],
+            ceiling: vec![CeilingWord::Enroll, CeilingWord::View],
         })
-        .expect("the owner enrols the administrator");
+        .expect("the owner enrolls the administrator");
 
     // The tunnel's key.
     let tunnel = env!("CARGO_BIN_EXE_shekyl-rpc-tunnel");
@@ -259,16 +259,16 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
     let fingerprint = String::from_utf8(made.stdout).unwrap().trim().to_owned();
     assert_eq!(fingerprint.len(), 64, "{fingerprint}");
 
-    // Enrol.
-    enrol::run(
+    // Enroll.
+    enroll::run(
         &cli,
-        &Enrol::ClientAdd {
+        &Enroll::ClientAdd {
             fingerprint: fingerprint.clone(),
             ceiling: vec![CeilingWord::View],
         },
     )
     .expect("rpc client add");
-    let listed = enrol::run(&cli, &Enrol::ClientList).expect("rpc client list");
+    let listed = enroll::run(&cli, &Enroll::ClientList).expect("rpc client list");
     assert!(listed.contains(&fingerprint), "{listed}");
 
     // Dial: the tunnel reports its grant and listens.
@@ -360,9 +360,9 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
     assert!(stopped.success(), "a SIGTERM is a clean stop: {stopped}");
 
     // Revoke.
-    enrol::run(
+    enroll::run(
         &cli,
-        &Enrol::ClientRemove {
+        &Enroll::ClientRemove {
             fingerprint: fingerprint.clone(),
         },
     )
@@ -394,7 +394,7 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
         std::thread::sleep(POLL);
     };
     if let Some(refused) = refused {
-        assert_eq!(refused, "The node revoked this client's enrolment.");
+        assert_eq!(refused, "The node revoked this client's enrollment.");
     }
     let deadline = Instant::now() + Duration::from_secs(30);
     let ended = loop {
@@ -408,15 +408,15 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
     assert!(
         tunnel_run
             .stderr()
-            .contains("The node revoked this client's enrolment."),
+            .contains("The node revoked this client's enrollment."),
         "{}",
         tunnel_run.stderr()
     );
     let log = std::fs::read_to_string(dir.path().join("tunnel.log")).unwrap_or_default();
     assert!(
-        log.contains("The node revoked this client's enrolment."),
+        log.contains("The node revoked this client's enrollment."),
         "the tunnel's log names the revocation at its default level: {log}"
     );
-    let listed = enrol::run(&cli, &Enrol::ClientList).expect("rpc client list");
+    let listed = enroll::run(&cli, &Enroll::ClientList).expect("rpc client list");
     assert!(!listed.contains(&fingerprint), "{listed}");
 }

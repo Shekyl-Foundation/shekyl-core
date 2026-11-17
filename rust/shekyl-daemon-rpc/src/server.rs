@@ -74,7 +74,7 @@ pub struct AppState {
     /// on disk; the permit is taken before the blocking-pool task.
     pub coinbase_reads: Arc<Semaphore>,
     /// The RPC channel's state: its key, the enrolled set and the live
-    /// sessions (`crate::channel`). `None` serves the enrolment methods as
+    /// sessions (`crate::channel`). `None` serves the enrollment methods as
     /// not ready.
     pub channel: Option<Arc<crate::channel::Channel>>,
 }
@@ -354,9 +354,9 @@ pub(crate) struct ChannelServed {
     pub(crate) console: Option<crate::channel::console_leg::ConsoleListener>,
 }
 
-/// Which listener a bound socket is. An enrolment preset
+/// Which listener a bound socket is. An enrollment preset
 /// (`shekyl_rpc_grants::Preset`) is a different thing: the view listener
-/// also serves submit and mining work until RT-W12, which the enrolment
+/// also serves submit and mining work until RT-W12, which the enrollment
 /// preset `View` does not.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Listener {

@@ -13,7 +13,7 @@ Wants=network-online.target
 #   install -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/lib/shekyl-tunnel
 #   runuser -u shekyl-tunnel -- shekyl-rpc-tunnel --rpc-key-create \
 #       --rpc-key-file /var/lib/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key
-#     (prints the fingerprint; enrol it on the node with
+#     (prints the fingerprint; enroll it on the node with
 #      `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`)
 #   write /etc/shekyl/shekyl-rpc-tunnel.toml: daemon-endpoint,
 #     daemon-bundle-file (the node's `rpc bundle show`), and listen, a

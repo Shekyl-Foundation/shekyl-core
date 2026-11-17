@@ -187,10 +187,10 @@ impl View {
     }
 }
 
-/// The words that enrol clients on a node, and this client's own channel
+/// The words that enroll clients on a node, and this client's own channel
 /// key (`INPUT_GRAMMAR.md` IG-Q87, IG-Q109).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Enrol {
+pub enum Enroll {
     /// `rpc client add <fingerprint> --ceiling <word>...`.
     ClientAdd {
         fingerprint: String,
@@ -213,7 +213,7 @@ pub enum Enrol {
     KeyShow,
 }
 
-impl Enrol {
+impl Enroll {
     /// The words, as the person typed them.
     #[must_use]
     pub fn label(&self) -> &'static str {
@@ -398,10 +398,10 @@ pub enum ResolvedCommand {
     ChainHealth,
     /// A daemon word (`INPUT_GRAMMAR.md` §13). The arguments are typed.
     Daemon(View),
-    /// An enrolment word (IG-Q87) or this client's channel key (IG-Q109),
+    /// An enrollment word (IG-Q87) or this client's channel key (IG-Q109),
     /// reached on its own leg, never the plaintext listener
-    /// (`RPC_CHANNEL.md` §5; [`crate::enrol`]).
-    Enrol(Enrol),
+    /// (`RPC_CHANNEL.md` §5; [`crate::enroll`]).
+    Enroll(Enroll),
 
     // -- Proofs (WI-RPC-3 surface) --
     GetTxProof {

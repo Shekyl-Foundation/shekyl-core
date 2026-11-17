@@ -3,19 +3,19 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The enrolment words (`INPUT_GRAMMAR.md` IG-Q87) and this client's
+//! The enrollment words (`INPUT_GRAMMAR.md` IG-Q87) and this client's
 //! channel key (IG-Q109).
 //!
-//! Enrolment runs over the channel or on the owner's leg, never on a
+//! Enrollment runs over the channel or on the owner's leg, never on a
 //! plaintext listener (`RPC_CHANNEL.md` §5): any local account reaches
-//! those until RT-W12, and an enrolment made there would outlive them. So
+//! those until RT-W12, and an enrollment made there would outlive them. So
 //! these words do not use the shell's daemon client. Each picks its own
 //! leg, in this order (Rick, 2026-11-15):
 //!
 //! 1. **A node on another host:** `daemon-bundle-file` is set. The channel
 //!    to `daemon-endpoint` (through `daemon-socks` for an onion), as this
 //!    client's key (`rpc-key-file`), which the node has enrolled with an
-//!    `enrol` ceiling.
+//!    `enroll` ceiling.
 //! 2. **This computer's service** (RT-16: "this computer" is the service
 //!    when one runs): the service's console leg, at its fixed name in the
 //!    service's data directory, as the console key beside it (RT-O37). The
@@ -27,9 +27,9 @@
 //!    (`LocalTarget`).
 //!
 //! Each word asks for every grant, and the node clamps the request to the
-//! key's ceiling. What a key may enrol, change, list or remove is bounded by
+//! key's ceiling. What a key may enroll, change, list or remove is bounded by
 //! that effective grant (`RPC_CHANNEL.md` §5, RT-O9.1), so a session asking
-//! for `enrol` alone could enrol nothing beyond `enrol`.
+//! for `enroll` alone could enroll nothing beyond `enroll`.
 
 use std::path::{Path, PathBuf};
 
@@ -46,11 +46,11 @@ use shekyl_rpc_types::kinds::NoParams;
 use shekyl_rpc_types::wire::rpc::{ClientCeiling, ClientFingerprint};
 use shekyl_wallet_rpc::Network;
 
-use crate::resolve::Enrol;
+use crate::resolve::Enroll;
 
-/// What the enrolment words need from the shell's options.
+/// What the enrollment words need from the shell's options.
 #[derive(Clone, Debug)]
-pub struct EnrolOptions {
+pub struct EnrollOptions {
     /// The shell's network.
     pub network: Network,
     /// A node on another host, when `daemon-bundle-file` is set.
@@ -61,7 +61,7 @@ pub struct EnrolOptions {
     pub key_file: Option<PathBuf>,
 }
 
-impl EnrolOptions {
+impl EnrollOptions {
     /// This client's channel key file.
     ///
     /// # Errors
@@ -87,7 +87,7 @@ pub struct Remote {
     pub bundle_file: PathBuf,
 }
 
-/// The channel address an enrolment needs when `daemon-bundle-file` is set.
+/// The channel address an enrollment needs when `daemon-bundle-file` is set.
 ///
 /// The CLI's daemon address otherwise defaults to the plaintext RPC port.
 /// `rpc-listen` has no default port, so that default is not a channel.
@@ -108,7 +108,7 @@ fn default_key_file(network: Network) -> Result<PathBuf, String> {
     Ok(root.join(format!("rpc-shekyl-cli-{}.key", network.name())))
 }
 
-/// The channel leg for an enrolment on another host.
+/// The channel leg for an enrollment on another host.
 ///
 /// `address` is a peer-endpoint and `proxy`, when set, an endpoint: the
 /// kinds `daemon-endpoint` and `daemon-socks` have. A URL, a hostname, or
@@ -160,15 +160,15 @@ const CONSOLE_KEY_FAILURE: &str = "This command needs the node's console key, wh
 /// # Errors
 ///
 /// What the person reading it can act on.
-pub fn run(options: &EnrolOptions, word: &Enrol) -> Result<String, String> {
+pub fn run(options: &EnrollOptions, word: &Enroll) -> Result<String, String> {
     match word {
-        Enrol::KeyCreate => return key_create(&options.key_file()?),
-        Enrol::KeyShow => return key_show(&options.key_file()?),
+        Enroll::KeyCreate => return key_create(&options.key_file()?),
+        Enroll::KeyShow => return key_show(&options.key_file()?),
         _ => {}
     }
     let leg = EnrolLeg::resolve(options)?;
     match word {
-        Enrol::ClientAdd {
+        Enroll::ClientAdd {
             fingerprint,
             ceiling,
         } => {
@@ -178,7 +178,7 @@ pub fn run(options: &EnrolOptions, word: &Enrol) -> Result<String, String> {
             })?;
             Ok(format!("enrolled {fingerprint}"))
         }
-        Enrol::ClientSet {
+        Enroll::ClientSet {
             fingerprint,
             ceiling,
         } => {
@@ -188,13 +188,13 @@ pub fn run(options: &EnrolOptions, word: &Enrol) -> Result<String, String> {
             })?;
             Ok(format!("changed {fingerprint}'s ceiling"))
         }
-        Enrol::ClientRemove { fingerprint } => {
+        Enroll::ClientRemove { fingerprint } => {
             leg.call::<wire::RpcClientRemove>(&ClientFingerprint {
                 fingerprint: hash(fingerprint)?,
             })?;
             Ok(format!("removed {fingerprint}"))
         }
-        Enrol::ClientList => {
+        Enroll::ClientList => {
             let clients = leg.call::<wire::RpcClientList>(&NoParams)?;
             if clients.is_empty() {
                 return Ok("No clients are enrolled.".to_owned());
@@ -208,11 +208,11 @@ pub fn run(options: &EnrolOptions, word: &Enrol) -> Result<String, String> {
                 .collect::<Vec<_>>()
                 .join("\n"))
         }
-        Enrol::BundleShow => {
+        Enroll::BundleShow => {
             let bundle = leg.call::<wire::RpcBundleShow>(&NoParams)?;
             Ok(bundle_text(&bundle.bundle.0))
         }
-        Enrol::KeyCreate | Enrol::KeyShow => unreachable!("answered above"),
+        Enroll::KeyCreate | Enroll::KeyShow => unreachable!("answered above"),
     }
 }
 
@@ -220,7 +220,7 @@ fn hash(fingerprint: &str) -> Result<HashHex, String> {
     HashHex::from_hex(fingerprint).map_err(|error| error.to_string())
 }
 
-/// The leg one enrolment word runs on.
+/// The leg one enrollment word runs on.
 enum EnrolLeg {
     /// The owner's leg of a daemon this account runs.
     Owner(LocalTarget),
@@ -229,7 +229,7 @@ enum EnrolLeg {
 }
 
 impl EnrolLeg {
-    fn resolve(options: &EnrolOptions) -> Result<Self, String> {
+    fn resolve(options: &EnrollOptions) -> Result<Self, String> {
         let request = GrantSet::ALL;
         if let Some(remote) = &options.remote {
             let text = std::fs::read_to_string(&remote.bundle_file).map_err(|error| {
@@ -247,7 +247,7 @@ impl EnrolLeg {
             let key_file = options.key_file()?;
             let key = read_client_key(&key_file)?.ok_or_else(|| {
                 format!(
-                    "this client has no key at {}; make one with `rpc key create`, then enrol \
+                    "this client has no key at {}; make one with `rpc key create`, then enroll \
                      its fingerprint on the node",
                     key_file.display()
                 )
@@ -375,7 +375,7 @@ mod tests {
     use super::*;
 
     /// A missing leg is no service. A leg this account cannot see is the
-    /// console-key failure, so enrolment does not fall through to the owner.
+    /// console-key failure, so enrollment does not fall through to the owner.
     /// Red edit: treat every `symlink_metadata` error as absent in
     /// `leg_published`, and a mode-000 directory is "no service".
     #[test]

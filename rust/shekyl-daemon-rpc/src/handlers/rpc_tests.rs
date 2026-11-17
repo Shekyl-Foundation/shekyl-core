@@ -265,24 +265,24 @@ async fn every_table_row_is_answered_on_the_admin_listener() {
     }
 }
 
-/// Enrolment is not a plaintext method. The admin listener holds every
-/// grant and is reachable by any local account until RT-W12; an enrolment
+/// Enrollment is not a plaintext method. The admin listener holds every
+/// grant and is reachable by any local account until RT-W12; an enrollment
 /// made there would outlive that listener (§5). The owner's socket is the
 /// host and is not refused for the leg: with no channel open it reaches
 /// the store. Red edit: treat a missing `ChannelCall` as the host, and
 /// the admin listener's code is `rpc.client.store`.
 #[tokio::test]
-async fn enrolment_is_refused_on_a_plaintext_listener() {
-    let (_scratch, state) = state("enrol-leg");
+async fn enrollment_is_refused_on_a_plaintext_listener() {
+    let (_scratch, state) = state("enroll-leg");
     let request = call("rpc_client_list", json!({}));
-    // The admin listener holds `enrol`. The refusal is the leg.
+    // The admin listener holds `enroll`. The refusal is the leg.
     let admin = send(&state, ADMIN, &request).await;
     assert_eq!(
         refusal(&admin).map(|(_, code)| code).as_deref(),
         Some(crate::channel::codes::PLAINTEXT),
         "{admin}"
     );
-    // The view listener does not hold `enrol`, so admission refuses it
+    // The view listener does not hold `enroll`, so admission refuses it
     // before the leg is asked.
     let view = send(&state, Authority::VIEW_LISTENER, &request).await;
     assert_eq!(

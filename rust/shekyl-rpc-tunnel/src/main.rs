@@ -96,7 +96,7 @@ fn run(config: config::Config) -> ExitCode {
         Ok(Some(key)) => key,
         Ok(None) => {
             eprintln!(
-                "this tunnel has no key at {}; make one with --rpc-key-create, then enrol its \
+                "this tunnel has no key at {}; make one with --rpc-key-create, then enroll its \
                  fingerprint on the node",
                 config.key_file.display()
             );

@@ -5,7 +5,7 @@
 
 //! A service's console key, installed as one change (`RPC_CHANNEL.md` §5).
 //!
-//! The private half is a file. The fingerprint is a cell in the enrolment
+//! The private half is a file. The fingerprint is a cell in the enrollment
 //! store, and it is the admission record: a file edited by hand does not
 //! become the console key. The two are written so a crash cannot leave
 //! them disagreeing.
@@ -47,7 +47,7 @@ pub(crate) enum Reconcile {
 pub(crate) enum ConsoleFault {
     /// A key file could not be used.
     File(FileRefused),
-    /// The enrolment store refused.
+    /// The enrollment store refused.
     Store(StoreError),
     /// The key could not be drawn.
     Generate(String),
@@ -154,7 +154,7 @@ pub(crate) fn reconcile(dir: &Path, store: &Store) -> Result<Reconcile, ConsoleF
             live.display()
         ))),
         Step::Refuse(Refusal::Unrecorded) => Err(ConsoleFault::Refuse(format!(
-            "{} is present and the enrolment store has no console key; remove it, or replace \
+            "{} is present and the enrollment store has no console key; remove it, or replace \
              the console key with `shekyld --rpc-console-key-reset`",
             live.display()
         ))),

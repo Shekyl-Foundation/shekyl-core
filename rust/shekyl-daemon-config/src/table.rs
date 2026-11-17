@@ -171,7 +171,7 @@ const ROWS: &[Row] = &[
     // Network, paths, logging
     public("help", Kind::Switch, Default::Unset, Surface::Cli, "Print the options and exit."),
     public("version", Kind::Switch, Default::Unset, Surface::Cli, "Print the version and the operating system, and exit."),
-    public("rpc-console-key-reset", Kind::Switch, Default::Unset, Surface::Cli, "Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrolment. Service mode only; refused while the daemon runs."),
+    public("rpc-console-key-reset", Kind::Switch, Default::Unset, Surface::Cli, "Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrollment. Service mode only; refused while the daemon runs."),
     public("config-verify", Kind::Switch, Default::Unset, Surface::Cli, "Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own."),
     public("network", Kind::OneOf(NETWORKS), Default::Value("mainnet"), Surface::Cli, "The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file."),
     Row {

@@ -43,7 +43,7 @@ tracing = "0.1"
 tempfile = "3"
 # The end-to-end test (tests/end_to_end.rs): a real daemon in a child of
 # the test binary, as shekyl-daemon's own tests run one; the owner's calls
-# that enrol the administrator; the CLI's enrolment words, as a library;
+# that enroll the administrator; the CLI's enrollment words, as a library;
 # the spawn lock every launcher takes.
 shekyl-daemon = { path = "../shekyl-daemon" }
 shekyl-cli = { path = "../shekyl-cli" }

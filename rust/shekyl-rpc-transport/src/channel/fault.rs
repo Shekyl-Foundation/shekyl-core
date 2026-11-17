@@ -77,11 +77,11 @@ impl std::fmt::Display for ChannelFault {
             ),
             Self::NotEnrolled { fingerprint } => write!(
                 f,
-                "The node answered but has not enrolled this client. Enrol it on the node \
+                "The node answered but has not enrolled this client. Enroll it on the node \
                  with: shekyl-cli rpc client add {} --ceiling GRANTS",
                 hex::encode(fingerprint)
             ),
-            Self::Revoked => f.write_str("The node revoked this client's enrolment."),
+            Self::Revoked => f.write_str("The node revoked this client's enrollment."),
             Self::TimedOut => f.write_str("The node did not complete the handshake in time."),
             Self::Busy => f.write_str(
                 "The node is busy and did not accept the connection in time. Try again shortly.",

@@ -11,7 +11,7 @@
 //! - [`prologue`]: what the channel's Noise handshake binds to before its
 //!   first message, so a client of one network cannot complete a handshake
 //!   with a daemon of another.
-//! - [`static_fingerprint`]: the identity a daemon enrols a client under.
+//! - [`static_fingerprint`]: the identity a daemon enrolls a client under.
 //!
 //! The third derivation of RT-O14, the rendezvous name, is
 //! `shekyl-rpc-rendezvous`'s, with the instance rule and the rendezvous's
@@ -94,7 +94,7 @@ pub fn prologue(network_id: &NetworkId) -> [u8; PROLOGUE_LEN] {
     out
 }
 
-/// The identity a daemon enrols a client's static keys under.
+/// The identity a daemon enrolls a client's static keys under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StaticFingerprint([u8; STATIC_FINGERPRINT_LEN]);
 

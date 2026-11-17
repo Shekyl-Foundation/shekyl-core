@@ -102,7 +102,7 @@ impl Served {
         self.channel.key.public().clone()
     }
 
-    fn enrol(&self, client: &StaticKeypair, ceiling: &[CeilingWord]) {
+    fn enroll(&self, client: &StaticKeypair, ceiling: &[CeilingWord]) {
         self.channel
             .client_add(
                 HOST,
@@ -268,14 +268,14 @@ async fn an_unenrolled_client_gets_no_message_4() {
 
 /// **Message 4 carries the ceiling; the connection holds the clamp.** An
 /// `admin` client that asks for `view` is told `admin`, and is refused
-/// `rpc_bundle_show` (`enrol`) on that connection. Red edit: stamp the
+/// `rpc_bundle_show` (`enroll`) on that connection. Red edit: stamp the
 /// ceiling instead of `request ∩ ceiling` in the listener, and the bundle
 /// is served.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn message_4_carries_the_ceiling_and_the_connection_holds_the_clamp() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::Admin]);
+    served.enroll(&client, &[CeilingWord::Admin]);
 
     let mut viewing = connect(&served, &client, Preset::View.grants())
         .await
@@ -306,7 +306,7 @@ async fn message_4_carries_the_ceiling_and_the_connection_holds_the_clamp() {
 async fn removing_a_client_closes_its_live_session() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::View]);
+    served.enroll(&client, &[CeilingWord::View]);
     let mut session = connect(&served, &client, Preset::View.grants())
         .await
         .expect("a session");
@@ -337,7 +337,7 @@ async fn removing_a_client_closes_its_live_session() {
 async fn a_key_past_its_session_cap_is_refused_by_name() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::View]);
+    served.enroll(&client, &[CeilingWord::View]);
     let mut held = Vec::new();
     for _ in 0..shekyl_rpc_channel::SESSIONS_PER_CLIENT {
         let mut session = connect(&served, &client, Preset::View.grants())
@@ -386,7 +386,7 @@ async fn a_key_past_its_session_cap_is_refused_by_name() {
 async fn a_kept_session_past_the_cap_is_not_announced() {
     let served = Served::start(false).await;
     let key = StaticKeypair::generate().unwrap();
-    served.enrol(&key, &[CeilingWord::View]);
+    served.enroll(&key, &[CeilingWord::View]);
     let mut held = Vec::new();
     for _ in 0..shekyl_rpc_channel::SESSIONS_PER_CLIENT {
         let mut session = connect(&served, &key, Preset::View.grants())
@@ -425,7 +425,7 @@ async fn a_parked_session_outlives_the_handshake_deadline() {
     let served = Served::start(false).await;
     let key = StaticKeypair::generate().unwrap();
     let fingerprint = *key.public().fingerprint().as_bytes();
-    served.enrol(&key, &[CeilingWord::View]);
+    served.enroll(&key, &[CeilingWord::View]);
     let pool = pool_to(&served, key, Preset::View.grants());
     pool.open_kept().await.expect("the kept session");
     assert_eq!(served.channel.sessions.open(&fingerprint), 1);
@@ -447,7 +447,7 @@ async fn the_pool_reuses_its_sessions_and_waits_at_its_cap() {
     let served = Served::start(false).await;
     let key = StaticKeypair::generate().unwrap();
     let fingerprint = *key.public().fingerprint().as_bytes();
-    served.enrol(&key, &[CeilingWord::View]);
+    served.enroll(&key, &[CeilingWord::View]);
     let pool = pool_to(&served, key, Preset::View.grants());
     let (ceiling, granted) = pool.open_kept().await.expect("the kept session");
     assert_eq!(
@@ -490,7 +490,7 @@ async fn the_pool_reuses_its_sessions_and_waits_at_its_cap() {
 }
 
 /// **A revocation stops the pool, which does not dial again** (§4.5,
-/// RT-W11). Enrol, dial, call; remove the key; the next call is refused as
+/// RT-W11). Enroll, dial, call; remove the key; the next call is refused as
 /// revoked, and so is every one after, with no new handshake. Red edit:
 /// make `Pool::open_session` report `NotEnrolled` after a held session, and
 /// the refusal is not a revocation.
@@ -499,7 +499,7 @@ async fn a_revocation_stops_the_pool_and_it_does_not_dial_again() {
     let served = Served::start(false).await;
     let key = StaticKeypair::generate().unwrap();
     let fingerprint = *key.public().fingerprint().as_bytes();
-    served.enrol(&key, &[CeilingWord::View]);
+    served.enroll(&key, &[CeilingWord::View]);
     let pool = pool_to(&served, key, Preset::View.grants());
     let call = || {
         let pool = Arc::clone(&pool);
@@ -544,7 +544,7 @@ async fn a_lowered_ceiling_closes_the_session_and_a_raised_one_does_not() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
     let fingerprint = *client.public().fingerprint().as_bytes();
-    served.enrol(&client, &[CeilingWord::View]);
+    served.enroll(&client, &[CeilingWord::View]);
     let mut session = connect(&served, &client, Preset::View.grants())
         .await
         .expect("a session");
@@ -578,7 +578,7 @@ async fn a_lowered_ceiling_closes_the_session_and_a_raised_one_does_not() {
 async fn an_unpadded_submission_is_refused_over_the_channel() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::Wallet]);
+    served.enroll(&client, &[CeilingWord::Wallet]);
     // Unpadded: written raw through the handshake layer, the mark not armed.
     let (mut stream, _) = open_stream(&served, &client, Preset::Wallet.grants())
         .await
@@ -622,7 +622,7 @@ async fn an_unpadded_submission_is_refused_over_the_channel() {
 async fn two_submissions_in_one_frame_are_both_refused() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::Wallet]);
+    served.enroll(&client, &[CeilingWord::Wallet]);
     let (mut stream, _) = open_stream(&served, &client, Preset::Wallet.grants())
         .await
         .expect("a session");
@@ -662,13 +662,13 @@ fn tx_submit_post(body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// **The console key is the host's administrator and never an enrolment**
+/// **The console key is the host's administrator and never an enrollment**
 /// (§5). A service makes it on its first start; it connects with every
-/// grant and the host's classes; it is not listed, and the enrolment
+/// grant and the host's classes; it is not listed, and the enrollment
 /// methods cannot name it. Red edit: admit the console key as
 /// `Client(ALL)`, and `relay_stats` is refused as host-only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_console_key_is_the_host_and_never_an_enrolment() {
+async fn the_console_key_is_the_host_and_never_an_enrollment() {
     let served = Served::start(true).await;
     let console = super::files::read_key(&served.data_dir.join(super::files::CONSOLE_KEY_FILE))
         .expect("readable")
@@ -688,7 +688,7 @@ async fn the_console_key_is_the_host_and_never_an_enrolment() {
     let removed = served
         .channel
         .client_remove(HOST, fingerprint)
-        .expect_err("not an enrolment");
+        .expect_err("not an enrollment");
     assert_eq!(removed.diagnostic.code, super::codes::CONSOLE);
 }
 
@@ -757,7 +757,7 @@ async fn the_console_leg_serves_the_console_key_alone_from_its_reserve() {
     assert_ne!(code(&host), Some("grant.host-only"), "{host}");
 
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::Admin]);
+    served.enroll(&client, &[CeilingWord::Admin]);
     let io = tokio::net::UnixStream::connect(&place).await.expect("dial");
     assert_eq!(
         open_over(io, &served.bundle(), &client, Preset::View.grants())
@@ -771,16 +771,16 @@ async fn the_console_leg_serves_the_console_key_alone_from_its_reserve() {
     serving.await.expect("joined").expect("served");
 }
 
-/// **Enrolment is bounded by the caller's own grant** (RT-O9.1). A key
-/// holding `enrol` and `view` may enrol `view`, not `bans`; may not remove
-/// or change an `admin` enrolment; and lists only what lies within its
+/// **Enrollment is bounded by the caller's own grant** (RT-O9.1). A key
+/// holding `enroll` and `view` may enroll `view`, not `bans`; may not remove
+/// or change an `admin` enrollment; and lists only what lies within its
 /// grant. Red edit: drop the `within_caller` check on the new ceiling in
-/// `client_add`, and the `bans` enrolment is made.
+/// `client_add`, and the `bans` enrollment is made.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enrolment_is_bounded_by_the_callers_grant() {
+async fn enrollment_is_bounded_by_the_callers_grant() {
     let served = Served::start(false).await;
     let narrow = Authority::channel(
-        Preset::View.grants().union(GrantSet::of(&[Grant::Enrol])),
+        Preset::View.grants().union(GrantSet::of(&[Grant::Enroll])),
         false,
     );
     let by = Enroller::Client([5; 32]);
@@ -803,7 +803,7 @@ async fn enrolment_is_bounded_by_the_callers_grant() {
         served
             .channel
             .client_remove(narrow, admin_key)
-            .expect_err("an admin enrolment")
+            .expect_err("an admin enrollment")
             .diagnostic
             .code,
         super::codes::BEYOND_CALLER
@@ -860,7 +860,7 @@ async fn a_silent_connection_is_closed_at_the_message_1_deadline() {
 async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::View]);
+    served.enroll(&client, &[CeilingWord::View]);
     let mut session = connect(&served, &client, Preset::View.grants())
         .await
         .expect("a session");
@@ -908,7 +908,7 @@ async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
     assert!(after.is_none(), "{after:?}");
 }
 
-/// **The console key's reset replaces the console enrolment and nothing
+/// **The console key's reset replaces the console enrollment and nothing
 /// else** (IG-Q88, §5), run offline as the switch runs it: the old console
 /// key is no longer admitted, the new one is, an enrolled client is
 /// untouched, and the next start reads the note it left. Red edit: skip

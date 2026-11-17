@@ -22,7 +22,7 @@
 #   install -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/db/shekyl-tunnel
 #   su -m shekyl-tunnel -c "shekyl-rpc-tunnel --rpc-key-create \
 #       --rpc-key-file /var/db/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key"
-#     (prints the fingerprint; enrol it on the node with
+#     (prints the fingerprint; enroll it on the node with
 #      `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`)
 #   write /usr/local/etc/shekyl/shekyl-rpc-tunnel.toml: daemon-endpoint,
 #     daemon-bundle-file (the node's `rpc bundle show`), and listen, a

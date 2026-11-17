@@ -72,7 +72,7 @@ Register at birth (rule 94 §1) when this lands as a tracked doc.
 operator-to-operator; P2P is adversarial by design and hardened separately."
 RT-4's pinned-mutual-TLS mechanism (`:223-227`, "No CA... every client is a
 device the operator physically holds — there is no delegation, only
-enrolment") is therefore **not transferable** to P2P by default; P2P's peer
+enrollment") is therefore **not transferable** to P2P by default; P2P's peer
 is a stranger by construction, so any borrowed mechanism needs its own
 justification, not RT-4's.
 

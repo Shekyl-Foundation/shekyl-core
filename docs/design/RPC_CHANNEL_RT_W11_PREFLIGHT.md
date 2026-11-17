@@ -33,7 +33,7 @@ request (Rick, 2026-11-15):
   channel's own failures (not the daemon, not enrolled, revoked, busy)
   join it as variants of their own with the wallet contract's change,
   never folded into an existing one.
-- **`shekyl-cli`'s enrolment words** (IG-Q87): `rpc client add`, `set`,
+- **`shekyl-cli`'s enrollment words** (IG-Q87): `rpc client add`, `set`,
   `remove`, `list` and `rpc bundle show`.
 - **`shekyl-rpc-tunnel`** as `RPC_CHANNEL.md` §8 rules it, with its
   session pool.
@@ -45,9 +45,9 @@ It is not:
   their legs; the plaintext admin listener stays, and so does the
   daemon client's `https://` arm.
 - **RT-W10 step 5.** The CLI's other words do not move onto the owner's
-  leg here. Only the five enrolment words reach the daemon through
+  leg here. Only the five enrollment words reach the daemon through
   `LocalTarget`, because the plaintext listeners do not serve them (§5).
-- **RT-W14.** Service mode's installer, its enrol-at-install and the
+- **RT-W14.** Service mode's installer, its enroll-at-install and the
   Windows service directory's creation stay there.
 
 ---
@@ -61,7 +61,7 @@ It is not:
    rendezvous record and console key itself, from the fixed paths
    `shekyl-daemon-config` already holds (§4.5's console-key row assumes
    this), and never keeps a second copy of those paths. A run-as-me owner
-   enrols over `LocalTarget`. `daemon-bundle-file` and `rpc-key-file` are
+   enrolls over `LocalTarget`. `daemon-bundle-file` and `rpc-key-file` are
    for a CLI on another host, and are posed with the tunnel's table.
 3. **The grammar.** The tunnel's table is posed as IG questions here. It
    is one table shared with the CLI's channel rows, so each name means the
@@ -128,7 +128,7 @@ the channel.
 
 `channel/sessions.rs` indexes live sessions by fingerprint. `register`
 (`sessions.rs:88-107`) adds a session under the index's lock if the
-enrolment still admits it, with no count. The listener registers after
+enrollment still admits it, with no count. The listener registers after
 the first record opens (`listener.rs:131-143`, the call at 135), so by then the session is
 authenticated and the daemon can answer it: a refusal at registration
 can be a typed JSON-RPC error on the first request rather than a silent
@@ -275,15 +275,15 @@ and renamed `rpc-grant` (Rick, 2026-11-16), so `request` keeps its one
 meaning.
 
 **What the CLI asks for, and which of its words these rows move.** The
-CLI does not read `rpc-grant`. An enrolment word asks for every grant,
+CLI does not read `rpc-grant`. An enrollment word asks for every grant,
 and the node clamps the request to the key's ceiling: what a key may
-enrol, change, list or remove is bounded by its effective grant (§5,
-RT-O9.1), so a session holding `enrol` alone could enrol nothing beyond
-`enrol`. Each session lasts one command. *(Corrected 2026-11-16 and
+enroll, change, list or remove is bounded by its effective grant (§5,
+RT-O9.1), so a session holding `enroll` alone could enroll nothing beyond
+`enroll`. Each session lasts one command. *(Corrected 2026-11-16 and
 confirmed by Rick the same day: the recommendation as first ruled had each
 word ask for its method's grant alone, which RT-O9.1's bound refuses; the
 end-to-end test found it.)* In RT-W11, `daemon-bundle-file`
-and `rpc-key-file` move **only the five enrolment words** onto the
+and `rpc-key-file` move **only the five enrollment words** onto the
 channel. Every other console word, and the wallet session's daemon leg,
 stay where they are until RT-W12 moves them (§1).
 
@@ -291,7 +291,7 @@ stay where they are until RT-W12 moves them (§1).
 
 **Problem.** §5: each endpoint generates its own bundle; the tunnel
 "generates and holds that host's static bundle; prints its fingerprint
-for enrolment" (§8). The operator then enrols that fingerprint with
+for enrollment" (§8). The operator then enrolls that fingerprint with
 `rpc client add`. A CLI on another host needs the same.
 
 **Question.** How a key is made, and how its fingerprint is shown.
@@ -433,7 +433,7 @@ whether the reserves count inside `rpc-connections-max`.
 - **The kept session** reopens when the daemon closes it, under the
   retry policy (§4.3). A reopen refused at message 3 after a session was
   held is a revocation (§4.5, "The node revoked this client's
-  enrolment"); the pool stops, reports it, and does not redial.
+  enrollment"); the pool stops, reports it, and does not redial.
 - **Submissions** (close-out F2): the tunnel buffers a local request
   whole, reads its JSON-RPC method, and sends a `tx_submit` as one `Full`
   body on a session that carries nothing else until the response, with
@@ -459,7 +459,7 @@ One pull request. Commits in this order; each builds.
    console key (§2, item 2).
 7. `shekyl-rpc-tunnel`, and the CLI's rows from IG-Q108 and IG-Q109;
    the four questions move into `INPUT_GRAMMAR.md` as ruled.
-8. End-to-end tests against a real daemon: enrol, dial, call, revoke,
+8. End-to-end tests against a real daemon: enroll, dial, call, revoke,
    and a refused call after revocation; the cap; the reserves; the
    submission's contract. Each names the edit that makes it fail.
 9. Documentation: `RPC_CHANNEL.md` (§4.5, §6.3, §8, §13), the grammar's
