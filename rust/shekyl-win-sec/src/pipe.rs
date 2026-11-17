@@ -187,6 +187,25 @@ impl OwnerOnlyPipeListener {
         })
     }
 
+    /// Create the first instance of a service's console pipe at `name`:
+    /// the console's descriptor ([`OwnerOnlyDescriptor::console_pipe`]),
+    /// refusing a name that is already held. Its clients are the service
+    /// account and administrators of any logon session; the channel's
+    /// handshake, not a peer check, authenticates the two ends.
+    ///
+    /// Must be called inside a tokio runtime with I/O enabled.
+    pub fn bind_console(name: String) -> Result<Self, PipeBindError> {
+        let owner = current_user_sid()?;
+        let descriptor = OwnerOnlyDescriptor::console_pipe(&owner)?;
+        let first = create_instance(&name, &descriptor, true).map_err(PipeBindError::Create)?;
+        Ok(Self {
+            name,
+            descriptor,
+            waiting: Some(first),
+            live: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+
     /// The name this listener holds.
     #[must_use]
     pub fn name(&self) -> &str {

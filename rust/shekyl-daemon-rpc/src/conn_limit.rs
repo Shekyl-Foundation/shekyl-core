@@ -37,6 +37,15 @@
 //! sockets back as a [`CountedStream`] whose drop (connection close) releases
 //! the slot. The same tracker's live total is what `daemon_status` reports as
 //! `rpc_connections_count`.
+//!
+//! **Two reserves sit outside the caps** (`RPC_CHANNEL.md` RT-O37, ruled
+//! 2026-11-15): the owner's leg and a service's console leg each hold
+//! [`RESERVED_SLOTS`] beyond `rpc-connections-max`, drawn only by their own
+//! listener, after the shared pool is full. A compromised enrolled host on
+//! the operator's network can fill the shared pool with silent connections;
+//! it cannot reach either leg, so the administrator can still revoke it. The
+//! owner's reserve also keeps the owner's leg open to its owner while any
+//! local account can reach the plaintext view listener (until RT-W12).
 
 use std::collections::HashMap;
 use std::io;
@@ -47,6 +56,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use axum::serve::Listener;
+use shekyl_rpc_channel::SESSIONS_PER_CLIENT;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -125,6 +135,12 @@ impl ConnLimits {
 #[derive(Debug)]
 pub struct ConnTracker {
     limits: ConnLimits,
+    /// Live connections in the owner's reserve and the console's reserve.
+    /// Mutated only under `per_ip`'s lock, as `total` is. Each counter is
+    /// named: a new reserve is a new field, and [`Reserve::slots`] does
+    /// not compile until it is.
+    owner: AtomicU64,
+    console: AtomicU64,
     /// Live connection total. Mutated only while `per_ip`'s lock is held so it
     /// stays coherent with the map; read lock-free for the `daemon_status` metric.
     total: AtomicU64,
@@ -138,6 +154,8 @@ impl ConnTracker {
     pub fn new(limits: ConnLimits) -> Arc<Self> {
         Arc::new(Self {
             limits,
+            owner: AtomicU64::new(0),
+            console: AtomicU64::new(0),
             total: AtomicU64::new(0),
             per_ip: Mutex::new(HashMap::new()),
         })
@@ -146,7 +164,33 @@ impl ConnTracker {
     /// Current number of live connections — the value reported as
     /// `rpc_connections_count`.
     pub fn active_total(&self) -> u64 {
-        self.total.load(Ordering::Relaxed)
+        self.total.load(Ordering::Relaxed) + self.reserved_total()
+    }
+
+    /// Admit a connection on a leg with `reserve`: from the shared pool
+    /// while it has room, otherwise from the reserve. A reserve is not
+    /// subject to the per-address caps: its callers are on this computer.
+    pub fn try_acquire_reserved(
+        self: &Arc<Self>,
+        ip: IpAddr,
+        reserve: Reserve,
+    ) -> Option<ConnGuard> {
+        if let Some(guard) = self.try_acquire(ip) {
+            return Some(guard);
+        }
+        let _map = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let held = self.slots(reserve);
+        if held.load(Ordering::Relaxed) >= RESERVED_SLOTS {
+            return None;
+        }
+        held.fetch_add(1, Ordering::Relaxed);
+        Some(ConnGuard {
+            tracker: Arc::clone(self),
+            held: Held::Reserve(reserve),
+        })
     }
 
     /// Try to admit a connection from `ip`. On success returns a [`ConnGuard`]
@@ -184,15 +228,23 @@ impl ConnTracker {
         self.total.fetch_add(1, Ordering::Relaxed);
         Some(ConnGuard {
             tracker: Arc::clone(self),
-            ip,
+            held: Held::Shared(ip),
         })
     }
 
-    fn release(&self, ip: IpAddr) {
+    fn release(&self, held: Held) {
         let mut map = self
             .per_ip
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ip = match held {
+            Held::Shared(ip) => ip,
+            Held::Reserve(reserve) => {
+                // Held only while counted, so this cannot wrap.
+                self.slots(reserve).fetch_sub(1, Ordering::Relaxed);
+                return;
+            }
+        };
         let Some(slot) = map.get_mut(&ip) else {
             // Unreachable given the guard lifecycle (a ConnGuard exists iff
             // try_acquire inserted this canonical IP). Fail safe if that
@@ -211,16 +263,52 @@ impl ConnTracker {
     }
 }
 
+/// The connections each reserve holds beyond the caps: one client key's
+/// sessions (`SESSIONS_PER_CLIENT`, RT-O37).
+pub const RESERVED_SLOTS: u64 = SESSIONS_PER_CLIENT as u64;
+
+/// A leg that holds slots beyond the caps (RT-O37).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reserve {
+    /// The owner's socket or pipe (RT-15).
+    Owner,
+    /// A service's console leg: the channel at a socket in the data home.
+    Console,
+}
+
+impl ConnTracker {
+    fn slots(&self, reserve: Reserve) -> &AtomicU64 {
+        match reserve {
+            Reserve::Owner => &self.owner,
+            Reserve::Console => &self.console,
+        }
+    }
+
+    fn reserved_total(&self) -> u64 {
+        self.slots(Reserve::Owner).load(Ordering::Relaxed)
+            + self.slots(Reserve::Console).load(Ordering::Relaxed)
+    }
+}
+
+/// Which slot a guard holds.
+#[derive(Clone, Copy, Debug)]
+enum Held {
+    /// One of the shared pool's, counted under this address.
+    Shared(IpAddr),
+    /// One of a reserve's.
+    Reserve(Reserve),
+}
+
 /// Releases one connection slot from its [`ConnTracker`] on drop.
 #[derive(Debug)]
 pub struct ConnGuard {
     tracker: Arc<ConnTracker>,
-    ip: IpAddr,
+    held: Held,
 }
 
 impl Drop for ConnGuard {
     fn drop(&mut self) {
-        self.tracker.release(self.ip);
+        self.tracker.release(self.held);
     }
 }
 
@@ -269,11 +357,25 @@ fn ip_is_local(ip: IpAddr) -> bool {
 pub struct LimitedListener<L = TcpListener> {
     inner: L,
     tracker: Arc<ConnTracker>,
+    reserve: Option<Reserve>,
 }
 
 impl<L> LimitedListener<L> {
     pub fn new(inner: L, tracker: Arc<ConnTracker>) -> Self {
-        Self { inner, tracker }
+        Self {
+            inner,
+            tracker,
+            reserve: None,
+        }
+    }
+
+    /// A leg that draws on `reserve` once the shared pool is full (RT-O37).
+    pub fn reserved(inner: L, tracker: Arc<ConnTracker>, reserve: Reserve) -> Self {
+        Self {
+            inner,
+            tracker,
+            reserve: Some(reserve),
+        }
     }
 }
 
@@ -319,7 +421,12 @@ where
             // logs and backs off on transient accept errors and only yields
             // on a real connection.
             let (stream, addr) = self.inner.accept().await;
-            match self.tracker.try_acquire(L::admit_as(&addr)) {
+            let ip = L::admit_as(&addr);
+            let admitted = match self.reserve {
+                None => self.tracker.try_acquire(ip),
+                Some(reserve) => self.tracker.try_acquire_reserved(ip, reserve),
+            };
+            match admitted {
                 Some(guard) => {
                     return (
                         CountedStream {
@@ -415,6 +522,44 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    /// The owner's and the console's legs hold their reserves when the
+    /// shared pool is full, each `RESERVED_SLOTS` deep and apart from the
+    /// other; a plain listener gets nothing; `active_total` counts every
+    /// slot, and a dropped reserve slot is free again. Red edit: make
+    /// `try_acquire_reserved` return `try_acquire`'s answer, and the owner
+    /// is locked out with the pool.
+    #[test]
+    fn a_full_pool_leaves_the_owner_and_the_console_their_reserves() {
+        let t = ConnTracker::new(ConnLimits::checked(1, 0, 0).unwrap());
+        let shared = t.try_acquire(ip("10.0.0.5")).unwrap();
+        assert!(t.try_acquire(ip("10.0.0.6")).is_none(), "the pool is full");
+        let local = ip("127.0.0.1");
+        let owner: Vec<ConnGuard> = (0..RESERVED_SLOTS)
+            .map(|_| {
+                t.try_acquire_reserved(local, Reserve::Owner)
+                    .expect("the owner's reserve")
+            })
+            .collect();
+        assert!(
+            t.try_acquire_reserved(local, Reserve::Owner).is_none(),
+            "the owner's reserve is RESERVED_SLOTS deep"
+        );
+        let console = t
+            .try_acquire_reserved(local, Reserve::Console)
+            .expect("the console's reserve is its own");
+        assert_eq!(t.active_total(), 1 + RESERVED_SLOTS + 1);
+        drop(owner);
+        let _again = t
+            .try_acquire_reserved(local, Reserve::Owner)
+            .expect("a dropped reserve slot is free");
+        assert!(
+            t.try_acquire(ip("10.0.0.6")).is_none(),
+            "the pool is still full"
+        );
+        drop((shared, console));
+        assert_eq!(t.active_total(), 1);
     }
 
     #[test]

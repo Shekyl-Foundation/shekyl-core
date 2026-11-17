@@ -246,10 +246,10 @@ oracle. The requirement carries to the channel unchanged — one protocol
 name, no negotiation, and no fallback between legs
 ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §4.1, RT-15).
 
-### RT-7 — Enrolment is where the security lives
+### RT-7 — Enrollment is where the security lives
 
 The pairing step must be short-lived, single-use, bound to the specific
-enrolment session, and high-entropy enough to resist online guessing. A
+enrollment session, and high-entropy enough to resist online guessing. A
 pairing code that is reusable or long-lived is a password with extra steps.
 
 Any secret a human can type is a secret a human will choose. Generated
@@ -273,7 +273,7 @@ the modal deployment (desktop daemon; laptop and phone on the same LAN), so
 **The channel runs inside the onion service as well.** The failure mode to avoid is
 Tor authenticating via onion client auth while TCP authenticates another way —
 two provisioning flows, two config surfaces, and one of them weaker. One trust
-decision, one enrolment flow, regardless of transport.
+decision, one enrollment flow, regardless of transport.
 
 ### RT-9 — `--public-node` is removed
 

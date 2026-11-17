@@ -190,6 +190,37 @@ impl OwnerOnlyDescriptor {
         Self::from_sddl(&sddl)
     }
 
+    /// A service's console file (`RPC_CHANNEL.md` RT-O37): the console key,
+    /// the node's public bundle, and the pipe's name. The owning account
+    /// may read and write it. BUILTIN\Administrators may read it, which is
+    /// how an administrator reaches the console. The DACL is protected and
+    /// the no-read-up label is set in the creating call. On Unix the same
+    /// reach is mode `0600`: the superuser reads it, and no other account
+    /// does.
+    pub fn console_file(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;;FA;;;{o})(A;;FR;;;BA)S:(ML;;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
+        Self::from_sddl(&sddl)
+    }
+
+    /// A service's console pipe (`RPC_CHANNEL.md` RT-O37, Rick
+    /// 2026-11-15): owned by `owner`, the service account; access for that
+    /// account and the built-in Administrators, the data home's ruled ACL
+    /// (§7.1); protected; Medium label, as the owner's pipe. The handshake
+    /// over it still authenticates both ends; the descriptor decides only
+    /// who reaches the console's reserved slots.
+    pub fn console_pipe(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;;GA;;;{o})(A;;GA;;;BA){sacl}",
+            o = owner.as_str(),
+            sacl = MEDIUM_INTEGRITY_SACL
+        );
+        Self::from_sddl(&sddl)
+    }
+
     /// The one place the **pipe** policy string is assembled. Both pipe
     /// constructors route through it so the label is the *only* thing that
     /// can differ between them — a second `format!` would be a second policy

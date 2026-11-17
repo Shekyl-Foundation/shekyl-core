@@ -11,7 +11,7 @@
 //! - [`prologue`]: what the channel's Noise handshake binds to before its
 //!   first message, so a client of one network cannot complete a handshake
 //!   with a daemon of another.
-//! - [`static_fingerprint`]: the identity a daemon enrols a client under.
+//! - [`static_fingerprint`]: the identity a daemon enrolls a client under.
 //!
 //! The third derivation of RT-O14, the rendezvous name, is
 //! `shekyl-rpc-rendezvous`'s, with the instance rule and the rendezvous's
@@ -48,6 +48,19 @@ pub const MAC1_LEN: usize = 16;
 /// Length of a busy reply.
 pub const BUSY_LEN: usize = 16;
 
+/// The most live channel sessions one client key may hold
+/// (`RPC_CHANNEL.md` §6.3, RT-O37). The daemon refuses a fingerprint's next
+/// session past it (`bound.sessions`), and a client's session pool opens no
+/// more than it.
+///
+/// **Assumption** (Rick, 2026-11-15). Basis: five clients fit in
+/// `rpc-connections-max`'s default of 25 with five to spare, and the
+/// console's four are its own, beyond that number. Without a cap, one
+/// compromised enrolled key could hold every connection the daemon admits
+/// and lock its administrator out of revoking it. RT-P10 measures whether
+/// a pool of this size serves its load.
+pub const SESSIONS_PER_CLIENT: usize = 4;
+
 /// Length of the genesis-derived network id (`shekyl-p2p-transport`'s
 /// `NetworkId`; a test holds the two equal).
 pub const NETWORK_ID_LEN: usize = 16;
@@ -81,7 +94,7 @@ pub fn prologue(network_id: &NetworkId) -> [u8; PROLOGUE_LEN] {
     out
 }
 
-/// The identity a daemon enrols a client's static keys under.
+/// The identity a daemon enrolls a client's static keys under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StaticFingerprint([u8; STATIC_FINGERPRINT_LEN]);
 

@@ -172,8 +172,8 @@ jobs:
         host=${{ matrix.toolchain.host }}
         bindir=build/$host/release/bin
         case "$host" in
-          *-w64-mingw32) bins="$bindir/shekyld.exe" ;;
-          *) bins="$bindir/shekyld $bindir/shekyl-cli $bindir/shekyl-wallet-rpc" ;;
+          *-w64-mingw32) bins="$bindir/shekyld.exe $bindir/shekyl-rpc-tunnel.exe" ;;
+          *) bins="$bindir/shekyld $bindir/shekyl-cli $bindir/shekyl-wallet-rpc $bindir/shekyl-rpc-tunnel" ;;
         esac
         # shellcheck disable=SC2086
         scripts/ci/check_binary_hardening.sh --tool-prefix "contrib/depends/$host/native/bin/$host-" $bins

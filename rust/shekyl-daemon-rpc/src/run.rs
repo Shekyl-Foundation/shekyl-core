@@ -55,6 +55,8 @@ pub struct Running {
     owner: Option<Owner>,
     /// A service's published rendezvous record; dropped first on stop.
     service_rendezvous: Option<crate::channel::rendezvous::ServiceRendezvous>,
+    /// A service's data directory, whose console leg is removed on stop.
+    console_dir: Option<std::path::PathBuf>,
 }
 
 /// The server's runtime, and the owner's leg bound on it, before the node
@@ -178,6 +180,21 @@ pub fn start(
                 .map_err(|e| format!("bind failed on {addr}: {e}"))?,
         );
     }
+    // A service's console leg (RT-O37): bound in this runtime, under the
+    // data directory's lock, whether or not it listens on `rpc-listen`.
+    let console_dir = channel.as_ref().and_then(|c| c.console_dir.clone());
+    let console = match &console_dir {
+        Some(dir) => {
+            let _runtime = rt.enter();
+            Some(crate::channel::console_leg::bind(dir).map_err(|e| {
+                format!(
+                    "the console's leg in {} could not be bound: {e}",
+                    dir.display()
+                )
+            })?)
+        }
+        None => None,
+    };
     // A service that listens on the channel publishes its machine-wide
     // rendezvous record once its listeners are bound; one that does not
     // publishes nothing (`RPC_CHANNEL.md` §7.1; Rick, 2026-11-14).
@@ -269,10 +286,13 @@ pub fn start(
         if let Err(e) = serve_listeners(
             config,
             submit_engine,
-            admin,
-            view,
-            owner_listener,
-            channel_listen,
+            crate::server::Listeners {
+                admin,
+                view,
+                owner: owner_listener,
+                channel_listen,
+                console,
+            },
             shutdown_rx,
         )
         .await
@@ -286,6 +306,7 @@ pub fn start(
         serve,
         owner,
         service_rendezvous,
+        console_dir,
     })
 }
 
@@ -300,6 +321,7 @@ impl Running {
             serve,
             owner,
             service_rendezvous,
+            console_dir,
         } = self;
         // A service's record first, so no client is pointed at a daemon
         // that is draining (§7.1).
@@ -321,6 +343,11 @@ impl Running {
         // level-triggered; `notify_waiters` was not and could lose a stop).
         shutdown.send_replace(true);
         drop(rt.block_on(serve));
+        // The console's leg after its last connection has ended; a later
+        // start replaces a leg a crash left.
+        if let Some(dir) = console_dir {
+            crate::channel::console_leg::retire(&dir);
+        }
         drop(rt);
         drop(shutdown);
     }

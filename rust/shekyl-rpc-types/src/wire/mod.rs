@@ -30,7 +30,7 @@ use crate::method::Policy;
 use crate::nullable::Nullable;
 use shared::{OrArchived, Slot};
 use shekyl_rpc_grants::Grant::{
-    Bans, Chain, Enrol, Health, MiningControl, MiningWork, Node, Peers, Pool, Status, Submit,
+    Bans, Chain, Enroll, Health, MiningControl, MiningWork, Node, Peers, Pool, Status, Submit,
 };
 
 const fn g(grant: shekyl_rpc_grants::Grant) -> Policy {
@@ -117,16 +117,16 @@ crate::rpc_methods! {
     BanList = "ban_list": NoParams => Vec<node::Ban>, g(Bans);
     /// One host's ban; `null` when it is not banned (§18).
     BanShow = "ban_show": node::BanHost => Nullable<node::Ban>, g(Bans);
-    /// Enrol a client under a ceiling (IG-Q87).
-    RpcClientAdd = "rpc_client_add": rpc::ClientCeiling => Done, g(Enrol);
+    /// Enroll a client under a ceiling (IG-Q87).
+    RpcClientAdd = "rpc_client_add": rpc::ClientCeiling => Done, g(Enroll);
     /// Change an enrolled client's ceiling.
-    RpcClientSet = "rpc_client_set": rpc::ClientCeiling => Done, g(Enrol);
-    /// Revoke an enrolment.
-    RpcClientRemove = "rpc_client_remove": rpc::ClientFingerprint => Done, g(Enrol);
-    /// The enrolments within the caller's grant.
-    RpcClientList = "rpc_client_list": NoParams => Vec<rpc::Client>, g(Enrol);
+    RpcClientSet = "rpc_client_set": rpc::ClientCeiling => Done, g(Enroll);
+    /// Revoke an enrollment.
+    RpcClientRemove = "rpc_client_remove": rpc::ClientFingerprint => Done, g(Enroll);
+    /// The enrollments within the caller's grant.
+    RpcClientList = "rpc_client_list": NoParams => Vec<rpc::Client>, g(Enroll);
     /// This daemon's public bundle.
-    RpcBundleShow = "rpc_bundle_show": NoParams => rpc::Bundle, g(Enrol);
+    RpcBundleShow = "rpc_bundle_show": NoParams => rpc::Bundle, g(Enroll);
     /// The relay's floor and stem tallies (host-only, RT-O9.3).
     RelayStats = "relay_stats": NoParams => p2p::RelayStats, Policy::HostOnly;
     /// Mine blocks (an armed lever, RT-O9.2).

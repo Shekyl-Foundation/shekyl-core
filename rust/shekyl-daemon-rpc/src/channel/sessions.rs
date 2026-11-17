@@ -11,15 +11,20 @@
 //! **One lock decides.** Admission looks the fingerprint up before message 4,
 //! and the session joins this index only after its first record opens. A
 //! removal between the two would leave a session no index entry names. So
-//! a session registers under the index's lock, checking the enrolment again
-//! there ([`Sessions::register`]), and every change to an enrolment is made
+//! a session registers under the index's lock, checking the enrollment again
+//! there ([`Sessions::register`]), and every change to an enrollment is made
 //! under the same lock ([`Sessions::change`]): whichever comes second sees
 //! the first.
+//!
+//! **A key holds at most `SESSIONS_PER_CLIENT` sessions** (RT-O37). The
+//! count is read under the same lock, so two sessions registering at once
+//! cannot both take the last place.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use shekyl_rpc_channel::SESSIONS_PER_CLIENT;
 use tokio::sync::watch;
 
 type Index = HashMap<[u8; 32], Vec<(u64, watch::Sender<bool>)>>;
@@ -60,6 +65,16 @@ impl Drop for Session {
     }
 }
 
+/// What a registration came to.
+pub enum Registration {
+    /// The session joined the index.
+    Registered(Session),
+    /// The enrollment no longer admits it: removed, or its ceiling lowered.
+    NotAdmitted,
+    /// The key already holds [`SESSIONS_PER_CLIENT`] sessions.
+    AtCap,
+}
+
 /// What a change under the lock asks of the index.
 pub struct Changing<'a> {
     index: MutexGuard<'a, Index>,
@@ -83,22 +98,27 @@ impl Sessions {
         self.index.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Register a session for `fingerprint` if `admitted` still says yes,
-    /// asked under the index's lock.
+    /// Register a session for `fingerprint` if `admitted` still says yes
+    /// and the key holds fewer than [`SESSIONS_PER_CLIENT`], both asked
+    /// under the index's lock.
     pub fn register(
         self: &Arc<Self>,
         fingerprint: [u8; 32],
         admitted: impl FnOnce() -> bool,
-    ) -> Option<Session> {
+    ) -> Registration {
         let mut index = self.lock();
         if !admitted() {
-            return None;
+            return Registration::NotAdmitted;
+        }
+        let open = index.entry(fingerprint).or_default();
+        if open.len() >= SESSIONS_PER_CLIENT {
+            return Registration::AtCap;
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (close, closed) = watch::channel(false);
-        index.entry(fingerprint).or_default().push((id, close));
+        open.push((id, close));
         drop(index);
-        Some(Session {
+        Registration::Registered(Session {
             sessions: Arc::clone(self),
             fingerprint,
             id,
@@ -106,7 +126,7 @@ impl Sessions {
         })
     }
 
-    /// Change an enrolment under the index's lock: `change` writes the store
+    /// Change an enrollment under the index's lock: `change` writes the store
     /// and closes what it must.
     pub fn change<T>(&self, change: impl FnOnce(&mut Changing<'_>) -> T) -> T {
         let mut changing = Changing { index: self.lock() };
@@ -124,15 +144,23 @@ impl Sessions {
 mod tests {
     use super::*;
 
+    fn registered(registration: Registration) -> Session {
+        match registration {
+            Registration::Registered(session) => session,
+            Registration::NotAdmitted => panic!("not admitted"),
+            Registration::AtCap => panic!("at the cap"),
+        }
+    }
+
     /// Closing a fingerprint closes each of its sessions and no other's; a
     /// dropped session leaves the index. Red edit: make `close` a no-op,
     /// and the first session never sees its close.
     #[tokio::test]
     async fn closing_a_fingerprint_closes_its_sessions_only() {
         let sessions = Arc::new(Sessions::default());
-        let mut a1 = sessions.register([1; 32], || true).unwrap();
-        let mut a2 = sessions.register([1; 32], || true).unwrap();
-        let b = sessions.register([2; 32], || true).unwrap();
+        let mut a1 = registered(sessions.register([1; 32], || true));
+        let mut a2 = registered(sessions.register([1; 32], || true));
+        let b = registered(sessions.register([2; 32], || true));
         assert_eq!(sessions.change(|c| c.close(&[1; 32])), 2);
         tokio::time::timeout(std::time::Duration::from_secs(1), a1.closed())
             .await
@@ -150,7 +178,32 @@ mod tests {
     #[test]
     fn a_session_no_longer_admitted_is_not_registered() {
         let sessions = Arc::new(Sessions::default());
-        assert!(sessions.register([3; 32], || false).is_none());
+        assert!(matches!(
+            sessions.register([3; 32], || false),
+            Registration::NotAdmitted
+        ));
         assert_eq!(sessions.open(&[3; 32]), 0);
+    }
+
+    /// A key holds at most `SESSIONS_PER_CLIENT` sessions; another key is
+    /// not affected, and a closed session frees its place. Red edit: drop
+    /// the count test in `register`, and the fifth session registers.
+    #[test]
+    fn a_key_past_its_cap_is_refused_and_a_closed_session_frees_a_place() {
+        let sessions = Arc::new(Sessions::default());
+        let mut held: Vec<Session> = (0..SESSIONS_PER_CLIENT)
+            .map(|_| registered(sessions.register([4; 32], || true)))
+            .collect();
+        assert!(matches!(
+            sessions.register([4; 32], || true),
+            Registration::AtCap
+        ));
+        assert_eq!(sessions.open(&[4; 32]), SESSIONS_PER_CLIENT);
+        let other = registered(sessions.register([5; 32], || true));
+        held.pop();
+        let again = registered(sessions.register([4; 32], || true));
+        assert_eq!(sessions.open(&[4; 32]), SESSIONS_PER_CLIENT);
+        drop((held, other, again));
+        assert_eq!(sessions.open(&[4; 32]), 0);
     }
 }

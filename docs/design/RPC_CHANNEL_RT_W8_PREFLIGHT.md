@@ -288,7 +288,7 @@ under a 24 GiB cap. The cap was not raised. Two changes to *how the model
 is asked*, neither to what it says, brought every row back under it:
 
 - **One query per ProVerif run**, and the second client as an entry in the
-  daemon's enrolment table, read by one daemon process, in place of a third
+  daemon's enrollment table, read by one daemon process, in place of a third
   process. This alone is enough for ten of the twelve variants.
 - **One proof-search hint, on two variants** (the unbroken one and the
   later-key-leak one): do not resolve on "the attacker knows `exp(x, y)`"

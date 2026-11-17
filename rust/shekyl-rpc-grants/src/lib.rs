@@ -51,7 +51,7 @@ pub enum Grant {
     /// The node's configuration.
     Config,
     /// Enrolling and revoking keys (RT-O9.1).
-    Enrol,
+    Enroll,
 }
 
 impl Grant {
@@ -68,7 +68,7 @@ impl Grant {
         Self::Bans,
         Self::Node,
         Self::Config,
-        Self::Enrol,
+        Self::Enroll,
     ];
 
     /// This grant's bit in a [`GrantSet`] on the wire. Fixed: a change is a
@@ -87,7 +87,7 @@ impl Grant {
             Self::Bans => 1 << 8,
             Self::Node => 1 << 9,
             Self::Config => 1 << 10,
-            Self::Enrol => 1 << 11,
+            Self::Enroll => 1 << 11,
         }
     }
 
@@ -106,7 +106,7 @@ impl Grant {
             Self::Bans => "bans",
             Self::Node => "node",
             Self::Config => "config",
-            Self::Enrol => "enrol",
+            Self::Enroll => "enroll",
         }
     }
 
@@ -314,7 +314,7 @@ pub enum PayloadRefused {
     UnknownGrants(u16),
 }
 
-/// What an operator names at enrolment (`RPC_CHANNEL.md` §6.1).
+/// What an operator names at enrollment (`RPC_CHANNEL.md` §6.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preset {
     /// `chain` + `pool` + `health`.
@@ -323,7 +323,7 @@ pub enum Preset {
     Wallet,
     /// `view` + `mining-work`.
     Miner,
-    /// Every grant, `enrol` included.
+    /// Every grant, `enroll` included.
     Admin,
 }
 
@@ -381,7 +381,7 @@ mod tests {
             (Grant::Bans, 0x0100),
             (Grant::Node, 0x0200),
             (Grant::Config, 0x0400),
-            (Grant::Enrol, 0x0800),
+            (Grant::Enroll, 0x0800),
         ];
         for (grant, bit) in pinned {
             assert_eq!(grant.bit(), bit, "{grant:?}");
@@ -482,7 +482,7 @@ mod tests {
         for preset in [Preset::View, Preset::Wallet, Preset::Miner] {
             assert!(!preset.grants().names(Peers), "{preset:?}");
             assert!(!preset.grants().names(Config), "{preset:?}");
-            assert!(!preset.grants().names(Enrol), "{preset:?}");
+            assert!(!preset.grants().names(Enroll), "{preset:?}");
         }
     }
 

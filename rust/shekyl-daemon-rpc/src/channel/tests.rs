@@ -13,19 +13,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper_util::rt::TokioIo;
 use serde_json::{json, Value};
 use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
 use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_mempool::Pool;
-use shekyl_rpc_channel::handshake::{
-    Client, StaticKeypair, StaticPublic, MESSAGE2_LEN, MESSAGE4_LEN,
-};
+use shekyl_rpc_channel::handshake::{Client, StaticKeypair, StaticPublic, MESSAGE2_LEN};
 use shekyl_rpc_channel::NetworkId;
 use shekyl_rpc_grants::{Grant, GrantSet, Preset};
 use shekyl_rpc_stream::RecordStream;
+use shekyl_rpc_transport::channel as client;
 use shekyl_rpc_types::wire::rpc::CeilingWord;
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, UnixSeconds};
@@ -84,6 +80,7 @@ impl Served {
         let tracker = ConnTracker::new(ConnLimits::default());
         let serving = tokio::spawn(super::listener::serve(
             LimitedListener::new(listener, Arc::clone(&tracker)),
+            super::listener::Leg::Network,
             Arc::clone(&channel),
             router,
             async move {
@@ -105,7 +102,7 @@ impl Served {
         self.channel.key.public().clone()
     }
 
-    fn enrol(&self, client: &StaticKeypair, ceiling: &[CeilingWord]) {
+    fn enroll(&self, client: &StaticKeypair, ceiling: &[CeilingWord]) {
         self.channel
             .client_add(
                 HOST,
@@ -156,83 +153,97 @@ fn app_state(dir: &std::path::Path, channel: Arc<Channel>) -> Arc<AppState> {
     })
 }
 
-/// A client session over the channel: the ceiling message 4 carried, and
-/// HTTP over the record stream.
+/// A client session over the channel, on RT-W11's production initiator
+/// (`shekyl_rpc_transport::channel`): the ceiling message 4 carried, and its
+/// HTTP session.
 struct Session {
     ceiling: GrantSet,
-    sender: hyper::client::conn::http1::SendRequest<Full<Bytes>>,
-    mark: shekyl_rpc_stream::SubmissionMark,
+    inner: client::Session,
 }
 
 /// How a connection ended before a session.
 #[derive(Debug, PartialEq, Eq)]
 enum NoSession {
+    /// The daemon closed the connection before message 2: no slot, or no
+    /// listener.
+    ClosedBeforeMessage2,
     /// The daemon closed the connection before message 4.
     ClosedBeforeMessage4,
 }
 
-/// The client's side of the handshake, as a record stream.
+/// The client's side of the handshake, as a record stream: the
+/// initiator's handshake layer, the seam the raw-frame tests write through.
 async fn open_stream(
     served: &Served,
     client: &StaticKeypair,
     request: GrantSet,
 ) -> Result<(RecordStream<TcpStream>, GrantSet), NoSession> {
-    let mut tcp = TcpStream::connect(served.addr).await.expect("connect");
-    let daemon = served.bundle();
-    let (c, message1) = Client::start(&NETWORK, client, &daemon).expect("message 1");
-    tcp.write_all(&message1).await.expect("write message 1");
-    let mut message2 = vec![0u8; MESSAGE2_LEN];
-    tcp.read_exact(&mut message2).await.expect("message 2");
-    let c = c
-        .read_message2(&message2)
-        .expect("the daemon is the bundle's");
-    let (c, message3) = c.write_message3(&request.to_payload()).expect("message 3");
-    tcp.write_all(&message3).await.expect("write message 3");
-    let mut message4 = vec![0u8; MESSAGE4_LEN];
-    if tcp.read_exact(&mut message4).await.is_err() {
-        return Err(NoSession::ClosedBeforeMessage4);
-    }
-    let (established, ceiling) = c.read_message4(&message4).expect("message 4");
-    let ceiling = GrantSet::from_payload(&ceiling).expect("a ceiling");
-    let (send, recv) = established.into_directions();
-    Ok((RecordStream::new(tcp, send, recv), ceiling))
+    let tcp = TcpStream::connect(served.addr).await.expect("connect");
+    open_over(tcp, &served.bundle(), client, request).await
 }
 
-/// The client's side, as RT-W11's client will run it.
+/// The initiator's handshake layer over `io`, any stream.
+async fn open_over<S>(
+    io: S,
+    daemon: &StaticPublic,
+    key: &StaticKeypair,
+    request: GrantSet,
+) -> Result<(RecordStream<S>, GrantSet), NoSession>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    match client::handshake_over(io, &NETWORK, key, daemon, request).await {
+        Ok(opened) => Ok((opened.stream, opened.ceiling)),
+        Err(client::Attempt::ClosedAfterMessage3) => Err(NoSession::ClosedBeforeMessage4),
+        Err(client::Attempt::ClosedAfterMessage1 | client::Attempt::Io(_)) => {
+            Err(NoSession::ClosedBeforeMessage2)
+        }
+        Err(other) => panic!("the handshake: {other:?}"),
+    }
+}
+
+/// The client's side as RT-W11's initiator runs it.
 async fn connect(
     served: &Served,
-    client: &StaticKeypair,
+    key: &StaticKeypair,
     request: GrantSet,
 ) -> Result<Session, NoSession> {
-    let (stream, ceiling) = open_stream(served, client, request).await?;
-    let mark = stream.submission_mark();
-    let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .expect("http");
-    tokio::spawn(connection);
-    Ok(Session {
-        ceiling,
-        sender,
-        mark,
-    })
+    let (stream, ceiling) = open_stream(served, key, request).await?;
+    session_over(stream, ceiling, request).await
+}
+
+/// The initiator's HTTP session over an opened record stream.
+async fn session_over<S>(
+    stream: RecordStream<S>,
+    ceiling: GrantSet,
+    request: GrantSet,
+) -> Result<Session, NoSession>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let inner = client::Session::start(
+        client::Opened {
+            stream,
+            ceiling,
+            granted: request.intersection(ceiling),
+        },
+        None,
+    )
+    .await
+    .expect("http");
+    Ok(Session { ceiling, inner })
 }
 
 impl Session {
     /// One JSON-RPC call; the reply's envelope, or `None` once the session
-    /// is closed.
+    /// is closed. A `tx_submit` goes padded, as the initiator sends one.
     async fn call(&mut self, method: &str, params: Value) -> Option<Value> {
         let body = serde_json::to_vec(&json!({
             "jsonrpc": "2.0", "id": 1, "method": method, "params": params,
         }))
         .unwrap();
-        let request = hyper::Request::post("/json_rpc")
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body)))
-            .unwrap();
-        self.sender.ready().await.ok()?;
-        let response = self.sender.send_request(request).await.ok()?;
-        let body = response.into_body().collect().await.ok()?.to_bytes();
-        serde_json::from_slice(&body).ok()
+        let reply = self.inner.post("json_rpc", body).await.ok()?;
+        serde_json::from_slice(&reply).ok()
     }
 }
 
@@ -257,14 +268,14 @@ async fn an_unenrolled_client_gets_no_message_4() {
 
 /// **Message 4 carries the ceiling; the connection holds the clamp.** An
 /// `admin` client that asks for `view` is told `admin`, and is refused
-/// `rpc_bundle_show` (`enrol`) on that connection. Red edit: stamp the
+/// `rpc_bundle_show` (`enroll`) on that connection. Red edit: stamp the
 /// ceiling instead of `request ∩ ceiling` in the listener, and the bundle
 /// is served.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn message_4_carries_the_ceiling_and_the_connection_holds_the_clamp() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::Admin]);
+    served.enroll(&client, &[CeilingWord::Admin]);
 
     let mut viewing = connect(&served, &client, Preset::View.grants())
         .await
@@ -287,13 +298,15 @@ async fn message_4_carries_the_ceiling_and_the_connection_holds_the_clamp() {
 }
 
 /// **Removing a client closes its live session** (§5; the pre-flight's
-/// named edit "revocation"). Red edit: drop `changing.close` from
-/// `Channel::client_remove`, and the session keeps answering.
+/// named edit "revocation"). Red edits: drop `changing.close` from
+/// `Channel::client_remove`, and the session keeps answering; drop
+/// `biased;` from the connection's select, and the request after the
+/// removal is sometimes answered (CI, 2026-11-16: `daemon.unready`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn removing_a_client_closes_its_live_session() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::View]);
+    served.enroll(&client, &[CeilingWord::View]);
     let mut session = connect(&served, &client, Preset::View.grants())
         .await
         .expect("a session");
@@ -316,6 +329,213 @@ async fn removing_a_client_closes_its_live_session() {
     );
 }
 
+/// **A key holds at most `SESSIONS_PER_CLIENT` sessions** (RT-O37). The
+/// next one is told `bound.sessions` on its first request and closed; a
+/// session that ends frees its place. Red edit: drop the count test in
+/// `Sessions::register`, and the fifth session is served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_past_its_session_cap_is_refused_by_name() {
+    let served = Served::start(false).await;
+    let client = StaticKeypair::generate().unwrap();
+    served.enroll(&client, &[CeilingWord::View]);
+    let mut held = Vec::new();
+    for _ in 0..shekyl_rpc_channel::SESSIONS_PER_CLIENT {
+        let mut session = connect(&served, &client, Preset::View.grants())
+            .await
+            .expect("a session");
+        // The test's node has no handles, so a served call is answered
+        // not ready; what matters is that the cap did not refuse it.
+        let reply = session.call("version", json!({})).await.expect("served");
+        assert_ne!(code(&reply), Some("bound.sessions"), "{reply}");
+        held.push(session);
+    }
+    let mut past = connect(&served, &client, Preset::View.grants())
+        .await
+        .expect("the handshake completes");
+    let refused = past.call("version", json!({})).await.expect("a refusal");
+    assert_eq!(code(&refused), Some("bound.sessions"), "{refused}");
+    assert!(
+        past.call("version", json!({})).await.is_none(),
+        "a refused session stays open"
+    );
+
+    drop(held.pop());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut again = connect(&served, &client, Preset::View.grants())
+            .await
+            .expect("a session");
+        let reply = again.call("version", json!({})).await.expect("an answer");
+        if code(&reply) != Some("bound.sessions") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the closed session's place never freed"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The pool does not announce a kept session the node refused at the cap.
+/// Four sessions of the same key are already admitted; `open_kept` sends
+/// `version` as its first record and the node answers `bound.sessions`.
+/// Red edit: ignore that code in `admission`, and `open_kept` returns the
+/// grants of a session the node did not keep.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kept_session_past_the_cap_is_not_announced() {
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    served.enroll(&key, &[CeilingWord::View]);
+    let mut held = Vec::new();
+    for _ in 0..shekyl_rpc_channel::SESSIONS_PER_CLIENT {
+        let mut session = connect(&served, &key, Preset::View.grants())
+            .await
+            .expect("a session");
+        session.call("version", json!({})).await.expect("served");
+        held.push(session);
+    }
+    let pool = pool_to(&served, key, Preset::View.grants());
+    assert_eq!(
+        pool.open_kept().await.expect_err("the cap"),
+        client::ChannelFault::SessionCap
+    );
+    drop(held);
+}
+
+/// A pool to `served` as `key`, asking for `request`.
+fn pool_to(served: &Served, key: StaticKeypair, request: GrantSet) -> Arc<client::Pool> {
+    client::Pool::new(
+        client::ChannelTarget::new(
+            NETWORK,
+            served.bundle(),
+            key,
+            client::Leg::ip(served.addr, None),
+        ),
+        request,
+    )
+}
+
+/// A session parked at open stays open past the handshake deadline. The
+/// daemon finishes the handshake only when the client's first record
+/// arrives; `version` is that record. Red edit: remove `confirm` from
+/// `Session::start`, and this session is gone after the deadline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_parked_session_outlives_the_handshake_deadline() {
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    let fingerprint = *key.public().fingerprint().as_bytes();
+    served.enroll(&key, &[CeilingWord::View]);
+    let pool = pool_to(&served, key, Preset::View.grants());
+    pool.open_kept().await.expect("the kept session");
+    assert_eq!(served.channel.sessions.open(&fingerprint), 1);
+    tokio::time::sleep(shekyl_rpc_channel::deadline::HANDSHAKE_DEADLINE + Duration::from_secs(1))
+        .await;
+    assert_eq!(
+        served.channel.sessions.open(&fingerprint),
+        1,
+        "the daemon closed the parked session at the handshake deadline"
+    );
+}
+
+/// **The pool reuses a session, holds at most `SESSIONS_PER_CLIENT`, and a
+/// lend past them waits for one to come back** (§8, RT-O37). Red edit:
+/// make `Pool::lend` leave an idle session in the list and open a new one,
+/// and the daemon holds two sessions after two calls in turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_pool_reuses_its_sessions_and_waits_at_its_cap() {
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    let fingerprint = *key.public().fingerprint().as_bytes();
+    served.enroll(&key, &[CeilingWord::View]);
+    let pool = pool_to(&served, key, Preset::View.grants());
+    let (ceiling, granted) = pool.open_kept().await.expect("the kept session");
+    assert_eq!(
+        (ceiling, granted),
+        (Preset::View.grants(), Preset::View.grants())
+    );
+    for _ in 0..2 {
+        let mut lent = pool.lend().await.expect("a session");
+        lent.session()
+            .post(
+                "json_rpc",
+                br#"{"jsonrpc":"2.0","id":1,"method":"version","params":{}}"#.to_vec(),
+            )
+            .await
+            .expect("an answer");
+        pool.give_back(lent);
+    }
+    assert_eq!(
+        served.channel.sessions.open(&fingerprint),
+        1,
+        "one session, reused"
+    );
+
+    let mut held = Vec::new();
+    for _ in 0..shekyl_rpc_channel::SESSIONS_PER_CLIENT {
+        held.push(pool.lend().await.expect("a session under the cap"));
+    }
+    let waiting = {
+        let pool = Arc::clone(&pool);
+        tokio::spawn(async move { pool.lend().await.map(|_| ()) })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "a lend past the cap waits");
+    pool.give_back(held.pop().expect("held"));
+    tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the returned session is lent")
+        .expect("joined")
+        .expect("a session");
+}
+
+/// **A revocation stops the pool, which does not dial again** (§4.5,
+/// RT-W11). Enroll, dial, call; remove the key; the next call is refused as
+/// revoked, and so is every one after, with no new handshake. Red edit:
+/// make `Pool::open_session` report `NotEnrolled` after a held session, and
+/// the refusal is not a revocation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revocation_stops_the_pool_and_it_does_not_dial_again() {
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    let fingerprint = *key.public().fingerprint().as_bytes();
+    served.enroll(&key, &[CeilingWord::View]);
+    let pool = pool_to(&served, key, Preset::View.grants());
+    let call = || {
+        let pool = Arc::clone(&pool);
+        async move {
+            let request = hyper::Request::post("/json_rpc")
+                .header("content-type", "application/json")
+                .body(hyper::body::Bytes::from_static(
+                    br#"{"jsonrpc":"2.0","id":1,"method":"version","params":{}}"#,
+                ))
+                .unwrap();
+            pool.send(request).await
+        }
+    };
+    call().await.expect("an enrolled key is served");
+    served
+        .channel
+        .client_remove(HOST, fingerprint)
+        .expect("removed");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let refused = loop {
+        match call().await {
+            Ok(_) => {
+                assert!(Instant::now() < deadline, "the pool kept being served");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(client::ChannelFault::Closed) => {}
+            Err(fault) => break fault,
+        }
+    };
+    assert_eq!(refused, client::ChannelFault::Revoked);
+    assert_eq!(pool.stopped(), Some(client::ChannelFault::Revoked));
+    let before = Instant::now();
+    assert_eq!(call().await.err(), Some(client::ChannelFault::Revoked));
+    assert!(before.elapsed() < Duration::from_millis(100), "no new dial");
+}
+
 /// **A lowered ceiling closes the session; a raised one does not** (§5:
 /// no mid-session downgrade). Red edit: never close in `client_set`, and
 /// the lowered session keeps answering.
@@ -324,7 +544,7 @@ async fn a_lowered_ceiling_closes_the_session_and_a_raised_one_does_not() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
     let fingerprint = *client.public().fingerprint().as_bytes();
-    served.enrol(&client, &[CeilingWord::View]);
+    served.enroll(&client, &[CeilingWord::View]);
     let mut session = connect(&served, &client, Preset::View.grants())
         .await
         .expect("a session");
@@ -346,27 +566,51 @@ async fn a_lowered_ceiling_closes_the_session_and_a_raised_one_does_not() {
     );
 }
 
-/// **An unpadded submission is refused over the channel** (RT-O28; the
-/// pre-flight's named edit "submission shape"). The same call armed as a
-/// submission reaches `tx_submit` itself. Red edit: remove the shape check
-/// in the dispatch's `TxSubmit` arm, and the unpadded body is not refused
-/// for its shape.
+/// **An unpadded submission is refused over the channel, and the initiator
+/// sends one padded** (RT-O28; the pre-flight's named edit "submission
+/// shape"; RT-W11's client contracts). Written raw, unarmed, the call is
+/// refused for its shape; through the production `Session`, which arms the
+/// mark for a `tx_submit`, it reaches `tx_submit` itself. Red edits: remove
+/// the shape check in the dispatch's `TxSubmit` arm, and the raw body is not
+/// refused; drop the `arm` in `shekyl_rpc_transport::channel::Session::send`,
+/// and the production call is refused as unpadded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unpadded_submission_is_refused_over_the_channel() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::Wallet]);
+    served.enroll(&client, &[CeilingWord::Wallet]);
+    // Unpadded: written raw through the handshake layer, the mark not armed.
+    let (mut stream, _) = open_stream(&served, &client, Preset::Wallet.grants())
+        .await
+        .expect("a session");
+    stream
+        .write_all(&tx_submit_post("AAAA"))
+        .await
+        .expect("the request");
+    stream.flush().await.expect("sealed");
+    let mut got = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !got
+        .windows(b"submit.unpadded".len())
+        .any(|window| window == b"submit.unpadded")
+    {
+        assert!(deadline > Instant::now(), "the refusal: {got:?}");
+        let mut buf = [0u8; 1024];
+        let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
+            .await
+            .expect("an answer")
+            .expect("read");
+        assert!(n > 0, "the daemon closed before refusing: {got:?}");
+        got.extend_from_slice(&buf[..n]);
+    }
+    // Padded: the production initiator arms the mark for a `tx_submit`.
     let mut session = connect(&served, &client, Preset::Wallet.grants())
         .await
         .expect("a session");
-    let body = json!({ "body": "AAAA" });
-    let unpadded = session
-        .call("tx_submit", body.clone())
+    let padded = session
+        .call("tx_submit", json!({ "body": "AAAA" }))
         .await
         .expect("a reply");
-    assert_eq!(code(&unpadded), Some("submit.unpadded"), "{unpadded}");
-    session.mark.arm();
-    let padded = session.call("tx_submit", body).await.expect("a reply");
     assert_ne!(code(&padded), Some("submit.unpadded"), "{padded}");
 }
 
@@ -378,7 +622,7 @@ async fn an_unpadded_submission_is_refused_over_the_channel() {
 async fn two_submissions_in_one_frame_are_both_refused() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::Wallet]);
+    served.enroll(&client, &[CeilingWord::Wallet]);
     let (mut stream, _) = open_stream(&served, &client, Preset::Wallet.grants())
         .await
         .expect("a session");
@@ -418,13 +662,13 @@ fn tx_submit_post(body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// **The console key is the host's administrator and never an enrolment**
+/// **The console key is the host's administrator and never an enrollment**
 /// (§5). A service makes it on its first start; it connects with every
-/// grant and the host's classes; it is not listed, and the enrolment
+/// grant and the host's classes; it is not listed, and the enrollment
 /// methods cannot name it. Red edit: admit the console key as
 /// `Client(ALL)`, and `relay_stats` is refused as host-only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_console_key_is_the_host_and_never_an_enrolment() {
+async fn the_console_key_is_the_host_and_never_an_enrollment() {
     let served = Served::start(true).await;
     let console = super::files::read_key(&served.data_dir.join(super::files::CONSOLE_KEY_FILE))
         .expect("readable")
@@ -444,20 +688,99 @@ async fn the_console_key_is_the_host_and_never_an_enrolment() {
     let removed = served
         .channel
         .client_remove(HOST, fingerprint)
-        .expect_err("not an enrolment");
+        .expect_err("not an enrollment");
     assert_eq!(removed.diagnostic.code, super::codes::CONSOLE);
 }
 
-/// **Enrolment is bounded by the caller's own grant** (RT-O9.1). A key
-/// holding `enrol` and `view` may enrol `view`, not `bans`; may not remove
-/// or change an `admin` enrolment; and lists only what lies within its
-/// grant. Red edit: drop the `within_caller` check on the new ceiling in
-/// `client_add`, and the `bans` enrolment is made.
+/// **A service's console leg serves the console key alone, from its own
+/// reserve** (RT-O37). Served through `serve_bound`, as a start serves it,
+/// with the shared pool already full: the console key is answered as the
+/// host; an enrolled key there gets no message 4, whatever its ceiling;
+/// the socket is the service account's alone. Red edits: build the console
+/// leg's listener with `LimitedListener::new` in `serve_bound`, and the
+/// console is closed at accept with the pool; drop the console-only
+/// check in the listener's `handshake`, and the enrolled key is answered.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enrolment_is_bounded_by_the_callers_grant() {
+async fn the_console_leg_serves_the_console_key_alone_from_its_reserve() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let served = Served::start(true).await;
+    let tracker = ConnTracker::new(ConnLimits::checked(1, 0, 0).expect("limits"));
+    let _pool_full = tracker
+        .try_acquire("10.0.0.9".parse().expect("an address"))
+        .expect("the one shared slot");
+    let console_listener =
+        super::console_leg::bind(&served.data_dir).expect("the console's leg binds");
+    let place = super::console_leg::place(&served.data_dir);
+    let mode = std::fs::metadata(&place)
+        .expect("bound")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+    // The router's own chain store: `Served` holds the one in its data
+    // directory.
+    let store_dir = tempfile::tempdir().expect("a directory");
+    let router = crate::server::channel_router(
+        app_state(store_dir.path(), Arc::clone(&served.channel)),
+        &[],
+    );
+    let (stop, stopped) = watch::channel(false);
+    let serving = tokio::spawn(crate::server::serve_bound(
+        Vec::new(),
+        None,
+        Some(crate::server::ChannelServed {
+            router,
+            channel: Arc::clone(&served.channel),
+            network: Vec::new(),
+            console: Some(console_listener),
+        }),
+        Arc::clone(&tracker),
+        stopped,
+    ));
+
+    let console = super::files::read_key(&served.data_dir.join(super::files::CONSOLE_KEY_FILE))
+        .expect("readable")
+        .expect("a service has a console key");
+    let io = tokio::net::UnixStream::connect(&place).await.expect("dial");
+    let (stream, ceiling) = open_over(io, &served.bundle(), &console, GrantSet::ALL)
+        .await
+        .expect("the console is admitted from its reserve");
+    let mut session = session_over(stream, ceiling, GrantSet::ALL)
+        .await
+        .expect("a session");
+    let host = session
+        .call("relay_stats", json!({}))
+        .await
+        .expect("a reply");
+    assert_ne!(code(&host), Some("grant.host-only"), "{host}");
+
+    let client = StaticKeypair::generate().unwrap();
+    served.enroll(&client, &[CeilingWord::Admin]);
+    let io = tokio::net::UnixStream::connect(&place).await.expect("dial");
+    assert_eq!(
+        open_over(io, &served.bundle(), &client, Preset::View.grants())
+            .await
+            .err(),
+        Some(NoSession::ClosedBeforeMessage4)
+    );
+
+    drop(session);
+    stop.send_replace(true);
+    serving.await.expect("joined").expect("served");
+}
+
+/// **Enrollment is bounded by the caller's own grant** (RT-O9.1). A key
+/// holding `enroll` and `view` may enroll `view`, not `bans`; may not remove
+/// or change an `admin` enrollment; and lists only what lies within its
+/// grant. Red edit: drop the `within_caller` check on the new ceiling in
+/// `client_add`, and the `bans` enrollment is made.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enrollment_is_bounded_by_the_callers_grant() {
     let served = Served::start(false).await;
     let narrow = Authority::channel(
-        Preset::View.grants().union(GrantSet::of(&[Grant::Enrol])),
+        Preset::View.grants().union(GrantSet::of(&[Grant::Enroll])),
         false,
     );
     let by = Enroller::Client([5; 32]);
@@ -480,7 +803,7 @@ async fn enrolment_is_bounded_by_the_callers_grant() {
         served
             .channel
             .client_remove(narrow, admin_key)
-            .expect_err("an admin enrolment")
+            .expect_err("an admin enrollment")
             .diagnostic
             .code,
         super::codes::BEYOND_CALLER
@@ -537,7 +860,7 @@ async fn a_silent_connection_is_closed_at_the_message_1_deadline() {
 async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
     let served = Served::start(false).await;
     let client = StaticKeypair::generate().unwrap();
-    served.enrol(&client, &[CeilingWord::View]);
+    served.enroll(&client, &[CeilingWord::View]);
     let mut session = connect(&served, &client, Preset::View.grants())
         .await
         .expect("a session");
@@ -585,7 +908,7 @@ async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
     assert!(after.is_none(), "{after:?}");
 }
 
-/// **The console key's reset replaces the console enrolment and nothing
+/// **The console key's reset replaces the console enrollment and nothing
 /// else** (IG-Q88, §5), run offline as the switch runs it: the old console
 /// key is no longer admitted, the new one is, an enrolled client is
 /// untouched, and the next start reads the note it left. Red edit: skip

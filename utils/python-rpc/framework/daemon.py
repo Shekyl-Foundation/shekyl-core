@@ -237,7 +237,7 @@ class Daemon(object):
     def ban_show(self, host):
         return self.call('ban_show', {'host': host})
 
-    # Enrolment over the channel (IG-Q87): each under the `enrol` grant. A
+    # Enrollment over the channel (IG-Q87): each under the `enroll` grant. A
     # ceiling is a list of grant and preset keywords.
 
     def rpc_client_add(self, fingerprint, ceiling):

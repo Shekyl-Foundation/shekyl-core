@@ -16,11 +16,17 @@ publish = false
 # A leaf with no network stack (Rick, 2026-11-13): libc on Unix, shekyl-win-sec
 # on Windows. The process-hardening crate and the transport both read the
 # account here, so neither pulls the other's dependencies.
+[dependencies]
+# A private file's bytes are a key: read into a buffer wiped on drop
+# (rule 35).
+zeroize = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-# The local application data folder, the account's root on Windows.
+# The local application data folder, the account's root on Windows, and a
+# private file's owner-only, labelled descriptor.
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]

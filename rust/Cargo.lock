@@ -4014,9 +4014,13 @@ dependencies = [
  "shekyl-engine-prefs",
  "shekyl-logging",
  "shekyl-options",
+ "shekyl-os-account",
  "shekyl-peerlist",
  "shekyl-process",
+ "shekyl-rpc-channel",
  "shekyl-rpc-client",
+ "shekyl-rpc-grants",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-shard-visual",
@@ -4227,6 +4231,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-os-account",
  "shekyl-rpc-rendezvous",
  "shekyl-win-sec",
  "tempfile",
@@ -4247,7 +4252,6 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "redb",
- "rustix",
  "serde",
  "serde_json",
  "shekyl-archival-bond-builder",
@@ -4270,6 +4274,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-noise",
  "shekyl-options",
+ "shekyl-os-account",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
  "shekyl-rpc-channel",
@@ -4291,7 +4296,6 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "zeroize",
 ]
 
 [[package]]
@@ -4874,6 +4878,7 @@ dependencies = [
  "libc",
  "shekyl-win-sec",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]
@@ -5280,21 +5285,54 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "rand_core 0.6.4",
  "serde",
  "serde_json",
  "shekyl-address",
  "shekyl-network",
  "shekyl-os-account",
+ "shekyl-rpc-channel",
  "shekyl-rpc-client",
+ "shekyl-rpc-grants",
  "shekyl-rpc-rendezvous",
+ "shekyl-rpc-stream",
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",
  "tempfile",
  "tokio",
  "tower-service",
+ "tracing",
  "windows-sys 0.61.2",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-rpc-tunnel"
+version = "3.1.0"
+dependencies = [
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "shekyl-cli",
+ "shekyl-daemon",
+ "shekyl-daemon-config",
+ "shekyl-logging",
+ "shekyl-options",
+ "shekyl-os-account",
+ "shekyl-process",
+ "shekyl-rpc-channel",
+ "shekyl-rpc-client",
+ "shekyl-rpc-grants",
+ "shekyl-rpc-rendezvous",
+ "shekyl-rpc-stream",
+ "shekyl-rpc-transport",
+ "shekyl-rpc-types",
+ "shekyl-spawn",
+ "shekyl-version",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
