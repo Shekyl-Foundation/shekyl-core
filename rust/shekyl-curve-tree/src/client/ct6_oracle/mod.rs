@@ -27,7 +27,7 @@ use crate::recon::{assemble_leaf_stream, drained_sorted, root_from_scalars};
 use crate::types::{
     AssembleInput, BlockHeight, ChunkLeaf, CurveTreeRoot, LeafEntry, ReferenceBlock,
 };
-use crate::{ClientError, PathRootFault};
+use crate::{AssembledPath, ClientError, PathRootFault};
 use shekyl_consensus::COINBASE_LOCK_WINDOW;
 use shekyl_fcmp::tree::{
     layer_count_for_leaves, HELIOS_CHUNK_WIDTH, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
@@ -680,7 +680,8 @@ fn batched_assembly_keeps_each_input_its_own_path() {
 
     assert_eq!(paths.len(), inputs.len(), "one path per input");
     assert_ne!(
-        paths[0].leaf_chunk, paths[1].leaf_chunk,
+        paths[0].leaf_chunk(),
+        paths[1].leaf_chunk(),
         "positions {first} and {second} are in different layer-0 chunks, so their \
          leaf chunks must differ; equal chunks mean a per-input value was computed \
          once and reused across the batch"
@@ -779,8 +780,9 @@ fn a_mutated_leaf_chunk_is_absent_from_its_branch() {
         "the path assemble just accepted must fold"
     );
 
-    let mut spliced = path;
-    spliced.leaf_chunk[0].cm_x[0] ^= 0x01;
+    let mut parts = path.into_parts();
+    parts.leaf_chunk[0].cm_x[0] ^= 0x01;
+    let spliced = AssembledPath::from_parts_unchecked(parts);
     assert_eq!(
         verify_path_against_its_branches(&spliced),
         Err(PathRootFault::ChildAbsent),

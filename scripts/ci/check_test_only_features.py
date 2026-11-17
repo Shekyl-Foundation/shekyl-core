@@ -182,6 +182,16 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "by ruling, so its clear path must not exist in shipped code; enabled "
     "from the p-host and engine-core dev edges only",
     (
+        "shekyl-curve-tree",
+        "test-paths",
+    ): "AssembledPath::from_parts_unchecked: a membership path written from "
+    "its parts with neither of the assembler's checks (its branches fold to "
+    "the root it names; that root is the reference block's header root). "
+    "Production gets a path only from the checked assembler (R-25), so a "
+    "path to a made-up tree must not be constructible in shipped code. "
+    "Enabled from the engine-core and multisig dev edges only, for their "
+    "placeholder and tampered paths",
+    (
         "shekyl-wire",
         "test-fixtures",
     ): "BoundTx::whole and BoundTx::modify: a fixture's whole body bound to "

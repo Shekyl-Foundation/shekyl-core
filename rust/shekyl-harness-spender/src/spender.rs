@@ -620,6 +620,7 @@ impl Spender {
                 &reference,
             )
             .expect("the output has matured into the tree at the reference height");
+        let path = path.into_parts();
         let leaf_chunk: Vec<LeafEntry> = path
             .leaf_chunk
             .iter()
@@ -641,8 +642,8 @@ impl Spender {
                 combined_ss: combined_ss.0.to_vec(),
                 output_index: index_in_tx,
                 leaf_chunk,
-                c1_layers: path.c1_layers.clone(),
-                c2_layers: path.c2_layers.clone(),
+                c1_layers: path.c1_layers,
+                c2_layers: path.c2_layers,
             },
             key_image: ki.key_image,
             tree: TreeContext {

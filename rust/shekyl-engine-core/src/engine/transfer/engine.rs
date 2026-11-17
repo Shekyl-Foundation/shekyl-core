@@ -1016,7 +1016,7 @@ where
             // the gap if that invariant ever breaks (the per-input branch-layer
             // count is authoritatively re-checked downstream in tx-builder's
             // `validate_inputs`; this is the fee-sizing pre-check).
-            if paths.iter().any(|p| p.tree.tree_depth != depth) {
+            if paths.iter().any(|p| p.tree().tree_depth != depth) {
                 // The tree moved under the reference between the depth read and
                 // the assemble — re-stale; retry the whole loop.
                 last_resync = Some(ReanchorError::ReferenceResyncing {

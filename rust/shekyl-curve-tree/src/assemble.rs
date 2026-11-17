@@ -11,15 +11,13 @@
 //! height: a path assembled against a wrong tree is a wrong proof, so
 //! assembly applies the integrity gate (§3.3) before building. The gate is
 //! [`CurveTreeClient::root_and_depth_at`]: one reading supplies the root and
-//! the depth both routes stamp. A registered batch reads its branches from
-//! the capture table and the frontier snapshot. An unregistered batch
-//! rebuilds layers from replay-held `CurveTreeClient::entries` via
-//! [`assemble_leaf_stream`] (CT-4). Pruned frozen segments may not retain a
-//! complete drained byte stream, and the engine registrant is not yet the
-//! caller of registration, so that rebuild is the route production batches
-//! take. The gate does not see those branches.
+//! the depth the path is stamped with. A batch reads its branches from the
+//! capture table and the frontier snapshot; an input not registered is
+//! refused by name. The gate does not see those branches, so
 //! `verify_path_against_its_branches` folds each assembled path onto the
 //! root it claims and refuses a path whose branches came from somewhere else.
+//! That fold is the sealing step, the one place an [`AssembledPath`] is
+//! made (R-25).
 //!
 //! ## Path layout (pinned to the FCMP++ prover at source)
 //!
@@ -48,14 +46,141 @@ use crate::client::{
 };
 use crate::store::StoreError;
 use crate::types::{
-    AssembleInput, AssembledPath, ChunkLeaf, CommitmentBytes, LeafEntry, OneTimePubkey,
-    ReferenceBlock, TreeContext, TreePosition,
+    AssembleInput, ChunkLeaf, CommitmentBytes, LeafEntry, OneTimePubkey, ReferenceBlock,
+    TreeContext, TreePosition,
 };
 use shekyl_fcmp::tree::{
     chunk_width, hash_grow_helios, hash_grow_selene, helios_hash_init,
     helios_point_to_selene_scalar, key_image_generator, layer_is_selene, selene_hash_init,
     selene_point_to_helios_scalar, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
+
+/// A locally-assembled FCMP++ membership path for one owned output, public
+/// material only (no secrets, no `ZeroizeOnDrop`). The secret-bearing
+/// `shekyl_tx_builder::types::SpendInput` is a *different* type; the
+/// engine/2A signer maps this path into a `SpendInput` by adding secrets.
+///
+/// **A path only comes from the checked assembler (R-25).** Its fields are
+/// private and its one constructor is this module's sealing step, which
+/// only [`CurveTreeClient::assemble_paths`] reaches. So every path carries
+/// two checks: its branches fold to the root it names
+/// ([`ClientError::PathRootMismatch`]), and that root is the reference
+/// block's header root as the wallet's own tree computes it
+/// ([`ClientError::RootMismatch`]). No public constructor takes the parts,
+/// checked or not: a self-consistent path to a made-up tree is what this
+/// rules out. Tests build one from parts only under the TEST_ONLY
+/// `test-paths` feature (`AssembledPath::from_parts_unchecked`).
+///
+/// `c1_layers`/`c2_layers` are node x-coordinate scalars, each layer the
+/// **full chunk including the path node** (siblings are not excluded),
+/// ordered bottom-to-top, matching the FCMP++ prover's `Path`. The C3
+/// invariant `c1_layers.len() + c2_layers.len() + 1 == tree.tree_depth`
+/// holds on a successful assembly (the leaf layer is the `+1`; the root
+/// layer is excluded — it is the prover's `TreeRoot`).
+///
+/// A path is read, never built, outside this crate:
+///
+/// ```
+/// fn depth(path: &shekyl_curve_tree::AssembledPath) -> u8 {
+///     path.tree().tree_depth
+/// }
+/// ```
+///
+/// and a path cannot be written out from its parts:
+///
+/// ```compile_fail,E0451
+/// use shekyl_curve_tree::{AssembledPath, BlockHash, CurveTreeRoot, TreeContext};
+///
+/// let made_up = AssembledPath {
+///     leaf_chunk: Vec::new(),
+///     c1_layers: Vec::new(),
+///     c2_layers: Vec::new(),
+///     tree: TreeContext {
+///         reference_block: BlockHash::NULL,
+///         tree_root: CurveTreeRoot::EMPTY,
+///         tree_depth: 1,
+///     },
+/// };
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AssembledPath {
+    /// The path leaf node's outputs (including the target), in chunk order.
+    leaf_chunk: Vec<ChunkLeaf>,
+    /// Selene-node chunks as x-coordinate scalars, bottom-to-top.
+    c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios-node chunks as x-coordinate scalars, bottom-to-top.
+    c2_layers: Vec<Vec<[u8; 32]>>,
+    /// The single tree context shared by the whole transaction.
+    tree: TreeContext,
+}
+
+/// An [`AssembledPath`] taken apart by [`AssembledPath::into_parts`]: plain
+/// data, which no public function turns back into a path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PathParts {
+    /// The path leaf node's outputs (including the target), in chunk order.
+    pub leaf_chunk: Vec<ChunkLeaf>,
+    /// Selene-node chunks as x-coordinate scalars, bottom-to-top.
+    pub c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios-node chunks as x-coordinate scalars, bottom-to-top.
+    pub c2_layers: Vec<Vec<[u8; 32]>>,
+    /// The single tree context shared by the whole transaction.
+    pub tree: TreeContext,
+}
+
+impl AssembledPath {
+    /// The path leaf node's outputs (including the target), in chunk order.
+    #[must_use]
+    pub fn leaf_chunk(&self) -> &[ChunkLeaf] {
+        &self.leaf_chunk
+    }
+
+    /// Selene-node chunks as x-coordinate scalars, bottom-to-top.
+    #[must_use]
+    pub fn c1_layers(&self) -> &[Vec<[u8; 32]>] {
+        &self.c1_layers
+    }
+
+    /// Helios-node chunks as x-coordinate scalars, bottom-to-top.
+    #[must_use]
+    pub fn c2_layers(&self) -> &[Vec<[u8; 32]>] {
+        &self.c2_layers
+    }
+
+    /// The tree the path was assembled to: the reference block, its header
+    /// root and the depth.
+    #[must_use]
+    pub fn tree(&self) -> &TreeContext {
+        &self.tree
+    }
+
+    /// The path's parts, for a reader that consumes them (a signer moving
+    /// the branches into its spend input).
+    #[must_use]
+    pub fn into_parts(self) -> PathParts {
+        PathParts {
+            leaf_chunk: self.leaf_chunk,
+            c1_layers: self.c1_layers,
+            c2_layers: self.c2_layers,
+            tree: self.tree,
+        }
+    }
+
+    /// A path written from its parts with neither check, for tests only:
+    /// compiled for this crate's own tests and under the TEST_ONLY
+    /// `test-paths` feature, which only dev-dependency edges enable
+    /// (`scripts/ci/check_test_only_features.py`).
+    #[cfg(any(test, feature = "test-paths"))]
+    #[must_use]
+    pub fn from_parts_unchecked(parts: PathParts) -> Self {
+        Self {
+            leaf_chunk: parts.leaf_chunk,
+            c1_layers: parts.c1_layers,
+            c2_layers: parts.c2_layers,
+            tree: parts.tree,
+        }
+    }
+}
 
 /// Which step `verify_path_against_its_branches` refused.
 ///

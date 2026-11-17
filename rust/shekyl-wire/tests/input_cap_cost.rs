@@ -370,7 +370,7 @@ fn measure(
                 combined_ss: s.combined_ss.to_vec(),
                 output_index: s.index,
                 leaf_chunk: path
-                    .leaf_chunk
+                    .leaf_chunk()
                     .iter()
                     .map(|cl| LeafEntry {
                         output_key: cl.output_key.to_bytes(),
@@ -379,8 +379,8 @@ fn measure(
                         cm_x: cl.cm_x,
                     })
                     .collect(),
-                c1_layers: path.c1_layers.clone(),
-                c2_layers: path.c2_layers.clone(),
+                c1_layers: path.c1_layers().to_vec(),
+                c2_layers: path.c2_layers().to_vec(),
             }
         })
         .collect();

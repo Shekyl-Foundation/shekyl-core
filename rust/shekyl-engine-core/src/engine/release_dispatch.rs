@@ -567,11 +567,15 @@ where
                 "assemble_tx returned no paths",
             ))
         })?;
-        let tree_ctx = tree_context_from(&first.tree);
+        let tree_ctx = tree_context_from(first.tree());
         let funding: Vec<FundingInputContext> = selection
             .records
             .into_iter()
-            .zip(paths)
+            .zip(
+                paths
+                    .into_iter()
+                    .map(shekyl_curve_tree::AssembledPath::into_parts),
+            )
             .map(|(record, path)| FundingInputContext {
                 record,
                 leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),

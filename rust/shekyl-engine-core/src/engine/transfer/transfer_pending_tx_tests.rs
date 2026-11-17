@@ -2763,21 +2763,23 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         .first()
         .expect("assemble_tx returns one path per AssembleInput");
     assert_eq!(
-        path.tree.tree_depth, ref_depth,
+        path.tree().tree_depth,
+        ref_depth,
         "assembled path depth agrees with the depth resolved from the same reference block"
     );
     assert_eq!(
-        path.tree.tree_depth, 2,
+        path.tree().tree_depth,
+        2,
         "the two-leaf consistent fixture yields a real depth-2 tree"
     );
     assert!(
-        !path.c1_layers.is_empty() || !path.c2_layers.is_empty(),
+        !path.c1_layers().is_empty() || !path.c2_layers().is_empty(),
         "a real depth-2 path carries genuine branch layers, not a synthetic leaf chunk"
     );
 
     // Map curve-tree path → tx-builder signing inputs (mirror types).
     let leaf_chunk: Vec<LeafEntry> = path
-        .leaf_chunk
+        .leaf_chunk()
         .iter()
         .map(|cl| LeafEntry {
             output_key: cl.output_key.to_bytes(),
@@ -2787,9 +2789,9 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         })
         .collect();
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
-        tree_depth: path.tree.tree_depth,
+        reference_block: path.tree().reference_block,
+        tree_root: path.tree().tree_root,
+        tree_depth: path.tree().tree_depth,
     };
 
     let inputs = vec![SpendInput {
@@ -2802,8 +2804,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         combined_ss: bundle.combined_ss.to_vec(),
         output_index,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers().to_vec(),
+        c2_layers: path.c2_layers().to_vec(),
     }];
 
     // ── Build the bond vin + the change output ───────────────────────
@@ -3742,7 +3744,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
     use crate::engine::signing_assembly::assemble_tx_to_sign;
     use crate::engine::tx_fee_model::build_fee_directive;
     use shekyl_curve_tree::{
-        AssembleInput, AssembledPath, BlockHash, CurveTreeRoot, Gindex,
+        AssembleInput, AssembledPath, BlockHash, CurveTreeRoot, Gindex, PathParts,
         TreeContext as CtTreeContext,
     };
     use shekyl_rpc_client::FeeRate;
@@ -3766,13 +3768,14 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
     // The `gindex` must equal the output's `global_output_index` (100) so the
     // index-stability guard passes and the missing-`key_image` check inside
     // `input_context_from_transfer` is reached. The path is unused before
-    // that check fires, so a placeholder suffices.
+    // that check fires, so a placeholder suffices, written through the
+    // test-only constructor (R-25).
     let assemble_inputs = vec![AssembleInput {
         gindex: Gindex::from_raw(100),
         output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([0u8; 32]),
         commitment: shekyl_curve_tree::CommitmentBytes::from_bytes([0u8; 32]),
     }];
-    let paths = vec![AssembledPath {
+    let paths = vec![AssembledPath::from_parts_unchecked(PathParts {
         leaf_chunk: Vec::new(),
         c1_layers: Vec::new(),
         c2_layers: Vec::new(),
@@ -3781,7 +3784,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
             tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
             tree_depth: 1,
         },
-    }];
+    })];
     let err = ledger.with_ledger_block(|block| {
         assemble_tx_to_sign(
             Network::Mainnet,

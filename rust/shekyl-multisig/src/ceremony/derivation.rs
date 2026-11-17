@@ -129,12 +129,7 @@ impl GroupOutput {
 /// intent's reference block.
 ///
 /// `derive` checks that every path names the intent's reference block hash
-/// and one tree. That the tree's root is the one the block's header
-/// commits to is the implementor's to hold, as the solo wallet's curve
-/// tree client holds it (`shekyl_curve_tree::ReferenceBlock`): a ledger
-/// assembles its paths against the header root of the block it has synced
-/// under that hash. A path to another root makes a context the proposer's
-/// honest proof does not verify under.
+/// and one tree.
 pub trait GroupOutputs {
     /// The record of the output at `global_index`, if the group holds it
     /// spendable.
@@ -199,7 +194,7 @@ impl InputContext {
             pqc_leaf_commitment: self.output.leaf_point,
             pqc_leaf_blind: *self.secrets.leaf_blind(),
             leaf_outputs: path
-                .leaf_chunk
+                .leaf_chunk()
                 .iter()
                 .map(|leaf| {
                     (
@@ -209,9 +204,9 @@ impl InputContext {
                     )
                 })
                 .collect(),
-            leaf_cm_x: path.leaf_chunk.iter().map(|leaf| leaf.cm_x).collect(),
-            c1_branch_layers: branch(&path.c1_layers),
-            c2_branch_layers: branch(&path.c2_layers),
+            leaf_cm_x: path.leaf_chunk().iter().map(|leaf| leaf.cm_x).collect(),
+            c1_branch_layers: branch(path.c1_layers()),
+            c2_branch_layers: branch(path.c2_layers()),
         }
     }
 
@@ -486,7 +481,7 @@ fn spendable(
         .ok_or(DeriveError::Leaf { global_index })?;
     // Consensus does not forbid two leaves with one `(O, C)` in a chunk;
     // `CM.x` names the spent one.
-    if !output.path.leaf_chunk.iter().any(|leaf| {
+    if !output.path.leaf_chunk().iter().any(|leaf| {
         leaf.output_key.to_bytes() == output.output_key
             && leaf.commitment.to_bytes() == output.commitment
             && leaf.cm_x == cm_x.0
@@ -505,7 +500,7 @@ fn one_tree(
     let mut tree = None;
     for (output, _) in records {
         let global_index = output.global_index;
-        let this = output.path.tree;
+        let this = *output.path.tree();
         if *this.reference_block.as_bytes() != reference {
             return Err(DeriveError::Reference { global_index });
         }
@@ -533,7 +528,7 @@ mod tests {
         MultisigOutputData,
     };
     use shekyl_crypto_pq::output::recover_combined_ss;
-    use shekyl_curve_tree::ChunkLeaf;
+    use shekyl_curve_tree::{ChunkLeaf, PathParts};
     use shekyl_fcmp::tree::key_image_generator;
     use shekyl_types::{BlockHash, CommitmentBytes, CurveTreeRoot, OneTimePubkey};
     use shekyl_units::AtomicUnits;
@@ -759,7 +754,7 @@ mod tests {
     /// The path every paid output's record holds: one leaf chunk holding
     /// all of them, in the tree at [`REFERENCE_HASH`].
     fn path(paid: &[Paid]) -> AssembledPath {
-        AssembledPath {
+        AssembledPath::from_parts_unchecked(PathParts {
             leaf_chunk: paid
                 .iter()
                 .map(|p| ChunkLeaf {
@@ -778,7 +773,7 @@ mod tests {
                 tree_root: CurveTreeRoot::from_bytes(TREE_ROOT),
                 tree_depth: TREE_LAYERS,
             },
-        }
+        })
     }
 
     /// `member`'s ledger record of `paid`, its path `path`.

@@ -17,6 +17,7 @@ use rand_core::OsRng;
 use common::wallet::{context, import_for, intent, ledger, validate, verify_from_the_wire, Live};
 use common::{found_group, pay_group_twice, Paid, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
+use shekyl_curve_tree::{AssembledPath, PathParts};
 use shekyl_fcmp::frost_sal::{participant, FrostError};
 use shekyl_multisig::ceremony::context::ContextError;
 use shekyl_multisig::ceremony::files::{Body, Commitment, FinalTx, SignatureShare, SigningSet};
@@ -48,6 +49,14 @@ struct Members {
 struct Caps {
     store: HeldNonceStore,
     live: Live,
+}
+
+/// `path` with one of its parts edited: a recorded path tampered with,
+/// which only the test-only constructor can write (R-25).
+fn retree(path: &mut AssembledPath, edit: impl FnOnce(&mut PathParts)) {
+    let mut parts = path.clone().into_parts();
+    edit(&mut parts);
+    *path = AssembledPath::from_parts_unchecked(parts);
 }
 
 fn setup() -> (Spend, Members, Caps, Caps, Caps) {
@@ -320,7 +329,9 @@ fn a_final_tx_that_is_not_the_intents_is_refused_before_signing() {
     // under that root: the proposer's honest proof is not over it.
     let mut elsewhere = ledger(&m.b, &s.paid);
     for output in &mut elsewhere.0 {
-        output.path.tree.tree_root = CurveTreeRoot::EMPTY;
+        retree(&mut output.path, |p| {
+            p.tree.tree_root = CurveTreeRoot::EMPTY
+        });
     }
     let other = DerivedSpend::derive(
         validate(&m.b, s.intent.clone()),
@@ -667,7 +678,7 @@ fn a_context_needs_a_layer_count_a_spend_proves_under() {
     for layers in [0, 1, shekyl_fcmp::MAX_TREE_DEPTH + 1] {
         let mut held = ledger(&m.b, &s.paid);
         for output in &mut held.0 {
-            output.path.tree.tree_depth = layers;
+            retree(&mut output.path, |p| p.tree.tree_depth = layers);
         }
         let derived = DerivedSpend::derive(
             validate(&m.b, s.intent.clone()),
@@ -752,19 +763,24 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
     // A path to another block, to another tree than the other input's, or
     // one whose leaf chunk does not hold the output.
     assert!(matches!(
-        derive_from(&|l| l[0].path.tree.reference_block = BlockHash::from_bytes([0; 32])),
+        derive_from(&|l| retree(&mut l[0].path, |p| {
+            p.tree.reference_block = BlockHash::from_bytes([0; 32]);
+        })),
         Some(DeriveError::Reference { .. })
     ));
     assert!(matches!(
-        derive_from(&|l| l[1].path.tree.tree_root = CurveTreeRoot::EMPTY),
+        derive_from(&|l| retree(&mut l[1].path, |p| {
+            p.tree.tree_root = CurveTreeRoot::EMPTY;
+        })),
         Some(DeriveError::Tree { .. })
     ));
     assert!(matches!(
         derive_from(&|l| {
             let spent = l[0].output_key;
-            l[0].path
-                .leaf_chunk
-                .retain(|leaf| leaf.output_key.to_bytes() != spent);
+            retree(&mut l[0].path, |p| {
+                p.leaf_chunk
+                    .retain(|leaf| leaf.output_key.to_bytes() != spent);
+            });
         }),
         Some(DeriveError::Path { .. })
     ));

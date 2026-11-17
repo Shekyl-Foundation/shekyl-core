@@ -31,7 +31,7 @@ use shekyl_crypto_pq::multisig_output::{
     MultisigOutputData,
 };
 use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss};
-use shekyl_curve_tree::{AssembledPath, ChunkLeaf, TreeContext};
+use shekyl_curve_tree::{AssembledPath, ChunkLeaf, PathParts, TreeContext};
 use shekyl_fcmp::frost_sal::{dealer_split, threshold_keys, Ed25519T, ThresholdKeys};
 use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::tree::{
@@ -316,7 +316,10 @@ fn tree(
             }],
         })
         .collect();
-    let path = AssembledPath {
+    // The tree is real and its root is the fold of these branches, but the
+    // path is written out rather than assembled from a client, so it is
+    // built through the test-only constructor (R-25).
+    let path = AssembledPath::from_parts_unchecked(PathParts {
         leaf_chunk: leaf_outputs
             .iter()
             .zip(&leaf_cm_x)
@@ -336,7 +339,7 @@ fn tree(
             tree_root: root,
             tree_depth: depth,
         },
-    };
+    });
     let paths = vec![path; outputs.len()];
     (root, depth, chunks, paths)
 }

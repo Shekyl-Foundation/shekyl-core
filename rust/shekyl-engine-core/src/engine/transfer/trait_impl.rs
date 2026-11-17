@@ -388,7 +388,7 @@ where
         // reference; never fires benignly. Check *every* path (all share the one
         // reference's tree, so they should agree — verifying all closes the gap
         // if that invariant ever breaks).
-        if paths.iter().any(|p| p.tree.tree_depth != tree_depth) {
+        if paths.iter().any(|p| p.tree().tree_depth != tree_depth) {
             return Err(fail_build_after_attempted(
                 self.sink.as_ref(),
                 SendError::BuildInvariant {

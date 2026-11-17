@@ -183,16 +183,16 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
 
     // C3 invariant.
     assert_eq!(
-        path.c1_layers.len() + path.c2_layers.len() + 1,
-        usize::from(path.tree.tree_depth),
+        path.c1_layers().len() + path.c2_layers().len() + 1,
+        usize::from(path.tree().tree_depth),
         "C3: c1 + c2 + 1 (leaf) == tree_depth",
     );
-    assert!(path.tree.tree_depth >= 2, "non-empty tree is depth >= 2");
+    assert!(path.tree().tree_depth >= 2, "non-empty tree is depth >= 2");
 
     // The fold compared the branches to `tree_root`. This checks that value
     // is the header root the reference carried, not some other root the
     // fold was willing to accept.
-    assert_eq!(path.tree.tree_root, reference.curve_tree_root);
+    assert_eq!(path.tree().tree_root, reference.curve_tree_root);
 
     // The caller-supplied block hash is threaded verbatim into the tree
     // context for the eventual `CtSig.referenceBlock` (the CT-4 anchor
@@ -200,13 +200,14 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
     // `ReferenceBlock` (set below) makes this catch both a dropped/zeroed value
     // and a silent swap with the root.
     assert_eq!(
-        path.tree.reference_block, reference.block_hash,
+        path.tree().reference_block,
+        reference.block_hash,
         "assembled path must echo the caller-supplied ReferenceBlock::block_hash",
     );
 
     // The resolved output is actually present in the returned leaf chunk.
     assert!(
-        path.leaf_chunk
+        path.leaf_chunk()
             .iter()
             .any(|cl| cl.output_key == target.output_key && cl.commitment == target.commitment),
         "the target output must be in its own leaf chunk",

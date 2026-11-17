@@ -359,9 +359,10 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     // so the message takes the first path's; the path↔record pairing itself
     // is the seal's — `with_paths` counts and zips in the mint's own order,
     // refusing a mismatch loudly.
-    let tree_ctx = paths.first().map(|p| tree_context_from(&p.tree));
+    let tree_ctx = paths.first().map(|p| tree_context_from(p.tree()));
     let membership_paths: Vec<MembershipPath> = paths
         .into_iter()
+        .map(shekyl_curve_tree::AssembledPath::into_parts)
         .map(|path| MembershipPath {
             leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),
             c1_layers: path.c1_layers,

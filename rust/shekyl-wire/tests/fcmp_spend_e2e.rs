@@ -307,7 +307,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         .expect("register the spent output");
     let path = client
         .assemble_path(&target, &reference)
-        .expect("assemble membership path");
+        .expect("assemble membership path")
+        .into_parts();
     assert_eq!(
         path.c1_layers.len() + path.c2_layers.len() + 1,
         usize::from(path.tree.tree_depth),
@@ -339,8 +340,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers,
+        c2_layers: path.c2_layers,
     };
 
     // ── 5. Two destination outputs: a payment + change ────────────────────

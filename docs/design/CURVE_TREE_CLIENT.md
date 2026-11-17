@@ -275,11 +275,19 @@ the Tier-2 `chunk_replace_*` / `undeepen_*` / `reorg_*` tests (§7.7) exercise t
 /// `shekyl-tx-builder` dependency); the duplicated public `ChunkLeaf` /
 /// `TreeContext` reverts to a shared low-level types crate only if the
 /// duplication causes drift (`21-reversion-clause-discipline.mdc`).
+///
+/// Sealed (R-25): the fields are private, read through `leaf_chunk()`,
+/// `c1_layers()`, `c2_layers()`, `tree()` and the consuming `into_parts()`.
+/// The one constructor is the assembler's sealing step, so every path has
+/// passed both checks: its branches fold to the root it names
+/// (`PathRootMismatch`), and that root is the reference block's header root
+/// as the wallet's own tree computes it (`RootMismatch`). Tests write one
+/// from parts only under the TEST_ONLY `test-paths` feature.
 pub struct AssembledPath {
-    pub leaf_chunk:  Vec<ChunkLeaf>,     // the path leaf node's outputs, incl. target
-    pub c1_layers:   Vec<Vec<[u8; 32]>>, // Selene-node chunks, x-coords, bottom→top
-    pub c2_layers:   Vec<Vec<[u8; 32]>>, // Helios-node chunks, x-coords, bottom→top
-    pub tree:        TreeContext,        // { reference_block, tree_root, tree_depth }
+    leaf_chunk:  Vec<ChunkLeaf>,         // the path leaf node's outputs, incl. target
+    c1_layers:   Vec<Vec<[u8; 32]>>,     // Selene-node chunks, x-coords, bottom→top
+    c2_layers:   Vec<Vec<[u8; 32]>>,     // Helios-node chunks, x-coords, bottom→top
+    tree:        TreeContext,            // { reference_block, tree_root, tree_depth }
 }
 
 /// One output in the path's Selene leaf chunk. Mirrors the field names of

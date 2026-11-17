@@ -102,7 +102,7 @@ pub(crate) fn assemble_tx_to_sign(
         // rather than trusting the caller — a path whose tree disagrees would
         // bind a tx context (root/depth) inconsistent with that input's
         // membership data. Refuse rather than sign.
-        if path.tree != first.tree {
+        if path.tree() != first.tree() {
             return Err(SendError::BuildInvariant {
                 reason: "assembled paths disagree on the tree context",
             });
@@ -112,7 +112,7 @@ pub(crate) fn assemble_tx_to_sign(
 
     // C1: one tree context for the whole tx — verified equal across all inputs
     // in the loop above, so the first path's context represents the whole tx.
-    let tree = tree_context_from(&first.tree);
+    let tree = tree_context_from(first.tree());
 
     let mut outputs = Vec::with_capacity(request.recipients.len() + 1);
     for recipient in &request.recipients {
@@ -161,7 +161,11 @@ fn input_context_from_transfer(
     // commitment from its secrets and checks it against that entry before
     // proving (`PL-D3`; a mismatch is the typed received-but-unspendable
     // refusal), so nothing about the own leaf is read here.
-    let leaf_chunk: Vec<LeafEntry> = path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect();
+    let leaf_chunk: Vec<LeafEntry> = path
+        .leaf_chunk()
+        .iter()
+        .map(leaf_entry_from_chunk)
+        .collect();
 
     Ok(TxInputSigningContext {
         handle,
@@ -173,8 +177,8 @@ fn input_context_from_transfer(
         output_key,
         commitment,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers().to_vec(),
+        c2_layers: path.c2_layers().to_vec(),
     })
 }
 

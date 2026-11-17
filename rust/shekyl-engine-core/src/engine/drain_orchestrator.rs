@@ -890,13 +890,17 @@ pub(crate) async fn orchestrate_drain(
             detail: "assemble_tx returned no paths for a non-empty selection".to_owned(),
         })?;
     let tree_ctx = TreeContext {
-        reference_block: first.tree.reference_block,
-        tree_root: first.tree.tree_root,
-        tree_depth: first.tree.tree_depth,
+        reference_block: first.tree().reference_block,
+        tree_root: first.tree().tree_root,
+        tree_depth: first.tree().tree_depth,
     };
     let funding: Vec<FundingInputContext> = selected
         .into_iter()
-        .zip(paths)
+        .zip(
+            paths
+                .into_iter()
+                .map(shekyl_curve_tree::AssembledPath::into_parts),
+        )
         .map(|(record, path)| FundingInputContext {
             record,
             leaf_chunk: path

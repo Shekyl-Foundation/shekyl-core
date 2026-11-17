@@ -21,11 +21,11 @@ use super::super::{
 use super::{lock_count, reference_at};
 use crate::store::CapturedChunk;
 use crate::types::{
-    AssembleInput, AssembledPath, BlockHeight, ChunkLeaf, CommitmentBytes, Gindex, OneTimePubkey,
-    ReferenceBlock, TargetKind,
+    AssembleInput, BlockHeight, ChunkLeaf, CommitmentBytes, Gindex, OneTimePubkey, ReferenceBlock,
+    TargetKind,
 };
-use crate::CurveTreeClient;
 use crate::TreePosition;
+use crate::{AssembledPath, CurveTreeClient, PathParts};
 use shekyl_fcmp::tree::{
     key_image_generator, selene_point_to_helios_scalar, HELIOS_CHUNK_WIDTH, SELENE_CHUNK_WIDTH,
 };
@@ -340,7 +340,7 @@ fn a_captured_chunk_equals_what_assembly_builds() {
     // Layer 0: the siblings as a path carries them.
     assert_eq!(
         decode_identities(&body_at(&held, 0)),
-        path.leaf_chunk,
+        path.leaf_chunk(),
         "the captured leaf chunk must be the leaf chunk assembly builds"
     );
 
@@ -358,11 +358,12 @@ fn a_captured_chunk_equals_what_assembly_builds() {
         })
         .collect();
     assert_eq!(
-        captured, path.c2_layers[0],
+        captured,
+        path.c2_layers()[0],
         "the captured layer-1 chunk must be the branch assembly walks"
     );
     assert_eq!(
-        path.c1_layers.len(),
+        path.c1_layers().len(),
         1,
         "the layer-2 branch is the root's child set, which never closes — it \
          comes from the ring snapshot, not from a capture"
@@ -1300,7 +1301,7 @@ fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
         - 1;
     assert_eq!(
         decode_identities(&body_at(&held_at(&client, end_leaf), 0)),
-        path.leaf_chunk,
+        path.leaf_chunk(),
         "the capture at the new position must be the leaf chunk assembly builds \
          from the post-reorg tree"
     );
@@ -1464,7 +1465,7 @@ fn rebuilt_path(
         }
         node = parent;
     }
-    AssembledPath {
+    AssembledPath::from_parts_unchecked(PathParts {
         leaf_chunk,
         c1_layers,
         c2_layers,
@@ -1473,7 +1474,7 @@ fn rebuilt_path(
             tree_root: reference.curve_tree_root,
             tree_depth: depth,
         },
-    }
+    })
 }
 
 /// The input for the leaf at `position` on `client`, read from its entries.
@@ -1547,7 +1548,7 @@ fn a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone() {
         "the test-side rebuild must fold to the reference root, or it is no oracle"
     );
     assert!(
-        full.leaf_chunk.len() > 1,
+        full.leaf_chunk().len() > 1,
         "the owned leaf's real chunk holds its siblings; a one-leaf chunk here would \
          mean the fixture, not the mechanism, is doing the work"
     );
@@ -1654,7 +1655,7 @@ fn an_owned_leaf_in_the_open_leaf_chunk_assembles_from_the_tail() {
     let input = input_at(&twin, tip, position);
     let full = rebuilt_path(&twin, position, &reference);
     assert_eq!(
-        full.leaf_chunk.len(),
+        full.leaf_chunk().len(),
         into_tail,
         "the open chunk is the tail"
     );
