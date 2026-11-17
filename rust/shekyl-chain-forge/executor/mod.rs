@@ -18,16 +18,20 @@
 //! connected fails there.
 //!
 //! A module tree outside `src/`, included by the crate's test-kind targets
-//! (the `forge` example and the determinism test) with `#[path]`: it
-//! compiles against the dev-dependencies, which the library never sees.
+//! (the `forge` example, and the determinism, forged-chain and producer-audit
+//! tests) with `#[path]`: it compiles against the dev-dependencies, which
+//! the library never sees.
 //!
 //! The chain is written as corpus layout 4 (`CORPUS_FORMAT_VERSION`): a
 //! reorg is a rewind record and the branch after it. Layout 5's `offer`
 //! record is `CF-3`'s.
 
+mod built;
 pub mod claim;
 pub mod produce;
 pub mod seeds;
+
+pub use built::{Built, BuiltKind};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -42,9 +46,6 @@ use shekyl_chain_forge::{
 };
 use shekyl_chain_ingest::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use shekyl_chain_ingest::archival_driver::{ENDPOINT, FEE};
-use shekyl_chain_ingest::chain_drive::{
-    priced_emission_claim, spender_owning_before, EmissionClaimParts,
-};
 use shekyl_chain_ingest::corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
 use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::PipelineConfig;
@@ -58,7 +59,7 @@ use shekyl_chain_ingest::scenario_shard::{
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, CenRow, SettlementEpochBlocks, SettlementSchedule};
-use shekyl_harness_spender::{Owner, Persona, Recipient, Spender};
+use shekyl_harness_spender::{Persona, Recipient, Spender};
 use shekyl_network::Network;
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 
@@ -178,50 +179,6 @@ pub async fn forge(
         .finish(plan, plan_ref, out, hashers)
         .await
         .map(|forged| Outcome::Forged(Box::new(forged)))
-}
-
-/// A body the plan built, with what re-signing it takes
-/// ([`Spender::signed_under`]): the identity test's proof leg re-signs one
-/// of each kind under another network's id.
-#[derive(Clone, Debug)]
-pub struct Built {
-    /// The body as listed.
-    pub body: shekyl_wire::Transaction,
-    /// The height its block connected at.
-    pub connecting: BlockHeight,
-    /// What it is.
-    pub kind: BuiltKind,
-}
-
-/// What a [`Built`] body is.
-#[derive(Clone, Debug)]
-pub enum BuiltKind {
-    /// A spend of the miner's coinbases at these heights.
-    Spend {
-        /// The coinbases spent.
-        coinbases: Vec<BlockHeight>,
-    },
-    /// A coinbase spend carrying persona `slot`'s compact join of `shards`.
-    Join {
-        /// The coinbase spent.
-        coinbase: BlockHeight,
-        /// The persona.
-        slot: u32,
-        /// The shards joined.
-        shards: Vec<u64>,
-    },
-    /// Persona `slot`'s emission claim.
-    Claim {
-        /// The persona.
-        slot: u32,
-        /// The height its join connected at: its owned outputs are paid
-        /// there.
-        join_height: BlockHeight,
-        /// The claim's backing output.
-        backing_key: [u8; 32],
-        /// The claim's fee input.
-        fee_key: [u8; 32],
-    },
 }
 
 /// A persona the plan joined.
@@ -520,7 +477,7 @@ impl Forge {
             Action::FillShards { count } => self.fill(*count).await,
             Action::Join { persona, shards } => self.join(*persona, shards).await?,
             Action::Serve { persona } => self.serve(*persona).await?,
-            Action::Claim { persona } => self.claim(*persona).await?,
+            Action::Claim { persona } => claim::step(self, *persona).await?,
             Action::Reorg { depth } => self.reorg(*depth).await?,
             Action::Produce {
                 persona,
@@ -530,7 +487,7 @@ impl Forge {
                     .producer
                     .start_spread
                     .unwrap_or(std::time::Duration::from_millis(*start_spread_ms));
-                self.produce(*persona, spread).await?;
+                produce::step(self, *persona, spread).await?;
             }
         }
         self.write_new()
@@ -692,213 +649,6 @@ impl Forge {
         assert_issued_pair(&scenario, served, (joined.persona.id(), joined.shard.shard));
         self.scenario = Some(scenario);
         self.chain = chain;
-        Ok(())
-    }
-
-    /// Persona `slot` claims the epoch it served, in the block after that
-    /// epoch's slash pass (S4).
-    async fn claim(&mut self, slot: u32) -> Result<(), ForgeFault> {
-        let (served, shard, join_epoch, backing_key, fee_key, join_height) = {
-            let joined = self
-                .personas
-                .get(&slot)
-                .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
-            (
-                SettlementEpoch::from_raw(joined.join_epoch.to_raw() + 1),
-                joined.shard,
-                joined.join_epoch,
-                joined.backing_key,
-                joined.fee_key,
-                joined.join_height,
-            )
-        };
-        let at_pass = BlockHeight::from_raw(self.schedule.slash_deadline_height(served.to_raw()));
-        let connecting = at_pass + BlockCount::ONE;
-        let mut chain = std::mem::take(&mut self.chain);
-        mine_to(
-            self.scenario.as_mut().expect("home"),
-            &mut chain,
-            connecting,
-        )
-        .await;
-        self.chain = chain;
-        self.write_new()?;
-        if self.stopped.is_some() {
-            return Ok(());
-        }
-        let count_at_close = (served.to_raw() + 1) * self.schedule.blocks().get();
-        let closing = &self.chain[usize::try_from(count_at_close - 1).expect("small")].archival;
-        let close = *closing
-            .close()
-            .expect("the block that completes the epoch carries its close");
-        assert_eq!(close.epoch(), served, "the close is the served epoch's");
-        let terms = claim::terms(&claim::Served {
-            schedule: self.schedule,
-            epoch: served,
-            join_epoch,
-            shard: shard.shard.to_raw(),
-            close_height: shard.close_height,
-            budget: close.budget().to_raw(),
-        });
-
-        let network = self.scenario().network_id();
-        let spender =
-            spender_owning_before(network, &self.chain, join_height, &[backing_key, fee_key]);
-        let index = self.claims;
-        self.claims += 1;
-        let spend = self.next_spend();
-        let seeds = self.seeds.claim(index, spend);
-        let tx_key = self.seeds.claim_tx_key(index);
-        let persona = &self.personas[&slot].persona;
-        let owner = Owner::persona(persona.keys());
-        let claim = priced_emission_claim(
-            self.scenario.as_mut().expect("home"),
-            EmissionClaimParts {
-                spender: &spender,
-                owner: &owner,
-                keys: persona.keys(),
-                backing_key,
-                fee_key,
-                terms,
-                connecting,
-                tx_key,
-                seeds: Some(&seeds),
-            },
-        )
-        .await;
-        self.built.push(Built {
-            body: claim.clone(),
-            connecting,
-            kind: BuiltKind::Claim {
-                slot,
-                join_height,
-                backing_key,
-                fee_key,
-            },
-        });
-        let block = self
-            .scenario()
-            .mine_listing(vec![claim])
-            .await
-            .unwrap_or_else(|outcome| panic!("the claim connects: {outcome}"));
-        assert_eq!(block.height, connecting);
-        self.chain.push(block);
-        Ok(())
-    }
-
-    /// Persona `slot` serves its shard, the bundle producer's task reads it
-    /// and files, and the chain mines through the slash pass of the first
-    /// epoch the persona is drawn in ([`produce`]).
-    async fn produce(
-        &mut self,
-        slot: u32,
-        start_spread: std::time::Duration,
-    ) -> Result<(), ForgeFault> {
-        use produce::{Draws, PlanReceipts, Producing};
-        let (shard, join_epoch) = {
-            let joined = self
-                .personas
-                .get(&slot)
-                .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
-            (joined.shard.shard, joined.join_epoch)
-        };
-        let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
-        let settled_at =
-            BlockHeight::from_raw(self.schedule.slash_deadline_height(served.to_raw()));
-        let network = self.scenario().network_id();
-        let draws = if self.producer.live {
-            Draws::Live
-        } else {
-            Draws::Plan(Arc::clone(&self.seeds))
-        };
-        let ring = Producing::ring(&draws, network);
-        self.scenario().draw_from(Arc::clone(&ring));
-        let tip = Arc::new(shekyl_p_host::DaemonTipCache::new(
-            std::time::Duration::from_secs(24 * 60 * 60),
-        ));
-        tip.stamp_synced(self.chain.last().expect("genesis at least").height);
-        let body = shekyl_chain_ingest::scenario_shard::shard_body(
-            self.scenario.as_ref().expect("home"),
-            &self.chain,
-            shard,
-        );
-        // The persona's own receipt secret, owned by the serving key.
-        let receipt =
-            Persona::from_master(&self.seeds.persona_master(slot), Network::Regtest, slot)
-                .into_keys()
-                .receipt_sign_sk;
-        let key: Arc<dyn shekyl_p_host::PassKey> = Arc::new(PlanReceipts::new(
-            receipt,
-            match &draws {
-                Draws::Plan(seeds) => Some(Arc::clone(seeds)),
-                Draws::Live => None,
-            },
-        ));
-        let signer = shekyl_p_host::signer_over_tip(Arc::clone(&tip), key);
-        let (endpoint, client) = shekyl_p_loopback::endpoint_and_client(
-            shard.to_raw(),
-            body,
-            signer,
-            produce::timeouts(),
-        )
-        .await;
-        let mut producing = Producing::start(
-            self.scenario.as_ref().expect("home"),
-            self.rules,
-            &ring,
-            client,
-            &draws,
-            start_spread,
-        )
-        .await;
-        let mut admitted = 0usize;
-        while self.chain.last().expect("genesis at least").height < settled_at {
-            let queued = !self
-                .scenario()
-                .store()
-                .begin_read()
-                .expect("snapshot")
-                .queued_bundles()
-                .expect("the queue reads")
-                .is_empty();
-            let mined = if queued {
-                let (mined, bundles) = self
-                    .scenario()
-                    .mine_admitting(Vec::new())
-                    .await
-                    .unwrap_or_else(|outcome| panic!("a producer-plan block lands: {outcome}"));
-                admitted += bundles.len();
-                mined
-            } else {
-                self.scenario()
-                    .mine_listing(Vec::new())
-                    .await
-                    .unwrap_or_else(|outcome| panic!("a producer-plan block lands: {outcome}"))
-            };
-            tip.stamp_synced(mined.height);
-            self.chain.push(mined);
-            producing.settle().await;
-            self.write_new()?;
-            if self.stopped.is_some() {
-                break;
-            }
-        }
-        let ended = std::mem::take(&mut *producing.ended.lock().expect("the outcome list"));
-        producing.stop().await;
-        drop(endpoint);
-        // The subject (rule 47): the producer made bundles the chain took.
-        if admitted == 0 && self.stopped.is_none() {
-            return Err(ForgeFault::Plan(
-                "the producer filed no bundle the chain admitted: the step produced nothing".into(),
-            ));
-        }
-        if let Some(first) = ended.first() {
-            return Err(ForgeFault::Plan(format!(
-                "{} read(s) did not pass, the first {first:?}: a stall changes a produced \
-                 bundle, so this run cannot be the plan's chain (CHAIN_FORGE.md §4)",
-                ended.len()
-            )));
-        }
         Ok(())
     }
 

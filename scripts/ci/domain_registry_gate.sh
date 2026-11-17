@@ -459,7 +459,9 @@ count_pattern() {
 # rust/shekyl-chain-forge/src/seed.rs (`seed_for`), under the test-only
 # domain shekyl/chain-forge/seed-v1. The crate is NOT_SHIPPED and its
 # executor a test-kind target; the site is under src/ and so counted.
-MECH1_EXPECTED=73
+# The producer receipt's message-bound seed (`seed_for_message`) is a
+# second call of the same customization: 73 -> 74.
+MECH1_EXPECTED=74
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

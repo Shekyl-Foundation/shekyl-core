@@ -190,6 +190,35 @@ pub fn seed_for(plan: &PlanSeed, role: Role, index: u64) -> [u8; 32] {
     cshake256_32(SEED_CUSTOMIZATION, &input)
 }
 
+/// SHA-256 of `message`. A control that swaps a [`seed_for_message`] draw
+/// remembers the OS bytes under this digest, so the same transcript signs
+/// the same way for the rest of the run. The unswapped draw is the cSHAKE,
+/// not this digest.
+#[must_use]
+pub fn message_id(message: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(message).into()
+}
+
+/// `seed_for` over a message the plan does not number: a producer receipt's
+/// transcript. The preimage is `plan_seed ‖ role_len_le8 ‖ role ‖ message`.
+/// [`seed_for`]'s is `plan_seed ‖ role ‖ index_le8`. A role name starts with
+/// a letter and is shorter than 32 bytes, so the byte after the plan seed
+/// is a length here and a letter there, and the two preimages cannot be
+/// the same. The customization is [`SEED_CUSTOMIZATION`]: both are the
+/// forge's seed, and the preimage is what tells them apart.
+#[must_use]
+pub fn seed_for_message(plan: &PlanSeed, role: Role, message: &[u8]) -> [u8; 32] {
+    let name = role.name().as_bytes();
+    let len = u64::try_from(name.len()).expect("a role name fits");
+    let mut input = Vec::with_capacity(plan.0.len() + 8 + name.len() + message.len());
+    input.extend_from_slice(&plan.0);
+    input.extend_from_slice(&len.to_le_bytes());
+    input.extend_from_slice(name);
+    input.extend_from_slice(message);
+    cshake256_32(SEED_CUSTOMIZATION, &input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +254,18 @@ mod tests {
         }
         let names: std::collections::BTreeSet<&str> = Role::ALL.iter().map(|r| r.name()).collect();
         assert_eq!(names.len(), Role::ALL.len(), "every role has its own name");
+        for role in Role::ALL {
+            let name = role.name().as_bytes();
+            assert!(
+                name.len() < 32 && name.first().is_some_and(u8::is_ascii_alphabetic),
+                "{role:?} would share a preimage with seed_for_message"
+            );
+            assert_ne!(
+                seed_for(&plan, role, 0),
+                seed_for_message(&plan, role, b"transcript"),
+                "{role:?}"
+            );
+        }
     }
 
     /// A different plan seed moves every stream.

@@ -29,4 +29,6 @@ pub use manifest::{
     MANIFEST_FORMAT_VERSION,
 };
 pub use plan::{Action, EpochBlocks, Plan, PlanFault, Schedule, Step};
-pub use seed::{seed_for, PlanSeed, Role, SeedFault, SEED_CUSTOMIZATION};
+pub use seed::{
+    message_id, seed_for, seed_for_message, PlanSeed, Role, SeedFault, SEED_CUSTOMIZATION,
+};

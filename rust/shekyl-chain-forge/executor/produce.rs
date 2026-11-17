@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use rand::SeedableRng as _;
 use shekyl_archival_fetch_sched::{FetchScheduler, ReadFailure};
-use shekyl_archival_retention::BUNDLE_SIGNATURE_LEN;
+use shekyl_archival_retention::{sign_bundle_commitment_seeded, BUNDLE_SIGNATURE_LEN};
 use shekyl_bundle_producer::{RingDraws, WitnessRing};
 use shekyl_chain_forge::Role;
 use shekyl_chain_ingest::bundle_producer::{
@@ -44,20 +44,26 @@ use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridSecretKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
-use shekyl_crypto_pq::signature::{
-    SignatureScheme as _, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
-};
+use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_RECEIPT};
 use shekyl_crypto_pq::CryptoError;
+use shekyl_harness_spender::Persona;
 use shekyl_network::envelope::Framed64;
+use shekyl_network::Network;
 use shekyl_p_host::{PassKey, PassTranscript, SignRefused};
 use shekyl_p_loopback::Timeouts;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, SettlementEpoch};
 use tokio::sync::watch;
 
+use super::{Forge, ForgeFault};
 use crate::executor::seeds::{Seeds, Source};
 
 /// How long one block's reads and filing may take on a loaded host.
 pub const SETTLE: Duration = Duration::from_secs(120);
+
+/// How long a stamped tip stays fresh in the serve loop's cache. A forging
+/// runs against the wall clock while its blocks are stamped near regtest
+/// genesis, so the window covers the run.
+const TIP_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The loopback client's timeouts: generous, so a loaded host's read
 /// completes rather than stalls (a stall refuses the forging).
@@ -92,20 +98,7 @@ impl RingDraws for PlanRing {
         commitment: &Framed64,
     ) -> Result<[u8; BUNDLE_SIGNATURE_LEN], CryptoError> {
         let seed = self.0.pick(Source::S8, Role::RingSignature, h.to_raw());
-        HybridEd25519FnDsa
-            .sign_with_rng_seed(
-                secret,
-                SCHEME_DOMAIN_WITNESS_BUNDLE,
-                commitment.as_bytes(),
-                &seed,
-            )?
-            .to_canonical_bytes()
-            .try_into()
-            .map_err(|_| {
-                CryptoError::SerializationError(
-                    "a scheme-3 signature is not the canonical width".into(),
-                )
-            })
+        sign_bundle_commitment_seeded(secret, commitment, &seed)
     }
 }
 
@@ -135,10 +128,9 @@ impl PassKey for PlanReceipts {
         let signed = match &self.seeds {
             Some(seeds) => {
                 // The transcript names the read (its nonce, anchor and
-                // shard), so its hash keys the receipt's draw.
-                let digest = shekyl_chain_forge::sha256_hex(&message);
-                let index = u64::from_str_radix(&digest[..16], 16).expect("hex");
-                let seed = seeds.pick(Source::S8, Role::ProducerReceipt, index);
+                // shard). The plan does not number it, so the seed is the
+                // transcript's own.
+                let seed = seeds.pick_message(Source::S8, Role::ProducerReceipt, &message);
                 HybridEd25519FnDsa.sign_with_rng_seed(
                     &self.secret,
                     SCHEME_DOMAIN_RECEIPT,
@@ -287,4 +279,117 @@ impl Producing {
         let _sent = self.stop.send(true);
         self.task.await.expect("the producer's task joins");
     }
+}
+
+/// Persona `slot` serves its shard, this task reads it and files, and the
+/// chain mines through the slash pass of the first epoch the persona is
+/// drawn in.
+///
+/// # Errors
+///
+/// [`ForgeFault`] when `slot` has not joined, when the producer files
+/// nothing, or when a read stalls.
+pub(super) async fn step(
+    forge: &mut Forge,
+    slot: u32,
+    start_spread: Duration,
+) -> Result<(), ForgeFault> {
+    let (shard, join_epoch) = {
+        let joined = forge
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        (joined.shard.shard, joined.join_epoch)
+    };
+    let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
+    let settled_at = BlockHeight::from_raw(forge.schedule.slash_deadline_height(served.to_raw()));
+    let network = forge.scenario().network_id();
+    let draws = if forge.producer.live {
+        Draws::Live
+    } else {
+        Draws::Plan(Arc::clone(&forge.seeds))
+    };
+    let ring = Producing::ring(&draws, network);
+    forge.scenario().draw_from(Arc::clone(&ring));
+    let tip = Arc::new(shekyl_p_host::DaemonTipCache::new(TIP_MAX_AGE));
+    tip.stamp_synced(forge.chain.last().expect("genesis at least").height);
+    let body = shekyl_chain_ingest::scenario_shard::shard_body(
+        forge.scenario.as_ref().expect("home"),
+        &forge.chain,
+        shard,
+    );
+    // The persona's own receipt secret, owned by the serving key. The
+    // joined persona keeps its copy; this one moves into the signer.
+    let receipt = Persona::from_master(&forge.seeds.persona_master(slot), Network::Regtest, slot)
+        .into_keys()
+        .receipt_sign_sk;
+    let key: Arc<dyn PassKey> = Arc::new(PlanReceipts::new(
+        receipt,
+        match &draws {
+            Draws::Plan(seeds) => Some(Arc::clone(seeds)),
+            Draws::Live => None,
+        },
+    ));
+    let signer = shekyl_p_host::signer_over_tip(Arc::clone(&tip), key);
+    let (endpoint, client) =
+        shekyl_p_loopback::endpoint_and_client(shard.to_raw(), body, signer, timeouts()).await;
+    let mut producing = Producing::start(
+        forge.scenario.as_ref().expect("home"),
+        forge.rules,
+        &ring,
+        client,
+        &draws,
+        start_spread,
+    )
+    .await;
+    let mut admitted = 0usize;
+    while forge.chain.last().expect("genesis at least").height < settled_at {
+        let queued = !forge
+            .scenario()
+            .store()
+            .begin_read()
+            .expect("snapshot")
+            .queued_bundles()
+            .expect("the queue reads")
+            .is_empty();
+        let mined = if queued {
+            let (mined, bundles) = forge
+                .scenario()
+                .mine_admitting(Vec::new())
+                .await
+                .unwrap_or_else(|outcome| panic!("a producer-plan block lands: {outcome}"));
+            admitted += bundles.len();
+            mined
+        } else {
+            forge
+                .scenario()
+                .mine_listing(Vec::new())
+                .await
+                .unwrap_or_else(|outcome| panic!("a producer-plan block lands: {outcome}"))
+        };
+        tip.stamp_synced(mined.height);
+        forge.chain.push(mined);
+        producing.settle().await;
+        forge.write_new()?;
+        if forge.stopped.is_some() {
+            break;
+        }
+    }
+    let ended = std::mem::take(&mut *producing.ended.lock().expect("the outcome list"));
+    producing.stop().await;
+    drop(endpoint);
+    // The subject (rule 47): the producer made bundles the chain took.
+    if admitted == 0 && forge.stopped.is_none() {
+        return Err(ForgeFault::Plan(
+            "the producer filed no bundle the chain admitted: the step produced nothing".into(),
+        ));
+    }
+    if let Some(first) = ended.first() {
+        return Err(ForgeFault::Plan(format!(
+            "{} read(s) did not pass, the first {first:?}: a stall changes a produced \
+             bundle, so this run cannot be the plan's chain (CHAIN_FORGE.md §4)",
+            ended.len()
+        )));
+    }
+    Ok(())
 }

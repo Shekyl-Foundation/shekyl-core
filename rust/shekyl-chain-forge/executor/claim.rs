@@ -17,10 +17,17 @@ use shekyl_archival_retention::{
     CreditPair, EmissionEpochSource, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
     ShardWorkEntry, WorkEpochClaim,
 };
+use shekyl_chain_ingest::chain_drive::{
+    priced_emission_claim, spender_owning_before, EmissionClaimParts,
+};
 use shekyl_chain_ingest::emission_assembly::ClaimTerms;
 use shekyl_chain_ingest::scenario_archival::shard_set;
+use shekyl_chain_ingest::scenario_shard::mine_to;
 use shekyl_chain_rules::SettlementSchedule;
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_harness_spender::Owner;
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch};
+
+use super::{Built, BuiltKind, Forge, ForgeFault};
 
 /// What the claim's arithmetic reads.
 pub struct Served {
@@ -97,4 +104,99 @@ pub fn terms(served: &Served) -> ClaimTerms {
         }],
         reward_amount_plain: vec![share.reward],
     }
+}
+
+/// Persona `slot` claims the epoch it served, in the block after that
+/// epoch's slash pass (S4).
+///
+/// # Errors
+///
+/// [`ForgeFault`] when `slot` has not joined.
+pub(super) async fn step(forge: &mut Forge, slot: u32) -> Result<(), ForgeFault> {
+    let (served, shard, join_epoch, backing_key, fee_key, join_height) = {
+        let joined = forge
+            .personas
+            .get(&slot)
+            .ok_or_else(|| ForgeFault::Plan(format!("persona {slot} has not joined")))?;
+        (
+            SettlementEpoch::from_raw(joined.join_epoch.to_raw() + 1),
+            joined.shard,
+            joined.join_epoch,
+            joined.backing_key,
+            joined.fee_key,
+            joined.join_height,
+        )
+    };
+    let at_pass = BlockHeight::from_raw(forge.schedule.slash_deadline_height(served.to_raw()));
+    let connecting = at_pass + BlockCount::ONE;
+    let mut chain = std::mem::take(&mut forge.chain);
+    mine_to(
+        forge.scenario.as_mut().expect("home"),
+        &mut chain,
+        connecting,
+    )
+    .await;
+    forge.chain = chain;
+    forge.write_new()?;
+    if forge.stopped.is_some() {
+        return Ok(());
+    }
+    let count_at_close = (served.to_raw() + 1) * forge.schedule.blocks().get();
+    let closing = &forge.chain[usize::try_from(count_at_close - 1).expect("small")].archival;
+    let close = *closing
+        .close()
+        .expect("the block that completes the epoch carries its close");
+    assert_eq!(close.epoch(), served, "the close is the served epoch's");
+    let terms = terms(&Served {
+        schedule: forge.schedule,
+        epoch: served,
+        join_epoch,
+        shard: shard.shard.to_raw(),
+        close_height: shard.close_height,
+        budget: close.budget().to_raw(),
+    });
+
+    let network = forge.scenario().network_id();
+    let spender =
+        spender_owning_before(network, &forge.chain, join_height, &[backing_key, fee_key]);
+    let index = forge.claims;
+    forge.claims += 1;
+    let spend = forge.next_spend();
+    let seeds = forge.seeds.claim(index, spend);
+    let tx_key = forge.seeds.claim_tx_key(index);
+    let persona = &forge.personas[&slot].persona;
+    let owner = Owner::persona(persona.keys());
+    let claim = priced_emission_claim(
+        forge.scenario.as_mut().expect("home"),
+        EmissionClaimParts {
+            spender: &spender,
+            owner: &owner,
+            keys: persona.keys(),
+            backing_key,
+            fee_key,
+            terms,
+            connecting,
+            tx_key,
+            seeds: Some(&seeds),
+        },
+    )
+    .await;
+    forge.built.push(Built {
+        body: claim.clone(),
+        connecting,
+        kind: BuiltKind::Claim {
+            slot,
+            join_height,
+            backing_key,
+            fee_key,
+        },
+    });
+    let block = forge
+        .scenario()
+        .mine_listing(vec![claim])
+        .await
+        .unwrap_or_else(|outcome| panic!("the claim connects: {outcome}"));
+    assert_eq!(block.height, connecting);
+    forge.chain.push(block);
+    Ok(())
 }

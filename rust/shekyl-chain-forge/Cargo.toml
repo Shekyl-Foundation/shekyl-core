@@ -41,7 +41,7 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 # store, and the OS randomness a negative control swaps a source to.
 shekyl-harness-spender = { path = "../shekyl-harness-spender", features = ["seeded-rng"] }
 shekyl-tx-builder = { path = "../shekyl-tx-builder", features = ["seeded-rng"] }
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["seeded-rng"] }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-network = { path = "../shekyl-network" }
 shekyl-types = { path = "../shekyl-types" }

@@ -23,14 +23,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use rand::RngCore as _;
-use shekyl_archival_retention::BUNDLE_SIGNATURE_LEN;
-use shekyl_chain_forge::{seed_for, PlanSeed, Role};
+use shekyl_archival_retention::{sign_bundle_commitment_seeded, BUNDLE_SIGNATURE_LEN};
+use shekyl_chain_forge::{message_id, seed_for, seed_for_message, PlanSeed, Role};
 use shekyl_chain_ingest::admitted_draws::WitnessDraws;
 use shekyl_chain_ingest::emission_assembly::EmissionSeeds;
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridSecretKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
-use shekyl_crypto_pq::signature::SCHEME_DOMAIN_WITNESS_BUNDLE;
 use shekyl_crypto_pq::CryptoError;
 use shekyl_harness_spender::SpendSeeds;
 use shekyl_network::envelope::Framed64;
@@ -95,11 +94,18 @@ impl Source {
     }
 }
 
+/// A swapped index-bound draw, remembered by role and index.
+type IndexDraws = BTreeMap<(Role, u64), [u8; 32]>;
+/// A swapped message-bound draw, remembered by role and [`message_id`].
+type MessageDraws = BTreeMap<(Role, [u8; 32]), [u8; 32]>;
+
 /// The plan's seeds, with the sources a control swaps.
 pub struct Seeds {
     plan: PlanSeed,
     swapped: BTreeSet<Source>,
-    drawn: Mutex<BTreeMap<(Role, u64), [u8; 32]>>,
+    drawn: Mutex<IndexDraws>,
+    /// A swapped message-bound draw, remembered by [`message_id`].
+    drawn_message: Mutex<MessageDraws>,
 }
 
 impl Seeds {
@@ -110,6 +116,7 @@ impl Seeds {
             plan,
             swapped,
             drawn: Mutex::new(BTreeMap::new()),
+            drawn_message: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -124,6 +131,25 @@ impl Seeds {
             .lock()
             .expect("the swap's record is never poisoned")
             .entry((role, index))
+            .or_insert_with(|| {
+                let mut fresh = [0u8; 32];
+                rand::rngs::OsRng.fill_bytes(&mut fresh);
+                fresh
+            })
+    }
+
+    /// [`pick`] for a draw [`seed_for_message`] names. A swapped source
+    /// draws from the OS once per message, remembered by [`message_id`].
+    pub fn pick_message(&self, source: Source, role: Role, message: &[u8]) -> [u8; 32] {
+        if !self.swapped.contains(&source) {
+            return seed_for_message(&self.plan, role, message);
+        }
+        let id = message_id(message);
+        *self
+            .drawn_message
+            .lock()
+            .expect("the swap's record is never poisoned")
+            .entry((role, id))
             .or_insert_with(|| {
                 let mut fresh = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut fresh);
@@ -218,20 +244,7 @@ impl WitnessDraws for PlanDraws {
         commitment: &Framed64,
     ) -> Result<[u8; BUNDLE_SIGNATURE_LEN], CryptoError> {
         let seed = self.0.pick(Source::S8, Role::BundleWitness, h.to_raw());
-        HybridEd25519FnDsa
-            .sign_with_rng_seed(
-                secret,
-                SCHEME_DOMAIN_WITNESS_BUNDLE,
-                commitment.as_bytes(),
-                &seed,
-            )?
-            .to_canonical_bytes()
-            .try_into()
-            .map_err(|_| {
-                CryptoError::SerializationError(
-                    "a scheme-3 signature is not the canonical width".into(),
-                )
-            })
+        sign_bundle_commitment_seeded(secret, commitment, &seed)
     }
 
     fn sign_receipt(
