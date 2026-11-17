@@ -45,6 +45,30 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::{CANDIDATE_DEPTH, MAX_CANDIDATES};
 
+/// Where a ring draws its witnesses and their signatures from, in place of
+/// the OS: the chain forge's producer plan, whose bundles must come out the
+/// same every forging (`CHAIN_FORGE.md` §4, the producer audit). Only under
+/// the TEST_ONLY `seeded-rng` feature; every node's ring is
+/// [`WitnessRing::new`]'s, drawn from the OS.
+#[cfg(feature = "seeded-rng")]
+pub trait RingDraws: Send + Sync {
+    /// The witness for the template whose block connects at `connecting`:
+    /// its key's two keygen seeds (Ed25519, FN-DSA) and its draw seed.
+    fn witness(&self, connecting: BlockHeight) -> ([u8; 32], [u8; 32], [u8; 32]);
+
+    /// The witness signature over the bundle of `h`, by `secret`.
+    ///
+    /// # Errors
+    ///
+    /// The signer's refusal.
+    fn sign_bundle(
+        &self,
+        h: BlockHeight,
+        secret: &FnDsaHybridSecretKey,
+        commitment: &shekyl_network::envelope::Framed64,
+    ) -> Result<[u8; shekyl_archival_retention::BUNDLE_SIGNATURE_LEN], CryptoError>;
+}
+
 /// The seed and the witness secret key. Both wipe on drop: the seed is a
 /// [`Zeroizing`] cell, and [`FnDsaHybridSecretKey`] wipes its own halves.
 /// The public key is not here, so this derive is honest about what is secret.
@@ -69,6 +93,26 @@ impl core::fmt::Debug for WitnessMaterial {
 }
 
 impl WitnessMaterial {
+    /// The witness `draws` gives for `connecting`.
+    #[cfg(feature = "seeded-rng")]
+    fn keyed(draws: &dyn RingDraws, connecting: BlockHeight) -> Result<Self, DrawFailed> {
+        let (ed25519_seed, fn_dsa_seed, seed) = draws.witness(connecting);
+        let (public, key) = HybridEd25519FnDsa::keypair_from_seeds(&ed25519_seed, &fn_dsa_seed)
+            .map_err(|e| DrawFailed::KeyGeneration(e.to_string()))?;
+        let public: Box<[u8; BUNDLE_WITNESS_KEY_LEN]> = public
+            .to_canonical_bytes()
+            .into_boxed_slice()
+            .try_into()
+            .map_err(|_| DrawFailed::KeyGeneration("a scheme-3 key of another width".into()))?;
+        Ok(Self {
+            secret: WitnessSecret {
+                seed: Zeroizing::new(seed),
+                key,
+            },
+            public,
+        })
+    }
+
     fn drawn() -> Result<Self, DrawFailed> {
         let (public, key) = HybridEd25519FnDsa::generate_keypair()
             .map_err(|e| DrawFailed::KeyGeneration(e.to_string()))?;
@@ -127,6 +171,9 @@ pub struct WitnessRing {
     /// under (`bundle_commitment`): a witness signature made here verifies
     /// on this network alone.
     network_id: NetworkId,
+    /// The caller's draws in place of the OS's ([`Self::drawing`]).
+    #[cfg(feature = "seeded-rng")]
+    draws: Option<std::sync::Arc<dyn RingDraws>>,
 }
 
 impl core::fmt::Debug for WitnessRing {
@@ -148,6 +195,20 @@ impl WitnessRing {
             state: Mutex::default(),
             bound: MAX_CANDIDATES,
             network_id,
+            #[cfg(feature = "seeded-rng")]
+            draws: None,
+        }
+    }
+
+    /// An empty ring filing for `network_id` whose witnesses and signatures
+    /// come from `draws` (the chain forge's producer plan). TEST_ONLY
+    /// `seeded-rng` only.
+    #[cfg(feature = "seeded-rng")]
+    #[must_use]
+    pub fn drawing(network_id: NetworkId, draws: std::sync::Arc<dyn RingDraws>) -> Self {
+        Self {
+            draws: Some(draws),
+            ..Self::new(network_id)
         }
     }
 
@@ -159,7 +220,51 @@ impl WitnessRing {
             state: Mutex::default(),
             bound,
             network_id: shekyl_network::HARNESS_NETWORK_ID,
+            #[cfg(feature = "seeded-rng")]
+            draws: None,
         }
+    }
+
+    /// The witness for `connecting`: the caller's draws when this ring has
+    /// them, the OS's otherwise. One choice, so `draw` does not grow a
+    /// second path.
+    #[cfg_attr(
+        not(feature = "seeded-rng"),
+        expect(
+            unused_variables,
+            clippy::unused_self,
+            reason = "the witness source is chosen only under seeded-rng"
+        )
+    )]
+    fn material(&self, connecting: BlockHeight) -> Result<WitnessMaterial, DrawFailed> {
+        #[cfg(feature = "seeded-rng")]
+        if let Some(draws) = &self.draws {
+            return WitnessMaterial::keyed(draws.as_ref(), connecting);
+        }
+        WitnessMaterial::drawn()
+    }
+
+    /// The witness signature over `commitment`: the caller's when this ring
+    /// has draws, [`sign_bundle_commitment`]'s otherwise.
+    #[cfg_attr(
+        not(feature = "seeded-rng"),
+        expect(
+            unused_variables,
+            clippy::unused_self,
+            reason = "the witness source is chosen only under seeded-rng"
+        )
+    )]
+    fn sign_commitment(
+        &self,
+        h: BlockHeight,
+        secret: &FnDsaHybridSecretKey,
+        commitment: &shekyl_network::envelope::Framed64,
+    ) -> Result<[u8; shekyl_archival_retention::BUNDLE_SIGNATURE_LEN], CryptoError> {
+        #[cfg(feature = "seeded-rng")]
+        if let Some(draws) = &self.draws {
+            return draws.sign_bundle(h, secret, commitment);
+        }
+        sign_bundle_commitment(secret, commitment)
     }
 
     /// A poisoned lock is recovered: every mutation below leaves the state
@@ -178,7 +283,7 @@ impl WitnessRing {
     /// [`DrawFailed`] when the OS random source or key generation fails.
     /// There is no fallback commitment.
     pub fn draw(&self, connecting: BlockHeight) -> Result<DrawCommitment, DrawFailed> {
-        let secrets = WitnessMaterial::drawn()?;
+        let secrets = self.material(connecting)?;
         let commitment = secrets.commitment();
         let mut state = self.lock();
         while state.candidates.len() >= self.bound {
@@ -259,7 +364,7 @@ impl WitnessRing {
             &kept,
             records,
             &material.public,
-            |commitment| sign_bundle_commitment(&material.secret.key, commitment),
+            |commitment| self.sign_commitment(h, &material.secret.key, commitment),
         ))
     }
 

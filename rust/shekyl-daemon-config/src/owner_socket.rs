@@ -250,7 +250,7 @@ fn check_service_dir(dir: &std::path::Path, me: u32) -> Result<(), String> {
 }
 
 /// A Unix socket path's buffer, its terminator included: `sun_path` is 108
-/// bytes on Linux and 104 on macOS and the BSDs (`RPC_CHANNEL.md` §7.1).
+/// bytes on Linux and 104 on macOS and FreeBSD (`RPC_CHANNEL.md` §7.1).
 #[cfg(unix)]
 const SUN_PATH_MAX: usize = if cfg!(target_os = "linux") { 108 } else { 104 };
 

@@ -1277,6 +1277,31 @@ pub fn sign_emission_backing_for_output(
     )
 }
 
+/// [`sign_emission_backing_for_output`] with the ML-DSA nonce drawn from
+/// `ml_dsa_seed` ([`sign_pqc_auth_for_output_with_ml_dsa_seed`]), so a forged
+/// chain's emission claims come out the same every forging
+/// (`CHAIN_FORGE.md` §5.3, seam T3). Deterministic signing only (the
+/// TEST_ONLY `seeded-rng` feature, or this crate's own tests).
+///
+/// # Errors
+///
+/// As [`sign_emission_backing_for_output`].
+#[cfg(any(test, feature = "seeded-rng"))]
+pub fn sign_emission_backing_for_output_with_ml_dsa_seed(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+    message: &Framed64,
+    ml_dsa_seed: &[u8; crate::signature::ML_DSA_SIGNING_SEED_LEN],
+) -> Result<PqcAuthSignature, CryptoError> {
+    sign_pqc_auth_for_output_with_ml_dsa_seed(
+        combined_ss,
+        output_index,
+        crate::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+        message.as_bytes(),
+        ml_dsa_seed,
+    )
+}
+
 // ── Proof helpers (Phase 1) ───────────────────────────────────────────
 
 /// Narrow projection of output secrets for proof protocols.

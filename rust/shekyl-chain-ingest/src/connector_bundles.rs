@@ -762,8 +762,9 @@ fn commit_upkeep(batch: &WriteBatch<'_, '_>, plan: &Upkeep) -> Result<(), RunFau
 /// connect, and report what its section admitted — the verdict's
 /// admissions; `connect` takes those entries out of the queue. The block
 /// carries the section ([`Scenario::mine_admitting`](crate::scenario::Scenario::mine_admitting)),
-/// and `validate` admits it as it admits any block's.
-#[cfg(test)]
+/// and `validate` admits it as it admits any block's. The chain forge's
+/// driver applies its blocks the same way (`forge`, TEST_ONLY).
+#[cfg(any(test, feature = "forge"))]
 pub(crate) struct ApplyAdmitting {
     /// The height the source claims for the block.
     pub(crate) height: BlockHeight,
@@ -772,13 +773,13 @@ pub(crate) struct ApplyAdmitting {
 }
 
 /// What [`ApplyAdmitting`] did: the block, and what its section admitted.
-#[cfg(test)]
+#[cfg(any(test, feature = "forge"))]
 pub(crate) struct AppliedAdmitting {
     pub(crate) applied: super::Applied,
     pub(crate) admitted: Vec<shekyl_chain_rules::Admitted>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "forge"))]
 impl Message<ApplyAdmitting> for Connector {
     type Reply = Result<AppliedAdmitting, RunFault>;
 

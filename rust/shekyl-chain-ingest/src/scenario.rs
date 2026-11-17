@@ -150,9 +150,10 @@ pub struct Scenario<P> {
 /// The rules every scenario runs under: regtest at fixed difficulty one,
 /// so a nonce of zero satisfies any longhash — real or free — and the
 /// subject stays the chain, not the search. The driver mines its own
-/// block 0, so its chain is held to no genesis pin. One constant with the
-/// bench driver's, whose fixtures are chains this driver mined.
-pub const RULES: ChainRules = crate::bench_support::RULES;
+/// block 0, so its chain is held to no genesis pin. The bench path's
+/// fixtures are chains this driver mined, so they use the same constant
+/// ([`ChainRules::HARNESS_REGTEST`]).
+pub(crate) const RULES: ChainRules = ChainRules::HARNESS_REGTEST;
 
 impl Scenario<FreeHash> {
     /// A scenario over the free longhash, at a fresh store named `name`.
@@ -469,6 +470,36 @@ impl<P: Pow> Scenario<P> {
         Ok((self.mined(height, out.applied, kept)?, out.admitted))
     }
 
+    /// [`Self::connect_next_admitting`] carrying `section` rather than the
+    /// queue's: the references and the bodies the caller hands in, the
+    /// header's root set to the root they make. The block is judged by the
+    /// connector's own door, so a section the queue would never have packed
+    /// (a tampered bundle, CHAIN_FORGE.md `CF-R16`) meets the rules that
+    /// judge a block's section at connect (CEN-J29 through J37).
+    ///
+    /// # Errors
+    ///
+    /// A refused block, as [`Self::mine_listing`]'s.
+    pub async fn connect_next_carrying(
+        &mut self,
+        next: NextBlock,
+        section: (
+            Vec<shekyl_archival_retention::BundleRef>,
+            Vec<shekyl_archival_retention::BundleBody>,
+        ),
+    ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
+        let (height, formed, kept) = self.form_next_carrying(next, Some(section))?;
+        let out = self
+            .asked(crate::connector::ApplyAdmitting {
+                height,
+                formed: Ok(formed),
+            })
+            .await
+            .map_err(handler_error)
+            .map_err(StepOutcome::Connector)?;
+        Ok((self.mined(height, out.applied, kept)?, out.admitted))
+    }
+
     /// The section the node's template would carry at `height`: the
     /// production [`crate::template::section`], `fill_section` over the
     /// queue on one snapshot. `None` when it packs nothing.
@@ -731,7 +762,6 @@ impl<P: Pow> Scenario<P> {
     /// the store has never held. Nothing is applied, and the ledger is not
     /// trimmed — the header is not in the store, and a later connected
     /// claim is what bounds the window.
-    #[cfg(test)]
     pub async fn assemble_unconnected(
         &mut self,
         facts: &ChainFacts,
@@ -775,7 +805,6 @@ impl<P: Pow> Scenario<P> {
 
     /// Offer `block` the way [`Self::offer`] offers a connected one: formed
     /// again here under empty reference claims, then [`OfferAlt`].
-    #[cfg(test)]
     pub async fn offer_unconnected(&self, block: &Unconnected) -> Result<Offered, RunFault> {
         let formed = self
             .job(block.seed, |job| {
@@ -1078,7 +1107,7 @@ struct Formed {
 /// the driver holds no witness key or seed for it, so the block's draws are
 /// never revealed.
 #[allow(clippy::too_many_arguments)] // the template's operands, and the commitment it may take
-pub(crate) fn build_template(
+pub fn build_template(
     rules: ChainRules,
     params: &EconomicParams,
     miner: &MinerKeys,

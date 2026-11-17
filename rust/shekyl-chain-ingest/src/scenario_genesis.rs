@@ -31,7 +31,7 @@ use shekyl_network::{Network, NetworkId};
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
-use super::{MinerKeys, Scenario, StepOutcome};
+use super::{Mined, MinerKeys, Scenario, StepOutcome};
 use crate::pow::Pow;
 use crate::schedule::ChainRules;
 
@@ -48,6 +48,60 @@ impl<P: Pow> Scenario<P> {
     /// If regtest's table genesis does not assemble, or does not connect
     /// under regtest's rules.
     pub async fn open_regtest(name: &str, pow: P, schedule: CappedEpoch) -> (Self, Block) {
+        let mut scenario = Self::regtest(name, pow, schedule);
+        let genesis = regtest_genesis();
+        let connected = scenario
+            .offer_genesis(&genesis)
+            .await
+            .unwrap_or_else(|outcome| panic!("regtest's table genesis connects: {outcome}"));
+        assert_eq!(
+            connected,
+            genesis.hash(),
+            "the store holds the table's block 0"
+        );
+        (scenario, genesis)
+    }
+
+    /// [`Self::open_regtest`], with block 0 connected the way every mined
+    /// block is: a template for height 0 with the table's genesis block put
+    /// in it, formed and applied through [`Self::connect_template`] (as a
+    /// captured chain's blocks are connected verbatim). The block comes back
+    /// as a [`Mined`], so a chain held as `Vec<Mined>` starts at height 0 and
+    /// the driver's helpers, which read a block's height off its place in
+    /// that list, work on it unchanged. The chain forge opens its chains
+    /// this way (`CHAIN_FORGE.md` §6, §11.3).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::open_regtest`].
+    pub async fn open_regtest_mined(name: &str, pow: P, schedule: CappedEpoch) -> (Self, Mined) {
+        let mut scenario = Self::regtest(name, pow, schedule);
+        let genesis = regtest_genesis();
+        let mut next = scenario
+            .next_template(Vec::new())
+            .await
+            .unwrap_or_else(|outcome| panic!("a template for block 0: {outcome}"));
+        assert_eq!(
+            next.height,
+            BlockHeight::ZERO,
+            "a fresh store's next block is 0"
+        );
+        next.template.block = genesis.clone();
+        let mined = scenario
+            .connect_template(next)
+            .await
+            .unwrap_or_else(|outcome| panic!("regtest's table genesis connects: {outcome}"));
+        assert_eq!(
+            mined.hash,
+            genesis.hash(),
+            "the store holds the table's block 0"
+        );
+        (scenario, mined)
+    }
+
+    /// A scenario under regtest's rules at fixed difficulty one under
+    /// `schedule`, mining to the regtest miner, with nothing connected.
+    fn regtest(name: &str, pow: P, schedule: CappedEpoch) -> Self {
         let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), schedule)
             .unwrap_or_else(|refused| panic!("regtest's row permits every lever: {refused}"));
         let mut scenario = Self::open_under(name, pow, rules);
@@ -59,18 +113,7 @@ impl<P: Pow> Scenario<P> {
             ml_kem_ek: recipient.ml_kem_ek.clone(),
         };
         scenario.wallet = miner;
-        let genesis = pinned_genesis(Network::Regtest)
-            .unwrap_or_else(|error| panic!("regtest's table genesis assembles: {error}"));
-        let connected = scenario
-            .offer_genesis(&genesis)
-            .await
-            .unwrap_or_else(|outcome| panic!("regtest's table genesis connects: {outcome}"));
-        assert_eq!(
-            connected,
-            genesis.hash(),
-            "the store holds the table's block 0"
-        );
-        (scenario, genesis)
+        scenario
     }
 
     /// Offer `block` as this chain's block 0: formed under the chain's own
@@ -110,4 +153,14 @@ impl<P: Pow> Scenario<P> {
     pub fn network_id(&self) -> NetworkId {
         self.rules.trust().network_id()
     }
+}
+
+/// Regtest's table genesis, assembled as the node assembles it.
+///
+/// # Panics
+///
+/// If the table's genesis does not assemble.
+fn regtest_genesis() -> Block {
+    pinned_genesis(Network::Regtest)
+        .unwrap_or_else(|error| panic!("regtest's table genesis assembles: {error}"))
 }

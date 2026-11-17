@@ -17,7 +17,7 @@
 //!
 //! Each platform reports that fact in its own words:
 //!
-//! - Linux and Android: the POSIX access list in `system.posix_acl_access`.
+//! - Linux: the POSIX access list in `system.posix_acl_access`.
 //!   A named user or named group is [`AclProbe::Named`]. An NFSv4 list in
 //!   `system.nfs4_acl` is [`AclProbe::Named`] as well; this probe does not
 //!   compare it with the mode.
@@ -56,7 +56,7 @@ pub(crate) fn probe(file: &File) -> AclProbe {
 ///
 /// Compared with `==`. On these targets `NOTSUP` and `OPNOTSUPP` are one
 /// value, and an or-pattern of both is unreachable.
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 fn os_reports_no_list() -> bool {
     let Some(err) = rustix::io::Errno::from_io_error(&std::io::Error::last_os_error()) else {
         return false;
@@ -67,7 +67,7 @@ fn os_reports_no_list() -> bool {
         || err == rustix::io::Errno::INVAL
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 mod platform {
     use std::fs::File;
 
@@ -313,7 +313,7 @@ mod platform {
 
 /// Darwin's list calls. rustix has no ACL API, so this module is the one
 /// place the crate's `unsafe_code` deny is lifted.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod platform {
     use std::fs::File;
@@ -498,13 +498,7 @@ mod platform {
 
 /// An operating system this crate can build for and has no list probe.
 /// Refusing is the whole policy: the mode bits are not known to be complete.
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd",)))]
 mod platform {
     use std::fs::File;
 

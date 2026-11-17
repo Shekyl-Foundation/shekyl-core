@@ -114,6 +114,7 @@ pub fn sign_transaction_with_terms(
 ) -> Result<SignedProofs, TxBuilderError> {
     sign_with(
         &mut OsRng,
+        &mut OsRng,
         proof::prove,
         &SignRequest {
             network_id,
@@ -128,11 +129,30 @@ pub fn sign_transaction_with_terms(
     )
 }
 
-/// [`sign_transaction_with_terms`] with every random value drawn from `seed`:
-/// the range proof, the pseudo-out blinds and the membership proof. One seed
-/// gives the same proofs byte for byte. For the chain forge's reproducible
-/// chains (`CHAIN_FORGE.md` §5.3, seam T2); only under the TEST_ONLY
-/// `seeded-rng` feature, which no build that ships enables (`CF-R9`).
+/// The seeds of one spend's proofs, one per source of randomness
+/// (`CHAIN_FORGE.md` §5.2): the Bulletproofs+ range proof (S1), the
+/// pseudo-out blinds of every input but the last (S2), and the FCMP++
+/// membership proof (S3). Apart, so a chain can draw each from its own
+/// stream, and the forge's determinism check can swap one of them for the
+/// OS's randomness and leave the other two as they were. Only under the
+/// TEST_ONLY `seeded-rng` feature (`CF-R9`).
+#[cfg(feature = "seeded-rng")]
+pub struct ProofSeeds {
+    /// The range proof's stream.
+    pub range: Zeroizing<[u8; 32]>,
+    /// The pseudo-out blinds' stream.
+    pub blinds: Zeroizing<[u8; 32]>,
+    /// The membership proof's stream.
+    pub membership: Zeroizing<[u8; 32]>,
+}
+
+/// [`sign_transaction_with_terms`] with every random value drawn from
+/// `seeds`: the range proof from `seeds.range`, the pseudo-out blinds from
+/// `seeds.blinds`, the membership proof from `seeds.membership`. The same
+/// seeds give the same proofs byte for byte. For the chain forge's
+/// reproducible chains (`CHAIN_FORGE.md` §5.3, seam T2); only under the
+/// TEST_ONLY `seeded-rng` feature, which no build that ships enables
+/// (`CF-R9`).
 ///
 /// # Errors
 ///
@@ -140,10 +160,10 @@ pub fn sign_transaction_with_terms(
 #[cfg(feature = "seeded-rng")]
 #[allow(
     clippy::too_many_arguments,
-    reason = "sign_transaction_with_terms's signing boundary, plus the seed"
+    reason = "sign_transaction_with_terms's signing boundary, plus the seeds"
 )]
 pub fn sign_transaction_with_terms_seeded(
-    seed: &[u8; 32],
+    seeds: &ProofSeeds,
     network_id: &NetworkId,
     tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
@@ -153,9 +173,10 @@ pub fn sign_transaction_with_terms_seeded(
     extra_outputs: &[OutputTerm],
     tree: &TreeContext,
 ) -> Result<SignedProofs, TxBuilderError> {
-    let (mut rng, mut prover_rng) = seeded::streams(seed);
+    let mut prover_rng = seeded::stream(&seeds.membership);
     sign_with(
-        &mut rng,
+        &mut seeded::stream(&seeds.range),
+        &mut seeded::stream(&seeds.blinds),
         |inputs, root, depth, hash| {
             proof::prove_with_rng(&mut prover_rng, inputs, root, depth, hash)
         },
@@ -185,13 +206,14 @@ struct SignRequest<'a> {
     tree: &'a TreeContext,
 }
 
-/// [`sign_transaction_with_terms`]'s body. `rng` draws the range proof's and
-/// the pseudo-out blinds' randomness; `prove` makes the membership proof
-/// (production's [`proof::prove`], over the OS, or the seeded prover). Private:
-/// no build that ships has a signer that takes its caller's randomness
-/// (`CHAIN_FORGE.md` `CF-R9`).
-fn sign_with<R: RngCore + CryptoRng>(
-    rng: &mut R,
+/// [`sign_transaction_with_terms`]'s body. `range_rng` draws the range
+/// proof's randomness and `blinds_rng` the pseudo-out blinds'; `prove` makes
+/// the membership proof (production's [`proof::prove`], over the OS, or the
+/// seeded prover). Private: no build that ships has a signer that takes its
+/// caller's randomness (`CHAIN_FORGE.md` `CF-R9`).
+fn sign_with<R: RngCore + CryptoRng, B: RngCore + CryptoRng>(
+    range_rng: &mut R,
+    blinds_rng: &mut B,
     prove: impl FnOnce(
         &[ProveInput],
         &CurveTreeRoot,
@@ -225,7 +247,7 @@ fn sign_with<R: RngCore + CryptoRng>(
         })
         .collect();
 
-    let bp = shekyl_bulletproofs::Bulletproof::prove_plus(&mut *rng, commitments_for_bp)
+    let bp = shekyl_bulletproofs::Bulletproof::prove_plus(&mut *range_rng, commitments_for_bp)
         .map_err(|e| TxBuilderError::BulletproofError(e.to_string()))?;
 
     let mut bp_bytes = Vec::new();
@@ -257,7 +279,7 @@ fn sign_with<R: RngCore + CryptoRng>(
     // outputs' masks (the fee is committed with mask 0, fee*H), through the
     // balancer every spend uses, a multisig one included.
     let mut pseudo_masks: Vec<Zeroizing<[u8; 32]>> = (1..n_in)
-        .map(|_| Zeroizing::new(Scalar::random(&mut *rng).to_bytes()))
+        .map(|_| Zeroizing::new(Scalar::random(&mut *blinds_rng).to_bytes()))
         .collect();
     let output_masks: Zeroizing<Vec<[u8; 32]>> =
         Zeroizing::new(outputs.iter().map(|out| out.commitment_mask).collect());
@@ -739,24 +761,11 @@ fn compute_key_image_gen(output_key: &[u8; 32]) -> [u8; 32] {
 /// The generators the seeded entry points draw from (`seeded-rng` only).
 #[cfg(feature = "seeded-rng")]
 pub(crate) mod seeded {
-    use rand_chacha::rand_core::{RngCore, SeedableRng};
+    use rand_chacha::rand_core::SeedableRng;
     use rand_chacha::ChaCha20Rng;
-    use zeroize::Zeroizing;
 
     /// One ChaCha20 stream over `seed`.
     pub(crate) fn stream(seed: &[u8; 32]) -> ChaCha20Rng {
         ChaCha20Rng::from_seed(*seed)
-    }
-
-    /// Two independent streams over `seed`: the second's seed is the first
-    /// 32 bytes of the first, drawn before anything else reads it, so a
-    /// caller that needs one generator for itself and one to hand on (the
-    /// signer and its membership prover) gets both from one seed.
-    pub(crate) fn streams(seed: &[u8; 32]) -> (ChaCha20Rng, ChaCha20Rng) {
-        let mut first = stream(seed);
-        let mut second_seed = Zeroizing::new([0u8; 32]);
-        first.fill_bytes(&mut *second_seed);
-        let second = ChaCha20Rng::from_seed(*second_seed);
-        (first, second)
     }
 }

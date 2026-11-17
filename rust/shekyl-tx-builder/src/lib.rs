@@ -99,6 +99,7 @@ pub use sign::{
 #[cfg(feature = "seeded-rng")]
 pub use sign::{
     prove_backing_membership_seeded, sign_pqc_auths_seeded, sign_transaction_with_terms_seeded,
+    ProofSeeds,
 };
 pub use types::{
     LeafEntry, OutputInfo, PqcAuth, PqcScheme, SignedProofs, SpendInput, TreeContext,

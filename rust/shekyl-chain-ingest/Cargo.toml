@@ -92,6 +92,41 @@ harness = [
     "dep:curve25519-dalek",
     "dep:zeroize",
 ]
+# forge: the scenario driver for an outside caller, the chain forge
+# (CHAIN_FORGE.md §5.3, seam T5). The modules the executor names are
+# public (`scenario`, `scenario_shard`, `scenario_archival`, `chain_drive`,
+# `admitted_draws`, `archival_driver`, `emission_assembly`). The store
+# helpers they open stores with (`test_support`) stay crate-private. The
+# bench driver's rules are not part of this feature. A TEST_ONLY feature
+# (check_test_only_features.py): no feature here enables it, and its one
+# enabler is `shekyl-chain-forge`'s [dev-dependencies] edge, whose example
+# and integration test are the forge. No build that ships has the driver,
+# so no build that ships is a second producer.
+forge = [
+    "pipeline",
+    # The bundle producer's task, and its ring's draws from the forge's plan
+    # (CHAIN_FORGE.md §4, the producer audit).
+    "producer",
+    "shekyl-bundle-producer/seeded-rng",
+    # `harness`'s edges, named here: no feature of this crate may enable
+    # its own TEST_ONLY `harness` (the gate's second limb), and a forward to
+    # another crate's TEST_ONLY feature from this TEST_ONLY one is the
+    # accepted shape.
+    "shekyl-chain-rules/harness",
+    "dep:shekyl-crypto-pq",
+    "dep:shekyl-tx-builder",
+    "dep:shekyl-curve-generators",
+    "dep:curve25519-dalek",
+    "dep:zeroize",
+    "dep:shekyl-harness-wallet",
+    "dep:shekyl-harness-spender",
+    "shekyl-harness-spender/seeded-rng",
+    "shekyl-tx-builder/seeded-rng",
+    "shekyl-crypto-pq/seeded-rng",
+    "dep:shekyl-genesis-tool",
+    "dep:shekyl-hash-budget",
+    "dep:tempfile",
+]
 
 # The block path's instruction counts (BENCHMARK_ALIGNMENT.md BA-T2,
 # BA-T41): form, connect with its commit, pop and three store reads, over
@@ -235,6 +270,14 @@ tempfile = { workspace = true, optional = true }
 # `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
 clap = { version = "4", features = ["derive"], optional = true }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
+
+# forge: the driver's harness crates, as optional normal edges only `forge`
+# enables (the [dev-dependencies] below name the same crates for this
+# crate's own tests). `shekyl-harness-spender`'s `seeded-rng` is TEST_ONLY;
+# `forge` forwards it, and `forge` is TEST_ONLY itself.
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet", optional = true }
+shekyl-harness-spender = { path = "../shekyl-harness-spender", optional = true }
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool", optional = true }
 
 # harness: what `emission_assembly.rs` signs and encodes with — the same
 # crates the [dev-dependencies] below name unconditionally for the rest of

@@ -107,7 +107,7 @@ impl ChainRules {
 
     /// A harness chain that mines its own genesis: these rules with block 0
     /// held to nothing. Test and harness builds only.
-    #[cfg(any(test, feature = "harness"))]
+    #[cfg(any(test, feature = "harness", feature = "forge"))]
     #[must_use]
     pub const fn unpinned(self) -> Self {
         Self {
@@ -116,6 +116,13 @@ impl ChainRules {
         }
     }
 
+    /// Regtest at fixed difficulty one, on the production epoch, held to no
+    /// genesis pin. The scenario driver and the bench path share this one
+    /// constant: a fixture chain and a driver chain are the same rules.
+    #[cfg(any(test, feature = "harness", feature = "forge"))]
+    pub const HARNESS_REGTEST: Self =
+        Self::harness_regtest(Some(NonZeroU128::MIN), CappedEpoch::PRODUCTION);
+
     /// Regtest under `fixed_difficulty` and `schedule`, its row checked, for
     /// a harness chain that mines its own genesis. Test and harness builds
     /// only.
@@ -123,7 +130,7 @@ impl ChainRules {
     /// # Panics
     ///
     /// Never: regtest's row permits every lever (NI-R6).
-    #[cfg(any(test, feature = "harness"))]
+    #[cfg(any(test, feature = "harness", feature = "forge"))]
     #[must_use]
     pub const fn harness_regtest(
         fixed_difficulty: Option<NonZeroU128>,
