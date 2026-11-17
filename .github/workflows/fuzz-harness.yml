@@ -89,22 +89,19 @@ jobs:
           echo "crates=$crates" >> "$GITHUB_OUTPUT"
 
   compile:
-    # A plain name: GitHub adds the leg's crate, "Fuzz harness (<crate>)".
-    # The per-leg names are not required checks; fuzz-harness-pass is the
-    # verdict, so the job may be skipped whole when no crate is reached (an
-    # empty matrix is not a valid one).
-    name: "Fuzz harness"
+    # One job for every fuzz crate the change reaches (ruled 2026-11-16), in
+    # place of a leg per crate. The crates share one target directory, so
+    # the dependencies they have in common (shekyl-fcmp, shekyl-crypto-pq,
+    # the oxide crates) type-check once, not once per crate; a leg per crate
+    # was a runner allocation each, with each leg checking the whole tree
+    # beneath its crate from cold. fuzz-harness-pass is the verdict; this
+    # job is skipped whole when no crate is reached.
+    name: "Fuzz harnesses: compile"
     needs: scope
     if: needs.scope.outputs.crates != '[]'
     runs-on: ubuntu-latest
-    # The largest crate (shekyl-crypto-pq's eleven harnesses, its whole
-    # dependency tree from cold) type-checks in a few minutes on a
-    # workstation; a cold runner with no cache is several times that.
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        crate: ${{ fromJSON(needs.scope.outputs.crates) }}
+    # Every crate from cold, one after another, sharing their dependencies.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - name: install Rust toolchain
@@ -113,20 +110,44 @@ jobs:
         uses: ./.github/actions/install-rust
       - uses: Swatinem/rust-cache@v2
         with:
-          # Each fuzz crate is its own workspace with its own target/, so
-          # each caches its own. Saved by pushes to dev only.
-          workspaces: rust/${{ matrix.crate }}/fuzz -> target
-          key: fuzz-${{ matrix.crate }}
+          # One cache for the shared target directory. Saved by pushes to
+          # dev only.
+          workspaces: rust -> target-fuzz
+          key: fuzz-harnesses
           save-if: ${{ github.event_name == 'push' }}
-      - name: cargo check --locked
+      - name: cargo check --locked, every crate reached
+        shell: bash
         env:
-          CRATE: ${{ matrix.crate }}
+          CRATES: ${{ needs.scope.outputs.crates }}
+          CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target-fuzz
         run: |
           # A lockfile cargo refuses to update is a crate this harness
           # depends on that changed its dependencies: the fuzz lockfiles
-          # are regenerated from the workspace's, and committed.
-          if ! cargo check --locked --manifest-path "rust/$CRATE/fuzz/Cargo.toml"; then
-            echo "::error::rust/$CRATE/fuzz did not type-check. If cargo refused to update its Cargo.lock, run python3 scripts/ci/check_fuzz_inventory.py --regenerate and commit the fuzz lockfiles."
+          # are regenerated from the workspace's, and committed. Every
+          # crate is checked, and every failure is named, before the
+          # verdict.
+          listed=$(jq -r '.[]' <<<"$CRATES")
+          mapfile -t crates <<<"$listed"
+          # The job runs only when the scope listed a crate (rule 47: an
+          # empty list here would check nothing and pass).
+          if [ -z "$listed" ] || [ "${#crates[@]}" -eq 0 ]; then
+            echo "::error::no fuzz crate to check in ${CRATES} — missing subject"
+            exit 1
+          fi
+          failed=()
+          for crate in "${crates[@]}"; do
+            echo "::group::rust/$crate/fuzz"
+            if cargo check --locked --manifest-path "rust/$crate/fuzz/Cargo.toml"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::rust/$crate/fuzz did not type-check. If cargo refused to update its Cargo.lock, run python3 scripts/ci/check_fuzz_inventory.py --regenerate and commit the fuzz lockfiles."
+              failed+=("$crate")
+            fi
+          done
+          echo "checked ${#crates[@]} fuzz crate(s): ${crates[*]}"
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "did not type-check: ${failed[*]}"
             exit 1
           fi
 
