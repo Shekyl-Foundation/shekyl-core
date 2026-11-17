@@ -41,7 +41,7 @@ use tracing::{info, warn};
 
 use crate::auth::{require_basic_auth, AuthConfig};
 use crate::handlers;
-use crate::tenant::{DaemonEndpoint, TenantState};
+use crate::tenant::{DaemonTarget, TenantState};
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
@@ -136,10 +136,9 @@ pub struct ServerConfig {
     pub wallet_dir: PathBuf,
     /// Network every create/open binds to.
     pub network: Network,
-    /// Daemon JSON-RPC base URL (e.g. `http://127.0.0.1:11029`).
-    pub daemon_address: String,
-    /// SOCKS5h proxy for the daemon transport (CLI `--proxy`); `None` = direct.
-    pub proxy: Option<String>,
+    /// The daemon every wallet connects to: "this computer" with no
+    /// `--daemon-address`, otherwise that address and its `--proxy`.
+    pub daemon: DaemonTarget,
     /// HTTP basic auth (disabled for UDS-by-default deployments).
     pub auth: AuthConfig,
     /// Argon2id cost for `create_wallet` / password rotation.
@@ -147,8 +146,8 @@ pub struct ServerConfig {
     pub kdf: KdfParams,
 }
 
-/// Manual (not derived): `daemon_address` may carry digest credentials in
-/// its authority, so it renders through the transport's `redacted_endpoint`
+/// Manual (not derived): the daemon address may carry digest credentials in
+/// its authority, and [`DaemonTarget`]'s `Debug` renders it redacted
 /// (`AuthConfig` redacts its own password; the remaining fields are inert).
 impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -156,17 +155,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("listen", &self.listen)
             .field("wallet_dir", &self.wallet_dir)
             .field("network", &self.network)
-            .field(
-                "daemon_address",
-                &shekyl_rpc_transport::redacted_endpoint(&self.daemon_address),
-            )
-            .field(
-                "proxy",
-                &self
-                    .proxy
-                    .as_deref()
-                    .map(shekyl_rpc_transport::redacted_endpoint),
-            )
+            .field("daemon", &self.daemon)
             .field("auth", &self.auth)
             .field("kdf", &self.kdf)
             .finish()
@@ -204,10 +193,7 @@ impl AppState {
             tenants: tokio::sync::Mutex::new(TenantState::new(
                 config.wallet_dir,
                 config.network,
-                DaemonEndpoint {
-                    address: config.daemon_address,
-                    proxy: config.proxy,
-                },
+                config.daemon,
             )),
             auth: Arc::new(config.auth),
             kdf: config.kdf,
@@ -410,6 +396,35 @@ impl Drop for UdsCleanup {
     }
 }
 
+/// The daemon a wallet on `network` connects to, from its two flags
+/// (`RPC_CHANNEL.md` RT-15; RT-W10 step 5): no `--daemon-address` is "this
+/// computer", the node this account runs, whose service record is read only
+/// to say that it is a service; an address is that address, through
+/// `--proxy` when given. A proxy without an address is refused: this
+/// computer's node is reached on its owner's leg, never through a proxy.
+///
+/// # Errors
+///
+/// `--proxy` without `--daemon-address`.
+pub fn daemon_target(
+    network: Network,
+    address: Option<String>,
+    proxy: Option<String>,
+) -> Result<DaemonTarget, String> {
+    match (address, proxy) {
+        (Some(url), proxy) => Ok(DaemonTarget::Address { url, proxy }),
+        (None, None) => Ok(DaemonTarget::ThisComputer {
+            network,
+            service_rendezvous: shekyl_process::platform::service_rendezvous(),
+        }),
+        (None, Some(_)) => Err(
+            "--proxy needs --daemon-address: without one the wallet's daemon is this \
+             computer's node, reached on its owner's socket, never through a proxy"
+                .to_owned(),
+        ),
+    }
+}
+
 /// Refuse a malformed `--daemon-address` / `--proxy` at startup (offline
 /// shape check only — an unreachable daemon stays fine for offline
 /// commands). Deferred to first use, a bad flag would surface on
@@ -417,17 +432,20 @@ impl Drop for UdsCleanup {
 /// (rule 82 — the failure must name the flag, at the moment it can be
 /// fixed).
 fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
-    shekyl_rpc_transport::validate_endpoint(&config.daemon_address, config.proxy.as_deref())
-        .map_err(|e| {
-            // Both flags are named here; the inner cause identifies the half
-            // ("daemon URL ..." / "--proxy ..." / "TLS connector ...").
-            // Attributing one flag per failure would need either a second
-            // validation pass (mislabeling a TLS-root failure as
-            // --daemon-address) or matching on error text — both worse than
-            // naming the pair.
-            format!("invalid daemon endpoint configuration (--daemon-address / --proxy): {e}")
-                .into()
-        })
+    let DaemonTarget::Address { url, proxy } = &config.daemon else {
+        // "This computer" has no address to check: its rendezvous is read at
+        // each call.
+        return Ok(());
+    };
+    shekyl_rpc_transport::validate_endpoint(url, proxy.as_deref()).map_err(|e| {
+        // Both flags are named here; the inner cause identifies the half
+        // ("daemon URL ..." / "--proxy ..." / "TLS connector ...").
+        // Attributing one flag per failure would need either a second
+        // validation pass (mislabeling a TLS-root failure as
+        // --daemon-address) or matching on error text — both worse than
+        // naming the pair.
+        format!("invalid daemon endpoint configuration (--daemon-address / --proxy): {e}").into()
+    })
 }
 
 /// What `--daemon-address` discloses at startup: the network-path warning
@@ -440,14 +458,19 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
 ///
 /// Runs after [`validate_daemon_endpoint`]: an address that is refused is
 /// not an endpoint this server uses, so there is nothing to disclose about
-/// it. Empty for the loopback default.
+/// it. Empty for "this computer", which is no network path.
 fn daemon_disclosures(config: &ServerConfig) -> DaemonDisclosures {
-    shekyl_rpc_transport::network_posture::daemon_disclosures(
-        "--daemon-address",
-        &config.daemon_address,
-        config.proxy.as_deref(),
-        ProxyResolution::AlwaysRemote,
-    )
+    match &config.daemon {
+        DaemonTarget::ThisComputer { .. } => DaemonDisclosures::default(),
+        DaemonTarget::Address { url, proxy } => {
+            shekyl_rpc_transport::network_posture::daemon_disclosures(
+                "--daemon-address",
+                url,
+                proxy.as_deref(),
+                ProxyResolution::AlwaysRemote,
+            )
+        }
+    }
 }
 
 /// The local alternative the listen refusals point at, per platform: a
@@ -894,8 +917,7 @@ impl InProcessHandle {
 /// Shape B entry point: `shekyl-cli` one-shot / REPL hosts a server without
 /// a subprocess. Never binds TCP: an auth-less loopback port would let any
 /// local process drive the open wallet. The daemon is not dialed until
-/// refresh/send, so an unreachable `daemon_address` is fine for offline
-/// commands.
+/// refresh/send, so an unreachable daemon is fine for offline commands.
 ///
 /// **Unix:** the socket lives in a fresh 0700, pid-scoped directory (under
 /// `$XDG_RUNTIME_DIR`, temp-dir fallback) and is itself 0600, so only the
@@ -913,21 +935,14 @@ impl InProcessHandle {
 pub async fn spawn_in_process(
     wallet_dir: PathBuf,
     network: Network,
-    daemon_address: String,
-    proxy: Option<String>,
+    daemon: DaemonTarget,
 ) -> Result<InProcessHandle, BoxErr> {
     #[cfg(unix)]
     {
         let socket_dir = private_socket_dir()?;
         let listen = ListenAddr::Uds(socket_dir.join("wallet-rpc.sock"));
-        let mut handle = spawn_in_process_with(private_config(
-            listen,
-            wallet_dir,
-            network,
-            daemon_address,
-            proxy,
-        ))
-        .await?;
+        let mut handle =
+            spawn_in_process_with(private_config(listen, wallet_dir, network, daemon)).await?;
         handle.socket_dir = Some(socket_dir);
         Ok(handle)
     }
@@ -936,14 +951,7 @@ pub async fn spawn_in_process(
         let owner = shekyl_win_sec::current_user_sid()?;
         let name = shekyl_win_sec::self_hosted_pipe_name(&owner, next_spawn());
         let listen = ListenAddr::SelfHostedPipe(SelfHostedPipe { name });
-        spawn_in_process_with(private_config(
-            listen,
-            wallet_dir,
-            network,
-            daemon_address,
-            proxy,
-        ))
-        .await
+        spawn_in_process_with(private_config(listen, wallet_dir, network, daemon)).await
     }
 }
 
@@ -953,15 +961,13 @@ fn private_config(
     listen: ListenAddr,
     wallet_dir: PathBuf,
     network: Network,
-    daemon_address: String,
-    proxy: Option<String>,
+    daemon: DaemonTarget,
 ) -> ServerConfig {
     ServerConfig {
         listen,
         wallet_dir,
         network,
-        daemon_address,
-        proxy,
+        daemon,
         auth: AuthConfig::Disabled,
         kdf: KdfParams::default(),
     }
@@ -995,8 +1001,41 @@ pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHand
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tenant::DaemonEndpoint;
     use tracing::instrument::WithSubscriber as _;
+
+    /// With no `--daemon-address` the daemon is "this computer" on the
+    /// wallet's network (RT-W10 step 5); an address is that address through
+    /// its proxy; a proxy with no address is refused, naming both flags.
+    /// The edit that turns this red is defaulting to the plaintext port.
+    #[test]
+    fn the_daemon_is_this_computer_unless_an_address_is_named() {
+        assert!(matches!(
+            daemon_target(Network::Testnet, None, None).unwrap(),
+            DaemonTarget::ThisComputer {
+                network: Network::Testnet,
+                ..
+            }
+        ));
+        assert!(matches!(
+            daemon_target(
+                Network::Testnet,
+                Some("http://127.0.0.1:12030".into()),
+                Some("socks5h://127.0.0.1:9050".into())
+            )
+            .unwrap(),
+            DaemonTarget::Address { url, proxy: Some(_) } if url == "http://127.0.0.1:12030"
+        ));
+        let refused = daemon_target(
+            Network::Testnet,
+            None,
+            Some("socks5h://127.0.0.1:9050".into()),
+        )
+        .unwrap_err();
+        assert!(
+            refused.contains("--proxy needs --daemon-address"),
+            "{refused}"
+        );
+    }
 
     /// The credential-redaction pin: no `Debug` of server configuration —
     /// the shapes that reach logs and panic output — renders the digest
@@ -1004,16 +1043,15 @@ mod tests {
     /// `--rpc-login` password (rules 30/35).
     #[test]
     fn debug_of_server_state_never_renders_credentials() {
-        let endpoint = DaemonEndpoint {
-            address: "http://user:hunter2@127.0.0.1:28581/prefix".into(),
+        let endpoint = DaemonTarget::Address {
+            url: "http://user:hunter2@127.0.0.1:28581/prefix".into(),
             proxy: Some("socks5h://puser:swordfish@127.0.0.1:9050".into()),
         };
         let config = ServerConfig {
             listen: ListenAddr::Tcp(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
             wallet_dir: std::path::PathBuf::from("."),
             network: Network::Stagenet,
-            daemon_address: endpoint.address.clone(),
-            proxy: endpoint.proxy.clone(),
+            daemon: endpoint.clone(),
             auth: AuthConfig::from_rpc_login("rpcuser:opensesame").expect("login parses"),
             kdf: KdfParams::default(),
         };
@@ -1044,8 +1082,7 @@ mod tests {
             listen: ListenAddr::parse(listen).expect("listen parses"),
             wallet_dir: std::path::PathBuf::from("."),
             network: Network::Stagenet,
-            daemon_address: "http://127.0.0.1:1".into(),
-            proxy: None,
+            daemon: DaemonTarget::address("http://127.0.0.1:1"),
             auth,
             kdf: KdfParams::default(),
         }
@@ -1145,14 +1182,25 @@ mod tests {
             daemon_disclosures(&config).is_empty(),
             "the loopback default is silent"
         );
+        config.daemon = DaemonTarget::ThisComputer {
+            network: Network::Stagenet,
+            service_rendezvous: None,
+        };
+        assert!(
+            daemon_disclosures(&config).is_empty(),
+            "this computer is no network path"
+        );
 
-        config.daemon_address = "http://node.example.com:11029".into();
+        config.daemon = DaemonTarget::address("http://node.example.com:11029");
         let direct = daemon_disclosures(&config);
         let path = direct.path.as_deref().expect("path warning");
         assert!(path.contains("--daemon-address"), "{path}");
         assert!(direct.operator.is_some(), "{direct:?}");
 
-        config.proxy = Some("socks5://127.0.0.1:9050".into());
+        config.daemon = DaemonTarget::Address {
+            url: "http://node.example.com:11029".into(),
+            proxy: Some("socks5://127.0.0.1:9050".into()),
+        };
         let proxied = daemon_disclosures(&config);
         assert!(
             proxied.path.is_none(),
@@ -1197,7 +1245,7 @@ mod tests {
         let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
         let port = held.local_addr().expect("local addr").port();
         let mut config = listen_config(&format!("127.0.0.1:{port}"), AuthConfig::Disabled);
-        config.daemon_address = "http://203.0.113.7:11029".into();
+        config.daemon = DaemonTarget::address("http://203.0.113.7:11029");
         let err = run_server(config)
             .with_subscriber(subscriber)
             .await

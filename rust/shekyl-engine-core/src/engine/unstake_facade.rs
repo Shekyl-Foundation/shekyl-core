@@ -648,7 +648,7 @@ where
     /// remains the DQ-T2.3 slice).
     pub async fn unstake(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
-        daemon_address: &str,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
     ) -> Result<UnstakeOutcome, UnstakeError> {
         // A wallet with no stake engine owns no exit. Answer the seam's
         // `NotStaker` (-29513) here: a non-staker's empty snapshot resolves
@@ -688,7 +688,7 @@ where
             };
 
         // ① local posture; refuses non-loopback by construction.
-        let release_rpc = LocalNodeRpc::new(daemon_address.to_owned(), EXIT_FETCH_TIMEOUT)
+        let release_rpc = LocalNodeRpc::new(daemon, EXIT_FETCH_TIMEOUT)
             .await
             .map_err(|e| UnstakeError::Transport {
                 detail: e.to_string(),

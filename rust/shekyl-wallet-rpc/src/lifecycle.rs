@@ -25,13 +25,12 @@ use shekyl_engine_core::{
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_engine_prefs::WalletPrefs;
-use shekyl_rpc_transport::HttpRpc;
 use tokio::sync::RwLock;
 use zeroize::Zeroizing;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_required_object, require_empty_object};
-use crate::tenant::{require_open_engine, DaemonEndpoint, OpenTasks, SharedEngine, TenantState};
+use crate::tenant::{require_open_engine, DaemonTarget, OpenTasks, SharedEngine, TenantState};
 use crate::types::{capability_mode_str, WalletHandle};
 
 /// Params for `create_wallet`.
@@ -119,7 +118,7 @@ pub(crate) async fn create_wallet(
     // A freshly created wallet is a non-staker (no bond record), so
     // `start_pscan_if_staker` parks `None` here; the call is unconditional so
     // the embedder never branches on staking state (`81-no-protocol-knowledge`).
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -142,7 +141,7 @@ pub(crate) async fn create_wallet(
 async fn create_wallet_engine(
     base: &Path,
     network: Network,
-    daemon: &DaemonEndpoint,
+    daemon: &DaemonTarget,
     password: Zeroizing<Vec<u8>>,
     kdf: KdfParams,
 ) -> Result<(Engine<SoloSigner>, SeedBackup), WalletRpcError> {
@@ -245,7 +244,7 @@ pub(crate) async fn restore_wallet(
 
     let restore_hint = (restore_height > 0).then_some(i64::from(restore_height));
     let handle = wallet_handle(&p.name, &engine, restore_hint);
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -263,7 +262,7 @@ pub(crate) async fn restore_wallet(
 async fn restore_wallet_engine(
     base: &Path,
     network: Network,
-    daemon: &DaemonEndpoint,
+    daemon: &DaemonTarget,
     password: Zeroizing<Vec<u8>>,
     mnemonic: &str,
     restore_height: u32,
@@ -336,7 +335,7 @@ pub(crate) async fn open_wallet(
     // Auto-start the P-scan task for a staker (WI-1); a non-staker parks `None`.
     // A corrupt sealed P-scan state fails the open closed (see
     // `wrap_and_start_pscan`).
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -351,7 +350,7 @@ pub(crate) async fn open_wallet(
 async fn open_wallet_engine(
     base: &Path,
     network: Network,
-    daemon: &DaemonEndpoint,
+    daemon: &DaemonTarget,
     password: Zeroizing<Vec<u8>>,
 ) -> Result<(Engine<SoloSigner>, Option<i64>), WalletRpcError> {
     let daemon = make_daemon(daemon, network).await?;
@@ -396,9 +395,9 @@ async fn take_and_close_tenant(
     tenants: &tokio::sync::Mutex<TenantState>,
     expected_name: Option<&str>,
 ) -> Result<String, WalletRpcError> {
-    let (name, shared, tasks, daemon_address) = {
+    let (name, shared, tasks, daemon) = {
         let mut state = tenants.lock().await;
-        let daemon_address = state.daemon.address.clone();
+        let daemon = state.daemon.clone();
         if let Some(expected) = expected_name {
             // Same mutex hold as `take_open`: check-then-take is atomic.
             if state.tenant.open_name() != Some(expected) {
@@ -413,13 +412,13 @@ async fn take_and_close_tenant(
             .tenant
             .take_open()
             .ok_or(WalletRpcError::WalletNotOpen)?;
-        (name, shared, tasks, daemon_address)
+        (name, shared, tasks, daemon)
     };
     tasks.shutdown().await;
     let lock = match Arc::try_unwrap(shared) {
         Ok(lock) => lock,
         Err(shared) => {
-            let tasks = restart_tasks(&shared, &daemon_address).await;
+            let tasks = restart_tasks(&shared, &daemon).await;
             tenants
                 .lock()
                 .await
@@ -438,7 +437,7 @@ async fn take_and_close_tenant(
         // spawn a second driver. The open-wallet ⇒ driver-running property
         // still holds — `restart_tasks` is unconditional on this path.
         let shared: SharedEngine = Arc::new(RwLock::new(engine));
-        let tasks = restart_tasks(&shared, &daemon_address).await;
+        let tasks = restart_tasks(&shared, &daemon).await;
         tenants.lock().await.tenant.set_open(name, shared, tasks);
         return Err(WalletRpcError::from(e));
     }
@@ -587,22 +586,22 @@ fn validate_wallet_name(name: &str) -> Result<(), WalletRpcError> {
 /// verifier's daemon without any open wallet — through the same endpoint
 /// (address + proxy), so a proof check never bypasses the proxy posture.
 pub(crate) async fn make_daemon(
-    daemon: &DaemonEndpoint,
+    daemon: &DaemonTarget,
     network: Network,
 ) -> Result<DaemonClient, WalletRpcError> {
-    // SOCKS5h when a proxy is set: the daemon's block scan then resolves the
-    // node hostname *at the proxy*, never leaking it to the local resolver.
-    let rpc = HttpRpc::with_proxy(daemon.address.clone(), daemon.proxy.clone())
-        .await
-        .map_err(|e| {
-            // Startup already refused a malformed address/proxy
-            // (`validate_endpoint` in `server`), so what remains here is
-            // connectivity-shaped; the client-facing error stays stable, but
-            // the cause is never discarded (rule 82) — it lands in the
-            // server log.
-            tracing::warn!(error = %e, "daemon transport construction failed");
-            WalletRpcError::DaemonUnreachable
-        })?;
+    // "This computer" is the owner's leg (RT-W10 step 5). A named address
+    // goes through its SOCKS5h proxy when one is set: the daemon's block scan
+    // then resolves the node hostname *at the proxy*, never leaking it to
+    // the local resolver.
+    let rpc = daemon.connect(None).await.map_err(|e| {
+        // Startup already refused a malformed address/proxy
+        // (`validate_endpoint` in `server`), so what remains here is
+        // connectivity-shaped; the client-facing error stays stable, but
+        // the cause is never discarded (rule 82) — it lands in the
+        // server log.
+        tracing::warn!(error = %e, "daemon transport construction failed");
+        WalletRpcError::DaemonUnreachable
+    })?;
     // Identity-verifying (VC-4): the daemon must prove it is this network,
     // running this build's rules and RPC contract, before the first request.
     // The match is exact on every network, regtest included (VC-R3).
@@ -629,9 +628,9 @@ pub(crate) async fn make_daemon(
 /// legitimately win the start race, and one live host is the goal either way.
 async fn wrap_and_start_tasks(
     engine: Engine<SoloSigner>,
-    daemon_address: &str,
+    daemon: &DaemonTarget,
 ) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
-    let (shared, cadence) = engine.into_shared(daemon_address);
+    let (shared, cadence) = engine.into_shared(daemon);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -661,7 +660,7 @@ async fn wrap_and_start_tasks(
     // open. The task itself does not publish immediately; it waits the gate-6
     // §10.9 launch standoff first, precisely so the onion does not reanimate
     // in lockstep with this open.
-    match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon).await {
         Ok(Some(handle)) => cadence.adopt_serving(handle),
         // `Ok(None)`: not a serving persona. `AlreadyRunning`: the driver's
         // first tick fired before this call and won the start race; the
@@ -1047,7 +1046,7 @@ async fn reopen_with_first_stake_intent(
             let restored = async {
                 let pw = Zeroizing::new(password.as_slice().to_vec());
                 let (engine, _hint) = open_wallet_engine(&base, network, &endpoint, pw).await?;
-                wrap_and_start_tasks(engine, &endpoint.address).await
+                wrap_and_start_tasks(engine, &endpoint).await
             }
             .await;
             let mut state = tenants.lock().await;
@@ -1086,7 +1085,7 @@ async fn reopen_with_first_stake_intent(
     // wallet stays open with the actor resident and NO parked scan — the
     // exact state the `stake` entry's `has_pscan` check routes back through
     // this reopen, so a retry re-attempts the scan instead of spinning dark.
-    let (shared, cadence) = engine.into_shared(&endpoint.address);
+    let (shared, cadence) = engine.into_shared(&endpoint);
     match Engine::start_pscan(shared.clone()).await {
         Ok(handle) => {
             // The scan is the fail-closed one on this path (above); serving is
@@ -1094,7 +1093,7 @@ async fn reopen_with_first_stake_intent(
             // stake the operator is in the middle of. The driver's
             // serving-liveness leg re-attempts it on the next chain advance
             // (`ENGINE_CADENCE_DRIVER.md` §3 leg 2).
-            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint.address).await {
+            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint).await {
                 Ok(Some(h)) => cadence.adopt_serving(h),
                 // `None`: not a serving persona. `AlreadyRunning`: the
                 // driver's leg won the start race and parked the handle.
@@ -1154,8 +1153,8 @@ async fn reopen_with_first_stake_intent(
 /// already-shared form of the wrap (`ENGINE_CADENCE_DRIVER.md` §1) — and
 /// that one is infallible: the driver polls its way to health rather than
 /// failing to start.
-async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks {
-    let cadence = Engine::start_cadence(shared, daemon_address);
+async fn restart_tasks(shared: &SharedEngine, daemon: &DaemonTarget) -> OpenTasks {
+    let cadence = Engine::start_cadence(shared, daemon);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -1175,7 +1174,7 @@ async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks
     // re-attempts on the next chain advance. A fresh standoff is drawn either
     // way, so the re-armed host does not republish in lockstep with the
     // failed close.
-    match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon).await {
         Ok(Some(handle)) => cadence.adopt_serving(handle),
         // `None`: not a serving persona. `AlreadyRunning`: the freshly
         // re-armed driver's first tick won the start race and parked the
@@ -1199,7 +1198,7 @@ async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks
 #[cfg(test)]
 mod tests {
     use super::{close_wallet, create_wallet, open_wallet, restore_wallet, stake};
-    use crate::tenant::{DaemonEndpoint, TenantState};
+    use crate::tenant::{DaemonTarget, TenantState};
 
     use serde_json::json;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
@@ -1226,8 +1225,8 @@ mod tests {
             // engine tolerates an unreachable daemon; the P-scan task's first
             // tip fetch fails-and-retries inside the spawned loop), so the
             // lifecycle wiring is exercised without a live node.
-            DaemonEndpoint {
-                address: "http://127.0.0.1:1".to_string(),
+            DaemonTarget::Address {
+                url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
         ))
@@ -1569,8 +1568,8 @@ mod tests {
         Mutex::new(TenantState::new(
             dir.to_path_buf(),
             Network::Stagenet,
-            DaemonEndpoint {
-                address: "http://127.0.0.1:1".to_string(),
+            DaemonTarget::Address {
+                url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
         ))

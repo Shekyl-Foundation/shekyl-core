@@ -177,6 +177,98 @@ impl Rpc for DaemonTransport {
     }
 }
 
+/// What a wallet is configured to reach (`RPC_CHANNEL.md` RT-15): "this
+/// computer" when no `daemon-address` is given, otherwise the address named.
+/// Exactly one; [`Self::connect`] makes its one [`DaemonTransport`].
+#[derive(Clone)]
+pub enum DaemonTarget {
+    /// The node this account runs on this computer, over its owner's leg.
+    /// `service_rendezvous` is the service's fixed rendezvous directory
+    /// (`shekyl_process::platform::service_rendezvous`), read only to say
+    /// that this computer's node is a service.
+    ThisComputer {
+        /// The wallet's network: which node's rendezvous.
+        network: shekyl_network::Network,
+        /// The service's rendezvous directory, where the platform has one.
+        service_rendezvous: Option<std::path::PathBuf>,
+    },
+    /// A named daemon address (plaintext HTTP until RT-W12), and the SOCKS5h
+    /// proxy its connections go through.
+    Address {
+        /// The daemon's base URL; may carry digest credentials.
+        url: String,
+        /// The SOCKS5h proxy; `None` is direct.
+        proxy: Option<String>,
+    },
+}
+
+/// Manual: an address may carry digest credentials in its authority, so it
+/// renders through [`redacted_endpoint`], as the proxy does.
+impl std::fmt::Debug for DaemonTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ThisComputer {
+                network,
+                service_rendezvous,
+            } => f
+                .debug_struct("ThisComputer")
+                .field("network", network)
+                .field("service_rendezvous", service_rendezvous)
+                .finish(),
+            Self::Address { url, proxy } => f
+                .debug_struct("Address")
+                .field("url", &redacted_endpoint(url))
+                .field("proxy", &proxy.as_deref().map(redacted_endpoint))
+                .finish(),
+        }
+    }
+}
+
+impl DaemonTarget {
+    /// A named address, dialled directly (no proxy).
+    #[must_use]
+    pub fn address(url: impl Into<String>) -> Self {
+        Self::Address {
+            url: url.into(),
+            proxy: None,
+        }
+    }
+
+    /// This target's transport, each call bounded by `timeout`, or by the
+    /// transport's default when `None`.
+    ///
+    /// # Errors
+    ///
+    /// A named address this transport cannot dial (see
+    /// [`HttpRpc::with_proxy`]). "This computer" does not fail here: a node
+    /// that is not running, a service, or a failed peer check is the first
+    /// call's error.
+    pub async fn connect(&self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
+        match self {
+            Self::ThisComputer {
+                network,
+                service_rendezvous,
+            } => {
+                let target =
+                    local::LocalTarget::this_computer(*network, service_rendezvous.as_deref());
+                Ok(DaemonTransport::ThisComputer(match timeout {
+                    Some(within) => local::LocalRpc::within(target, within),
+                    None => local::LocalRpc::new(target),
+                }))
+            }
+            Self::Address { url, proxy } => Ok(DaemonTransport::Address(
+                HttpRpc::with_options(
+                    url.clone(),
+                    timeout.unwrap_or(DEFAULT_TIMEOUT),
+                    proxy.clone(),
+                )
+                .await
+                .map_err(RpcError::from)?,
+            )),
+        }
+    }
+}
+
 /// An HTTP(S) transport for the RPC.
 ///
 /// Requires tokio.

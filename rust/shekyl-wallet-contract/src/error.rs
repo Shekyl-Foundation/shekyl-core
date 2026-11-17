@@ -3834,7 +3834,41 @@ mod tests {
             (DaemonFault::Protocol, C::DaemonProtocolViolation, None),
             (DaemonFault::FeeResponse, C::DaemonFeeResponseInvalid, None),
             (DaemonFault::Internal, C::InternalError, None),
+            (DaemonFault::NotPermitted, C::DaemonGrantRefused, None),
+            (DaemonFault::PeerCheck, C::DaemonPeerCheckFailed, None),
+            (
+                DaemonFault::Service(Some("127.0.0.1:11030".parse().unwrap())),
+                C::DaemonIsAService,
+                Some(json!({ "view": "127.0.0.1:11030" })),
+            ),
+            (
+                DaemonFault::Service(None),
+                C::DaemonIsAService,
+                Some(json!({ "view": null })),
+            ),
         ]
+    }
+
+    /// A service at "this computer" says what to set (Rick, 2026-11-17):
+    /// the view listener as the `daemon-address`, or, with none, that the
+    /// node serves no wallet leg and `rpc-view-listen`. A failed peer check
+    /// is reported as the security failure it is.
+    #[test]
+    fn a_service_here_names_the_setting_and_a_peer_check_is_a_security_failure() {
+        let view = from_daemon_fault(
+            DaemonFault::Service(Some("127.0.0.1:11030".parse().unwrap())),
+            DAEMON_TEXT,
+        );
+        assert_eq!(
+            view.message(),
+            "The node on this computer runs as a service. Until wallets reach a service over \
+             the channel, set daemon-address = 127.0.0.1:11030"
+        );
+        let none = from_daemon_fault(DaemonFault::Service(None), DAEMON_TEXT).message();
+        assert!(none.contains("serves no wallet leg"), "{none}");
+        assert!(none.contains("rpc-view-listen"), "{none}");
+        let peer = from_daemon_fault(DaemonFault::PeerCheck, DAEMON_TEXT).message();
+        assert!(peer.contains("did not connect"), "{peer}");
     }
 
     /// A daemon fault answers the same code whichever operation met it, and
