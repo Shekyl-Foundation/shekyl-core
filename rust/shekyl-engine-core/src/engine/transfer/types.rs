@@ -129,7 +129,7 @@ impl ContentFingerprint {
 /// `PendingTxState` is a runtime `Mutex` (not persisted — F-F, [`docs/design/CT5D_REANCHOR.md`]
 /// §7), so these are runtime-only fields with no schema-migration cost.
 ///
-/// **Not `Clone`** (WI-RPC-3 retention): `tx_key_secret` is
+/// **Not `Clone`** (WI-RPC-3 retention): `tx_key` is
 /// deliberately non-`Clone`, keeping the per-tx secret single-copy
 /// while the entry moves `consumer_held → in_flight → finalize`.
 /// Nothing needed the whole-entry clone anyway — the flip moves the
@@ -176,8 +176,9 @@ pub(crate) struct ConsumerHeldEntry {
     /// exists only so a §2.5 retryable restoration can re-dispatch.
     /// Zeroize-on-drop — a discard wipes it structurally with the
     /// entry, matching pin 1's "not at build" lifecycle (a never-
-    /// submitted build leaves no orphan in the store).
-    pub tx_key_secret: shekyl_engine_state::TxSecretKey,
+    /// submitted build leaves no orphan in the store). The dispatch
+    /// record holds its stored form ([`shekyl_crypto_pq::TxKey::store`]).
+    pub tx_key: shekyl_crypto_pq::TxKey,
 }
 
 #[cfg(test)]
@@ -205,9 +206,7 @@ impl ConsumerHeldEntry {
             },
             content_gen: 0,
             fingerprint: ContentFingerprint::from_parts(AtomicUnits::ZERO, &[], AtomicUnits::ZERO),
-            tx_key_secret: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
-                [0u8; 32],
-            )),
+            tx_key: shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
         }
     }
 }

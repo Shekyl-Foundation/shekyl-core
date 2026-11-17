@@ -143,6 +143,10 @@ pub(crate) enum KeyEngineError {
     #[error("key engine primitive failure: {detail}")]
     Primitive { detail: &'static str },
 
+    /// The OS's random source failed while drawing the transaction key, so
+    /// nothing was built (`shekyl_crypto_pq::TxKey::random`).
+    #[error(transparent)]
+    Randomness(#[from] shekyl_crypto_pq::tx_key::RandomnessUnavailable),
     /// The transaction builder refused or failed the signing pass; the
     /// fault keeps its variant by identity, bounded (no inner text: the
     /// signer logs that locally at debug).

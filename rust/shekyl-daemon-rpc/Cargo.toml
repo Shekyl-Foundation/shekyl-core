@@ -129,6 +129,9 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 # §7.1). The pin the channel crate already carries.
 rand_core = { version = "0.6", features = ["getrandom"] }
 [dev-dependencies]
+# `seeded-rng` (TEST_ONLY): `submit_verifier`'s transaction keys come from its
+# seeded stream (`TxKey::seeded`, R-21); a dev edge only.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 # `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
 # harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
 shekyl-network = { path = "../shekyl-network", features = ["harness"] }

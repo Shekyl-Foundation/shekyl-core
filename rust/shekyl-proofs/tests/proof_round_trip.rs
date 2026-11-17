@@ -19,9 +19,10 @@ use shekyl_network::{Network, NetworkId};
 use shekyl_crypto_pq::{
     kem::{HybridX25519MlKem, KeyEncapsulation},
     output::{
-        compute_output_key_image, construct_output, derive_proof_secrets, rederive_combined_ss,
-        scan_output_recover, OutputData,
+        compute_output_key_image, construct_output, derive_proof_secrets, scan_output_recover,
+        OutputData,
     },
+    TxKey,
 };
 use shekyl_proofs::{
     reserve_proof::{
@@ -40,7 +41,7 @@ struct TestContext {
     spend_pubkey: [u8; 32],
     view_secret: [u8; 32],
     view_pubkey: [u8; 32],
-    tx_key_secret: [u8; 32],
+    tx_key: TxKey,
     kem_pk_x25519: [u8; 32],
     kem_pk_ml_kem: Vec<u8>,
     kem_sk_x25519: [u8; 32],
@@ -69,7 +70,7 @@ fn setup(num_outputs: usize, amount_base: u64) -> TestContext {
     let view_secret = v.to_bytes();
     let view_pubkey = v_point.compress().to_bytes();
 
-    let tx_key = Scalar::random(&mut OsRng).to_bytes();
+    let tx_key = TxKey::random().expect("the OS draws a key");
 
     let kem = HybridX25519MlKem;
     let (pk, sk) = kem.keypair_generate().expect("KEM keygen");
@@ -109,7 +110,7 @@ fn setup(num_outputs: usize, amount_base: u64) -> TestContext {
         spend_pubkey,
         view_secret,
         view_pubkey,
-        tx_key_secret: tx_key,
+        tx_key,
         kem_pk_x25519: pk.x25519,
         kem_pk_ml_kem: pk.ml_kem.clone(),
         kem_sk_x25519: sk.x25519,
@@ -131,7 +132,7 @@ fn test_01_outbound_proof_round_trip() {
 
     let proof = generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -269,7 +270,7 @@ fn test_03_outbound_inbound_consistency() {
 
     let outbound = generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -363,13 +364,10 @@ fn test_04_reserve_proof_round_trip() {
     let mut reserve_on_chain = Vec::new();
 
     for i in 0..3usize {
-        let (combined_ss, _, _) = rederive_combined_ss(
-            &ctx.tx_key_secret,
-            &ctx.kem_pk_x25519,
-            &ctx.kem_pk_ml_kem,
-            i as u64,
-        )
-        .expect("rederive");
+        let (combined_ss, _, _) = ctx
+            .tx_key
+            .rederive_combined_ss(&ctx.kem_pk_x25519, &ctx.kem_pk_ml_kem, i as u64)
+            .expect("rederive");
 
         let ps = derive_proof_secrets(&combined_ss.0, i as u64);
 
@@ -473,7 +471,7 @@ fn test_05_tampered_proof_secrets_rejected() {
 
     let mut proof = generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -515,7 +513,7 @@ fn test_06_swapped_proof_secrets_rejected() {
 
     let mut proof = generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -565,7 +563,7 @@ fn test_07_cross_tx_replay_rejected() {
 
     let proof = generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -696,7 +694,7 @@ fn test_multi_output_outbound() {
 
     let proof = generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -744,7 +742,7 @@ fn test_non_prefix_subset_round_trip() {
     // Outbound: prove only vout 1.
     let proof = generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -819,7 +817,7 @@ fn test_non_prefix_subset_round_trip() {
     // at generation.
     assert!(generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -830,7 +828,7 @@ fn test_non_prefix_subset_round_trip() {
     .is_err());
     assert!(generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -858,7 +856,7 @@ fn test_gate4_signing_round_trip_100() {
 
         let proof = generate_outbound_proof(
             &net(),
-            &ctx.tx_key_secret,
+            &ctx.tx_key,
             &ctx.txid,
             &ctx.address_bytes,
             &ctx.user_message,
@@ -906,7 +904,7 @@ fn test_outbound_with_secrets_matches_rederiving_path() {
 
     let rederived = generate_outbound_proof(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -919,19 +917,16 @@ fn test_outbound_with_secrets_matches_rederiving_path() {
     let secrets: Vec<(u64, shekyl_crypto_pq::kem::SharedSecret)> = indices
         .iter()
         .map(|&idx| {
-            let (ss, _eph_pk, _ml_kem_ct) = rederive_combined_ss(
-                &ctx.tx_key_secret,
-                &ctx.kem_pk_x25519,
-                &ctx.kem_pk_ml_kem,
-                idx,
-            )
-            .expect("rederive succeeds");
+            let (ss, _eph_pk, _ml_kem_ct) = ctx
+                .tx_key
+                .rederive_combined_ss(&ctx.kem_pk_x25519, &ctx.kem_pk_ml_kem, idx)
+                .expect("rederive succeeds");
             (idx, ss)
         })
         .collect();
     let with_secrets = generate_outbound_proof_with_secrets(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,
@@ -941,7 +936,7 @@ fn test_outbound_with_secrets_matches_rederiving_path() {
 
     // Byte-identical wire format outside the 64-byte Schnorr signature
     // at [33..97) (fresh random nonce per signing): version +
-    // tx_key_secret prefix, output count, and every per-output entry
+    // disclosed key prefix, output count, and every per-output entry
     // agree exactly.
     assert_eq!(with_secrets.len(), rederived.len());
     assert_eq!(with_secrets[..33], rederived[..33]);
@@ -973,7 +968,7 @@ fn test_outbound_with_secrets_refuses_empty_set() {
     let ctx = setup(1, 5_000);
     let err = generate_outbound_proof_with_secrets(
         &net(),
-        &ctx.tx_key_secret,
+        &ctx.tx_key,
         &ctx.txid,
         &ctx.address_bytes,
         &ctx.user_message,

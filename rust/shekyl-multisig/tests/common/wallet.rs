@@ -155,7 +155,7 @@ pub struct Derived {
 /// pseudo-out blinds balancing the outputs' masks.
 pub fn derive(group: &MultisigAddressPayload) -> Derived {
     let (payee, _) = found_group(2, 2);
-    let tx_key = random_scalar().to_bytes();
+    let tx_key = shekyl_crypto_pq::TxKey::random().expect("the OS draws a key");
     let outputs: Vec<MultisigOutputData> = [&payee, group]
         .into_iter()
         .zip(OUTPUT_AMOUNTS)

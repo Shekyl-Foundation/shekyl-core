@@ -3756,7 +3756,6 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "thiserror",
- "zeroize",
 ]
 
 [[package]]
@@ -4425,6 +4424,7 @@ dependencies = [
  "shekyl-levin",
  "shekyl-multisig",
  "shekyl-network",
+ "shekyl-noise",
  "shekyl-onion-key",
  "shekyl-operator-alarm",
  "shekyl-p-host",
@@ -4582,7 +4582,6 @@ name = "shekyl-genesis-tool"
 version = "3.1.0"
 dependencies = [
  "clap",
- "curve25519-dalek",
  "hex",
  "rand 0.8.6",
  "serde",
@@ -4632,6 +4631,7 @@ dependencies = [
  "sha2",
  "shekyl-address",
  "shekyl-crypto-pq",
+ "shekyl-harness-wallet",
  "shekyl-wire",
  "zeroize",
 ]
@@ -5036,7 +5036,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "zeroize",
 ]
 
 [[package]]

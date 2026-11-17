@@ -154,7 +154,6 @@ mod tests {
     use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
     use tokio::sync::RwLock;
-    use zeroize::Zeroizing;
 
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::traits::LedgerEngine;
@@ -216,7 +215,7 @@ mod tests {
         wallet.tx_meta.tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0x5A; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0x5A; 32]).store()),
             },
         );
         wallet.sync_state.pending_tx_hashes.push(txid);

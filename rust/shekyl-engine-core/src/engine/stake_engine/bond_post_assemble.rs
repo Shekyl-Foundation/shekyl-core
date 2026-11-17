@@ -101,7 +101,8 @@ pub(crate) async fn assemble_signed_bond_post(
 ) -> Result<AssembledBondPostTx, BondAssemblyError> {
     require_funding_inputs(args.funding.len())?;
 
-    let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
+    let tx_key = shekyl_crypto_pq::TxKey::random()
+        .map_err(|e| BondAssemblyError::build("bond-post transaction key", e))?;
 
     let ConstructedVouts {
         output_infos,
@@ -111,13 +112,13 @@ pub(crate) async fn assemble_signed_bond_post(
         leaf_entry_blob,
     } = construct_vouts_to_base(
         args.keys,
-        &tx_key_secret,
+        &tx_key,
         &args.amounts,
         args.output_site,
         |_, _| {},
     )?;
 
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
+    let mut extra = Extra::for_hybrid_transfer(tx_key.public(), kem_blobs);
     extra.push_pqc_leaf_entries(leaf_entry_blob);
     let tx_extra = extra.serialize();
 
