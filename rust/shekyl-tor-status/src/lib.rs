@@ -769,9 +769,25 @@ impl TorStatus {
     /// accessor that answers it. It fails closed: an unknown origination, a
     /// `tor` or `clearnet` setting this build does not know, or Tor off, is
     /// not that, and the send holds (Rick, 2026-11-12).
+    ///
+    /// Under a managed Tor the link must also still carry the node's
+    /// traffic (`carriage` is `carries` or `open-only`): the relay's
+    /// verdict lags a Tor that ended until the relay sees its sessions
+    /// close, and the renderer already says such a node is holding. A
+    /// carriage of `gone`, one this build does not know, or a managed
+    /// setting with no `tor` object, is not hiding (Rick, 2026-11-17). An
+    /// operator's Tor has no carriage; the origination alone answers.
     #[must_use]
     pub fn own_tx_hides_address(&self) -> bool {
-        matches!(self.posture.tor, TorSetting::Managed | TorSetting::Operator)
+        let link_carries = match &self.posture.tor {
+            TorSetting::Managed => self
+                .tor
+                .as_ref()
+                .is_some_and(|tor| matches!(tor.carriage, Carriage::Carries | Carriage::OpenOnly)),
+            TorSetting::Operator => true,
+            TorSetting::Off | TorSetting::Unknown { .. } => false,
+        };
+        link_carries
             && matches!(self.posture.clearnet, Clearnet::On | Clearnet::Off)
             && matches!(self.origination, Origination::AddressHiding)
     }

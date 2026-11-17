@@ -47,6 +47,12 @@ consumer writes a sentence of its own (`TSR-Q13`; Rick, 2026-11-08).
   `tor` setting of `managed` or `operator` together with the origination
   `address-hiding`. An unknown origination, or an unknown `tor` or `clearnet`
   setting, is not address-hiding, so the send flow holds the transaction.
+  Under a managed Tor the link must also still carry the node's traffic:
+  a `carriage` of `carries` or `open-only`. `gone`, or a carriage this
+  build does not know, is not address-hiding (Rick, 2026-11-17): the
+  relay's verdict lags a Tor that ended, and the renderer says such a node
+  is holding. A table test holds the accessor to the renderer's first
+  sentence over every origination and carriage.
   No other accessor answers that question.
 
 ## 3. The shape

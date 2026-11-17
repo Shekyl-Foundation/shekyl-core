@@ -465,7 +465,7 @@ fn an_unknown_origination_never_reads_as_address_hiding() {
 /// origination alone, or reads either half of the posture as known.
 #[test]
 fn an_unknown_posture_never_reads_as_address_hiding() {
-    let mut status = managed();
+    let mut status = with_tor(|tor| tor.carriage = Carriage::Carries);
     status.origination = Origination::AddressHiding;
     assert!(status.own_tx_hides_address());
     status.posture.tor = serde_json::from_value(serde_json::json!("bridge")).expect("decodes");
@@ -608,4 +608,82 @@ fn the_fixes_sentence_is_each_fix_s_own_words_joined() {
             && line.ends_with(UNKNOWN_SENTENCE),
         "{line}"
     );
+}
+
+/// **The send decision and the status line never disagree** (Rick,
+/// 2026-11-17). Over every origination and every carriage, known and
+/// unknown, `own_tx_hides_address` is true exactly when the line's first
+/// sentence says Tor carries the node's traffic. Under a managed Tor that
+/// needs the link to carry it still (`carries` or `open-only`): with
+/// `address-hiding` and a carriage of `gone` the line says the node is
+/// holding, and the accessor once said hiding. An operator's Tor has no
+/// carriage, and the origination alone answers. Red edit: drop the carriage
+/// condition from `own_tx_hides_address`.
+#[test]
+fn the_send_decision_agrees_with_the_line_over_every_origination_and_carriage() {
+    let says_carrying = |status: &TorStatus| {
+        let line = render(status, None);
+        line.starts_with(crate::render::CARRYING)
+            || line.starts_with(crate::render::CARRYING_OPEN_ONLY)
+    };
+    let mut originations = Origination::known();
+    originations.push(serde_json::from_value(serde_json::json!("mixnet")).expect("decodes"));
+    let mut carriages = Carriage::known();
+    carriages.push(serde_json::from_value(serde_json::json!("half")).expect("decodes"));
+
+    let mut hiding = Vec::new();
+    for origination in &originations {
+        for carriage in &carriages {
+            let mut status = with_tor(|tor| {
+                tor.carriage = carriage.clone();
+                tor.state = TorState::Usable;
+                tor.progress = None;
+            });
+            status.origination = origination.clone();
+            assert_eq!(
+                status.own_tx_hides_address(),
+                says_carrying(&status),
+                "managed, {origination:?}, {carriage:?}: {}",
+                render(&status, None)
+            );
+            if status.own_tx_hides_address() {
+                hiding.push((origination.clone(), carriage.clone()));
+            }
+        }
+        let operator = TorStatus {
+            posture: Posture {
+                tor: TorSetting::Operator,
+                clearnet: Clearnet::Off,
+            },
+            origination: origination.clone(),
+            sync_connector: vec![Connector::Tor],
+            tor_quiet: None,
+            tor: None,
+        };
+        assert_eq!(
+            operator.own_tx_hides_address(),
+            says_carrying(&operator),
+            "operator, {origination:?}: {}",
+            render(&operator, None)
+        );
+        assert_eq!(
+            operator.own_tx_hides_address(),
+            *origination == Origination::AddressHiding
+        );
+    }
+    assert_eq!(
+        hiding,
+        [
+            (Origination::AddressHiding, Carriage::Carries),
+            (Origination::AddressHiding, Carriage::OpenOnly),
+        ],
+        "under a managed Tor, hiding is address-hiding on a link that still carries"
+    );
+
+    // A managed setting with no `tor` object is a reply the node does not
+    // send; the decision fails closed on it.
+    let mut bare = managed();
+    bare.origination = Origination::AddressHiding;
+    bare.tor = None;
+    assert!(!bare.own_tx_hides_address());
 }

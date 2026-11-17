@@ -22,6 +22,14 @@ pub const UNKNOWN_SENTENCE: &str =
 
 const CHECK: &str = "Check this computer's date and time.";
 
+/// Said while the node's own transactions leave on a session that hides
+/// its address and the link carries its traffic.
+pub(crate) const CARRYING: &str = "Tor is carrying this node's traffic.";
+
+/// Said while they do, over connections that were already open.
+pub(crate) const CARRYING_OPEN_ONLY: &str =
+    "Connections already open through Tor still carry this node's traffic.";
+
 /// Whether [`render`] names a data directory for `status`. Only the
 /// unusable sentence has a place for the path (IG-Q97). A caller that
 /// holds `config` passes the directory; every other caller passes `None`.
@@ -85,12 +93,8 @@ fn append(text: &mut String, sentence: &str) {
 fn behaviour(status: &TorStatus, unknown: &mut bool) -> String {
     let carriage = status.tor.as_ref().map(|tor| &tor.carriage);
     match (&status.origination, carriage) {
-        (Origination::AddressHiding, Some(Carriage::Carries) | None) => {
-            "Tor is carrying this node's traffic.".to_owned()
-        }
-        (Origination::AddressHiding, Some(Carriage::OpenOnly)) => {
-            "Connections already open through Tor still carry this node's traffic.".to_owned()
-        }
+        (Origination::AddressHiding, Some(Carriage::Carries) | None) => CARRYING.to_owned(),
+        (Origination::AddressHiding, Some(Carriage::OpenOnly)) => CARRYING_OPEN_ONLY.to_owned(),
         (Origination::AddressHiding, Some(Carriage::Gone)) => {
             held_sentence(false, &status.sync_connector, unknown)
         }
