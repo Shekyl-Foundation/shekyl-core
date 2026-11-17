@@ -38,6 +38,9 @@
 #
 #   1. a crash: libFuzzer wrote an input under `fuzz/artifacts/<target>/`.
 #      The workflow uploads that directory; the input is the reproduction.
+#      A `slow-unit-*` file there is not one: libFuzzer writes it for an
+#      input that ran past `-report_slow_units` (10 s) and then carries on,
+#      so it is a figure about speed, which rule 4 already judges.
 #   2. the run failed some other way (a sanitizer abort with no input
 #      written): the exit status is not zero.
 #   3. no final `Done <n> runs` line: the fuzzer never reported finishing.
@@ -45,6 +48,19 @@
 #      have fuzzed anything (a green job with zero executions is the
 #      failure this run exists to remove).
 #   5. an empty corpus directory after the run.
+#   6. no coverage floor recorded for the target, or a final coverage under
+#      its tolerance, a percentage of the floor: 90 (ruled 2026-11-16), or
+#      wider for a target whose two floor runs differ by more than 5
+#      percent (`check_fuzz_inventory.tolerance`). The floor is the
+#      target's row in `scripts/ci/fuzz_coverage_floors.tsv`, the final
+#      `cov:` of a seeded nightly run; it moves only in a reviewed commit
+#      that names the run that measured it (`check_fuzz_inventory.py
+#      --floors`). A harness
+#      that stops at a length check, a constant that is not a point, a
+#      parser rewritten to refuse earlier, runs millions of inputs over a
+#      handful of edges: rules 4 and 5 pass it, and this one does not. A
+#      target with no row is red with its coverage reported, which is how
+#      its first floor is measured.
 #
 # The stats line also carries the run's final coverage (the `cov:` of
 # libFuzzer's `DONE` line) and how many corpus inputs the run started from
@@ -102,6 +118,17 @@ class Outcome:
     corpus_files: int
 
 
+# libFuzzer's artifact prefixes for an input it stopped on: a crash, a leak,
+# a per-input timeout, an out-of-memory. `slow-unit-` is the one it writes
+# and runs on past.
+SLOW_UNIT_PREFIX = "slow-unit-"
+
+
+def failure_inputs(names: list[str]) -> tuple[str, ...]:
+    """The artifact files that are a failing input: every one but a slow unit."""
+    return tuple(sorted(n for n in names if not Path(n).name.startswith(SLOW_UNIT_PREFIX)))
+
+
 @dataclass(frozen=True)
 class Verdict:
     green: bool
@@ -124,8 +151,10 @@ def restored(log: str, corpus: Path) -> int | None:
     return None
 
 
-def judge(outcome: Outcome, floor: int = FLOOR) -> Verdict:
-    """The run's verdict (the header's order)."""
+def judge(outcome: Outcome, cov_floor: tuple[int, int] | None, floor: int = FLOOR) -> Verdict:
+    """The run's verdict (the header's order). `cov_floor` is the target's
+    recorded coverage floor and its tolerance (a percentage), or None when
+    it has none."""
     done = DONE_RE.findall(outcome.log)
     executions = int(done[-1][0]) if done else None
     cov = final_cov(outcome.log)
@@ -144,7 +173,31 @@ def judge(outcome: Outcome, floor: int = FLOOR) -> Verdict:
         return Verdict(False, f"{executions} executions, under the floor of {floor}", executions, cov)
     if outcome.corpus_files == 0:
         return Verdict(False, "the corpus directory is empty after the run", executions, cov)
-    return Verdict(True, f"{executions} executions, {outcome.corpus_files} corpus inputs", executions, cov)
+    if cov is None:
+        return Verdict(False, "libFuzzer printed no final `DONE ... cov:` line", executions, None)
+    if cov_floor is None:
+        return Verdict(
+            False,
+            f"no coverage floor recorded: this run reached cov {cov}. Record it, with this run's id and "
+            "commit, in scripts/ci/fuzz_coverage_floors.tsv",
+            executions,
+            cov,
+        )
+    edges, percent = cov_floor
+    if cov * 100 < edges * percent:
+        return Verdict(
+            False,
+            f"cov {cov}, under {percent}% of its floor of {edges}: the harness no longer "
+            "reaches code it reached",
+            executions,
+            cov,
+        )
+    return Verdict(
+        True,
+        f"{executions} executions, cov {cov} (floor {edges} at {percent}%), {outcome.corpus_files} corpus inputs",
+        executions,
+        cov,
+    )
 
 
 def every_target() -> list[str]:
@@ -211,6 +264,14 @@ def run(name: str, seconds: int, corpus: Path, stats: Path, binary: Path) -> int
     if not binary.is_file():
         print(f"FAIL: {name}: no built binary at {binary}; its crate's fuzz-build leg says why — missing subject (rule 47)")
         return 2
+    import check_fuzz_inventory  # noqa: PLC0415
+
+    try:
+        row = check_fuzz_inventory.floors(ROOT).get(name)
+    except check_fuzz_inventory.GateError as exc:
+        print(f"FAIL: the coverage floors cannot be read: {exc}")
+        return 2
+    cov_floor = (row.cov, row.tolerance) if row else None
     # An artifact download does not keep the executable bit.
     binary.chmod(binary.stat().st_mode | 0o111)
     corpus = corpus.resolve()
@@ -232,15 +293,17 @@ def run(name: str, seconds: int, corpus: Path, stats: Path, binary: Path) -> int
     outcome = Outcome(
         exit_code=done.returncode,
         log=log_text,
-        crash_inputs=tuple(sorted(str(p.relative_to(ROOT)) for p in artifacts.glob("*") if p.is_file())),
+        crash_inputs=failure_inputs([str(p.relative_to(ROOT)) for p in artifacts.glob("*") if p.is_file()]),
         corpus_files=sum(1 for p in corpus.iterdir() if p.is_file()),
     )
-    verdict = judge(outcome)
+    verdict = judge(outcome, cov_floor)
     record = {
         "target": name,
         "seconds": seconds,
         "executions": verdict.executions,
         "cov": verdict.cov,
+        "floor": cov_floor[0] if cov_floor else None,
+        "tolerance": cov_floor[1] if cov_floor else None,
         "restored": restored(log_text, corpus),
         "corpus": outcome.corpus_files,
         "seeded": seeds.is_dir(),
@@ -266,18 +329,20 @@ def tabulate(records: list[dict], nightly: list[str], weekly: list[str]) -> tupl
     expected = [(name, NIGHTLY_SECONDS) for name in nightly] + [(name, WEEKLY_SECONDS) for name in weekly]
     seen = {(r.get("target"), r.get("seconds")): r for r in records}
     rows = [
-        "| Target | Seconds | Executions | Cov | Restored | Corpus | Seeded | Verdict |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        "| Target | Seconds | Executions | Cov | Floor | Restored | Corpus | Seeded | Verdict |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     findings = []
     for name, seconds in expected:
         record = seen.get((name, seconds))
         if record is None:
-            rows.append(f"| {name} | {seconds} | | | | | | RED: no figures (the leg died before its run) |")
+            rows.append(f"| {name} | {seconds} | | | | | | | RED: no figures (the leg died before its run) |")
             findings.append(f"{name} ({seconds} s) uploaded no figures")
             continue
         mark = "green" if record.get("green") else "RED"
-        shown = ["" if record.get(key) is None else str(record.get(key)) for key in ("executions", "cov", "restored")]
+        shown = ["" if record.get(key) is None else str(record.get(key)) for key in ("executions", "cov", "floor", "restored")]
+        if record.get("floor") is not None and record.get("tolerance") is not None:
+            shown[2] = f"{record['floor']} ({record['tolerance']}%)"
         rows.append(
             f"| {name} | {seconds} | {' | '.join(shown)} | {record.get('corpus')} "
             f"| {'yes' if record.get('seeded') else 'no'} | {mark}: {record.get('says')} |"
@@ -327,24 +392,59 @@ def selftest() -> int:
     slow = "Done 412 runs in 300 second(s)\n"
     crashed = "==1234==ERROR: libFuzzer: deadly signal\nTest unit written to fuzz/artifacts/t/crash-ab\n"
     base = Outcome(exit_code=0, log=done, crash_inputs=(), corpus_files=24)
+    # A harness that dies at its length check: the first nightly dispatch's
+    # fuzz_read_message1, 80,666,212 executions at a flat cov 137 where the
+    # seeded harness reaches 182. Planted here with a non-empty corpus, so
+    # the coverage rule alone has to catch it.
+    length_check = "#80666212\tDONE   cov: 137 ft: 138 corp: 1/1b\nDone 80666212 runs in 301 second(s)\n"
+    at = lambda cov: f"#9000\tDONE   cov: {cov} ft: 1\nDone 9000 runs in 300 second(s)\n"  # noqa: E731
     cases = [
-        ("a run that fuzzed", base, True, "52816 executions"),
+        ("a run that fuzzed", base, (1201, 90), True, "52816 executions, cov 1201 (floor 1201 at 90%)"),
         (
             "a crash, even one that came before the floor",
             Outcome(1, crashed, ("rust/a/fuzz/artifacts/t/crash-ab",), 3),
+            (1201, 90),
             False,
             "crash: libFuzzer wrote rust/a/fuzz/artifacts/t/crash-ab",
         ),
-        ("a sanitizer abort with no input", Outcome(1, "==1==ERROR: AddressSanitizer\n", (), 0), False, "exit status 1"),
-        ("no final line", Outcome(0, "INFO: Seed: 1\n", (), 2), False, "no final `Done <n> runs`"),
-        ("under the floor", Outcome(0, slow, (), 5), False, "412 executions, under the floor of 1000"),
-        ("an empty corpus", Outcome(0, done, (), 0), False, "corpus directory is empty"),
+        ("a sanitizer abort with no input", Outcome(1, "==1==ERROR: AddressSanitizer\n", (), 0), (1201, 90), False, "exit status 1"),
+        ("no final line", Outcome(0, "INFO: Seed: 1\n", (), 2), (1201, 90), False, "no final `Done <n> runs`"),
+        ("under the floor", Outcome(0, slow, (), 5), (1201, 90), False, "412 executions, under the floor of 1000"),
+        ("an empty corpus", Outcome(0, done, (), 0), (1201, 90), False, "corpus directory is empty"),
+        (
+            "a harness that dies at its length check",
+            Outcome(0, length_check, (), 1),
+            (182, 90),
+            False,
+            "cov 137, under 90% of its floor of 182",
+        ),
+        ("exactly the tolerance", Outcome(0, at(1350), (), 9), (1500, 90), True, "cov 1350 (floor 1500 at 90%)"),
+        ("one edge under the tolerance", Outcome(0, at(1349), (), 9), (1500, 90), False, "cov 1349, under 90%"),
+        ("a target's own, wider tolerance", Outcome(0, at(1200), (), 9), (1500, 80), True, "cov 1200 (floor 1500 at 80%)"),
+        ("one edge under a target's own", Outcome(0, at(1199), (), 9), (1500, 80), False, "cov 1199, under 80%"),
+        ("a target with no floor reports its coverage", base, None, False, "no coverage floor recorded: this run reached cov 1201"),
+        (
+            "a Done line with no DONE status line",
+            Outcome(0, "Done 52816 runs in 21 second(s)\n", (), 3),
+            (1201, 90),
+            False,
+            "no final `DONE ... cov:` line",
+        ),
     ]
     failures = []
-    for why, outcome, green, says in cases:
-        verdict = judge(outcome)
+    for why, outcome, cov_floor, green, says in cases:
+        verdict = judge(outcome, cov_floor)
         if verdict.green != green or says not in verdict.says:
             failures.append(f"{why}: wanted green={green} saying {says!r}, got {verdict}")
+    # A slow unit is not a failing input; every other artifact is.
+    for why, names, want in [
+        ("a slow unit alone", ["a/slow-unit-3f"], ()),
+        ("a crash beside a slow unit", ["a/slow-unit-3f", "a/crash-ab"], ("a/crash-ab",)),
+        ("a per-input timeout", ["a/timeout-9c"], ("a/timeout-9c",)),
+        ("a leak and an out-of-memory", ["a/oom-1", "a/leak-2"], ("a/leak-2", "a/oom-1")),
+    ]:
+        if failure_inputs(names) != want:
+            failures.append(f"artifacts, {why}: wanted {want}, got {failure_inputs(names)}")
     # The figures the stats line carries, read from libFuzzer's own lines.
     log = (
         "INFO:        3 files found in /t/corpus\nINFO:        1 files found in /t/seeds\n"

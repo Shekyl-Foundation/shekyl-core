@@ -147,4 +147,5 @@ scripts/ci/with_small_disk.sh	none
 scripts/ci/check_fuzz_inventory.py	fuzz-harness:compile,fuzz-harness:scope,nightly:fuzz-targets,nightly:report-red
 scripts/ci/test_check_fuzz_inventory.py	fuzz-harness:scope,nightly:fuzz-targets
 scripts/ci/fuzz_run.py	nightly:fuzz,nightly:fuzz-build,nightly:fuzz-summary,nightly:fuzz-targets,nightly:fuzz-weekly,nightly:report-red
+scripts/ci/fuzz_coverage_floors.tsv	fuzz-harness:scope,nightly:fuzz,nightly:fuzz-weekly
 scripts/ci/workflow_pass.py	build:pass,grep-gates:grep-gates,rust-audit-test:pass

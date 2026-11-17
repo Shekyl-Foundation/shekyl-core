@@ -42,6 +42,13 @@
 #                 weekly long run's, as a JSON list of `<crate>/<target>`;
 #                 naming one target narrows the list to it (refused, exit
 #                 2, when it is not in the list).
+#   --floors      the coverage floors (`FLOORS`, below): every target has
+#                 exactly one row, every row names a target, its tolerance
+#                 is the one its two runs' spread gives (`tolerance`,
+#                 below), and a floor that moved since the parent commit
+#                 moved with the run and commit it was measured on. The
+#                 per-PR compile workflow runs it; the nightly does not, so
+#                 a branch dispatch can measure a new target's first floor.
 #   --regenerate  rewrite every fuzz crate's `Cargo.lock` from the
 #                 workspace's: copy it in, then `cargo update --workspace
 #                 --offline` re-resolves the fuzz crate's own entries only,
@@ -65,6 +72,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -86,6 +94,17 @@ WEEKLY = (
     "shekyl-wire/fuzz_tx_parse",
 )
 WORKSPACE_LOCK = "rust/Cargo.lock"
+# Each target's coverage floor (ruled 2026-11-15): the final `cov:` of one
+# seeded nightly run, which `fuzz_run.py` holds every later run to. The
+# file's own header says how a floor is set and moved.
+FLOORS = "scripts/ci/fuzz_coverage_floors.tsv"
+FULL_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+# The coverage tolerance (ruled 2026-11-16): a run whose final coverage is
+# under this percentage of its target's floor is red. A target whose two
+# floor runs differ by more than SPREAD_LIMIT percent gets its own, wider
+# tolerance (`tolerance`).
+DEFAULT_TOLERANCE = 90
+SPREAD_LIMIT = 5
 CRON_RE = re.compile(r'^\s*-\s*cron:\s*"([^"]+)"', re.MULTILINE)
 SCHEDULE_RE = re.compile(r"github\.event\.schedule\s*[!=]=\s*'([^']+)'")
 # A change to any of these reaches every harness.
@@ -250,12 +269,162 @@ def check(root: Path, weekly: tuple[str, ...] = WEEKLY) -> tuple[list[str], list
     workflow = root / WORKFLOW
     if not workflow.is_file():
         fails.append(f"{WORKFLOW} is missing: nothing compiles the fuzz crates")
-    elif "check_fuzz_inventory.py --matrix" not in workflow.read_text():
-        fails.append(
-            f"{WORKFLOW} does not build its matrix from `check_fuzz_inventory.py --matrix`, "
-            "so a fuzz crate can exist that it does not compile"
-        )
+    else:
+        workflow_text = workflow.read_text()
+        if "check_fuzz_inventory.py --matrix" not in workflow_text:
+            fails.append(
+                f"{WORKFLOW} does not build its matrix from `check_fuzz_inventory.py --matrix`, "
+                "so a fuzz crate can exist that it does not compile"
+            )
+        if "check_fuzz_inventory.py --floors" not in workflow_text:
+            fails.append(
+                f"{WORKFLOW} does not check the coverage floors (`check_fuzz_inventory.py --floors`), "
+                "so a target can run with no floor, or a floor can move unmeasured"
+            )
     return fails, crates, n_targets
+
+
+@dataclass(frozen=True)
+class Floor:
+    """One row of `FLOORS`: the floor, the run and commit that measured it,
+    a second run's coverage of the same target, and the tolerance the two
+    give."""
+
+    cov: int
+    run: str
+    commit: str
+    second_cov: int
+    second_run: str
+    tolerance: int
+
+
+def tolerance(cov: int, second_cov: int) -> int | None:
+    """The percentage of the floor a run must reach, from the spread of the
+    two runs that measured it: |a - b| over the larger. Up to SPREAD_LIMIT
+    percent it is DEFAULT_TOLERANCE, whose margin (100 - 90 = 10 points) is
+    twice that limit. Over it, the margin is twice the spread rounded up to
+    a whole percent, the same ratio, so the default and a measured tolerance
+    meet at the limit. None when the spread leaves no floor (a margin of
+    100 points or more)."""
+    larger, gap = max(cov, second_cov), abs(cov - second_cov)
+    if 100 * gap <= SPREAD_LIMIT * larger:
+        return DEFAULT_TOLERANCE
+    spread = -(-100 * gap // larger)  # rounded up
+    margin = 2 * spread
+    return 100 - margin if margin < 100 else None
+
+
+def parse_floors(text: str) -> tuple[dict[str, Floor], list[str]]:
+    """`target -> Floor`, and what does not parse."""
+    rows: dict[str, Floor] = {}
+    fails: list[str] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        where = f"{FLOORS}:{number}"
+        if len(fields) != 7:
+            fails.append(
+                f"{where}: {len(fields)} fields, not the seven "
+                "`target  cov  run  commit  second_cov  second_run  tolerance`"
+            )
+            continue
+        target, cov, run_id, commit, second_cov, second_run, given = fields
+        if not cov.isdigit() or int(cov) == 0:
+            fails.append(f"{where}: {target}'s floor {cov!r} is not a positive count of edges")
+            continue
+        if not run_id.isdigit():
+            fails.append(f"{where}: {target}'s run {run_id!r} is not a workflow run id")
+            continue
+        if not FULL_COMMIT_RE.fullmatch(commit):
+            fails.append(f"{where}: {target}'s commit {commit!r} is not a full 40-character commit id")
+            continue
+        if not second_cov.isdigit() or int(second_cov) == 0:
+            fails.append(f"{where}: {target}'s second coverage {second_cov!r} is not a positive count of edges")
+            continue
+        if not second_run.isdigit() or second_run == run_id:
+            fails.append(f"{where}: {target}'s second run {second_run!r} is not a second workflow run id")
+            continue
+        wanted = tolerance(int(cov), int(second_cov))
+        if wanted is None:
+            fails.append(
+                f"{where}: {target}'s runs reached cov {cov} and {second_cov}, too far apart to hold a floor"
+            )
+            continue
+        if given != str(wanted):
+            fails.append(
+                f"{where}: {target}'s tolerance is {given!r}, and its runs (cov {cov} and {second_cov}) "
+                f"give {wanted}"
+            )
+            continue
+        if target in rows:
+            fails.append(f"{where}: {target} has a second row")
+            continue
+        rows[target] = Floor(int(cov), run_id, commit, int(second_cov), second_run, wanted)
+    return rows, fails
+
+
+def floors(root: Path) -> dict[str, Floor]:
+    """The floors, or GateError when the file is missing or does not parse."""
+    path = root / FLOORS
+    if not path.is_file():
+        raise GateError(f"{FLOORS} is missing — missing subject (rule 47)")
+    rows, fails = parse_floors(path.read_text())
+    if fails:
+        raise GateError("; ".join(fails))
+    return rows
+
+
+def floor_findings(root: Path) -> list[str]:
+    """`--floors`: every target has one row, and no floor moved unmeasured."""
+    path = root / FLOORS
+    if not path.is_file():
+        raise GateError(f"{FLOORS} is missing — missing subject (rule 47)")
+    rows, fails = parse_floors(path.read_text())
+    every = set(targets(root))
+    if not every:
+        raise GateError("no fuzz target found — missing subject (rule 47)")
+    fails.extend(
+        f"{FLOORS}: {name} has no coverage floor. Dispatch the nightly `fuzz` job on the branch for "
+        "it and record the run's `cov:` with that run's id and commit"
+        for name in sorted(every - set(rows))
+    )
+    fails.extend(f"{FLOORS}: {name} is not a fuzz target" for name in sorted(set(rows) - every))
+    parent = subprocess.run(
+        ["git", "-C", str(root), "show", f"HEAD^1:{FLOORS}"], capture_output=True, text=True, check=False
+    )
+    if parent.returncode == 0:
+        before, _ = parse_floors(parent.stdout)
+        for name, row in sorted(rows.items()):
+            was = before.get(name)
+            if was and was.cov != row.cov and (was.run, was.commit) == (row.run, row.commit):
+                fails.append(
+                    f"{FLOORS}: {name}'s floor moved {was.cov} -> {row.cov} with the run and commit "
+                    "unchanged: a floor moves only with the run that measured it"
+                )
+            if was and was.second_cov != row.second_cov and was.second_run == row.second_run:
+                fails.append(
+                    f"{FLOORS}: {name}'s second coverage moved {was.second_cov} -> {row.second_cov} with "
+                    "its run unchanged: the tolerance moves only with the run that measured it"
+                )
+    else:
+        print(f"note: no {FLOORS} at HEAD^1, so no floor is compared with a parent")
+    return fails
+
+
+def run_floors(root: Path) -> int:
+    try:
+        fails = floor_findings(root)
+    except GateError as exc:
+        print(f"FAIL: {exc}")
+        return 2
+    if fails:
+        print("FAIL: the coverage floors disagree with the tree:")
+        for finding in fails:
+            print("  " + finding)
+        return 1
+    print(f"fuzz coverage floors: one per target, {len(floors(root))} rows")
+    return 0
 
 
 def matrix(root: Path, rust_tests: str, changed: list[str]) -> list[str]:
@@ -349,10 +518,12 @@ def main() -> int:
         return 0
     if args == ["--regenerate"]:
         return regenerate(ROOT)
+    if args == ["--floors"]:
+        return run_floors(ROOT)
     if args:
         print(
             f"usage: {sys.argv[0]} [--matrix | --targets nightly|weekly [<crate>/<target>] "
-            "| --regenerate | --selftest]",
+            "| --floors | --regenerate | --selftest]",
             file=sys.stderr,
         )
         return 2

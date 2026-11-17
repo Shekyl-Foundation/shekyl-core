@@ -49,7 +49,17 @@ name = "shekyl-a"
 version = "0.1.0"
 """
 
-WORKFLOW = "jobs:\n  scope:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --matrix\n"
+WORKFLOW = (
+    "jobs:\n  scope:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --matrix\n"
+    "      - run: python3 scripts/ci/check_fuzz_inventory.py --floors\n"
+)
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+OTHER_COMMIT = "fedcba9876543210fedcba9876543210fedcba98"
+# The planted trees' floors: one row for the one target.
+FLOORS = (
+    "# target\tcov\trun\tcommit\tsecond_cov\tsecond_run\ttolerance\n"
+    f"shekyl-a/fuzz_one\t182\t43772973669\t{COMMIT}\t180\t43772976347\t90\n"
+)
 NIGHTLY = "jobs:\n  fuzz-targets:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n"
 # The planted trees' weekly run: the one target they have.
 WEEKLY = ("shekyl-a/fuzz_one",)
@@ -82,6 +92,7 @@ def tree(
     nightly=NIGHTLY,
     seeds=(),
     fuzz=True,
+    floors=FLOORS,
 ) -> None:
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     write(root, "rust/Cargo.lock", WORKSPACE_LOCK)
@@ -98,6 +109,8 @@ def tree(
         write(root, gate.WORKFLOW, workflow)
     if nightly is not None:
         write(root, gate.NIGHTLY, nightly)
+    if floors is not None:
+        write(root, gate.FLOORS, floors)
     subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
 
 
@@ -127,6 +140,27 @@ class Results:
             got = gate.matrix(root, rust_tests, changed)
             if got != want:
                 self.failures.append(f"{why}: wanted {json.dumps(want)}, got {json.dumps(got)}")
+            else:
+                self.passed += 1
+
+    def expect_floors(self, why: str, want: int, says: str = "", parent=None, **planted) -> None:
+        """`--floors` on a planted tree; `parent` is the floors file one commit back."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            if parent is not None:
+                tree(root, floors=parent)
+                git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+                subprocess.run([*git, "commit", "-q", "-m", "parent"], check=True)
+            tree(root, **planted)
+            if parent is not None:
+                subprocess.run([*git, "commit", "-q", "-m", "child"], check=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = gate.run_floors(root)
+            out = buf.getvalue()
+            if code != want or (says and says not in out):
+                wanted = f"exit {want}" + (f" naming {says!r}" if says else "")
+                self.failures.append(f"{why}: wanted {wanted}, got {code}\n{out}")
             else:
                 self.passed += 1
 
@@ -202,6 +236,57 @@ def selftest() -> int:
         "a second cron no condition chooses", 1, "no condition selects the cron '17 15 * * *'",
         nightly=on + "jobs:\n  a:\n    if: ${{ github.event.schedule == '0 3 * * *' }}\n"
         "  fuzz-targets:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --targets nightly\n",
+    )
+    r.expect(
+        "a compile workflow that does not check the floors", 1, "does not check the coverage floors",
+        workflow="jobs:\n  scope:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --matrix\n",
+    )
+    row = "shekyl-a/fuzz_one\t{cov}\t{run}\t{commit}\t{second}\t{second_run}\t{tolerance}\n"
+
+    def floor(cov=182, run=43772973669, commit=COMMIT, second=180, second_run=43772976347, tolerance=90) -> str:
+        return row.format(
+            cov=cov, run=run, commit=commit, second=second, second_run=second_run, tolerance=tolerance
+        )
+
+    r.expect_floors("one floor per target", 0, "one per target, 1 rows")
+    r.expect_floors("no floors file", 2, "missing subject", floors=None)
+    r.expect_floors(
+        "a target with no floor", 1, "shekyl-a/fuzz_two has no coverage floor",
+        bins=("fuzz_one", "fuzz_two"), files=("fuzz_one", "fuzz_two"),
+    )
+    r.expect_floors(
+        "a floor for no target", 1, "shekyl-a/fuzz_gone is not a fuzz target",
+        floors=FLOORS + f"shekyl-a/fuzz_gone\t10\t1\t{COMMIT}\t10\t2\t90\n",
+    )
+    r.expect_floors(
+        "a short commit id", 1, "is not a full 40-character commit id",
+        floors=floor(commit=COMMIT[:12]),
+    )
+    r.expect_floors("a floor of zero", 1, "is not a positive count", floors=floor(cov=0))
+    r.expect_floors("a second row", 1, "has a second row", floors=FLOORS + floor(cov=200, run=2, second=198))
+    r.expect_floors(
+        "a floor that moved with its run", 0,
+        parent=FLOORS, floors=floor(cov=240, run=43800000000, commit=OTHER_COMMIT, second=238, second_run=43800000001),
+    )
+    r.expect_floors(
+        "a floor that moved without the run that measured it", 1,
+        "floor moved 182 -> 120 with the run and commit unchanged",
+        parent=FLOORS, floors=floor(cov=120, second=119),
+    )
+    r.expect_floors("the old four-field row", 1, "not the seven", floors=f"shekyl-a/fuzz_one\t182\t1\t{COMMIT}\n")
+    r.expect_floors("no second run", 1, "is not a second workflow run id", floors=floor(second_run=43772973669))
+    r.expect_floors("a second coverage of zero", 1, "second coverage '0'", floors=floor(second=0))
+    # The tolerance is the runs' spread's: 5% or less is 90, more is
+    # 100 - 2 x the spread rounded up, so 182 against 172 (5.49%) is 88.
+    r.expect_floors("a spread of exactly five percent", 0, floors=floor(cov=200, second=190))
+    r.expect_floors("a spread over five percent at 90", 1, "give 88", floors=floor(second=172))
+    r.expect_floors("a spread over five percent at its own", 0, floors=floor(second=172, tolerance=88))
+    r.expect_floors("a tolerance tighter than the spread gives", 1, "give 90", floors=floor(tolerance=95))
+    r.expect_floors("runs too far apart to floor", 1, "too far apart", floors=floor(cov=200, second=99))
+    r.expect_floors(
+        "a second coverage that moved without its run", 1,
+        "second coverage moved 180 -> 172 with its run unchanged",
+        parent=FLOORS, floors=floor(second=172, tolerance=88),
     )
     r.expect_listed("the nightly list is every target", "nightly", None, ["shekyl-a/fuzz_one", "shekyl-a/fuzz_two"])
     r.expect_listed("the weekly list is the weekly targets", "weekly", None, ["shekyl-a/fuzz_one"])
