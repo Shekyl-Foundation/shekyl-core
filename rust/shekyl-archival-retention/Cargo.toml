@@ -37,6 +37,11 @@ shekyl-types = { path = "../shekyl-types" }
 # (e.g. the emission-verify KAT constructors). Enabled only through
 # dev-dependencies.
 consensus-kat = []
+# Deterministic witness signatures for the chain forge (CHAIN_FORGE.md
+# §5.3, S8). TEST_ONLY: no feature of this crate enables it, and its one
+# enabler is shekyl-chain-forge's dev edge. A shipped bundle signs with
+# the OS (`sign_bundle_commitment`).
+seeded-rng = ["shekyl-crypto-pq/seeded-rng"]
 
 [build-dependencies]
 serde_json = { workspace = true }

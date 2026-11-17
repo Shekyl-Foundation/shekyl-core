@@ -260,6 +260,22 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
     (
+        "shekyl-archival-retention",
+        "consensus-kat",
+    ): "kat_forge on the emission verify's sealed witnesses (BackingVerified, "
+    "AuthVerified): the assembly KAT exercises emission_vin_verify without "
+    "building a membership-only proof. Enabled from this crate's own dev "
+    "edge only; a production acceptance cannot mint the witness",
+    (
+        "shekyl-archival-retention",
+        "seeded-rng",
+    ): "sign_bundle_commitment_seeded: the witness signature over a bundle "
+    "commitment with FN-DSA's nonce drawn from a caller's seed, so the chain "
+    "forge's bundles come out the same every forging (CHAIN_FORGE.md §5.3, "
+    "S8). Forwards shekyl-crypto-pq's seeded-rng. The production signer is "
+    "sign_bundle_commitment, over the OS; enabled from shekyl-chain-forge's "
+    "dev edge only",
+    (
         "shekyl-bundle-producer",
         "seeded-rng",
     ): "WitnessRing::drawing and RingDraws: a ring whose witness keys, draw "
@@ -271,10 +287,11 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     (
         "shekyl-chain-ingest",
         "forge",
-    ): "the scenario driver as public library code for the chain forge "
-    "(CHAIN_FORGE.md §5.3, seam T5): scenario, scenario_shard, "
-    "scenario_archival, chain_drive, admitted_draws, archival_driver and "
-    "the store helpers, over optional edges to the harness crates and the "
+    ): "the scenario driver for the chain forge "
+    "(CHAIN_FORGE.md §5.3, seam T5). The modules the executor names are "
+    "public (scenario, scenario_shard, scenario_archival, chain_drive, "
+    "admitted_draws, archival_driver, emission_assembly); test_support stays "
+    "crate-private. Over optional edges to the harness crates and the "
     "seeded entry points (it forwards `harness` and the TEST_ONLY "
     "`seeded-rng` of shekyl-harness-spender, shekyl-tx-builder and "
     "shekyl-crypto-pq). Enabled from shekyl-chain-forge's dev edge alone, "
@@ -548,6 +565,7 @@ PERMANENT: dict[tuple[str, str], str] = {
 GOVERNED_OWNERS: frozenset[str] = frozenset(
     {
         "shekyl-wire",
+        "shekyl-archival-retention",
         "shekyl-chain-store",
         "shekyl-tor-control-client",
         "shekyl-chain-rules",
