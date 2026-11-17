@@ -127,7 +127,8 @@
 # Default: 127.0.0.1 and the network's rpc port.
 # rpc-admin-listen = ["127.0.0.1:11029"]
 
-# The plaintext view listeners, loopback only.
+# The plaintext view listeners, loopback only; an address with no port
+# takes the network's view port.
 # rpc-view-listen = "none"
 
 # Web origins allowed to call the RPC; `none` denies all. `*` is refused.
