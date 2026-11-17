@@ -44,6 +44,7 @@ pub(super) fn refetches(step: &Step) -> usize {
 /// began were refused, and how many began.
 pub(super) fn round_tally(uploaded: u32, refused: u32, begun: u32, draw: u64) -> Input {
     Input::UploadRoundEnded {
+        descriptor: super::D0,
         tally: RoundTally {
             uploaded,
             refused,
@@ -77,7 +78,7 @@ pub(super) fn arrival(minted_at: u64, arrived_at: u64) -> Input {
 /// the core refetches the descriptor and judges nothing. The second probe,
 /// after the refetch and a fresh delay, misses too. Returns that verdict
 /// step and its time.
-fn misses_twice(core: &mut Core, minted: u64) -> (u64, Step) {
+pub(super) fn misses_twice(core: &mut Core, minted: u64) -> (u64, Step) {
     let (at, first) = run_timed(core, minted + secs(60));
     assert_eq!(at, minted + secs(60));
     assert_eq!(cancels(&first), 1);
@@ -660,7 +661,7 @@ fn a_single_miss_refetches_and_an_arrival_after_it_is_reachable() {
 }
 
 fn stucks(step: &Step) -> usize {
-    count(step, |action| matches!(action, Action::RoundStuck))
+    count(step, |action| matches!(action, Action::RoundStuck { .. }))
 }
 
 /// **The round's wait** (Rick, 2026-10-29). A round still open 60 s after
@@ -673,8 +674,19 @@ fn stucks(step: &Step) -> usize {
 fn the_probe_follows_the_rounds_end_or_its_wait_whichever_is_first() {
     // The round hangs: the wait runs out at 60 s after its first upload.
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, secs(5));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(5),
+    );
     let (at, step) = run_timed(&mut core, secs(5 + 60 + 15));
     assert_eq!(probes(&step), 1, "the wait's probe");
     assert_eq!(
@@ -691,8 +703,19 @@ fn the_probe_follows_the_rounds_end_or_its_wait_whichever_is_first() {
 
     // The round ends at 9 s: the probe follows its end, and the wait is gone.
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, secs(5));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(5),
+    );
     core.on(uploaded(0), secs(9));
     let (at, step) = run_timed(&mut core, secs(5 + 60 + 15));
     assert_eq!(probes(&step), 1);
@@ -710,8 +733,19 @@ fn the_probe_follows_the_rounds_end_or_its_wait_whichever_is_first() {
 #[test]
 fn a_round_open_for_five_minutes_is_counted_once_and_never_a_cause() {
     let mut core = published();
-    core.on(Input::UploadRoundStarted, 0);
-    core.on(Input::FirstUploaded { draw: 0 }, secs(5));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        0,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        secs(5),
+    );
     let mut said = 0;
     let mut probed = 0;
     let mut now = 0;
@@ -740,7 +774,12 @@ fn a_round_open_for_five_minutes_is_counted_once_and_never_a_cause() {
     assert_eq!(status.shown, Shown::Usable);
     // The coalescer's resync ends it; the next round counts from nothing.
     core.on(uploaded(0), secs(401));
-    core.on(Input::UploadRoundStarted, secs(402));
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        secs(402),
+    );
     assert_eq!(core.status().stuck_upload_rounds, 1);
 }
 

@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use shekyl_draw_rng::RelayRng;
 use shekyl_p2p_session::{DialOutcome as SessionOutcome, Endpoint, Established, SessionLayer};
 use shekyl_peerlist::{ConnectorId, DialOutcome, NetworkAddress, SessionRow};
-use shekyl_timing_engine::Clock;
+use shekyl_timing_engine::{Clock, Stamp};
 use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, DialFailure, Reached, SocketId};
 
 use super::address::endpoint_of;
@@ -90,9 +90,6 @@ fn refused_by_peer(connector: ConnectorId) -> DialEnd {
 /// What the task needs, worked out on the loop before launch.
 pub(super) struct Prepared {
     endpoint: Endpoint,
-    /// The judge's clock, read when the channel opens and when the dial
-    /// ends.
-    stamp: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 /// The span from the channel's open until the loop has applied the
@@ -142,15 +139,14 @@ impl Drop for Window {
     }
 }
 
-impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
-    /// The attempt's inputs: the endpoint and the judge's clock. An address
-    /// with no endpoint is a local failure the loop records at once.
-    pub(super) fn prepare(&self, address: &NetworkAddress) -> Result<Prepared, DialEnd> {
-        let endpoint = endpoint_of(address).ok_or_else(DialEnd::local_close)?;
-        let stamp = Arc::clone(&self.shared().life_clock.now_ms);
-        Ok(Prepared { endpoint, stamp })
-    }
+/// The attempt's input: the endpoint. An address with no endpoint is a
+/// local failure the loop records at once.
+pub(super) fn prepare(address: &NetworkAddress) -> Result<Prepared, DialEnd> {
+    let endpoint = endpoint_of(address).ok_or_else(DialEnd::local_close)?;
+    Ok(Prepared { endpoint })
+}
 
+impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// Apply one task result, on the loop, through the layer that owns each
     /// decision. The shared lock is taken only to admit the received list;
     /// no session-layer call is made under it (#1092).
@@ -238,20 +234,18 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     }
 }
 
-/// What one attempt resolved, dated on the judge's clock.
+/// What one attempt resolved, dated on the process clock.
 pub(super) struct AttemptEnd {
     pub(super) result: TaskResult,
-    /// When the stream opened, if one did: the instant the channel arrived.
-    pub(super) opened_ms: Option<u64>,
-    /// When the attempt resolved. A failure is dated here, so the bracket
-    /// does not move because the result waited to be applied.
-    pub(super) ended_ms: u64,
+    /// When the attempt resolved. A failure is dated here, so the reading
+    /// its connector is asked for does not move because the result waited
+    /// to be applied.
+    pub(super) ended: Stamp,
 }
 
-/// The attempt task: the layer's dial and the judge's two stamps, nothing
-/// else. The open is the instant the channel arrived, before the
-/// handshake. The end is the last thing the task reads, before the result
-/// can wait. It takes no lock of the dialer's but the window's insert and
+/// The attempt task: the layer's dial and the end's stamp, nothing else.
+/// The end is the last thing the task reads, before the result can
+/// wait. It takes no lock of the dialer's but the window's insert and
 /// draws no random number. Dropped before it resolves (a cancelled
 /// attempt), it releases whatever it holds: the connect future aborts the
 /// connector's dial, an unhandshaken channel is closed by its drop, and a
@@ -264,18 +258,16 @@ pub(super) async fn attempt_task<C: Clock + Clone + Send + Sync + 'static>(
     aim: DialAim,
     prepared: Prepared,
 ) -> AttemptEnd {
-    let Prepared { endpoint, stamp } = prepared;
+    let Prepared { endpoint } = prepared;
     let dialed = match layer.connect(endpoint).await {
         Ok(dialed) => dialed,
         Err(end) => {
             return AttemptEnd {
                 result: TaskResult::Failed(end),
-                opened_ms: None,
-                ended_ms: stamp(),
+                ended: layer.stamp(),
             };
         }
     };
-    let opened_ms = stamp();
     let window = Window::open(shared, dialed.id());
     tracing::debug!(
         "{connector:?} dial {address:?}: channel {:?} open, handshake {aim:?}",
@@ -287,8 +279,7 @@ pub(super) async fn attempt_task<C: Clock + Clone + Send + Sync + 'static>(
     };
     AttemptEnd {
         result,
-        opened_ms: Some(opened_ms),
-        ended_ms: stamp(),
+        ended: layer.stamp(),
     }
 }
 

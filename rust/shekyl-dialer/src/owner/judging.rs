@@ -3,25 +3,25 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The judge in the owner (`DIALER_OUTAGE_EVIDENCE.md` §4.1, `OE-D8`):
-//! what the dialer observes of each connector's link, the deferred
-//! verdict, and clearing. [`crate::judge`] decides; this keeps its inputs
-//! and performs what it decides through [`Peerlist::apply`].
+//! The judge in the owner (`DIALER_OUTAGE_EVIDENCE.md` §4.1, `OE-D8`;
+//! §3.3 as ruled 2026-11-15): each connector's source of path readings,
+//! the waiting verdict, and clearing. [`crate::judge`] decides; this asks
+//! the dialing connector and performs what it decides through
+//! [`Peerlist::apply`].
 //!
-//! - **Observations.** A stream that opened is noted when its attempt
-//!   ends, after that attempt was judged, so it never corroborates its own
-//!   failure. A corroborating session's received bytes are read off the
-//!   board before the dialer's lock ([`Dialer::with_sessions`]): sessions whose
-//!   handshake finished, inbound included only where the connector counts
-//!   inbound. The probe of this node's own onion is dropped in that
-//!   handshake, so it is never one of them (§3.3, the brief's test 7).
-//! - **The deferred verdict** holds no in-flight slot and no target place:
-//!   the attempt finished, and the address is not drawn again meanwhile.
-//!   A sign of life inside its bracket counts it when the dialer sees it
-//!   ([`closes_the_bracket`]); the deadline only excuses. A verdict
-//!   performed late can therefore err only toward excusing. The
-//!   connector's owner loop arms its wake for the earliest deadline.
-//! - **Clearing.** The first sign of life on a connector after an excusal
+//! - **The source.** Each connector supplies its own
+//!   ([`Dialer::set_path_source`]); until it does, the connector has none
+//!   ([`NoReadings`]) and every uncertain failure on it is excused at once.
+//!   The source is asked for a reading taken after the failure. Asking is
+//!   the request: the source may start work toward one, and rings the
+//!   dialer's bell when a reading arrives.
+//! - **The waiting verdict** holds no in-flight slot and no target place:
+//!   the attempt finished, and the address is not drawn again meanwhile. A
+//!   working reading counts it; an impaired one, or none by the source's
+//!   wait, excuses it. A verdict performed late can therefore err only
+//!   toward excusing. The connector's owner loop arms its wake for the
+//!   earliest deadline, and a reading rings its bell.
+//! - **Clearing.** A working reading on a connector after an excusal
 //!   clears the excusals of its addresses with no counted failure.
 //! - **At stop** a verdict still waiting is not performed: the failure
 //!   counts against nothing, and its seat is stored as it stands.
@@ -29,153 +29,60 @@
 use std::sync::Arc;
 
 use shekyl_draw_rng::RelayRng;
-use shekyl_p2p_session::{Board, Direction};
-use shekyl_peerlist::{dial_profile, ConnectorId, DialOutcome, Tick, Verdict};
+use shekyl_peerlist::{ConnectorId, DialOutcome, Tick, Verdict};
 use shekyl_timing_engine::{Clock, Stamp};
-use shekyl_transport_layer::SessionTraffic;
+use shekyl_transport_layer::{NoReadings, PathReady, PathSource};
 
 use super::{Dialer, Shared};
-use crate::judge::{closes_the_bracket, judge, Judgement, Observations};
-use crate::reach::{attempt_stream, AttemptStream};
+use crate::judge::{judge, settle, Judgement};
 
-/// The clock the judge reads, and each session's last received byte on it:
-/// the byte-stamp clock (`monotonic_ms`) and the node gate's stamps in
-/// production. Never an engine `Tick`.
-#[derive(Clone)]
-pub(super) struct LifeClock {
-    pub(super) now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
-    pub(super) received_ms: Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-}
-
-impl LifeClock {
-    pub(super) fn production() -> Self {
-        Self {
-            now_ms: Arc::new(shekyl_transport_layer::monotonic_ms),
-            received_ms: Arc::new(|conn| shekyl_capped_stream::node_gate().activity(conn).1),
-        }
-    }
-}
-
-/// A failed test whose verdict waits for its bracket's after side.
+/// A failed test whose verdict waits for its connector's path reading.
 #[derive(Clone, Debug)]
 pub(super) struct PendingVerdict {
     pub(super) connector: ConnectorId,
     pub(super) outcome: DialOutcome,
-    /// When the test's final attempt failed, on the byte-stamp clock.
-    pub(super) failed_ms: u64,
-    /// When the bracket closes, on the byte-stamp clock.
-    pub(super) deadline_ms: u64,
-    /// A sign of life inside the bracket was seen: the failure counts.
-    pub(super) counted: bool,
+    /// When the test's final attempt failed, on the process clock.
+    pub(super) failed: Stamp,
+    /// When the connector's wait runs out, on the engine's clock: with no
+    /// reading by then, the failure is excused.
+    pub(super) deadline: Tick,
 }
 
-/// What the judge keeps per connector.
-#[derive(Clone, Copy, Debug, Default)]
-pub(super) struct LinkEvidence {
-    pub(super) observed: Observations,
-    /// The latest sign of life already acted on: a later one is the next.
-    pub(super) seen: Option<u64>,
-    /// An excusal was applied since the last sign of life.
+/// What the judge keeps per connector: where it asks, and whether an
+/// excusal was applied since its last working reading.
+pub(super) struct PathJudging {
+    pub(super) source: Arc<dyn PathSource>,
     pub(super) excused_since: bool,
 }
 
+impl PathJudging {
+    pub(super) fn none() -> Self {
+        Self {
+            source: Arc::new(NoReadings),
+            excused_since: false,
+        }
+    }
+}
+
 impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
-    /// Read each connector's corroborating sessions off the board, then
-    /// run `body`, dating any sign of life `at`.
-    ///
-    /// The board is the layer's published copy, read before the dialer's
-    /// lock. `body` must not call back into the session layer.
-    pub(super) fn with_sessions<R>(&self, at: Stamp, body: impl FnOnce(&mut Shared) -> R) -> R {
-        let board = self.board();
-        let mut shared = self.shared();
-        Self::observe_sessions(&board, &mut shared, at);
-        body(&mut shared)
+    /// Ask `connector`'s `source` for its path readings from now on. The
+    /// network supplies each connector's own; one supplied again replaces
+    /// the last. Verdicts already waiting are asked of the new source.
+    pub fn set_path_source(&self, connector: ConnectorId, source: Arc<dyn PathSource>) {
+        self.shared().paths[connector.index()].source = source;
+        self.bell.ring();
     }
 
-    /// Read each connector's corroborating sessions off `board`: the latest
-    /// byte any of them received. A byte that arrived is kept when its
-    /// session later closes; it did arrive.
-    fn observe_sessions(board: &Board, shared: &mut Shared, at: Stamp) {
-        for &connector in ConnectorId::ALL {
-            let traffic = dial_profile(connector)
-                .judging
-                .corroboration
-                .session_traffic;
-            let received = Arc::clone(&shared.life_clock.received_ms);
-            let latest = board
-                .rows()
-                .iter()
-                .filter(|row| {
-                    row.established()
-                        && row.connector() == connector
-                        && (traffic == SessionTraffic::AnySession
-                            || row.direction() == Direction::Outbound)
-                })
-                .map(|row| received(row.id().get()))
-                .filter(|&ms| ms > 0)
-                .max();
-            shared.evidence[connector.index()]
-                .observed
-                .note_session(latest);
-            Self::note_life(shared, connector, at);
-        }
-    }
-
-    /// A finished attempt's stream, noted after its own failure was judged,
-    /// at `at_ms`: when the stream opened, and never later than the instant
-    /// that failure was judged at, so the stream cannot close its own
-    /// bracket.
-    pub(super) fn note_stream(
-        shared: &mut Shared,
-        connector: ConnectorId,
-        outcome: &DialOutcome,
-        at_ms: u64,
-        at: Stamp,
-    ) {
-        if attempt_stream(outcome) == AttemptStream::Opened {
-            shared.evidence[connector.index()]
-                .observed
-                .note_stream(at_ms);
-            Self::note_life(shared, connector, at);
-        }
-    }
-
-    /// A sign of life the judge has not acted on yet counts every pending
-    /// failure whose bracket it falls inside, clears the excusals made
-    /// since the last one, and on Tor is published for the posture line
-    /// (§6).
-    fn note_life(shared: &mut Shared, connector: ConnectorId, at: Stamp) {
-        let judging = dial_profile(connector).judging;
-        let evidence = &mut shared.evidence[connector.index()];
-        let life = evidence.observed.last_life(judging.corroboration);
-        if life <= evidence.seen {
-            return;
-        }
-        evidence.seen = life;
-        if let Some(life_ms) = life {
-            for pending in shared
-                .pending
-                .iter_mut()
-                .filter(|pending| pending.connector == connector)
-            {
-                pending.counted |= closes_the_bracket(judging, pending.failed_ms, life_ms);
-            }
-        }
-        let evidence = &mut shared.evidence[connector.index()];
-        if std::mem::take(&mut evidence.excused_since) {
-            shared.lists.clear_excused(connector);
-        }
-        shared.tor_link.life(connector, at);
-    }
-
-    /// Judge a failed test at `failed_ms`, or defer its verdict. A test
-    /// that is not a failure is performed as it is.
+    /// Judge a failed test, failed at `failed`, or leave its verdict to
+    /// its connector's path reading. A test that is not a failure is
+    /// performed as it is. A failure that asks is asked at once, so the
+    /// source can start toward a reading now.
     pub(super) fn judge_outcome<R: RelayRng + ?Sized>(
         shared: &mut Shared,
         connector: ConnectorId,
         outcome: &DialOutcome,
-        failed_ms: u64,
-        now: Tick,
+        failed: Stamp,
+        now: Stamp,
         rng: &mut R,
     ) {
         let failure = match outcome {
@@ -183,109 +90,98 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
             DialOutcome::SessionAccepted(_)
             | DialOutcome::Confirmed(_)
             | DialOutcome::PayloadRefused(_) => {
-                shared.lists.apply(outcome, now, Verdict::Counted, rng);
+                shared
+                    .lists
+                    .apply(outcome, now.tick(), Verdict::Counted, rng);
                 return;
             }
         };
-        let judging = dial_profile(connector).judging;
-        let observed = shared.evidence[connector.index()].observed;
-        match judge(failure, judging, observed, failed_ms) {
+        match judge(failure) {
             Judgement::Now(verdict) => Self::perform(shared, connector, outcome, now, verdict, rng),
-            Judgement::AtBracketEnd { deadline_ms } => {
+            Judgement::AskThePath => {
+                let wait = shared.paths[connector.index()].source.wait_nanos();
                 shared.pending.push(PendingVerdict {
                     connector,
                     outcome: outcome.clone(),
-                    failed_ms,
-                    deadline_ms,
-                    counted: false,
+                    failed,
+                    deadline: Tick::new(failed.tick().get().saturating_add(wait)),
                 });
+                Self::apply_due_verdicts(shared, now, rng);
             }
         }
     }
 
-    /// Every deferred verdict a sign of life counted, and every one whose
-    /// deadline has passed with nothing counting it, performed: counted, or
-    /// excused.
+    /// Ask each waiting verdict's connector for a reading after its
+    /// failure, and perform every one that is decided: counted on a
+    /// working reading, excused on an impaired one or when its wait has
+    /// run out.
     pub(super) fn apply_due_verdicts<R: RelayRng + ?Sized>(
         shared: &mut Shared,
-        now: Tick,
+        now: Stamp,
         rng: &mut R,
     ) {
-        let now_ms = (shared.life_clock.now_ms)();
-        let (due, waiting): (Vec<PendingVerdict>, Vec<PendingVerdict>) =
-            std::mem::take(&mut shared.pending)
-                .into_iter()
-                .partition(|pending| pending.counted || pending.deadline_ms <= now_ms);
-        shared.pending = waiting;
-        for pending in due {
-            let verdict = if pending.counted {
-                Verdict::Counted
-            } else {
-                Verdict::Excused
-            };
-            Self::perform(
-                shared,
-                pending.connector,
-                &pending.outcome,
-                now,
-                verdict,
-                rng,
-            );
+        let ready = Arc::clone(&shared.ready);
+        let mut decided = Vec::new();
+        shared.pending.retain(|pending| {
+            let source = &shared.paths[pending.connector.index()].source;
+            let reading = source.reading_after(pending.failed, now, &ready);
+            match settle(reading, now.tick() >= pending.deadline) {
+                Some(verdict) => {
+                    decided.push((pending.connector, pending.outcome.clone(), verdict));
+                    false
+                }
+                None => true,
+            }
+        });
+        for (connector, outcome, verdict) in decided {
+            Self::perform(shared, connector, &outcome, now, verdict, rng);
         }
     }
 
-    /// Perform every deferred verdict that is decided: counted by a sign of
-    /// life inside its bracket, or excused at its deadline. Each wake does
-    /// this first, as the owner loop does.
+    /// Perform every waiting verdict that is decided. Each wake and each
+    /// bell does this first, as the owner loop does.
     pub fn apply_verdicts<R: RelayRng + ?Sized>(&self, rng: &mut R) {
         let at = self.stamp();
-        self.with_sessions(at, |shared| {
-            Self::apply_due_verdicts(shared, at.tick(), rng)
-        });
+        Self::apply_due_verdicts(&mut self.shared(), at, rng);
     }
 
+    /// Perform `verdict`. A counted uncertain failure is a working
+    /// reading, which clears the connector's excusals made since the last
+    /// one; an excusal is noted for the next.
     fn perform<R: RelayRng + ?Sized>(
         shared: &mut Shared,
         connector: ConnectorId,
         outcome: &DialOutcome,
-        now: Tick,
+        now: Stamp,
         verdict: Verdict,
         rng: &mut R,
     ) {
-        if verdict == Verdict::Excused {
-            shared.evidence[connector.index()].excused_since = true;
+        let paths = &mut shared.paths[connector.index()];
+        match verdict {
+            Verdict::Excused => paths.excused_since = true,
+            Verdict::Counted if std::mem::take(&mut paths.excused_since) => {
+                shared.lists.clear_excused(connector);
+            }
+            Verdict::Counted | Verdict::Drop => {}
         }
-        shared.lists.apply(outcome, now, verdict, rng);
+        shared.lists.apply(outcome, now.tick(), verdict, rng);
     }
 
-    /// When the owner loop next wakes for `connector`'s deferred verdicts,
-    /// on the engine's clock: now for one a sign of life has counted,
-    /// otherwise now plus what the byte-stamp clock still has to run to the
-    /// earliest deadline. One clock decides the deadline, so the wake never
-    /// comes before it and never re-arms for a due already past.
+    /// When the owner loop next wakes for `connector`'s waiting verdicts,
+    /// on the engine's clock: the earliest deadline. A reading that
+    /// arrives sooner rings the bell.
     #[must_use]
     pub fn next_verdict_due(&self, connector: ConnectorId) -> Option<Tick> {
-        let shared = self.shared();
-        let now_ms = (shared.life_clock.now_ms)();
-        let wait_ms = shared
+        self.shared()
             .pending
             .iter()
             .filter(|pending| pending.connector == connector)
-            .map(|pending| {
-                if pending.counted {
-                    0
-                } else {
-                    pending.deadline_ms.saturating_sub(now_ms)
-                }
-            })
-            .min()?;
-        drop(shared);
-        let wait_nanos = wait_ms.saturating_mul(1_000_000);
-        Some(Tick::new(self.now().get().saturating_add(wait_nanos)))
+            .map(|pending| pending.deadline)
+            .min()
     }
 
-    /// The deferred verdicts waiting on `connector`, for tests and the
-    /// operator view.
+    /// The verdicts waiting on `connector`, for tests and the operator
+    /// view.
     #[must_use]
     pub fn pending_verdicts(&self, connector: ConnectorId) -> usize {
         self.shared()
@@ -294,23 +190,10 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
             .filter(|pending| pending.connector == connector)
             .count()
     }
+}
 
-    /// The judge's clock now, read outside the dialer lock.
-    pub(super) fn life_now_ms(&self) -> u64 {
-        (self.shared().life_clock.now_ms)()
-    }
-
-    /// Drive the judge's clock and each session's received byte from the
-    /// caller, in place of the byte-stamp clock and the node gate.
-    #[cfg(feature = "test-seams")]
-    pub fn set_life_clock(
-        &self,
-        now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
-        received_ms: Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-    ) {
-        self.shared().life_clock = LifeClock {
-            now_ms,
-            received_ms,
-        };
-    }
+/// The bell a source rings when it has a reading.
+pub(super) fn ready_rings(bell: &Arc<super::ready::Bell>) -> PathReady {
+    let bell = Arc::clone(bell);
+    Arc::new(move || bell.ring())
 }

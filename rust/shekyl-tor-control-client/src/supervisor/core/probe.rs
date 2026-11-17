@@ -14,6 +14,16 @@
 //! this node's inbound handshake is the evidence, when the handshake took
 //! the nonce before the probe's bound. The evidence time is that take.
 //!
+//! **Each descriptor has its own rounds** (`UploadRounds`; Rick,
+//! 2026-11-15). Two rounds ending close together still bring one probe: a
+//! probe already in hand is each round's one probe. A scheduled probe does
+//! not go out while any round is younger than `Policy::round_wait`: it
+//! waits until every open round is that old, and only then is the check's
+//! list drawn ([`Action::CheckDirectories`]), so the list holds what both
+//! descriptors' rounds did. A list drawn when the probe was scheduled held
+//! whatever round had just ended, and on the floor device's runs of
+//! 2026-11-15 that was often the descriptor clients were not asking for.
+//!
 //! **Outside a round** (§4.5, "Overdue"; Rick, 2026-10-31): when no round
 //! has begun within the descriptor's lifetime of the last round's first
 //! upload, counted on this clock, the onion is published again, which
@@ -41,8 +51,9 @@ use super::directories::{
     Counted, DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryRow,
     DirectoryVerdict, Exclusion, OpenUploads,
 };
+use super::onion_path::OnionPath;
 use super::{duration_ns, Action, Core, Duty, Phase, RoundTally};
-use crate::control::{RelayFingerprint, ServiceDescriptor, UploadEnd};
+use crate::control::{DescriptorKey, RelayFingerprint, ServiceDescriptor, UploadEnd};
 
 /// The probe's place in its round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,9 +79,11 @@ pub(super) enum Probe {
     },
 }
 
-/// The descriptor round open now (§4.5).
+/// One descriptor's round open now (§4.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RoundTrack {
+    /// The descriptor the round uploads.
+    descriptor: DescriptorKey,
     started_at: u64,
     /// When its first upload succeeded, and the draw that came with it.
     first: Option<(u64, u64)>,
@@ -81,8 +94,9 @@ pub(super) struct RoundTrack {
 }
 
 impl RoundTrack {
-    const fn new(started_at: u64) -> Self {
+    const fn new(descriptor: DescriptorKey, started_at: u64) -> Self {
         Self {
+            descriptor,
             started_at,
             first: None,
             triggered: false,
@@ -127,49 +141,118 @@ impl Core {
         low + offset
     }
 
-    /// A round began.
-    pub(super) fn round_started(&mut self, now: u64) -> Vec<Action> {
-        self.round = Some(RoundTrack::new(now));
+    /// `descriptor`'s open round, if one is.
+    fn track_mut(&mut self, descriptor: DescriptorKey) -> Option<&mut RoundTrack> {
+        self.rounds
+            .iter_mut()
+            .find(|track| track.descriptor == descriptor)
+    }
+
+    /// Take `descriptor`'s open round out, if one is.
+    fn take_track(&mut self, descriptor: DescriptorKey) -> Option<RoundTrack> {
+        let at = self
+            .rounds
+            .iter()
+            .position(|track| track.descriptor == descriptor)?;
+        Some(self.rounds.remove(at))
+    }
+
+    /// A round of `descriptor` began. One that was still open, its end
+    /// lost, gives way to it.
+    pub(super) fn round_started(&mut self, now: u64, descriptor: DescriptorKey) -> Vec<Action> {
+        self.take_track(descriptor);
+        self.rounds.push(RoundTrack::new(descriptor, now));
         Vec::new()
     }
 
     /// A round's first upload reached a directory: the probe waits for the
     /// round's end, or `Policy::round_wait` from now.
-    pub(super) fn first_uploaded(&mut self, now: u64, draw: u64) -> Vec<Action> {
-        let track = self.round.get_or_insert(RoundTrack::new(now));
-        if track.first.is_none() {
-            track.first = Some((now, draw));
-            self.lifetime_from = Some(now);
+    pub(super) fn first_uploaded(
+        &mut self,
+        now: u64,
+        descriptor: DescriptorKey,
+        draw: u64,
+    ) -> Vec<Action> {
+        if self.track_mut(descriptor).is_none() {
+            self.rounds.push(RoundTrack::new(descriptor, now));
+        }
+        if let Some(track) = self.track_mut(descriptor) {
+            if track.first.is_none() {
+                track.first = Some((now, draw));
+                self.lifetime_from = Some(now);
+            }
         }
         Vec::new()
     }
 
-    /// A round ended. Read in order. More than half of the uploads that
-    /// began were refused: that names refused uploads and republishes
-    /// nothing, because a republish cannot get past a directory holding a
-    /// higher counter (§4.5, "Refused rounds"; Rick, 2026-11-01). Any upload
-    /// reached a directory: refused uploads clear, the onion is published,
+    /// `descriptor` left the tracker: Tor freed it at a rotation. An open
+    /// round is not judged. Its refusal, if it had one, no longer stands,
+    /// whether or not that round was still open.
+    pub(super) fn round_forgotten(&mut self, now: u64, descriptor: DescriptorKey) -> Vec<Action> {
+        self.take_track(descriptor);
+        self.uploads_accepted(now, descriptor);
+        Vec::new()
+    }
+
+    /// The driver is about to publish the onion afresh (`ADD_ONION`). The
+    /// open rounds will never end in this core, and their keys will not be
+    /// accepted, so the publication's refusals leave with them.
+    pub(super) fn forget_publication(&mut self, now: u64) {
+        self.rounds.clear();
+        self.clear_publication_refusals(now);
+    }
+
+    /// A round of `descriptor` ended, judged on that descriptor's whole
+    /// pass. Read in order. More than half of the uploads that began were
+    /// refused: that names refused uploads and republishes nothing, because
+    /// a republish cannot get past a directory holding a higher counter
+    /// (§4.5, "Refused rounds"; Rick, 2026-11-01). Any upload reached a
+    /// directory: that descriptor's refusal clears, the onion is published,
     /// as `ADD_ONION`'s reply does, and the round's one probe is scheduled
     /// unless the round's wait already did. Nothing reached a directory:
-    /// the round says nothing about the onion, Tor retries its own failed
-    /// uploads, and a republish waiting for a judgment ends with nothing
-    /// to judge. That round is not the latest round of uploads, so refused
+    /// the round says nothing about the onion, and Tor retries its own
+    /// failed uploads. A republish uploads both descriptors, and the probe
+    /// the first round with a success schedules judges it: that probe
+    /// arrives only through the descriptor clients ask for. A round that
+    /// reached nothing ends a republish's wait with nothing to judge only
+    /// when no other round is open and no probe is judging it. Refused
     /// uploads keep standing.
-    pub(super) fn round_ended(&mut self, now: u64, tally: RoundTally, draw: u64) -> Vec<Action> {
-        let track = self.round.take();
+    pub(super) fn round_ended(
+        &mut self,
+        now: u64,
+        descriptor: DescriptorKey,
+        tally: RoundTally,
+        draw: u64,
+    ) -> Vec<Action> {
+        let track = self.take_track(descriptor);
         if tally.majority_refused() {
-            return self.uploads_refused(now);
+            return self.uploads_refused(now, descriptor);
         }
         if tally.uploaded == 0 {
-            self.republish_failed(now);
+            if self.rounds.is_empty() && !self.probe_confirms {
+                self.republish_failed(now);
+            }
             return Vec::new();
         }
-        self.uploads_accepted(now);
+        self.uploads_accepted(now, descriptor);
         let mut actions = self.onion_published(now);
         if !track.is_some_and(|track| track.triggered) {
             actions.extend(self.trigger(now, draw, self.republish_is_judging()));
         }
         actions
+    }
+
+    /// Whether a check is in hand: scheduled, in flight, refetching or
+    /// being judged.
+    pub(super) fn check_in_hand(&self) -> bool {
+        self.probe != Probe::Idle
+    }
+
+    /// A check a waiting failure wants (§4.5a): the same check a round
+    /// schedules, under the same gates. It confirms no republish: only the
+    /// republish's own round does.
+    pub(super) fn wanted_check(&mut self, now: u64, draw: u64) -> Vec<Action> {
+        self.trigger(now, draw, false)
     }
 
     /// The round's one probe, or the jump's: scheduled while Running with
@@ -188,20 +271,24 @@ impl Core {
         }
     }
 
-    /// When the open round next needs the core: its wait for the probe, or
+    /// When an open round next needs the core: its wait for the probe, or
     /// the moment it counts as stuck.
     pub(super) fn round_due(&self) -> Option<u64> {
-        let track = self.round?;
-        let wait = track
-            .first
-            .filter(|_| !track.triggered)
-            .map(|(at, _)| at.saturating_add(duration_ns(self.policy.round_wait)));
-        let stuck = (!track.stuck).then(|| {
-            track
-                .started_at
-                .saturating_add(duration_ns(self.policy.round_stuck_after))
-        });
-        wait.into_iter().chain(stuck).min()
+        self.rounds
+            .iter()
+            .flat_map(|track| {
+                let wait = track
+                    .first
+                    .filter(|_| !track.triggered)
+                    .map(|(at, _)| at.saturating_add(duration_ns(self.policy.round_wait)));
+                let stuck = (!track.stuck).then(|| {
+                    track
+                        .started_at
+                        .saturating_add(duration_ns(self.policy.round_stuck_after))
+                });
+                wait.into_iter().chain(stuck)
+            })
+            .min()
     }
 
     /// When the descriptor's lifetime runs out with no round begun: the
@@ -211,7 +298,7 @@ impl Core {
     /// round that ends with no upload leaves the old anchor, so the check
     /// can be due at once: nothing shows a fresh descriptor.
     pub(super) fn overdue_due(&self) -> Option<u64> {
-        if self.round.is_some() || self.republish_cannot_help() {
+        if !self.rounds.is_empty() || self.republish_cannot_help() {
             return None;
         }
         self.lifetime_from
@@ -294,6 +381,9 @@ impl Core {
             }
             Probe::Scheduled { at, .. } => {
                 *at = (*at).max(now.saturating_add(duration_ns(self.policy.probe_after_min)));
+                // Its check's fetches, not drawn yet, wait their delays from
+                // the wake, as a drawn check's do.
+                self.check_from = self.check_from.max(now);
             }
             Probe::Idle | Probe::Refetching | Probe::Judging { .. } => {}
         }
@@ -307,7 +397,7 @@ impl Core {
         if let Some(at) = &mut self.lifetime_from {
             *at = now;
         }
-        if let Some(track) = &mut self.round {
+        for track in &mut self.rounds {
             track.started_at = now;
             if let Some((first_at, _)) = &mut track.first {
                 *first_at = now;
@@ -315,39 +405,43 @@ impl Core {
         }
     }
 
-    /// The open round's deadline fired. Its wait ran out: the probe goes
+    /// An open round's deadline fired. Its wait ran out: the probe goes
     /// ahead with the first upload's draw. It has been open too long: it is
     /// counted, and the driver says so once and ends it in the coalescer.
     pub(super) fn on_round_deadline(&mut self, now: u64) -> Vec<Action> {
-        let Some(mut track) = self.round else {
-            return Vec::new();
-        };
         let mut actions = Vec::new();
-        if let Some((at, draw)) = track.first {
-            if !track.triggered && now >= at.saturating_add(duration_ns(self.policy.round_wait)) {
-                let scheduled = self.trigger(now, draw, self.republish_is_judging());
-                // Standing down schedules nothing. The round's end can still
-                // schedule once it has cleared. A probe already in hand is
-                // this round's one probe.
-                if !scheduled.is_empty()
-                    || (self.probe != Probe::Idle && !self.republish_cannot_help())
+        for at in 0..self.rounds.len() {
+            let mut track = self.rounds[at];
+            if let Some((first_at, draw)) = track.first {
+                if !track.triggered
+                    && now >= first_at.saturating_add(duration_ns(self.policy.round_wait))
                 {
-                    track.triggered = true;
+                    let scheduled = self.trigger(now, draw, self.republish_is_judging());
+                    // Standing down schedules nothing. The round's end can
+                    // still schedule once it has cleared. A probe already in
+                    // hand is this round's one probe.
+                    if !scheduled.is_empty()
+                        || (self.probe != Probe::Idle && !self.republish_cannot_help())
+                    {
+                        track.triggered = true;
+                    }
+                    actions.extend(scheduled);
                 }
-                actions.extend(scheduled);
             }
+            if !track.stuck
+                && now
+                    >= track
+                        .started_at
+                        .saturating_add(duration_ns(self.policy.round_stuck_after))
+            {
+                track.stuck = true;
+                self.stuck_rounds = self.stuck_rounds.saturating_add(1);
+                actions.push(Action::RoundStuck {
+                    descriptor: track.descriptor,
+                });
+            }
+            self.rounds[at] = track;
         }
-        if !track.stuck
-            && now
-                >= track
-                    .started_at
-                    .saturating_add(duration_ns(self.policy.round_stuck_after))
-        {
-            track.stuck = true;
-            self.stuck_rounds = self.stuck_rounds.saturating_add(1);
-            actions.push(Action::RoundStuck);
-        }
-        self.round = Some(track);
         actions
     }
 
@@ -362,40 +456,63 @@ impl Core {
         }
     }
 
-    /// A probe's check begins: the rendezvous probe, and the directories
-    /// the driver names next ([`Action::CheckDirectories`]). The list is
-    /// not in yet ([`DirectoryHalf::AwaitingDraw`]); the verdict waits for it.
+    /// A probe's check begins: the rendezvous probe is scheduled. Its
+    /// directories are drawn when it goes out ([`Self::on_probe_deadline`]).
     fn schedule(&mut self, now: u64, draw: u64, attempt: Attempt, confirms: bool) -> Vec<Action> {
+        if attempt == Attempt::First {
+            self.check_began(now);
+        }
         self.probe_confirms = confirms;
+        self.check_from = now;
         self.probe = Probe::Scheduled {
             at: now.saturating_add(self.probe_delay(draw)),
             attempt,
         };
-        self.directories = Some(DirectoryHalf::AwaitingDraw);
-        vec![Action::CheckDirectories]
+        self.directories = None;
+        Vec::new()
+    }
+
+    /// The latest moment an open round is still younger than
+    /// `Policy::round_wait`, when one is at `now`: a scheduled probe waits
+    /// until then.
+    fn rounds_settle_at(&self, now: u64) -> Option<u64> {
+        self.rounds
+            .iter()
+            .map(|track| {
+                track
+                    .started_at
+                    .saturating_add(duration_ns(self.policy.round_wait))
+            })
+            .filter(|&at| at > now)
+            .max()
     }
 
     /// The directories to ask for the check in hand, each after its own
-    /// delay from the probe's range: a fetch at every directory straight
-    /// after an upload is the signature the probe's jitter exists to hide.
+    /// delay from the probe's range, counted from when the probe was
+    /// scheduled: a fetch at every directory straight after an upload is the
+    /// signature the probe's jitter exists to hide. A fetch already due when
+    /// the list comes in, because the probe waited for a round, goes out
+    /// now.
     /// Installed only while the draw is still outstanding, including once
     /// the probe is already [`Probe::Judging`]. A draw that arrives after
     /// the check was dropped is ignored.
     ///
-    /// An upload still open is asked only when `open_uploads` says so. That
-    /// value was read with the list (§4.5): the round's own probe goes ahead
-    /// once the round is older than `Policy::round_wait`, and a second probe
-    /// drawn seconds after a new round began leaves that round's uploads in
-    /// flight. The check does not read the live round. It may have ended
-    /// while the descriptor was being read, and the list would then be
-    /// classified against a different round. Tor starts a round's uploads in
-    /// one pass (`UploadRounds`), so the round's start is each upload's.
+    /// An upload still open is asked only once its own round is older than
+    /// `Policy::round_wait` (§4.5). The probe waits for that before the list
+    /// is asked for, but the list's request can queue behind another, and a
+    /// pass that begins in between leaves its uploads in flight. So the
+    /// driver reads which descriptors' rounds are still young in the same
+    /// turn as the list ([`Self::open_uploads`]), and the check keeps that
+    /// reading: a round may end while the descriptor is being read, and a
+    /// later reading would be a different round. Tor starts a pass's uploads
+    /// in one turn of its main loop (`UploadRounds`), so the round's start
+    /// is each upload's.
     pub(super) fn directories_drawn(
         &mut self,
         now: u64,
         fetches: Vec<DirectoryFetch>,
         ours: Option<ServiceDescriptor>,
-        open_uploads: OpenUploads,
+        open_uploads: &OpenUploads,
     ) -> Vec<Action> {
         if !matches!(self.directories, Some(DirectoryHalf::AwaitingDraw)) {
             return Vec::new();
@@ -403,8 +520,10 @@ impl Core {
         let rows = fetches
             .into_iter()
             .map(|fetch| {
-                let due = now.saturating_add(self.probe_delay(fetch.draw));
-                if fetch.upload.ended == UploadEnd::Open && !open_uploads.asks() {
+                let due = self.check_from.saturating_add(self.probe_delay(fetch.draw));
+                if fetch.upload.ended == UploadEnd::Open
+                    && !open_uploads.asks(fetch.upload.descriptor)
+                {
                     DirectoryRow::Settled {
                         upload: fetch.upload,
                         counted: Counted::Excluded(Exclusion::UploadInFlight),
@@ -418,24 +537,25 @@ impl Core {
             })
             .collect();
         self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(rows, ours)));
-        self.judge(now)
+        self.on_directories_deadline(now)
     }
 
-    /// How the round open at `now` treats uploads that have not ended.
-    /// The driver reads this in the same turn as the directory list.
+    /// How the rounds open at `now` treat uploads that have not ended: a
+    /// round younger than `Policy::round_wait` leaves them in flight. The
+    /// driver reads this in the same turn as the directory list.
     #[must_use]
     pub fn open_uploads(&self, now: u64) -> OpenUploads {
-        match self.round {
-            Some(track)
-                if now
-                    >= track
+        OpenUploads::in_flight(
+            self.rounds
+                .iter()
+                .filter(|track| {
+                    now < track
                         .started_at
-                        .saturating_add(duration_ns(self.policy.round_wait)) =>
-            {
-                OpenUploads::Hung
-            }
-            _ => OpenUploads::InFlight,
-        }
+                        .saturating_add(duration_ns(self.policy.round_wait))
+                })
+                .map(|track| track.descriptor)
+                .collect(),
+        )
     }
 
     pub(super) fn directories_due(&self) -> Option<u64> {
@@ -556,6 +676,13 @@ impl Core {
         if verdict == DirectoryVerdict::Unmatched {
             actions.push(Action::DirectoriesUnmatched);
         }
+        // The onion path worked only when the probe came back and the
+        // directory check passed in the same check (§4.5a). The probe alone
+        // (`Unmatched`) is answered from Tor's own cached descriptor, so it
+        // is no fact about the path.
+        if arrived.is_some() && verdict == DirectoryVerdict::Held {
+            actions.extend(self.path_fact(OnionPath::Working, now));
+        }
         match (arrived, verdict) {
             (Some(evidence_at), DirectoryVerdict::Held | DirectoryVerdict::Unmatched) => {
                 let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
@@ -580,6 +707,8 @@ impl Core {
                     actions.push(Action::RefetchDescriptor);
                 }
                 Attempt::AfterRefetch => {
+                    // The two-miss verdict is a failed check (§4.5a).
+                    actions.extend(self.path_fact(OnionPath::Impaired, now));
                     self.probe_confirms = false;
                     let cause = if arrived.is_some() {
                         InboundCause::DescriptorNotFound
@@ -645,6 +774,10 @@ impl Core {
 
     /// The probe's deadline fired: a scheduled probe is due, or one in
     /// flight missed its bound.
+    /// A scheduled probe that comes due while a round is younger than
+    /// `Policy::round_wait` waits until every open round is that old. When
+    /// it goes out, its check's directories are asked for: the list is
+    /// drawn now, not when the probe was scheduled.
     pub(super) fn on_probe_deadline(&mut self, now: u64) -> Vec<Action> {
         match self.probe {
             Probe::Scheduled { at, attempt } if now >= at => {
@@ -656,12 +789,20 @@ impl Core {
                     self.directories = None;
                     return Vec::new();
                 }
+                if let Some(settled) = self.rounds_settle_at(now) {
+                    self.probe = Probe::Scheduled {
+                        at: settled,
+                        attempt,
+                    };
+                    return Vec::new();
+                }
                 self.probe = Probe::InFlight {
                     bound_at: now.saturating_add(duration_ns(self.policy.probe_within)),
                     minted_at: None,
                     attempt,
                 };
-                vec![Action::Probe]
+                self.directories = Some(DirectoryHalf::AwaitingDraw);
+                vec![Action::Probe, Action::CheckDirectories]
             }
             Probe::InFlight {
                 bound_at, attempt, ..
@@ -744,8 +885,8 @@ impl Core {
         self.onion_rejected(now)
     }
 
-    /// Drop a probe a republish is replacing. An open round keeps its
-    /// `triggered` bit: that round is not this republish's.
+    /// Drop a probe a republish is replacing. Open rounds keep their
+    /// `triggered` bits: those rounds are not this republish's.
     pub(super) fn disarm_probe(&mut self) -> Vec<Action> {
         let cancel = matches!(self.probe, Probe::InFlight { .. });
         self.probe = Probe::Idle;
@@ -761,7 +902,7 @@ impl Core {
     /// Drop the probe because a republish cannot help. The open round can
     /// schedule its probe once standing down has cleared.
     pub(super) fn stand_down_probe(&mut self) -> Vec<Action> {
-        if let Some(track) = &mut self.round {
+        for track in &mut self.rounds {
             track.triggered = false;
         }
         self.disarm_probe()
@@ -776,7 +917,7 @@ impl Core {
         self.probe = Probe::Idle;
         self.probe_confirms = false;
         self.directories = None;
-        self.round = None;
+        self.rounds.clear();
         self.lifetime_from = None;
         self.queued_send = None;
         self.service_republish = false;

@@ -23,6 +23,7 @@ mod descriptors;
 mod dial;
 mod facts;
 mod network;
+mod path;
 mod peers;
 mod plan;
 mod reports;
@@ -35,7 +36,8 @@ pub use network::{Listening, Network, NetworkParts, StartError};
 pub use plan::{ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, TorPlan};
 pub use tor::{SupervisorFeeds, TOR_DIAL_WITHIN, TOR_SOCKS_TIMEOUT};
 
-pub use shekyl_dialer::{session_of, TallySink, TorCensus, TorLinkTally};
+pub use path::{PathFact, PathFactsSink};
+pub use shekyl_dialer::{session_of, LinkCensus, LinkTally, TallySink};
 pub use shekyl_p2p_session::{
     Board, ClaimCarrier, CoreSyncData, Endpoint, Established, PerConnector, ProbeArrival,
     ProbeHandshake, ProbeSink, Row, SessionsSink, SyncInbound, SyncOwner, Taken,
@@ -45,5 +47,5 @@ pub use shekyl_relay::owner::{Admit, PoolDoor, RelayHandle, VerdictSink};
 pub use shekyl_relay::{NodeSync, OriginVerdict, TxId};
 pub use shekyl_transport_layer::{
     clearnet_linger_descriptors, dial_profile, BanLeft, ConnectorId, DownCause, InboundCause,
-    InboundFacet, Ipv4Subnet, ListedBan, NetworkAddress, Sockets,
+    InboundFacet, Ipv4Subnet, ListedBan, NetworkAddress, PathReading, Sockets,
 };
