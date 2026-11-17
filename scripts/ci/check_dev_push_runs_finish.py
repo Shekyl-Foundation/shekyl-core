@@ -13,7 +13,9 @@ merges then never finishes, and `dev` has no verdict for hours: from
 1,595 runner-minutes went to runs that reported nothing.
 
 What passes: each workflow named in `FINISHING` triggers on push to
-`dev`, and its top-level concurrency has `cancel-in-progress` equal to
+`dev` (every branch, or a literal `branches` list naming `dev`; a branch
+pattern or `branches-ignore` is refused, not evaluated), and its top-level
+concurrency has `cancel-in-progress` equal to
 `CANCEL_ONLY_PRS`. A pull request's newer push still cancels its older
 run, since that run tests a head nobody will merge. Any other event
 queues: the running run finishes, one run waits, and a newer push
@@ -57,30 +59,56 @@ FINISHING = (
 )
 
 
-def pushes_on_dev(doc: dict) -> bool:
+# A branch filter entry with any of these is a pattern, not a name.
+PATTERN_CHARS = frozenset("*?[]!+")
+
+
+def push_trigger_problem(doc: dict) -> str | None:
+    """Why this gate cannot read the workflow as running on push to `dev`.
+
+    Only the forms the gate can decide are accepted: a push with no branch
+    or tag filter (every branch), or a `branches` list of literal names that
+    holds `dev`. Actions reads a branch filter as ordered globs with `!`
+    exclusions, so `[dev, '!dev']` or `branches-ignore: ['**']` stop `dev`
+    pushes while naming `dev`; a pattern or `branches-ignore` is refused
+    rather than evaluated.
+    """
     trigger = doc.get("on")
+    if trigger == "push" or (isinstance(trigger, list) and "push" in trigger):
+        return None
     if not isinstance(trigger, dict) or "push" not in trigger:
-        return False
+        return "has no push trigger"
     push = trigger["push"]
     if push is None:
-        return True
+        return None
     if not isinstance(push, dict):
-        return False
-    if "branches" in push:
-        return "dev" in (push["branches"] or [])
+        return f"push trigger is {push!r}, not a mapping"
     if "branches-ignore" in push:
-        return "dev" not in (push["branches-ignore"] or [])
-    # A tags filter alone runs on tag pushes only.
-    return "tags" not in push and "tags-ignore" not in push
+        return "filters push with branches-ignore; the gate reads only a literal branches list"
+    if "branches" not in push:
+        if "tags" in push or "tags-ignore" in push:
+            return "filters push on tags only, which runs on no branch push"
+        return None
+    branches = push["branches"]
+    if not isinstance(branches, list) or not all(isinstance(b, str) for b in branches):
+        return f"push branches is {branches!r}, not a list of names"
+    patterns = [b for b in branches if PATTERN_CHARS & set(b)]
+    if patterns:
+        return f"push branches holds patterns {patterns}; the gate reads only literal branch names"
+    if "dev" not in branches:
+        return "does not push on dev"
+    return None
 
 
 def problems_in(filename: str, doc: object) -> list[str]:
     if not isinstance(doc, dict):
         return [f"{filename}: not a mapping, so nothing in it is graded"]
-    if not pushes_on_dev(doc):
+    trigger_problem = push_trigger_problem(doc)
+    if trigger_problem is not None:
         return [
-            f"{filename}: no longer runs on push to dev; take it off "
-            "FINISHING in check_dev_push_runs_finish.py"
+            f"{filename}: {trigger_problem}; name dev literally, or take the "
+            "file off FINISHING in check_dev_push_runs_finish.py if it no "
+            "longer runs there"
         ]
     problems: list[str] = []
     concurrency = doc.get("concurrency")
@@ -157,7 +185,16 @@ def selftest() -> int:
         ("no push trigger", {**doc(CANCEL_ONLY_PRS), "on": {"pull_request": None}}, 1),
         ("pushes on tags only", doc(CANCEL_ONLY_PRS, push={"tags": ["v*"]}), 1),
         ("pushes on every branch", {**doc(CANCEL_ONLY_PRS), "on": {"push": None}}, 0),
-        ("ignores main only", doc(CANCEL_ONLY_PRS, push={"branches-ignore": ["main"]}), 0),
+        ("push in an event list", {**doc(CANCEL_ONLY_PRS), "on": ["push", "pull_request"]}, 0),
+        ("push as the one event", {**doc(CANCEL_ONLY_PRS), "on": "push"}, 0),
+        ("a paths filter only", doc(CANCEL_ONLY_PRS, push={"paths": ["rust/**"]}), 0),
+        ("dev and main", doc(CANCEL_ONLY_PRS, push={"branches": ["dev", "main"]}), 0),
+        # Actions applies `!` in order, so this list stops dev pushes.
+        ("dev then excluded", doc(CANCEL_ONLY_PRS, push={"branches": ["dev", "!dev"]}), 1),
+        ("every branch by glob", doc(CANCEL_ONLY_PRS, push={"branches": ["**"]}), 1),
+        ("ignores every branch", doc(CANCEL_ONLY_PRS, push={"branches-ignore": ["**"]}), 1),
+        ("ignores main only", doc(CANCEL_ONLY_PRS, push={"branches-ignore": ["main"]}), 1),
+        ("branches not a list", doc(CANCEL_ONLY_PRS, push={"branches": "dev"}), 1),
         (
             "a job cancels itself",
             doc(CANCEL_ONLY_PRS, jobs={"a": {"concurrency": {"group": "g", "cancel-in-progress": True}}}),
