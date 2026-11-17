@@ -12,8 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use shekyl_daemon_config::{after_file, Network, Platform, TABLE};
 use shekyl_daemon_rpc::chain_facts::FactsFault;
-use shekyl_difficulty::Difficulty;
-use shekyl_miner::Job;
 use shekyl_options::read_cli;
 use shekyl_types::BlockHash;
 
