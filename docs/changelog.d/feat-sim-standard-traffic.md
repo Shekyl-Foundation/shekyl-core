@@ -1,0 +1,16 @@
+- **The economics sim runs every scenario on standard traffic.** This implements Rick's ruling of 2026-11-15 that realistic traffic is the sim's standard scenario.
+  - **The draw.** Each block's interval is drawn exponential around the target spacing. Each fee rung's arrivals over that interval are Poisson, keyed on the seed, the height and the rung. A mean above Knuth's limit is drawn in chunks and summed.
+    - `exp` and `log` come from `libm`, so a pin holds on every host.
+    - The rungs' sum is §5.34's geometric count, so the restated median, 35, stands.
+  - **The default.** One named constant, `STANDARD_TRAFFIC`, at the canonical seed 1. Every `SimParams` constructor starts there, and the narration pins carry it.
+  - **The control.** The `steady` arm offers every block its demand. Run it with `--control-steady-traffic`.
+    - Its pins (stage 2's two arms, ESR-10's and EUP-4's nightly scopes) hold the reports byte for byte as they stood before, and run nightly.
+    - The recorded baseline fixture and the unit tests that pin steady arithmetic name it.
+  - **The spread.** `--seed-spread` runs `--stage2`, `--esr10`, `--eup4` or one instrument at seeds 1, 2 and 3. Each figure that differs prints as its median and [its range].
+  - **The grid's honest rows** print year 1's room:
+    - the cap in transactions;
+    - the share of blocks overflowed by their own arrivals;
+    - the share leaving a backlog;
+    - the median offered and carried.
+  - Predicted in `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.35 (STD-1…STD-9) before the code.
+- **The umbrella's predictability row is restated** (Rick, 2026-11-17). Every scenario's emitted fraction stays inside the release rails' envelope, with total supply unchanged.

@@ -1941,6 +1941,9 @@ fn oq2_corpus_samples(traj: &BurdenTrajectory) -> Vec<u64> {
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
 /// stdout, a human-readable summary to stderr.
 pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
+    if let Some(traffic) = params.traffic.report_line() {
+        writeln!(out, "{traffic}")?;
+    }
     // The arm first: every fee-dependent figure below is a figure under it.
     writeln!(out, "{}", params.fee.label())?;
     if let Some(preamble) = params.fee.report_preamble() {
@@ -2578,6 +2581,26 @@ mod tests {
         ),
     };
 
+    /// The production fee arm on the `steady` control's traffic: the
+    /// regression anchor (§5.35, STD-2). It moves only when the arithmetic
+    /// every arm shares does.
+    const PRODUCTION_STEADY_ARM: PinnedArm = PinnedArm {
+        params: || SimParams::default().on_steady(),
+        fixture: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/stage2_narration_steady.txt"
+        ),
+    };
+
+    /// The flat fee arm on the `steady` control's traffic.
+    const FLAT_CONTROL_STEADY_ARM: PinnedArm = PinnedArm {
+        params: || SimParams::section_12_14_control().on_steady(),
+        fixture: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/stage2_narration_flat_control_steady.txt"
+        ),
+    };
+
     fn stage2_narration(arm: &PinnedArm) -> String {
         let mut narration = String::new();
         run_stage2(&mut narration, &(arm.params)()).expect("String sink is infallible");
@@ -2620,6 +2643,15 @@ mod tests {
         assert_narration_matches(&FLAT_CONTROL_ARM);
     }
 
+    /// Both fee arms on the `steady` control against their committed
+    /// copies: the regression anchor (§5.35, STD-2). Nightly.
+    #[test]
+    #[ignore = "both --stage2 reports on steady traffic; ~250 s in release — nightly economics-sim-ignored; run with --release --ignored; fixture generated and checked on Linux x86-64"]
+    fn stage2_steady_narrations_match_the_committed_fixtures() {
+        assert_narration_matches(&PRODUCTION_STEADY_ARM);
+        assert_narration_matches(&FLAT_CONTROL_STEADY_ARM);
+    }
+
     fn assert_narration_matches(arm: &PinnedArm) {
         crate::committed_fixture::assert_matches(
             "--stage2 narration",
@@ -2628,7 +2660,8 @@ mod tests {
         );
     }
 
-    /// Regenerate both committed narrations, armed (rule 50). Ignored by
+    /// Regenerate the committed narrations, both fee arms on standard
+    /// traffic and on the `steady` control, armed (rule 50). Ignored by
     /// default; run with `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD
     /// <rationale>" cargo test --release -p shekyl-economics-sim -- --ignored
     /// regen_stage2_narration_fixtures`, the date naming the
@@ -2646,6 +2679,14 @@ mod tests {
                 Output {
                     path: FLAT_CONTROL_ARM.fixture,
                     build: || stage2_narration(&FLAT_CONTROL_ARM),
+                },
+                Output {
+                    path: PRODUCTION_STEADY_ARM.fixture,
+                    build: || stage2_narration(&PRODUCTION_STEADY_ARM),
+                },
+                Output {
+                    path: FLAT_CONTROL_STEADY_ARM.fixture,
+                    build: || stage2_narration(&FLAT_CONTROL_STEADY_ARM),
                 },
             ],
         );

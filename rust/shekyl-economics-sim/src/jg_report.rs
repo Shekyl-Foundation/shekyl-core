@@ -93,9 +93,9 @@ pub(super) fn write_opening(
          only), median+floor (the median, the stuffer paying the relay floor on its own bodies),\n\
          decoupled (the baseline in place of volume: release, the burn and C read none), rails-only\n\
          (release rails at 1.0; the burn and C still read the sum). Traffic: steady (the schedule's\n\
-         demand every block) or variable (a geometric count around it drawn at the block's height:\n\
-         Poisson arrivals over exponential block intervals; the pool carries what a block does not\n\
-         list){seed_clause}. Zone: N 2-in/2-out\n\
+         demand every block) or variable (the sim's standard traffic, §5.35: each block's interval drawn\n\
+         exponential at its height, and each fee rung's Poisson arrivals over it; the pool carries what a\n\
+         block does not list){seed_clause}. Zone: N 2-in/2-out\n\
          spends of {reference} B (genesis depth and Standard fee) plus the coinbase reserve ({} B), beside\n\
          the inherited and re-derived zones; w_ref at {} and {} B, each fixed across N. Not re-derived:\n\
          TX_WEIGHT_LIMIT (the sim does not read it; it caps one transaction, not a count) and\n\
@@ -122,7 +122,10 @@ pub(super) fn write_honest(
          the zone at the year-1 relay floor (SKL), the first year blocks carry the design load\n\
          ({DESIGN_LOAD_SPENDS} spends, {} ordinary transactions a block), the declared step's up-edge (M_r over the\n\
          window before it and the trace's last window, and the blocks until that window mean covers 95 % of\n\
-         the move), and for a median arm on variable traffic its count over year 1 after the window's first\n\
+         the move), year 1's room after the window's first fill (the cap in transactions, least to most:\n\
+         the effective median less the coinbase reserve over the Standard ordinary transaction; the share\n\
+         of blocks whose own arrivals exceed it; the share leaving a backlog; the median offered and\n\
+         carried), and for a median arm on variable traffic its count over year 1 after the window's first\n\
          fill, per seed: the mean, and the share of blocks at {} and at {derived}, the derived median.",
         design_load_txs(base),
         derived - 1
@@ -174,6 +177,19 @@ pub(super) fn write_honest(
             show(&rows.iter().map(|row| row.fill_a_day_skl).collect::<Vec<_>>(), 1),
             show(&rows.iter().map(|row| row.step_m_r.0).collect::<Vec<_>>(), 3),
             show(&rows.iter().map(|row| row.step_m_r.1).collect::<Vec<_>>(), 3),
+        )?;
+        let capacity = |pick: fn(&HonestRow) -> f64, digits| {
+            show(&rows.iter().map(pick).collect::<Vec<_>>(), digits)
+        };
+        write!(
+            out,
+            " ; room cap {}-{} txs, arrivals over it {} %, backlog {} %, median offered {} carried {}",
+            capacity(|row| row.capacity.cap.0 as f64, 0),
+            capacity(|row| row.capacity.cap.1 as f64, 0),
+            capacity(|row| row.capacity.overflow_pct, 1),
+            capacity(|row| row.capacity.backlog_pct, 1),
+            capacity(|row| row.capacity.median_offered as f64, 0),
+            capacity(|row| row.capacity.median_carried as f64, 0),
         )?;
         for row in rows {
             if let Some(count) = row.median_count {
