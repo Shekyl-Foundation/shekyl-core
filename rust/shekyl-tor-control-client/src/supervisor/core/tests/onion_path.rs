@@ -120,8 +120,9 @@ fn while_tor_says_it_cannot_reach_its_network_no_check_runs() {
 /// verdict, a want every 30 s starts nothing until the spacing has passed
 /// from the check's start, and then exactly one check starts. The edits
 /// that make this red: spacing from the verdict instead of the start, a
-/// want starting a check inside the spacing, judging that start by the
-/// step's horizon, or no check at the spacing.
+/// want starting a check inside the spacing, or no check at the spacing.
+/// The start is `last_check_began`, so one inside the spacing fails even
+/// when this step's horizon is already past the spacing.
 #[test]
 fn checks_never_run_closer_together_than_the_spacing() {
     let mut core = published();
