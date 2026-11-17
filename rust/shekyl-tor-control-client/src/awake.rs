@@ -8,8 +8,9 @@
 //! A tokio timer follows tokio's clock. On Windows that clock runs through
 //! every sleep. These waits sleep on that timer and, each time it returns,
 //! read [`MonotonicClock`]. They end only once that clock says so. S3 sleep
-//! and hibernation count for nothing on it. Modern Standby does not: the
-//! clock keeps running, so a standby still ends a wait at the wake.
+//! and hibernation count for nothing on it, and nor does most of a Modern
+//! Standby's time in DRIPS. A standby's active time counts, so a standby
+//! whose active time passes a wait's remainder ends it at the wake.
 //!
 //! The timing engine's thread does not use them. It sleeps on
 //! [`Clock::wait_for`], and linking

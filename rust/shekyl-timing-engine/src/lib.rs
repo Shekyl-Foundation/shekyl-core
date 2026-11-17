@@ -145,12 +145,12 @@ static PROCESS_ORIGIN: OnceLock<source::Reading> = OnceLock::new();
 /// `Instant`, which is `CLOCK_MONOTONIC`; on macOS it is `Instant`, which is
 /// `CLOCK_UPTIME_RAW`. On Windows `Instant` counts through every sleep, so
 /// the clock reads the unbiased interrupt time instead, which leaves out S3
-/// sleep and hibernation. It does not leave out Modern Standby (S0 low-power
-/// idle, the only sleep most current Windows laptops offer): the kernel
-/// keeps running, and the count went on through two standbys on 2026-11-11
+/// sleep and hibernation. Of a Modern Standby (S0 low-power idle, the only
+/// sleep most current Windows laptops offer) it leaves out most of the time
+/// in DRIPS, the deep idle, and counts the active time
 /// (`TOR_SUPERVISOR.md` §10, `TSR-M8`). A process frozen across a standby
-/// finds its deadlines late at the wake, and the Tor supervisor's resume
-/// check reads that as a wake.
+/// finds its deadlines late at the wake by the active time, and the Tor
+/// supervisor's resume check reads that as a wake once it passes 10 s.
 #[derive(Clone, Debug)]
 pub struct MonotonicClock {
     origin: &'static source::Reading,
@@ -184,8 +184,8 @@ mod source {
     }
 
     /// A reading of the unbiased interrupt time, in 100 ns units. The count
-    /// leaves out S3 sleep and hibernation, not Modern Standby (S0), where
-    /// the kernel keeps running. The precise call
+    /// leaves out S3 sleep and hibernation, and most of a Modern Standby's
+    /// time in DRIPS; it counts the standby's active time. The precise call
     /// reads the timer hardware, so a short span keeps its resolution where
     /// the plain call moves only at each clock tick (0.5 to 15.6 ms). It
     /// needs Windows 10 or Windows Server 2016, which every Shekyl Windows
