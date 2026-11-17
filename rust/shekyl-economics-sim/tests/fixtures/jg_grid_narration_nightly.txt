@@ -7,7 +7,7 @@ decoupled (the baseline in place of volume: release, the burn and C read none), 
 (release rails at 1.0; the burn and C still read the sum). Traffic: steady (the schedule's
 demand every block) or variable (a geometric count around it drawn at the block's height:
 Poisson arrivals over exponential block intervals; the pool carries what a block does not
-list), at seeds 1, each figure its median across them and [its range]. Zone: N 2-in/2-out
+list), at seed 1. Zone: N 2-in/2-out
 spends of 19939 B (genesis depth and Standard fee) plus the coinbase reserve (1386 B), beside
 the inherited and re-derived zones; w_ref at 3000 and 12595 B, each fixed across N. Not re-derived:
 TX_WEIGHT_LIMIT (the sim does not read it; it caps one transaction, not a count) and
@@ -18,29 +18,29 @@ THE HONEST CHAIN. Per signal, traffic, zone and w_ref: the ratio the chain rests
 before the step), the year-1 Standard fee (SKL, and over the ceiling), a day's blocks filled to
 the zone at the year-1 relay floor (SKL), the first year blocks carry the design load
 (30 spends, 48 ordinary transactions a block), the declared step's up-edge (M_r over the
-window before it and the trace's last window, and the blocks to 95 % of that move), and for a
-median arm on variable traffic its count over year 1 after the window's first fill, per seed:
-the mean, and the share of blocks at 34 and at 35, the derived median.
+window before it and the trace's last window, and the blocks until that window mean covers 95 % of
+the move), and for a median arm on variable traffic its count over year 1 after the window's first
+fill, per seed: the mean, and the share of blocks at 34 and at 35, the derived median.
   SMA          steady   inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
-  SMA          steady   inherited       300000 B w_ref 12595: rests 1.000 ; fee 1.2233 (2.46x) ; fill a day 4337.9 ; design load y1 ; step M_r 1.000->1.300 in 654 blocks
-  SMA          steady   N = 90         1795896 B w_ref  3000: rests 1.000 ; fee 0.0462 (0.09x) ; fill a day 1031.9 ; design load y1 ; step M_r 1.000->1.300 in 141 blocks
-  SMA          steady   N = 90         1795896 B w_ref 12595: rests 1.000 ; fee 0.1940 (0.39x) ; fill a day 4331.7 ; design load y1 ; step M_r 1.000->1.300 in 136 blocks
+  SMA          steady   inherited       300000 B w_ref 12595: rests 1.000 ; fee 1.2233 (2.46x) ; fill a day 4337.9 ; design load y1 ; step M_r 1.000->1.300 in 1235 blocks
+  SMA          steady   N = 90         1795896 B w_ref  3000: rests 1.000 ; fee 0.0462 (0.09x) ; fill a day 1031.9 ; design load y1 ; step M_r 1.000->1.300 in 766 blocks
+  SMA          steady   N = 90         1795896 B w_ref 12595: rests 1.000 ; fee 0.1940 (0.39x) ; fill a day 4331.7 ; design load y1 ; step M_r 1.000->1.300 in 763 blocks
   SMA          variable inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
-  SMA          variable inherited       300000 B w_ref 12595: rests 1.004 ; fee 0.7677 (1.55x) ; fill a day 2659.2 ; design load y1 ; step M_r 1.004->1.300 in 366 blocks
-  SMA          variable N = 90         1795896 B w_ref  3000: rests 1.004 ; fee 0.0461 (0.09x) ; fill a day 1073.2 ; design load y1 ; step M_r 1.004->1.300 in 120 blocks
-  SMA          variable N = 90         1795896 B w_ref 12595: rests 1.004 ; fee 0.1936 (0.39x) ; fill a day 4510.1 ; design load y1 ; step M_r 1.004->1.300 in 117 blocks
+  SMA          variable inherited       300000 B w_ref 12595: rests 1.004 ; fee 0.7677 (1.55x) ; fill a day 2659.2 ; design load y1 ; step M_r 1.004->1.300 in 938 blocks
+  SMA          variable N = 90         1795896 B w_ref  3000: rests 1.004 ; fee 0.0461 (0.09x) ; fill a day 1073.2 ; design load y1 ; step M_r 1.004->1.300 in 750 blocks
+  SMA          variable N = 90         1795896 B w_ref 12595: rests 1.004 ; fee 0.1936 (0.39x) ; fill a day 4510.1 ; design load y1 ; step M_r 1.004->1.300 in 748 blocks
   median       steady   inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
-  median       steady   inherited       300000 B w_ref 12595: rests 1.000 ; fee 1.2231 (2.46x) ; fill a day 4337.9 ; design load y1 ; step M_r 1.000->1.300 in 714 blocks
-  median       steady   N = 90         1795896 B w_ref  3000: rests 1.000 ; fee 0.0462 (0.09x) ; fill a day 1031.9 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
-  median       steady   N = 90         1795896 B w_ref 12595: rests 1.000 ; fee 0.1940 (0.39x) ; fill a day 4331.7 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       steady   inherited       300000 B w_ref 12595: rests 1.000 ; fee 1.2231 (2.46x) ; fill a day 4337.9 ; design load y1 ; step M_r 1.000->1.300 in 1272 blocks
+  median       steady   N = 90         1795896 B w_ref  3000: rests 1.000 ; fee 0.0462 (0.09x) ; fill a day 1031.9 ; design load y1 ; step M_r 1.000->1.300 in 1045 blocks
+  median       steady   N = 90         1795896 B w_ref 12595: rests 1.000 ; fee 0.1940 (0.39x) ; fill a day 4331.7 ; design load y1 ; step M_r 1.000->1.300 in 1045 blocks
   median       variable inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move ; variable s1 count 22.04 (34: 0.0 %, 35: 0.0 %)
-  median       variable inherited       300000 B w_ref 12595: rests 1.330 ; fee 0.9787 (1.97x) ; fill a day 3306.1 ; design load y1 ; step M_r 1.297->1.300 in 0 blocks ; variable s1 count 64.68 (34: 0.0 %, 35: 0.0 %)
-  median       variable N = 90         1795896 B w_ref  3000: rests 0.808 ; fee 0.0374 (0.08x) ; fill a day 848.2 ; design load y1 ; step M_r 0.812->1.300 in 175 blocks ; variable s1 count 38.77 (34: 2.1 %, 35: 4.2 %)
-  median       variable N = 90         1795896 B w_ref 12595: rests 0.802 ; fee 0.1569 (0.32x) ; fill a day 3566.2 ; design load y1 ; step M_r 0.808->1.300 in 175 blocks ; variable s1 count 38.65 (34: 2.2 %, 35: 4.6 %)
+  median       variable inherited       300000 B w_ref 12595: rests 1.330 ; fee 0.9787 (1.97x) ; fill a day 3306.1 ; design load y1 ; step M_r 1.297->1.300 in 178 blocks ; variable s1 count 64.68 (34: 0.0 %, 35: 0.0 %)
+  median       variable N = 90         1795896 B w_ref  3000: rests 0.808 ; fee 0.0374 (0.08x) ; fill a day 848.2 ; design load y1 ; step M_r 0.812->1.300 in 798 blocks ; variable s1 count 38.77 (34: 2.1 %, 35: 4.2 %)
+  median       variable N = 90         1795896 B w_ref 12595: rests 0.802 ; fee 0.1569 (0.32x) ; fill a day 3566.2 ; design load y1 ; step M_r 0.808->1.300 in 799 blocks ; variable s1 count 38.65 (34: 2.2 %, 35: 4.6 %)
   median-r     variable inherited       300000 B w_ref  3000: rests 0.629 ; fee 1.1907 (2.40x) ; fill a day 4485.9 ; design load y16 ; step M_r 0.800->0.800 in no move ; variable s1 count 22.04 (34: 0.0 %, 35: 0.0 %)
   median-r     variable inherited       300000 B w_ref 12595: rests 1.901 ; fee 1.0017 (2.02x) ; fill a day 3335.0 ; design load y1 ; step M_r 1.300->1.300 in no move ; variable s1 count 64.68 (34: 0.0 %, 35: 0.0 %)
-  median-r     variable N = 90         1795896 B w_ref  3000: rests 1.154 ; fee 0.0511 (0.10x) ; fill a day 1207.7 ; design load y1 ; step M_r 1.154->1.300 in 51 blocks ; variable s1 count 38.77 (34: 2.1 %, 35: 4.2 %)
-  median-r     variable N = 90         1795896 B w_ref 12595: rests 1.145 ; fee 0.2140 (0.43x) ; fill a day 5072.6 ; design load y1 ; step M_r 1.145->1.300 in 51 blocks ; variable s1 count 38.65 (34: 2.2 %, 35: 4.6 %)
+  median-r     variable N = 90         1795896 B w_ref  3000: rests 1.154 ; fee 0.0511 (0.10x) ; fill a day 1207.7 ; design load y1 ; step M_r 1.154->1.300 in 710 blocks ; variable s1 count 38.77 (34: 2.1 %, 35: 4.2 %)
+  median-r     variable N = 90         1795896 B w_ref 12595: rests 1.145 ; fee 0.2140 (0.43x) ; fill a day 5072.6 ; design load y1 ; step M_r 1.145->1.300 in 709 blocks ; variable s1 count 38.65 (34: 2.2 %, 35: 4.6 %)
 
 THE STUFFER. Per signal, traffic, zone, w_ref and start: a stuffer holding its share (100 = every
 miner) for the whole measured span (2160 blocks from the start of the year); the bodies
