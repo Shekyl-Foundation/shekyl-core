@@ -4372,16 +4372,19 @@ count offered against the median carried.
     | Ratio | 1.26 | 1.05 | 1.00 | 0.88 | 0.80 | 0.76 | 0.74 | 0.72 |
   - The SMA reads 1.004 at every one.
   - `median-r` reads 1.80 down to 1.03 over the same range.
-- **On variable traffic the median follows an honest step within a
-  window.** The block counts in this bullet are the per-block crossing
-  of the window-mean move, the reading at `3066f51832`. The narrations
-  regenerated on 2026-11-16 settle on the window mean itself (§5.34,
-  "the step's endpoints").
-  - Where there is room it covers 95 % of the step in 55 blocks at
-    N = 60, 99 at the re-derived zone, 175 at N = 90 and 226 at N = 150.
-  - The SMA takes 299, 266, 120 and 71.
-  - The median's 361 blocks in §5.33.1 came from traffic that never
-    varies.
+- **On variable traffic the window mean covers 95 % of an honest step
+  in about one window** (`w_ref` 3 000; §5.34, the step's endpoints).
+  The narrations regenerated on 2026-11-16 read that mean. A figure is
+  its median across seeds 1, 2 and 3, with [its range].
+  - Where there is room the median takes 695 [693, 726] blocks at
+    N = 60, 726 [720, 741] at the re-derived zone, 800 [798, 802] at
+    N = 90 and 849 [845, 850] at N = 150.
+  - The SMA takes 878 [868, 880], 850 [837, 852], 750 [746, 757] and
+    718 [716, 728].
+  - The per-block crossing of the same move, the reading at
+    `3066f51832`, was 55, 99, 175 and 226 blocks for the median and
+    299, 266, 120 and 71 for the SMA. The median's 361 blocks in
+    §5.33.1 came from traffic that never varies.
 - **The break-even burn on the stuffer's own floor fees is above 100 %
   wherever honest traffic leaves `M_r` below its cap.**
   - Across the 993 cells where a stuffer gains over 100 SKL and the honest
