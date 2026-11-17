@@ -256,6 +256,41 @@ fn j24_the_reward_commit_set_is_the_loud_vouts_in_order() {
         .is_none());
 }
 
+/// CEN-J24 fixes no position: a wallet places a claim's reward vout
+/// wherever its transaction key puts it (R-24), and the row reads the loud
+/// vout at any position. The claim with its two vouts swapped (each with
+/// its commitment and encrypted fields; the sum is unchanged) passes
+/// `tx_form`, and its reward set is the loud vout at position 1.
+#[test]
+fn j24_reads_the_reward_vout_wherever_it_sits() {
+    let mut coverage = RuleCoverage::EMPTY;
+    let mut moved = claim(5);
+    moved.prefix.outputs.swap(0, 1);
+    let Ct::Fcmp { base, .. } = &mut moved.ct else {
+        panic!("an emission is an Fcmp ct");
+    };
+    base.commitments.swap(0, 1);
+    base.enc_amounts.swap(0, 1);
+    base.enc_labels.swap(0, 1);
+    assert_eq!(moved.prefix.outputs[0].amount, 0, "the change vout leads");
+    tx_form(&moved, TxSlot::Lone, &RuleSet::GENESIS).expect("a moved reward vout balances");
+    let (commits, sum) = J24::reward_commits(&lone(&moved, &mut coverage))
+        .expect("well-defined")
+        .expect("an emission");
+    let Ct::Fcmp { base, .. } = &moved.ct else {
+        panic!("an emission is an Fcmp ct");
+    };
+    assert_eq!(
+        commits,
+        vec![RewardCommit {
+            commitment: base.commitments[1],
+            amount_plain: 5,
+            one_time_key: moved.prefix.outputs[1].key,
+        }]
+    );
+    assert_eq!(sum, 5);
+}
+
 /// The band's order is the C++ arm's: a body whose vin does not parse and
 /// whose slot key is a stranger's is J19's, not J20's.
 #[test]
