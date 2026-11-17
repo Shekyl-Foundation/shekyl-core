@@ -73,6 +73,7 @@ use crate::kem::{
 };
 use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
 use crate::leaf_commitment::{pqc_leaf_commitment, PqcLeafCommitment};
+use crate::output_mask::OutputMask;
 use crate::tx_key::TxKey;
 use crate::CryptoError;
 
@@ -130,6 +131,12 @@ pub struct OutputData {
 }
 
 impl OutputData {
+    /// The output's commitment mask `z`, as the scalar it was derived as.
+    #[must_use]
+    pub fn commitment_mask(&self) -> OutputMask {
+        OutputMask::of_derived(&self.z)
+    }
+
     /// The raw `enc_label` ciphertext, without its tag.
     ///
     /// Read-only by construction: the field behind it is `pub(crate)` so that
@@ -263,14 +270,33 @@ pub fn balancing_pseudo_out_blind(
             .map(Zeroizing::new)
             .ok_or(CryptoError::InvalidKeyMaterial)
     };
+    let masks = output_masks
+        .iter()
+        .map(scalar)
+        .collect::<Result<Vec<_>, _>>()?;
+    let blinds = other_blinds
+        .iter()
+        .map(|blind| scalar(blind))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Zeroizing::new(
+        balance(blinds.iter().map(|b| &**b), masks.iter().map(|m| &**m)).to_bytes(),
+    ))
+}
+
+/// The balancing blind's arithmetic, the one place it is done: the outputs'
+/// masks less the other inputs' blinds.
+pub(crate) fn balance<'a>(
+    other_blinds: impl Iterator<Item = &'a Scalar>,
+    output_masks: impl Iterator<Item = &'a Scalar>,
+) -> Zeroizing<Scalar> {
     let mut balance = Zeroizing::new(Scalar::ZERO);
     for mask in output_masks {
-        *balance += &*scalar(mask)?;
+        *balance += mask;
     }
     for blind in other_blinds {
-        *balance -= &*scalar(blind)?;
+        *balance -= blind;
     }
-    Ok(Zeroizing::new(balance.to_bytes()))
+    balance
 }
 
 /// Construct a two-component output with deterministic KEM from the

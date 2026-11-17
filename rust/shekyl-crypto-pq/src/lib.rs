@@ -77,6 +77,7 @@ pub mod multisig_intent;
 pub mod multisig_output;
 pub mod output;
 pub mod output_claim;
+pub mod output_mask;
 pub mod output_order;
 pub mod rng;
 pub mod schnorr;

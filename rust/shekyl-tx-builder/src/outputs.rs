@@ -46,6 +46,7 @@ use shekyl_address::ShekylAddress;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
 use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
+use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_crypto_pq::output_order::OutputOrder;
 use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_network::NetworkId;
@@ -181,6 +182,17 @@ pub struct BuiltOutput {
     pub pqc_leaf: [u8; 64],
     /// The output's `0x0D` entry, when it pays a group.
     multisig_entry: Option<MultisigEntry>,
+    /// The output's commitment mask `z`, as the scalar it was derived as.
+    mask: OutputMask,
+}
+
+impl BuiltOutput {
+    /// The output's commitment mask `z`, as the scalar it was derived as:
+    /// its opening at the output's amount cannot fail.
+    #[must_use]
+    pub fn commitment_mask(&self) -> &OutputMask {
+        &self.mask
+    }
 }
 
 /// A [`BuiltOutput`] from a constructed output of either kind: the two
@@ -206,6 +218,7 @@ macro_rules! built_output {
             .concat(),
             pqc_leaf: constructed.pqc_leaf.entry_bytes(),
             multisig_entry: $multisig_entry,
+            mask: constructed.commitment_mask(),
         }
     }};
 }

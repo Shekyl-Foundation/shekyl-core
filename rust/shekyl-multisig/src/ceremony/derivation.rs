@@ -63,6 +63,7 @@ use shekyl_crypto_pq::multisig_output::{
     recover_group_spend, GroupOutputSource, GroupSpendError, GroupSpendSecrets,
     MemberOwnCiphertext, MultisigGroupKey,
 };
+use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_curve_primitives::Commitment;
 use shekyl_curve_tree::{AssembledPath, TreeContext};
@@ -293,10 +294,6 @@ pub enum DeriveError {
     /// The builder refused the outputs.
     #[error("the outputs do not build: {0}")]
     Outputs(#[source] BuildSpendError),
-    /// The output at `position` does not open at its amount: its mask is
-    /// not a canonical scalar.
-    #[error("the output at position {position} does not open")]
-    Opening { position: usize },
     /// The pseudo-out blinds do not derive.
     #[error("the pseudo-out blinds do not derive: {0}")]
     Blinds(CryptoError),
@@ -385,22 +382,16 @@ impl DerivedSpend {
         // Recipient `i` lands at `π(i)`, the order the intent's key derives,
         // alike for every member (R-24).
         let built = BuiltSpend::build(&tx_key, &recipients).map_err(DeriveError::Outputs)?;
-        let output_masks: Zeroizing<Vec<[u8; 32]>> = Zeroizing::new(
-            built
-                .outputs()
-                .iter()
-                .map(|b| b.info.commitment_mask)
-                .collect(),
-        );
-        let output_openings = built
+        let output_masks: Vec<OutputMask> = built
             .outputs()
             .iter()
-            .enumerate()
-            .map(|(position, b)| {
-                Commitment::from_canonical_mask(&b.info.commitment_mask, b.info.amount.to_raw())
-                    .ok_or(DeriveError::Opening { position })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|b| b.commitment_mask().clone())
+            .collect();
+        let output_openings: Vec<Commitment> = built
+            .outputs()
+            .iter()
+            .map(|b| b.commitment_mask().opening(b.info.amount.to_raw()))
+            .collect();
         let blinds = seed
             .pseudo_out_blinds(records.len(), &output_masks)
             .map_err(DeriveError::Blinds)?;

@@ -52,6 +52,7 @@ use crate::multisig::{multisig_key_hash, MultisigCommittedForm, MULTISIG_KEY_HAS
 use crate::output::{
     compute_output_key_image, construct_output_core, encapsulate_deterministic, recover_combined_ss,
 };
+use crate::output_mask::OutputMask;
 use crate::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
@@ -171,6 +172,12 @@ pub struct MultisigOutputData {
 }
 
 impl MultisigOutputData {
+    /// The output's commitment mask `z`, as the scalar it was derived as.
+    #[must_use]
+    pub fn commitment_mask(&self) -> OutputMask {
+        OutputMask::of_derived(&self.z)
+    }
+
     /// The `enc_amount` wire field.
     #[must_use]
     pub fn enc_amount_wire(&self) -> EncryptedOutputField {

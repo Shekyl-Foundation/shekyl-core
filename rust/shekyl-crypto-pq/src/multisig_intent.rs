@@ -38,7 +38,8 @@ use sha2::Sha512;
 use zeroize::Zeroizing;
 
 use crate::derivation::{expand_32_into, expand_wide_scalar, make_info};
-use crate::output::balancing_pseudo_out_blind;
+use crate::output::balance;
+use crate::output_mask::OutputMask;
 use crate::seeded_rng::SeededRng;
 use crate::CryptoError;
 
@@ -167,26 +168,31 @@ impl IntentSeed {
     ///
     /// # Errors
     ///
-    /// [`CryptoError::InvalidInput`] for a spend with no input;
-    /// [`CryptoError::InvalidKeyMaterial`] for a mask that is not a
-    /// canonical scalar.
+    /// [`CryptoError::InvalidInput`] for a spend with no input.
     pub fn pseudo_out_blinds(
         &self,
         inputs: usize,
-        output_masks: &[[u8; 32]],
+        output_masks: &[OutputMask],
     ) -> Result<Vec<Zeroizing<[u8; 32]>>, CryptoError> {
         let derived_count = inputs
             .checked_sub(1)
             .ok_or_else(|| CryptoError::InvalidInput("a spend has at least one input".into()))?;
         let hk = self.hkdf();
-        let mut blinds: Vec<Zeroizing<[u8; 32]>> = (0..derived_count)
+        let derived: Vec<Zeroizing<Scalar>> = (0..derived_count)
             .map(|input| {
                 let info = make_info(LABEL_INTENT_PSEUDO_OUT_BLIND, index(input));
-                Zeroizing::new(expand_wide_scalar(&hk, &info).to_bytes())
+                expand_wide_scalar(&hk, &info)
             })
             .collect();
-        blinds.push(balancing_pseudo_out_blind(&blinds, output_masks)?);
-        Ok(blinds)
+        let last = balance(
+            derived.iter().map(|b| &**b),
+            output_masks.iter().map(OutputMask::scalar),
+        );
+        Ok(derived
+            .iter()
+            .chain(std::iter::once(&last))
+            .map(|blind| Zeroizing::new(blind.to_bytes()))
+            .collect())
     }
 }
 
@@ -201,8 +207,8 @@ mod tests {
     use crate::TxKey;
     use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 
-    fn mask(n: u64) -> [u8; 32] {
-        Scalar::from(n).to_bytes()
+    fn mask(n: u64) -> OutputMask {
+        OutputMask::of_derived(&Scalar::from(n).to_bytes())
     }
 
     /// Two members holding the same seed derive the same values, and each
@@ -241,7 +247,6 @@ mod tests {
             assert_eq!(sum, mask_sum);
         }
         assert!(seed.pseudo_out_blinds(0, &masks).is_err());
-        assert!(seed.pseudo_out_blinds(2, &[[0xFF; 32]]).is_err());
     }
 
     /// A seed's fingerprint is one-way and its own: it is not the seed,

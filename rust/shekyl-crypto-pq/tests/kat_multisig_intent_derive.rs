@@ -19,6 +19,7 @@ use curve25519_dalek::Scalar;
 use rand::RngCore as _;
 use serde_json::Value;
 use shekyl_crypto_pq::multisig_intent::{IntentSeed, INTENT_SEED_LEN};
+use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_crypto_pq::seeded_rng::SeededRng;
 use shekyl_crypto_pq::TxKey;
 
@@ -44,7 +45,13 @@ fn the_intent_derivations_match_the_oracle() {
         let seed: [u8; INTENT_SEED_LEN] = bytes32(&v["seed_hex"]);
         let seed = IntentSeed::new(&seed);
         let inputs = usize::try_from(v["inputs"].as_u64().expect("an input count")).unwrap();
-        let masks = hex_list(&v["output_masks_hex"]);
+        let masks: Vec<OutputMask> = hex_list(&v["output_masks_hex"])
+            .iter()
+            .map(|bytes| {
+                OutputMask::from_canonical_bytes_for_tests(bytes)
+                    .unwrap_or_else(|| panic!("vector {n}: a mask is not a canonical scalar"))
+            })
+            .collect();
         let expected = &v["expected"];
 
         // The key hands out no bytes, so `r` is held through its point:
