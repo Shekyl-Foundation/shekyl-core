@@ -521,6 +521,7 @@ impl Rig {
                 relay: recorder.clone(),
                 probes: Some(recorder.clone()),
                 sessions: None,
+                established: None,
             },
             connectors: peer.clone(),
             timing: timing.clone(),

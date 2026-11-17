@@ -239,7 +239,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
             // wake's: the seats held now. Expiry waits for a wake that
             // settles.
             let held = shared.lists.held_seats(connector);
-            shared.tor_link.census(connector, held, census_at);
+            shared.tallies[index].census(held, census_at);
             // Every wake reports to the recovery episode, this one too.
             let held = shared.attempts[index].held();
             recovery::report_wake(&mut shared.recovery[index], connector, held, target);
@@ -261,7 +261,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
             lists,
             attempts,
             pending,
-            tor_link,
+            tallies,
             ..
         } = &mut *shared;
         let kept = attempts[index].kept_count();
@@ -287,7 +287,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
         let seats = settled.census(&mut eligible);
         // After expiry, the seats this wake can draw. Cooling is inside
         // the two lengths; the candidate filter is not.
-        tor_link.census(connector, seats.white.saturating_add(seats.gray), census_at);
+        tallies[index].census(seats.white.saturating_add(seats.gray), census_at);
         let census = Census {
             kept,
             in_flight,

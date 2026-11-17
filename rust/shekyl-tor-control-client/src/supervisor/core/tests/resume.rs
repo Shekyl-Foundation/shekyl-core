@@ -218,39 +218,29 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
     );
 }
 
-/// The quiet stretch counts awake time: a sleep is not ten minutes in which
-/// no Tor connection opened. After the wake the stretch runs again, and a
-/// dial launched after it that fails stands the line once the span has
-/// passed. Leaving the stretch's start where it was fails this.
+/// A wake restarts the quiet line: an impaired reading from before the
+/// sleep does not stand it after the wake, even with a dial failed since.
+/// Before the sleep the same tally stands it. Leaving the restart's start
+/// where it was fails this.
 #[test]
-fn the_quiet_stretch_counts_awake_time() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    core.on(Input::StateFileAppeared, 0);
-    let failed = |unopened, began| super::super::DialTally {
-        opened: 0,
-        unopened,
-        last_sign_of_life: None,
-        failed_attempt_began: Some(began),
-        census: super::super::TorCensus::Held { seats: 1, since: 0 },
-    };
-    core.on(Input::DialEvidence(failed(1, secs(1))), secs(1));
-    run(&mut core, secs(15), 100, 1_000);
-    assert_eq!(core.status().tor_quiet, None);
-    let wake = secs(15 + SLEEP);
+fn a_reading_from_before_a_wake_does_not_stand_the_line() {
+    let (mut core, verdict_at) = super::quiet::impaired();
+    let failed = verdict_at + secs(5);
+    core.on(super::quiet::held_failing(Some(failed)), failed);
+    assert!(
+        core.status().tor_quiet.is_some(),
+        "it stands before the sleep"
+    );
+    let wake = failed + secs(SLEEP);
     let step = core.on(slept(Duration::from_secs(SLEEP)), wake);
     assert!(resumed(&step), "{:?}", step.actions);
-    // The next liveness deadline judges the stretch: the sleep is not in it.
-    run(
-        &mut core,
-        wake + duration_ns(policy().alive_every) + secs(1),
-        100,
-        1_000,
+    core.on(
+        super::quiet::held_failing(Some(wake + secs(1))),
+        wake + secs(1),
     );
-    assert_eq!(core.status().tor_quiet, None, "the sleep is not quiet");
-    let since = wake + duration_ns(policy().alive_every) + secs(1);
-    core.on(Input::DialEvidence(failed(2, since)), since);
-    let after = policy().quiet_after;
-    run(&mut core, wake + duration_ns(after) + secs(4), 100, 1_000);
-    assert!(core.status().tor_quiet.is_some(), "awake and still quiet");
+    assert_eq!(
+        core.status().tor_quiet,
+        None,
+        "the reading is from before the wake"
+    );
 }

@@ -11,7 +11,9 @@
 //! for, and the captured rounds, are [`super::directory_uploads`].
 
 use super::super::super::posture::{Cause, Inbound, InboundCause};
-use super::super::{Action, Core, DirectoryAnswer, DirectoryFetch, Input, OpenUploads, Step};
+use super::super::{
+    Action, Core, DirectoryAnswer, DirectoryFetch, Input, OnionPath, OpenUploads, PathReading, Step,
+};
 use super::probe::{
     arrival, count, probes, published, publishes_inbound, refetches, republishes, secs, served,
     uploaded,
@@ -260,6 +262,26 @@ fn found_at_every_directory_and_the_probe_arrives_is_reachable() {
     };
     assert_eq!(core.status().inbound, reachable);
     assert_eq!(publishes_inbound(&last), [reachable]);
+    // The probe came back and the directory check passed in the same
+    // check: the onion path worked, learned at the verdict (§4.5a).
+    assert_eq!(
+        path_readings(&last),
+        [PathReading {
+            path: OnionPath::Working,
+            at: secs(21),
+        }]
+    );
+}
+
+/// The onion-path readings a step publishes.
+fn path_readings(step: &Step) -> Vec<PathReading> {
+    step.actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::PathReading(reading) => Some(*reading),
+            _ => None,
+        })
+        .collect()
 }
 
 /// **Our cache still holds the descriptor, the directories report
@@ -471,8 +493,9 @@ fn a_requested_this_check_did_not_send_chooses_nothing() {
 
 /// A check that counts no directory (no directory the round reached holds
 /// the descriptor Tor asks for) is decided by the probe alone, and says so
-/// once. Fails if `Unmatched` is a miss (a node whose uploads land under the
-/// wrong key would republish in a loop), or if it is not said.
+/// once, and is no onion-path fact. Fails if `Unmatched` is a miss (a node
+/// whose uploads land under the wrong key would republish in a loop), if it
+/// is not said, or if it reads as working.
 #[test]
 fn a_check_that_counts_no_directory_is_decided_by_the_probe() {
     let (mut core, _) = checking(sent(1..=4, "next", 0));
@@ -492,6 +515,13 @@ fn a_check_that_counts_no_directory_is_decided_by_the_probe() {
         1
     );
     assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+    // The probe alone is answered from Tor's own cached descriptor: it is
+    // no fact about the onion path (§4.5a). Reading it as working fails
+    // this.
+    assert!(
+        path_readings(&step).is_empty(),
+        "the probe alone is no fact"
+    );
 }
 
 /// Each fetch takes its own delay from the probe's range, so the fetches do

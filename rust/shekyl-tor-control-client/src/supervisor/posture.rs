@@ -506,18 +506,14 @@ impl ProgressWindow {
     }
 }
 
-/// What the quiet line says, by the dialer's census (`TOR_SUPERVISOR.md`
-/// §4.2; Rick, 2026-11-10).
+/// What the quiet line says (`TOR_SUPERVISOR.md` §4.2; Rick, 2026-11-15).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TorQuiet {
-    /// The dialer holds no Tor address: no peer is known yet, so there is
-    /// nothing to dial.
-    NoPeersKnown,
-    /// Peers are known, and none has answered through Tor since `since`, in
-    /// nanoseconds on the core's clock: a Tor dial launched in the span
-    /// failed. A reading, so the span is taken at the ask.
-    Unanswered {
-        /// When the held span began.
+    /// Peers are known, the manager's onion-path reading has been impaired
+    /// since `since`, in nanoseconds on the core's clock, and a Tor dial
+    /// launched since failed. A reading, so the span is taken at the ask.
+    Unreached {
+        /// When the impaired reading was learned.
         since: u64,
     },
 }
@@ -555,12 +551,9 @@ pub struct Status {
     /// How the bootstrap is going, beside [`Self::cause`], never instead of
     /// it. Only while bootstrapping, once the first window has passed.
     pub pace: Option<BootstrapPace>,
-    /// The quiet line, while Tor runs and names no cause (§4.2).
-    /// [`TorQuiet::NoPeersKnown`] is an empty census once `quiet_after` has
-    /// passed. [`TorQuiet::Unanswered`] is a non-empty run whose held span
-    /// has reached `quiet_after` with a Tor dial launched inside it that
-    /// failed. A neutral fact, never a cause. [`TorQuiet::Unanswered`]
-    /// carries when that held span began.
+    /// The quiet line, while Tor runs and names no cause (§4.2): the
+    /// manager's onion-path reading is impaired, peers are known, and a Tor
+    /// dial launched since failed. A neutral fact, never a cause.
     pub tor_quiet: Option<TorQuiet>,
     /// Whether peers can reach this node's onion (§4.1). Its cause stands
     /// beside [`Self::cause`], never instead of it.

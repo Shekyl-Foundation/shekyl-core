@@ -51,6 +51,7 @@ use super::directories::{
     Counted, DirectoryAnswer, DirectoryCheck, DirectoryFetch, DirectoryHalf, DirectoryRow,
     DirectoryVerdict, Exclusion, OpenUploads,
 };
+use super::onion_path::OnionPath;
 use super::{duration_ns, Action, Core, Duty, Phase, RoundTally};
 use crate::control::{DescriptorKey, RelayFingerprint, ServiceDescriptor, UploadEnd};
 
@@ -239,6 +240,19 @@ impl Core {
             actions.extend(self.trigger(now, draw, self.republish_is_judging()));
         }
         actions
+    }
+
+    /// Whether a check is in hand: scheduled, in flight, refetching or
+    /// being judged.
+    pub(super) fn check_in_hand(&self) -> bool {
+        self.probe != Probe::Idle
+    }
+
+    /// A check a waiting failure wants (§4.5a): the same check a round
+    /// schedules, under the same gates. It confirms no republish: only the
+    /// republish's own round does.
+    pub(super) fn wanted_check(&mut self, now: u64, draw: u64) -> Vec<Action> {
+        self.trigger(now, draw, false)
     }
 
     /// The round's one probe, or the jump's: scheduled while Running with
@@ -445,6 +459,9 @@ impl Core {
     /// A probe's check begins: the rendezvous probe is scheduled. Its
     /// directories are drawn when it goes out ([`Self::on_probe_deadline`]).
     fn schedule(&mut self, now: u64, draw: u64, attempt: Attempt, confirms: bool) -> Vec<Action> {
+        if attempt == Attempt::First {
+            self.check_began(now);
+        }
         self.probe_confirms = confirms;
         self.check_from = now;
         self.probe = Probe::Scheduled {
@@ -659,6 +676,13 @@ impl Core {
         if verdict == DirectoryVerdict::Unmatched {
             actions.push(Action::DirectoriesUnmatched);
         }
+        // The onion path worked only when the probe came back and the
+        // directory check passed in the same check (§4.5a). The probe alone
+        // (`Unmatched`) is answered from Tor's own cached descriptor, so it
+        // is no fact about the path.
+        if arrived.is_some() && verdict == DirectoryVerdict::Held {
+            actions.extend(self.path_fact(OnionPath::Working, now));
+        }
         match (arrived, verdict) {
             (Some(evidence_at), DirectoryVerdict::Held | DirectoryVerdict::Unmatched) => {
                 let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
@@ -683,6 +707,8 @@ impl Core {
                     actions.push(Action::RefetchDescriptor);
                 }
                 Attempt::AfterRefetch => {
+                    // The two-miss verdict is a failed check (§4.5a).
+                    actions.extend(self.path_fact(OnionPath::Impaired, now));
                     self.probe_confirms = false;
                     let cause = if arrived.is_some() {
                         InboundCause::DescriptorNotFound

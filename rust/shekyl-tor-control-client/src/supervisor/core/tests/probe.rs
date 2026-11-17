@@ -78,7 +78,7 @@ pub(super) fn arrival(minted_at: u64, arrived_at: u64) -> Input {
 /// the core refetches the descriptor and judges nothing. The second probe,
 /// after the refetch and a fresh delay, misses too. Returns that verdict
 /// step and its time.
-fn misses_twice(core: &mut Core, minted: u64) -> (u64, Step) {
+pub(super) fn misses_twice(core: &mut Core, minted: u64) -> (u64, Step) {
     let (at, first) = run_timed(core, minted + secs(60));
     assert_eq!(at, minted + secs(60));
     assert_eq!(cancels(&first), 1);

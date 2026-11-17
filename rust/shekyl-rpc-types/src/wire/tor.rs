@@ -77,13 +77,10 @@ impl Schema for Posture {
 
 impl Schema for TorQuiet {
     fn shape() -> Shape {
-        Shape::States(vec![
-            ("empty", None),
-            (
-                "failing",
-                Some(object("tor quiet", vec![field("age", Duration::shape())])),
-            ),
-        ])
+        Shape::States(vec![(
+            "unreached",
+            Some(object("tor quiet", vec![field("age", Duration::shape())])),
+        )])
     }
 }
 

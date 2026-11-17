@@ -205,6 +205,8 @@ pub struct Rig {
     pub timing: shekyl_timing_engine::Handle<MonotonicClock>,
     /// Every report of the sessions each connector holds, in order.
     pub held: Arc<Mutex<Vec<PerConnector<u32>>>>,
+    /// Every session the layer reported established, in order.
+    pub established: Arc<Mutex<Vec<(ConnectorId, Direction)>>>,
     _engine: EngineService<MonotonicClock>,
 }
 
@@ -250,6 +252,8 @@ impl Rig {
         let (tip, tip_rx) = watch::channel(our_tip());
         let held = Arc::new(Mutex::new(Vec::new()));
         let reports = Arc::clone(&held);
+        let established = Arc::new(Mutex::new(Vec::new()));
+        let opened = Arc::clone(&established);
         let owners = Owners {
             peers: recorder.clone(),
             sync: recorder.clone(),
@@ -257,6 +261,12 @@ impl Rig {
             probes: Some(recorder.clone()),
             sessions: Some(Arc::new(move |sessions| {
                 reports.lock().expect("held reports").push(sessions);
+            })),
+            established: Some(Arc::new(move |connector, direction| {
+                opened
+                    .lock()
+                    .expect("established")
+                    .push((connector, direction));
             })),
         };
         let layer = SessionLayer::new(Parts {
@@ -283,6 +293,7 @@ impl Rig {
             tip,
             timing,
             held,
+            established,
             _engine: engine,
         }
     }
