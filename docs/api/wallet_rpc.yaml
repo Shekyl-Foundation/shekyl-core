@@ -523,7 +523,13 @@ info:
   # identity: -29123 TOO_MANY_INPUTS, -29124 TOO_MANY_OUTPUTS (refused at
   # the request), -29125 INPUT_NOT_IN_TREE, -29126 INPUT_UNSPENDABLE, and
   # -29119 SIGNER_FAILED names its fault in data.fault (A16).
-  version: 0.19.0
+  # 0.20.0: open gains -29017 RANDOM_SOURCE_CHECK_FAILED (Rick,
+  # 2026-11-17). A wallet built with the engine's conformance feature
+  # checks this computer's random-number source before it stakes, and
+  # refuses to open when the source fails; the refusal had no code of its
+  # own. The default build never runs the check, so never answers it.
+  # api_version stays 1.
+  version: 0.20.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -817,6 +823,7 @@ components:
         - -29014   # WALLET_CLOSE_BLOCKED
         - -29015   # CURVE_TREE_UNAVAILABLE
         - -29016   # CURVE_TREE_STORE_UNUSABLE
+        - -29017   # RANDOM_SOURCE_CHECK_FAILED
         - -29100   # INVALID_RECIPIENT
         - -29101   # INSUFFICIENT_FUNDS
         - -29102   # FEE_ESTIMATION_FAILED
@@ -989,6 +996,19 @@ components:
                                           finishes. Never a reason to restore
                                           from the seed (that is -29011, for
                                           the wallet's own files)
+          -29017 RANDOM_SOURCE_CHECK_FAILED open: this computer's random-number
+                                          source failed the check the wallet
+                                          runs before it stakes, so the wallet
+                                          did not open (staking on numbers
+                                          that fail it could link the
+                                          wallet's stakes). Only a build with
+                                          the engine's conformance feature
+                                          runs the check. The check's false
+                                          alarms are about one in a million:
+                                          try once more; a second failure
+                                          means this computer — open the
+                                          wallet on another. The grade stays
+                                          in the server log
 
           -29100 INVALID_RECIPIENT        build/proofs: the address is not
                                           one this wallet can pay

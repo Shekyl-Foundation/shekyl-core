@@ -74,35 +74,47 @@ pub enum OpenError {
     #[error("persistence failure during close: {0}")]
     Persistence(#[from] PersistenceError),
 
-    /// **Conformance build only (S6).** The StakeEngine's session RNG self-cert
-    /// failed at spawn: the OS CSPRNG graded non-conformant for the entry-gap
-    /// timing draws (or the entropy source failed mid-draw). A degenerate timing
-    /// RNG defeats the gate-6 decorrelation firewall, so the staker actor refuses
-    /// to start and wallet-open fails loudly rather than staking on a CSPRNG that
-    /// cannot produce unlinkable timing. This variant does not exist in the
-    /// default (non-`conformance`) build — production carries no float/stats
-    /// grader (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0).
+    /// The StakeEngine's session RNG self-cert failed at spawn (S6): the OS
+    /// CSPRNG graded non-conformant for the entry-gap timing draws, or the
+    /// entropy source failed mid-draw. A degenerate timing RNG defeats the
+    /// gate-6 decorrelation firewall, so the staker actor refuses to start and
+    /// wallet-open fails loudly rather than staking on a CSPRNG that cannot
+    /// produce unlinkable timing.
+    ///
+    /// Only the `conformance` build runs the self-cert, so only it constructs
+    /// this variant. The variant itself is in every build and the feature
+    /// gates its payload: [`StakeSelfCertFailure`] has no values without
+    /// `conformance`, so the default build cannot construct it and carries no
+    /// float/stats grader (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0). The
+    /// enum's shape does not move with the feature, so a dependent's
+    /// exhaustive match compiles in both builds and needs no feature of its
+    /// own (features are additive; a variant gated on a feature broke
+    /// `shekyl-wallet-contract` whenever the feature unified on).
     ///
     /// Carries the **structured** [`StakeSelfCertFailure`] (not a pre-rendered
     /// string), keeping the grade detail — the `CertifyReport` — available for
     /// logging / programmatic handling, per the module's no-stringly-typed-error
     /// rule. The `#[source]` chains it; `Display` still renders the human message.
-    #[cfg(feature = "conformance")]
     #[error("wallet open refused: StakeEngine session RNG self-cert failed at startup: {0}")]
     StakeRngSelfCertFailed(#[source] StakeSelfCertFailure),
 }
 
-/// **Conformance build only (S6).** Why the StakeEngine startup session RNG
-/// self-cert failed — structured so the grade detail survives to logging /
-/// handling instead of being stringified at the actor boundary (the wallet-core
-/// API does not return stringly-typed errors; see the module doc). Surfaced
-/// through [`OpenError::StakeRngSelfCertFailed`].
-#[cfg(feature = "conformance")]
+/// Why the StakeEngine startup session RNG self-cert failed (S6) — structured
+/// so the grade detail survives to logging / handling instead of being
+/// stringified at the actor boundary (the wallet-core API does not return
+/// stringly-typed errors; see the module doc). Surfaced through
+/// [`OpenError::StakeRngSelfCertFailed`].
+///
+/// Every variant is `conformance`-only, so the default build's type has no
+/// values: [`OpenError::StakeRngSelfCertFailed`] exists there for a stable
+/// enum shape and cannot be constructed (the same empty-enum shape as the
+/// stake actor's start error).
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum StakeSelfCertFailure {
     /// The OS CSPRNG graded **non-conformant** for the entry-gap timing draws.
     /// Carries the full [`CertifyReport`](shekyl_standoff::conformance::CertifyReport)
     /// (chi-square, the three property verdicts) — the data worth keeping.
+    #[cfg(feature = "conformance")]
     #[error("the OS CSPRNG graded non-conformant for entry-gap timing draws: {0:?}")]
     NonConformant(shekyl_standoff::conformance::CertifyReport),
 
@@ -110,6 +122,7 @@ pub enum StakeSelfCertFailure {
     /// OS entropy source failing mid-draw, or (future) another startup error.
     /// A panic / foreign start error has no richer structure than its rendered
     /// cause, so this case is honestly a string.
+    #[cfg(feature = "conformance")]
     #[error("StakeEngine startup failed before the self-cert completed: {0}")]
     StartupFailed(String),
 }
