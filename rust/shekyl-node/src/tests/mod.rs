@@ -12,8 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use shekyl_daemon_config::{after_file, Network, Platform, TABLE};
 use shekyl_daemon_rpc::chain_facts::FactsFault;
-use shekyl_difficulty::Difficulty;
-use shekyl_miner::Job;
 use shekyl_options::read_cli;
 use shekyl_types::BlockHash;
 
@@ -58,27 +56,6 @@ fn wait_for_posting(posting: &mut tokio::sync::watch::Receiver<Posting>, want: &
             started.elapsed() < Duration::from_secs(60),
             "the posting stayed {:?}",
             *posting.borrow()
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-/// Wait until ingest's tip follower has acted on the latest tip
-/// publication (`Service::followed`): whatever that pass withdrew or
-/// posted is done.
-fn wait_for_follower(node: &Node) {
-    let seq = node.tips.borrow().seq;
-    let mut followed = node
-        .service
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-        .expect("the service runs")
-        .followed();
-    let started = std::time::Instant::now();
-    while *followed.borrow_and_update() < seq {
-        assert!(
-            started.elapsed() < Duration::from_secs(60),
-            "the follower stayed behind tip publication {seq}"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
