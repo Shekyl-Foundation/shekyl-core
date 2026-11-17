@@ -787,12 +787,45 @@ pub fn sign_bundle_commitment(
     commitment: &Framed64,
 ) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
     use shekyl_crypto_pq::signature::SignatureScheme as _;
-    let signature = shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign(
+    canonical_scheme3(shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign(
         secret,
         shekyl_crypto_pq::signature::SCHEME_DOMAIN_WITNESS_BUNDLE,
         commitment.as_bytes(),
-    )?;
-    signature.to_canonical_bytes().try_into().map_err(|_| {
+    ))
+}
+
+/// [`sign_bundle_commitment`] with FN-DSA's nonce drawn from `rng_seed`, so
+/// one seed gives the same witness signature (`CHAIN_FORGE.md` §5.3, S8).
+/// Only under the TEST_ONLY `seeded-rng` feature: a shipped build's witness
+/// signs with the OS.
+///
+/// # Errors
+///
+/// As [`sign_bundle_commitment`].
+#[cfg(feature = "seeded-rng")]
+pub fn sign_bundle_commitment_seeded(
+    secret: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
+    commitment: &Framed64,
+    rng_seed: &[u8; 32],
+) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
+    canonical_scheme3(
+        shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign_with_rng_seed(
+            secret,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_WITNESS_BUNDLE,
+            commitment.as_bytes(),
+            rng_seed,
+        ),
+    )
+}
+
+/// A scheme-3 signature at the width a bundle's prunable part stores.
+fn canonical_scheme3(
+    signed: Result<
+        shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature,
+        shekyl_crypto_pq::CryptoError,
+    >,
+) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
+    signed?.to_canonical_bytes().try_into().map_err(|_| {
         shekyl_crypto_pq::CryptoError::SerializationError(
             "a scheme-3 signature is not the canonical width".into(),
         )

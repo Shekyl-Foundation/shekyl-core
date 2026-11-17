@@ -109,6 +109,8 @@ pub use bond_wire::{
     WireError as BondWireError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
+#[cfg(feature = "seeded-rng")]
+pub use bundle::sign_bundle_commitment_seeded;
 pub use bundle::{
     assemble_bundle, bundle_charge, bundle_commitment, bundle_prunable_hash, empty_section_root,
     section_budget, section_d_max, section_root, sign_bundle_commitment, BodyRefused, BundleBody,

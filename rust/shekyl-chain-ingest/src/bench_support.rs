@@ -54,13 +54,10 @@ use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::target::TargetLedger;
 
-/// The rules a fixture chain is mined and replayed under: regtest at fixed
-/// difficulty one, held to no genesis pin because the chain mines its own
-/// block 0. The scenario driver's rules are this constant.
-pub const RULES: ChainRules = ChainRules::harness_regtest(
-    Some(std::num::NonZeroU128::MIN),
-    shekyl_chain_rules::CappedEpoch::PRODUCTION,
-);
+/// The rules a fixture chain is mined and replayed under: the scenario
+/// driver's [`ChainRules::HARNESS_REGTEST`]. One constant, so a bench
+/// replays a chain the driver mined.
+pub const RULES: ChainRules = ChainRules::HARNESS_REGTEST;
 
 /// The harness longhash under a clock the driver sets to each block's own
 /// timestamp, so a replayed block is judged at the instant it was mined.

@@ -17,10 +17,10 @@ use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use crate::scenario_archival::Persona;
 
 /// A fixture fee large enough that a bond post's outputs balance.
-pub(crate) const FEE: u64 = 1_000_000;
+pub const FEE: u64 = 1_000_000;
 
 /// A non-zero serving endpoint. J14 refuses the all-zero one.
-pub(crate) const ENDPOINT: [u8; 32] = [0xEE; 32];
+pub const ENDPOINT: [u8; 32] = [0xEE; 32];
 
 /// The first height that can spend block 0's coinbase against a root that
 /// holds it — the spender's derivation
@@ -28,13 +28,13 @@ pub(crate) const ENDPOINT: [u8; 32] = [0xEE; 32];
 /// one, and the reference age) under the genesis rule set. The same under
 /// every regtest rule set here: a levered schedule moves settlement, not
 /// the unlock window.
-pub(crate) fn first_spending_height() -> BlockHeight {
+pub fn first_spending_height() -> BlockHeight {
     shekyl_harness_spender::first_spending_height(&RuleSet::GENESIS)
 }
 
 /// The bond post's vin. Every driven post spends at input 0 and posts at
 /// input 1, in the listed transaction `slot`.
-pub(crate) fn at_post(slot: usize) -> Locus {
+pub fn at_post(slot: usize) -> Locus {
     Locus::Input {
         slot: TxSlot::Listed(slot),
         input: 1,
@@ -43,7 +43,7 @@ pub(crate) fn at_post(slot: usize) -> Locus {
 
 /// `outcome` is `row`'s refusal at `locus`. A connect, or another row, fails
 /// the pin by name.
-pub(crate) fn refused_at(outcome: Result<Mined, StepOutcome>, row: CenRow, locus: Locus) {
+pub fn refused_at(outcome: Result<Mined, StepOutcome>, row: CenRow, locus: Locus) {
     match outcome {
         Err(StepOutcome::Refused(refused)) => {
             assert_eq!(refused.rule, row, "the row that refused: {refused}");
@@ -55,7 +55,7 @@ pub(crate) fn refused_at(outcome: Result<Mined, StepOutcome>, row: CenRow, locus
 }
 
 /// The persona's record, which must exist.
-pub(crate) async fn record_of(scenario: &Scenario<FreeHash>, persona: &Persona) -> BondRecord {
+pub async fn record_of(scenario: &Scenario<FreeHash>, persona: &Persona) -> BondRecord {
     scenario
         .bond_record(persona.id())
         .await

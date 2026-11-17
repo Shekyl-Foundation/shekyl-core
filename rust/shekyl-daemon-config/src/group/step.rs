@@ -19,13 +19,12 @@
 //!   account. Any other code refuses. An unavailable service is `ENOENT` too
 //!   (`nss/getnssent_r.c`, `__nss_getent_r`), which is the end of the list,
 //!   not a failed read.
-//! - FreeBSD, DragonFly and NetBSD (`getpwent_r`): `0` with no result is the
-//!   end (`lib/libc/gen/getpwent.c` in each). `ERANGE` refuses. Their files
-//!   and compat backends move past an entry before checking that it fits, so
+//! - FreeBSD (`getpwent_r`): `0` with no result is the end
+//!   (`lib/libc/gen/getpwent.c`). `ERANGE` refuses. Its files and compat
+//!   backends move past an entry before checking that it fits, so
 //!   a retry would skip that account and the check would fail open.
-//! - musl, macOS and iOS, OpenBSD, illumos and Solaris (`getpwent`): the libc
-//!   crate declares no `getpwent_r` for them (musl defines none,
-//!   `include/pwd.h`; illumos's has another signature). No result with
+//! - musl and macOS (`getpwent`): the libc crate declares no
+//!   `getpwent_r` for them (musl defines none, `include/pwd.h`). No result with
 //!   `errno` clear is the end. `getpwent` leaves `errno` alone at the end of
 //!   the list (musl `src/passwd/getpwent_a.c`), so the reader clears it
 //!   before each call. A record carries no `errno`: the call returns the
@@ -51,9 +50,9 @@ use super::{Account, AccountName};
 pub(super) enum ReentrantConvention {
     /// glibc: `ENOENT` ends the list; `ERANGE` is retried.
     Glibc,
-    /// FreeBSD, DragonFly, NetBSD: `0` with no result ends the list;
+    /// FreeBSD: `0` with no result ends the list;
     /// `ERANGE` refuses, because the cursor has already passed the entry.
-    Bsd,
+    FreeBsd,
 }
 
 /// One passwd record, copied out of the library's storage.
@@ -143,14 +142,16 @@ pub(super) fn step_reentrant(
             os_text(code)
         )),
         ReentrantReading::Absent { code } => match (convention, code) {
-            (ReentrantConvention::Glibc, libc::ENOENT) | (ReentrantConvention::Bsd, 0) => Step::End,
+            (ReentrantConvention::Glibc, libc::ENOENT) | (ReentrantConvention::FreeBsd, 0) => {
+                Step::End
+            }
             (ReentrantConvention::Glibc, libc::ERANGE) => return ReentrantStep::Grow,
             // The files and compat backends advance the cursor before they
             // notice the entry does not fit, so a retry would read the next
             // account and skip this one. A skipped account is one whose
             // primary group the check never sees. These targets start at the
             // largest buffer, so only an entry over that size reaches here.
-            (ReentrantConvention::Bsd, libc::ERANGE) => Step::Refused(
+            (ReentrantConvention::FreeBsd, libc::ERANGE) => Step::Refused(
                 "the system's account list holds an entry larger than the largest buffer, \
                  and this library moves past an entry it could not fit"
                     .to_owned(),
@@ -226,8 +227,8 @@ mod tests {
         step_reentrant(ReentrantConvention::Glibc, reading)
     }
 
-    fn bsd(reading: ReentrantReading) -> ReentrantStep {
-        step_reentrant(ReentrantConvention::Bsd, reading)
+    fn freebsd(reading: ReentrantReading) -> ReentrantStep {
+        step_reentrant(ReentrantConvention::FreeBsd, reading)
     }
 
     fn settled(step: ReentrantStep) -> Step {
@@ -256,7 +257,7 @@ mod tests {
             Step::Account(account(b"alice", 1000, 1000))
         );
         assert_eq!(
-            settled(bsd(alice)),
+            settled(freebsd(alice)),
             Step::Account(account(b"alice", 1000, 1000))
         );
         assert_eq!(
@@ -264,7 +265,7 @@ mod tests {
             Step::Account(account(b"alice", 1000, 1000))
         );
         assert!(refused(settled(glibc(nameless.clone()))).contains("no name"));
-        assert!(refused(settled(bsd(nameless))).contains("no name"));
+        assert!(refused(settled(freebsd(nameless))).contains("no name"));
         assert!(
             refused(step_errno(ErrnoReading::Record(record(b"", 1000, 1000)))).contains("no name")
         );
@@ -277,18 +278,18 @@ mod tests {
         let io = std::io::Error::from_raw_os_error(libc::EIO).to_string();
         for step in [
             glibc(ReentrantReading::Unread { code: libc::EIO }),
-            bsd(ReentrantReading::Unread { code: libc::EIO }),
+            freebsd(ReentrantReading::Unread { code: libc::EIO }),
         ] {
             let why = refused(settled(step));
             assert!(why.contains("entry with an error"), "{why}");
             assert!(why.contains(&io), "{why}");
         }
         // ERANGE beside a pointer is the same refusal, not a buffer to grow
-        // and not the BSD "moved past the entry" refusal.
+        // and not FreeBSD's "moved past the entry" refusal.
         let range = std::io::Error::from_raw_os_error(libc::ERANGE).to_string();
         for step in [
             glibc(ReentrantReading::Unread { code: libc::ERANGE }),
-            bsd(ReentrantReading::Unread { code: libc::ERANGE }),
+            freebsd(ReentrantReading::Unread { code: libc::ERANGE }),
         ] {
             let why = refused(settled(step));
             assert!(why.contains("entry with an error"), "{why}");
@@ -306,7 +307,7 @@ mod tests {
             ReentrantStep::Settled(Step::End)
         );
         assert_eq!(
-            bsd(ReentrantReading::Absent { code: 0 }),
+            freebsd(ReentrantReading::Absent { code: 0 }),
             ReentrantStep::Settled(Step::End)
         );
         assert_eq!(step_errno(ErrnoReading::Empty { errno: 0 }), Step::End);
@@ -315,7 +316,7 @@ mod tests {
             refused(settled(glibc(ReentrantReading::Absent { code: 0 })))
                 .contains("no entry and no end")
         );
-        assert!(refused(settled(bsd(ReentrantReading::Absent {
+        assert!(refused(settled(freebsd(ReentrantReading::Absent {
             code: libc::ENOENT
         })))
         .contains("could not be read"));
@@ -331,14 +332,16 @@ mod tests {
         let text = std::io::Error::from_raw_os_error(libc::EIO).to_string();
         let why = refused(settled(glibc(ReentrantReading::Absent { code: libc::EIO })));
         assert!(why.contains(&text), "{why}");
-        let why = refused(settled(bsd(ReentrantReading::Absent { code: libc::EIO })));
+        let why = refused(settled(freebsd(ReentrantReading::Absent {
+            code: libc::EIO,
+        })));
         assert!(why.contains(&text), "{why}");
         let why = refused(step_errno(ErrnoReading::Empty { errno: libc::EIO }));
         assert!(why.contains(&text), "{why}");
     }
 
     /// A buffer too small: glibc returns the same entry again, so the reader
-    /// grows and asks again. The BSDs have moved past it, so the walk
+    /// grows and asks again. FreeBSD has moved past it, so the walk
     /// refuses. `getpwent` has no caller buffer: `ERANGE` is a failed read,
     /// not a grow.
     #[test]
@@ -347,7 +350,7 @@ mod tests {
             glibc(ReentrantReading::Absent { code: libc::ERANGE }),
             ReentrantStep::Grow
         );
-        let why = refused(settled(bsd(ReentrantReading::Absent {
+        let why = refused(settled(freebsd(ReentrantReading::Absent {
             code: libc::ERANGE,
         })));
         assert!(why.contains("larger than"), "{why}");
