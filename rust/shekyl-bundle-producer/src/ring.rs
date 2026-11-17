@@ -228,6 +228,14 @@ impl WitnessRing {
     /// The witness for `connecting`: the caller's draws when this ring has
     /// them, the OS's otherwise. One choice, so `draw` does not grow a
     /// second path.
+    #[cfg_attr(
+        not(feature = "seeded-rng"),
+        expect(
+            unused_variables,
+            clippy::unused_self,
+            reason = "the witness source is chosen only under seeded-rng"
+        )
+    )]
     fn material(&self, connecting: BlockHeight) -> Result<WitnessMaterial, DrawFailed> {
         #[cfg(feature = "seeded-rng")]
         if let Some(draws) = &self.draws {
@@ -238,6 +246,14 @@ impl WitnessRing {
 
     /// The witness signature over `commitment`: the caller's when this ring
     /// has draws, [`sign_bundle_commitment`]'s otherwise.
+    #[cfg_attr(
+        not(feature = "seeded-rng"),
+        expect(
+            unused_variables,
+            clippy::unused_self,
+            reason = "the witness source is chosen only under seeded-rng"
+        )
+    )]
     fn sign_commitment(
         &self,
         h: BlockHeight,
