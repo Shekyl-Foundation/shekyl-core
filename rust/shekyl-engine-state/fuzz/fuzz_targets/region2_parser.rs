@@ -13,14 +13,13 @@
 //! that reach more of the parser's internal branches than random
 //! or mutation-of-valid strategies alone would.
 //!
-//! # Local-only
+//! # Where it runs
 //!
 //! This crate is excluded from the parent workspace (see
 //! `rust/Cargo.toml`) because `libfuzzer-sys` requires nightly Rust
-//! and the sanitizer runtime. The harness runs under
-//! `cargo +nightly fuzz run region2_parser` from inside this
-//! directory. See `README.md` for the full invocation, the reasons
-//! it is not integrated into CI yet, and the graduation plan.
+//! and the sanitizer runtime. The nightly fuzz workflow's `fuzz` job runs
+//! it, as `cargo +nightly fuzz run region2_parser` from inside this
+//! directory; see `README.md` for the invocation.
 
 #![no_main]
 

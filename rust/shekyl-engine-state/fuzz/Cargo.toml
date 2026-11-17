@@ -3,13 +3,12 @@
 # All rights reserved.
 # BSD-3-Clause
 
-# Local-only cargo-fuzz harness for the region-2 payload parser.
-# Intentionally excluded from the parent workspace (see
-# `rust/Cargo.toml`'s `[workspace].exclude`) so that stable-Rust CI
-# never attempts to resolve `libfuzzer-sys`. Builds and runs only
-# under nightly Rust via `cargo +nightly fuzz run region2_parser`.
-# See `README.md` in this directory for the full invocation and the
-# rationale for keeping this off CI for now (hardening-pass
+# cargo-fuzz harness for the region-2 payload parser. Excluded from the
+# parent workspace (see `rust/Cargo.toml`'s `[workspace].exclude`) so the
+# workspace's stable checks never resolve `libfuzzer-sys`. `ci/fuzz-harness`
+# type-checks it on stable; the nightly workflow's `fuzz` job runs it
+# (`cargo +nightly fuzz run region2_parser`).
+# See `README.md` in this directory for the invocation (hardening-pass
 # commit 8 — `docs/MID_REWIRE_HARDENING.md` §3.8).
 
 [package]

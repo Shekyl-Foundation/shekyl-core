@@ -63,6 +63,10 @@ jobs:
         run: |
           python3 scripts/ci/check_fuzz_inventory.py --selftest
           python3 scripts/ci/check_fuzz_inventory.py
+      - name: the coverage floors, one per target, each moved only with its run
+        # Against HEAD^1 (the base, in a pull request's merge commit): the
+        # full history is fetched above.
+        run: python3 scripts/ci/check_fuzz_inventory.py --floors
       - id: matrix
         name: the fuzz crates this change reaches
         shell: bash

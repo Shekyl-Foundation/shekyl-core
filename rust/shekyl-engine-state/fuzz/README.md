@@ -16,19 +16,14 @@ half lives at
 
 ## Status
 
-**Local-only, not CI-integrated.** This crate is deliberately
-excluded from the parent workspace (`rust/Cargo.toml`'s
-`[workspace].exclude`) and requires:
-
-- **Nightly Rust toolchain.** `libfuzzer-sys` + the sanitizer
-  runtime are nightly-only.
-- **`cargo install cargo-fuzz`.** The `cargo fuzz` subcommand is
-  not shipped with the toolchain itself.
-
-The stable proptest harness runs on every PR; this harness is
-reserved for authors running a deeper campaign locally before a
-significant parser change, and for pre-mainnet-freeze
-integration as a nightly sidecar job.
+**Run every night in CI.** The nightly fuzz workflow's `fuzz` job
+(`.github/workflows/fuzz-nightly.yml`) runs this target, like every fuzz
+target in the tree, for five minutes on the pinned nightly toolchain,
+and `ci/fuzz-harness` type-checks it on stable for every change that
+reaches it. The crate stays excluded from the parent workspace
+(`rust/Cargo.toml`'s `[workspace].exclude`): `libfuzzer-sys` and the
+sanitizer runtime need nightly Rust and `cargo install cargo-fuzz`.
+The stable proptest harness still runs on every PR.
 
 ## Invocation
 
@@ -49,24 +44,6 @@ regression file is disabled in CI: the cheap-and-reproducible
 failures are the ones that belong in a commit, not the
 accumulated coverage corpus.
 
-## Graduation plan
-
-Two conditions must be met before this harness moves into CI as a
-nightly sidecar:
-
-1. **Toolchain stability.** Either `libfuzzer-sys` stabilizes on
-   stable Rust (tracking issue in the rust-fuzz repo) or the
-   project accepts nightly as a permanent sidecar dependency.
-2. **Mainnet-freeze proximity.** Pre-mainnet is the natural point
-   to absorb the operational cost (nightly install cache, per-PR
-   wall-clock budget) for the deeper coverage guarantee. Before
-   that, the proptest harness is the cheaper and sufficient
-   check.
-
-Until both conditions hold, the stable proptest harness is the
-load-bearing fuzzer for this parser and the cargo-fuzz harness is
-the on-demand depth tool.
-
 ## What the harness asserts
 
 Exactly the same property as the proptest harness:
@@ -75,8 +52,9 @@ input.** libFuzzer's oracle is its exit status — a panic surfaces
 as a non-zero exit and a crash artifact under
 `fuzz/artifacts/region2_parser/`. Any such artifact found during
 a campaign is a commit-blocker on the PR that introduced the
-regression; checked-in artifacts are added to `fuzz/corpus/` only
-after the underlying bug is fixed.
+regression. The fix lands with the crashing input added to
+`fuzz/seeds/region2_parser/`, the committed regression corpus every
+run reads.
 
 ## Why the harness is trivial
 

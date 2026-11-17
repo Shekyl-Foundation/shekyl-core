@@ -12,6 +12,17 @@ use shekyl_crypto_pq::{kem::ML_KEM_768_EK_LEN, output::construct_output, TxKey};
 // both the x25519 public key and the ML-KEM encapsulation key. The function must return
 // Err on invalid keys, never panic. This catches panics inside ml-kem's try_from_bytes
 // or try_encaps on malformed ciphertext layouts.
+//
+// The spend key is fixed and must be a valid point, or every input is
+// refused as invalid key material before the KEM key is read. It was
+// `[0x42; 32]`, which is not a point: the first nightly dispatch ran 22
+// million inputs that all stopped there. This is the Ed25519 base point,
+// compressed.
+const SPEND_KEY: [u8; 32] = [
+    0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+];
+
 fuzz_target!(|data: &[u8]| {
     // Need: 8 (amount) + 8 (index) + 32 (tx_key) + 32 (x25519_pk) + 1184 (ml_kem_ek)
     const MIN_LEN: usize = 8 + 8 + 32 + 32 + ML_KEM_768_EK_LEN;
@@ -26,7 +37,7 @@ fuzz_target!(|data: &[u8]| {
     let x25519_pk: [u8; 32] = data[48..80].try_into().unwrap();
     let ml_kem_ek = &data[80..80 + ML_KEM_768_EK_LEN];
 
-    let spend_key = [0x42u8; 32];
+    let spend_key = SPEND_KEY;
 
     let _ = construct_output(
         &tx_key,
