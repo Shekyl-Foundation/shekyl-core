@@ -47,6 +47,13 @@
         reason = "pipeline-only fixtures are unused when the pipeline tests are not built"
     )
 )]
+#![cfg_attr(
+    all(not(test), feature = "forge"),
+    expect(
+        dead_code,
+        reason = "fixture builders serve this crate's tests; the forge feature compiles the module for the store helpers the driver opens with"
+    )
+)]
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -77,8 +84,10 @@ mod quiet;
 mod tree;
 
 pub use growing::Growing;
+#[cfg(test)]
+pub use quiet::quiet_seeds;
 #[cfg(feature = "pipeline")]
-pub use quiet::{held_seeds, named_seeds, quiet_resident, quiet_seeds};
+pub use quiet::{held_seeds, named_seeds, quiet_resident};
 pub use tree::GrownTree;
 
 /// A settlement epoch for test stores.

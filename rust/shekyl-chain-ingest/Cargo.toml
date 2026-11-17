@@ -93,11 +93,11 @@ harness = [
     "dep:zeroize",
 ]
 # forge: the scenario driver for an outside caller, the chain forge
-# (CHAIN_FORGE.md §5.3, seam T5): `scenario`, `scenario_shard`,
-# `scenario_archival`, `chain_drive`, `admitted_draws`, `archival_driver`,
-# `emission_assembly` and the store helpers they open stores with
-# (`test_support`), compiled as public library code over the harness crates
-# and the seeded entry points. A TEST_ONLY feature
+# (CHAIN_FORGE.md §5.3, seam T5). The modules the executor names are
+# public (`scenario`, `scenario_shard`, `scenario_archival`, `chain_drive`,
+# `admitted_draws`, `archival_driver`, `emission_assembly`). The store
+# helpers they open stores with (`test_support`) stay crate-private. The
+# bench driver's rules are not part of this feature. A TEST_ONLY feature
 # (check_test_only_features.py): no feature here enables it, and its one
 # enabler is `shekyl-chain-forge`'s [dev-dependencies] edge, whose example
 # and integration test are the forge. No build that ships has the driver,

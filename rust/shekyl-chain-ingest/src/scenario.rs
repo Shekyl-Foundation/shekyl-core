@@ -150,9 +150,10 @@ pub struct Scenario<P> {
 /// The rules every scenario runs under: regtest at fixed difficulty one,
 /// so a nonce of zero satisfies any longhash — real or free — and the
 /// subject stays the chain, not the search. The driver mines its own
-/// block 0, so its chain is held to no genesis pin. One constant with the
-/// bench driver's, whose fixtures are chains this driver mined.
-pub const RULES: ChainRules = crate::bench_support::RULES;
+/// block 0, so its chain is held to no genesis pin. The bench path's
+/// fixtures are chains this driver mined, so they use the same constant
+/// ([`ChainRules::HARNESS_REGTEST`]).
+pub(crate) const RULES: ChainRules = ChainRules::HARNESS_REGTEST;
 
 impl Scenario<FreeHash> {
     /// A scenario over the free longhash, at a fresh store named `name`.

@@ -129,11 +129,7 @@ pub mod bundle_producer;
 mod bench_fixture_tests;
 #[cfg(all(
     feature = "pipeline",
-    any(
-        test,
-        feature = "forge",
-        all(feature = "bench-internals", feature = "harness")
-    )
+    any(test, all(feature = "bench-internals", feature = "harness"))
 ))]
 pub mod bench_support;
 #[cfg(all(test, feature = "producer"))]
@@ -277,7 +273,7 @@ pub mod target;
 #[cfg(feature = "pipeline")]
 mod template;
 #[cfg(any(test, feature = "forge"))]
-pub mod test_support;
+pub(crate) mod test_support;
 pub mod trace;
 #[cfg(all(test, feature = "pipeline"))]
 mod vectors_tests;
