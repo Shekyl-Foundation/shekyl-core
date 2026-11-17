@@ -15,7 +15,7 @@ mod common;
 use rand_core::OsRng;
 
 use common::wallet::{
-    context, import_for, intent, ledger, validate, verify_from_the_wire, Held, Live,
+    context, import_for, intent, ledger, validate, verify_from_the_wire, Held, Live, GLOBAL_INDICES,
 };
 use common::{found_group, pay_group_twice, Paid, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
@@ -802,14 +802,18 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
         }),
         Some(DeriveError::Path { .. })
     ));
-    // One output recorded at both of the intent's global indices (an
-    // output key paid twice): both records derive, to one key image.
+    // One output recorded at both of the intent's global indices: the
+    // second input's amount is not the copied coin's, so its commitment
+    // does not open (R-27). At equal amounts only the shared key image
+    // tells; the derivation's unit test
+    // `one_coin_recorded_at_two_inputs_of_equal_amount_is_refused` holds
+    // that refusal.
     assert!(matches!(
         derive_from(&|l| {
             let global_index = l[1].0.global_index;
             l[1] = l[0].clone();
             l[1].0.global_index = global_index;
         }),
-        Some(DeriveError::DuplicateKeyImage)
+        Some(DeriveError::InputCommitment { global_index }) if global_index == GLOBAL_INDICES[1]
     ));
 }

@@ -667,30 +667,31 @@ mod tests {
             .iter()
             .map(|&(_, amount)| AtomicUnits::from_raw(amount))
             .collect();
-        validated_with(g, seed, &amounts)
+        validated_with(g, seed, &INPUTS, &amounts)
     }
 
-    /// The intent, validated against a ledger that names `ledger_amounts`
-    /// for its inputs.
+    /// The intent spending `inputs` (global index and amount), validated
+    /// against a ledger that names `ledger_amounts` for them.
     fn validated_with(
         g: &Group,
         seed: [u8; 32],
+        inputs: &[(u64, u64)],
         ledger_amounts: &[AtomicUnits],
     ) -> ValidatedIntent {
         let payload = &g.payload;
         let (kem, _) = HybridX25519MlKem.keypair_generate().unwrap();
         let single =
             ShekylAddress::new(NETWORK, point(), point(), [0; MSG_SIGN_PK_LEN], kem.ml_kem);
-        let amounts: Vec<AtomicUnits> = INPUTS
+        let amounts: Vec<AtomicUnits> = inputs
             .iter()
             .map(|&(_, amount)| AtomicUnits::from_raw(amount))
             .collect();
-        let indices: Vec<u64> = INPUTS.iter().map(|&(index, _)| index).collect();
+        let indices: Vec<u64> = inputs.iter().map(|&(index, _)| index).collect();
         let reference_block_hash = REFERENCE_HASH;
         let fingerprint = ChainStateFingerprint {
             reference_block_hash,
             input_global_indices: indices.clone(),
-            input_eligible_heights: vec![0; INPUTS.len()],
+            input_eligible_heights: vec![0; inputs.len()],
             input_amounts: amounts.clone(),
         }
         .compute();
@@ -752,7 +753,13 @@ mod tests {
 
     /// The group paid [`INPUTS`], each in its own transaction.
     fn pay(g: &Group) -> Vec<Paid> {
-        INPUTS
+        pay_inputs(g, &INPUTS)
+    }
+
+    /// The group paid `inputs` (global index and amount), each in its own
+    /// transaction.
+    fn pay_inputs(g: &Group, inputs: &[(u64, u64)]) -> Vec<Paid> {
+        inputs
             .iter()
             .map(|&(global_index, amount)| {
                 let output = construct_multisig_output(
@@ -903,13 +910,37 @@ mod tests {
             .map(|&(_, amount)| AtomicUnits::from_raw(amount))
             .collect();
         amounts.swap(0, 1);
-        let intent = validated_with(&g, bytes32(), &amounts);
+        let intent = validated_with(&g, bytes32(), &INPUTS, &amounts);
         let refused = DerivedSpend::derive(intent, &ledger(&pay(&g), 0), &g.key(), NET_ID).err();
         assert!(
             matches!(
                 refused,
                 Some(DeriveError::InputCommitment { global_index }) if global_index == INPUTS[0].0
             ),
+            "{refused:?}"
+        );
+    }
+
+    /// One coin recorded at both of an intent's global indices, where the
+    /// two inputs' amounts are equal: each record derives, opens at its
+    /// paired amount and sits in the tree, so only the shared key image
+    /// tells. The derivation refuses the spend of one output twice.
+    #[test]
+    fn one_coin_recorded_at_two_inputs_of_equal_amount_is_refused() {
+        /// Two inputs of one amount that balance [`OUTPUTS`] and [`FEE`].
+        const EQUAL_INPUTS: [(u64, u64); 2] = [(80, 600), (81, 600)];
+        let g = group();
+        let amounts = EQUAL_INPUTS.map(|(_, amount)| AtomicUnits::from_raw(amount));
+        let intent = validated_with(&g, bytes32(), &EQUAL_INPUTS, &amounts);
+        let paid = pay_inputs(&g, &EQUAL_INPUTS);
+        let mut held = ledger(&paid, 0);
+        held.records[1] = GroupOutputRecord {
+            global_index: EQUAL_INPUTS[1].0,
+            ..held.records[0].clone()
+        };
+        let refused = DerivedSpend::derive(intent, &held, &g.key(), NET_ID).err();
+        assert!(
+            matches!(refused, Some(DeriveError::DuplicateKeyImage)),
             "{refused:?}"
         );
     }
