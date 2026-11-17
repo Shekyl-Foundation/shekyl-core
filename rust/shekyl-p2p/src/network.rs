@@ -45,7 +45,8 @@ use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
 use shekyl_socks::{Proxy, SocksUsername};
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock};
 use shekyl_transport_layer::{
-    spans, ConnectorId, DownCause, InboundFacet, Links, Route, RoutePublish, Sockets,
+    spans, ConnectorId, Direction, DownCause, InboundFacet, Links, PathReading, PathSource, Route,
+    RoutePublish, Sockets, CLEARNET_READING_WAIT_NANOS,
 };
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -54,6 +55,7 @@ use crate::bans::{self, BanSpan, Bans};
 use crate::descriptors;
 use crate::dial::{ClearnetReady, Connectors, Spans, ACCEPT_BACKOFF};
 use crate::facts::{self, ConnectorCounts, LinkTotals, ListedAddress, SocketTraffic};
+use crate::path::{OnionPathSource, OutboundSessions, PathFact, PathFactsSink};
 use crate::peers::{self, OwnerLoops, Peers};
 use crate::plan::{LinkLimits, NetworkPlan, TorPlan};
 use crate::tor::{SupervisorFeeds, TorLink, TOR_SOCKS_TIMEOUT};
@@ -81,6 +83,9 @@ pub struct NetworkParts {
 /// when no supervisor runs.
 struct SupervisorParts {
     tally: Option<shekyl_dialer::TallySink>,
+    path: Option<PathFactsSink>,
+    /// The Tor Manager's declared wait for a reading; zero when none runs.
+    reading_wait: Duration,
     probes: Option<Arc<dyn shekyl_p2p_session::ProbeSink>>,
     verdict: Option<shekyl_relay::owner::VerdictSink>,
     sessions: Option<shekyl_p2p_session::SessionsSink>,
@@ -91,17 +96,23 @@ impl SupervisorParts {
         match feeds {
             Some(SupervisorFeeds {
                 tally,
+                path,
+                reading_wait,
                 probes,
                 verdict,
                 sessions,
             }) => Self {
                 tally: Some(tally),
+                path: Some(path),
+                reading_wait,
                 probes: Some(probes),
                 verdict: Some(verdict),
                 sessions: Some(sessions),
             },
             None => Self {
                 tally: None,
+                path: None,
+                reading_wait: Duration::ZERO,
                 probes: None,
                 verdict: None,
                 sessions: None,
@@ -174,6 +185,9 @@ struct Inner {
     /// reports one row for each and none for the others.
     running: Vec<ConnectorId>,
     tor_link: Arc<TorLink>,
+    /// The Tor connector's source of path readings: the Tor Manager's
+    /// reading, as it publishes it.
+    onion_path: Arc<OnionPathSource>,
     bans: Bans,
     listening: Listening,
     stopped: AtomicBool,
@@ -202,6 +216,8 @@ impl Network {
         } = parts;
         let SupervisorParts {
             tally,
+            path,
+            reading_wait,
             probes,
             verdict,
             sessions,
@@ -265,7 +281,7 @@ impl Network {
         ));
         let tor_link = Arc::new(TorLink::new());
         if let Some(tally) = tally {
-            dialer.report_tor_link(tally);
+            dialer.report_link(ConnectorId::Tor, tally);
         }
         if let Some(clearnet) = &plan.clearnet {
             dialer.set_own_addresses(ConnectorId::Clearnet, clearnet.own.clone());
@@ -298,6 +314,18 @@ impl Network {
             on_cause: Connectors::on_cause(),
             clearnet: Mutex::new(None),
             tor_proxy: Mutex::new(None),
+            path_facts: path.clone(),
+        });
+        // A new inbound Tor session is the Tor Manager's working fact; the
+        // probe of this node's own onion is dropped in its handshake and is
+        // never one (`TOR_SUPERVISOR.md` §4.5a).
+        let established = path.clone().map(|facts| {
+            let clock = timing.clock().clone();
+            Arc::new(move |connector, direction| {
+                if connector == ConnectorId::Tor && direction == Direction::Inbound {
+                    facts(PathFact::InboundTorSession(clock.stamp()));
+                }
+            }) as shekyl_p2p_session::EstablishedSink
         });
         let layer = SessionLayer::new(Parts {
             sockets: sockets.clone(),
@@ -315,6 +343,7 @@ impl Network {
                 relay: Arc::clone(&relay.port) as Arc<dyn shekyl_p2p_session::RelayOwner>,
                 probes,
                 sessions,
+                established,
             },
             connectors: Arc::clone(&connectors) as Arc<dyn shekyl_p2p_session::Dial>,
             timing: timing.clone(),
@@ -323,6 +352,25 @@ impl Network {
             rng: Box::new(SecureRelayRng),
         });
         dialer.attach(layer.clone());
+        // Each connector's source of path readings (`DIALER_OUTAGE_EVIDENCE.md`
+        // §3.3): Tor asks the Tor Manager, clearnet reads its outbound
+        // sessions.
+        let onion_path = Arc::new(OnionPathSource::new(
+            path,
+            u64::try_from(reading_wait.as_nanos()).unwrap_or(u64::MAX),
+        ));
+        dialer.set_path_source(
+            ConnectorId::Tor,
+            Arc::clone(&onion_path) as Arc<dyn PathSource>,
+        );
+        dialer.set_path_source(
+            ConnectorId::Clearnet,
+            Arc::new(OutboundSessions::new(
+                layer.clone(),
+                ConnectorId::Clearnet,
+                CLEARNET_READING_WAIT_NANOS,
+            )),
+        );
         let bans = Bans::new(sockets.clone(), clock.clone());
         bans.attach(layer.clone());
         for target in &plan.bans {
@@ -348,6 +396,7 @@ impl Network {
                 connectors,
                 running: plan.connectors(),
                 tor_link,
+                onion_path,
                 bans,
                 listening: Listening::default(),
                 stopped: AtomicBool::new(false),
@@ -639,6 +688,13 @@ impl Network {
     /// The store's write.
     pub fn store_addresses_if_due(&self) -> std::io::Result<bool> {
         self.inner.dialer.store_if_due(self.inner.clock.now())
+    }
+
+    /// The Tor Manager's onion-path reading, learned at `at_nanos` on the
+    /// process clock (`TOR_SUPERVISOR.md` §4.5a): the Tor connector's source
+    /// answers from it, and a newer one rings the dialer's bell.
+    pub fn publish_onion_path(&self, reading: PathReading, at_nanos: u64) {
+        self.inner.onion_path.publish(reading, at_nanos);
     }
 
     /// Mint the Tor probe's handshake (`TOR_SUPERVISOR.md` §4.5).

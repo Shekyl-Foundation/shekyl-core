@@ -541,13 +541,18 @@ pub(crate) struct OutputDestination {
     pub rid: Option<shekyl_engine_state::PaymentRequestId>,
 }
 
-/// Public fee variant directive (§3.9). All fields are network-derived.
+/// Public fee variant directive (§3.9): the two ladder fees a signing
+/// pass may carry, both network-derived. Which one it carries is
+/// `fee_variant::fee_and_change`'s rule; the fee is always one of these,
+/// never the leftover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub(crate) struct FeeDirective {
+    /// The fee for the payments alone.
     pub fee_no_change: u64,
-    pub fee_with_change: u64,
-    pub dust_threshold: u64,
+    /// The fee with a change output added; `None` when the payments
+    /// already fill the output limit and no change output fits.
+    pub fee_with_change: Option<u64>,
 }
 
 /// Per-output signing context (§3.9). Deliberately **not** `Clone`.
@@ -594,11 +599,10 @@ pub(crate) struct FcmpPlusPlusContext {
 /// for final wire encode in `LocalSigner`, plus the per-tx secret
 /// scalar retained for OUTBOUND tx proofs (WI-RPC-3).
 ///
-/// **Not `Clone`** — `tx_key_secret` refuses duplication
-/// ([`TxSecretKey`] is deliberately non-`Clone`); the struct moves
-/// through the actor reply channel and the signer, never fans out.
-/// `Debug` stays derivable because `TxSecretKey`'s own `Debug` is
-/// redacted.
+/// **Not `Clone`** — `tx_key` refuses duplication
+/// ([`shekyl_crypto_pq::TxKey`] is deliberately non-`Clone`); the struct
+/// moves through the actor reply channel and the signer, never fans out.
+/// `Debug` stays derivable because `TxKey`'s own `Debug` is redacted.
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) struct TxSignatures {
@@ -624,7 +628,7 @@ pub(crate) struct TxSignatures {
     /// submit-ACCEPTED (`docs/api/wallet_rpc.yaml` OUTBOUND
     /// PREREQUISITE, lifecycle pin 1). Zeroizes on drop; every
     /// build-then-discard path wipes it structurally.
-    pub tx_key_secret: shekyl_engine_state::TxSecretKey,
+    pub tx_key: shekyl_crypto_pq::TxKey,
 }
 
 /// Per-input public signature bundle (§3.9).
@@ -1006,8 +1010,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
-                dust_threshold: 0,
+                fee_with_change: Some(0),
             },
         };
         let rendered = format!("{tx:?}");

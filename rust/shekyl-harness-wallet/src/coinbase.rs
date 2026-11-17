@@ -16,33 +16,23 @@
 //! nothing else, which is what lets a pricer settle a fixture's coinbase
 //! after the fact without rebuilding the block around it.
 
-use curve25519_dalek::edwards::EdwardsPoint;
-use curve25519_dalek::scalar::Scalar;
 use shekyl_crypto_pq::output::{construct_output, OutputData};
+use shekyl_crypto_pq::TxKey;
 use shekyl_wire::tx_extra::{self, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT};
 use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
-use zeroize::Zeroizing;
 
 use crate::Recipient;
 
-/// The coinbase tx secret `r` for a block at `height`: the height in the
-/// low eight bytes under a fixed `0x0A` fill. The fill keeps the value
-/// below the group order with a non-zero top, so it is already reduced
-/// and never zero — no reduction step whose output a reader would have to
-/// reason about.
+/// The coinbase's transaction key for a block at `height`: the height in
+/// the low eight bytes under a fixed `0x0A` fill. The fill keeps the value
+/// below the group order with a non-zero top, so the scalar is the bytes as
+/// written and never zero — no reduction step whose output a reader would
+/// have to reason about.
 #[must_use]
-pub fn tx_key(height: u64) -> Zeroizing<[u8; 32]> {
-    let mut r = Zeroizing::new([0x0A; 32]);
+pub fn tx_key(height: u64) -> TxKey {
+    let mut r = [0x0A; 32];
     r[..8].copy_from_slice(&height.to_le_bytes());
-    r
-}
-
-/// The tx public key `r·G` for [`tx_key`]`(height)` — what the `0x01`
-/// field of a coinbase at `height` carries.
-#[must_use]
-pub fn tx_pubkey(height: u64) -> [u8; 32] {
-    let r = Zeroizing::new(Scalar::from_bytes_mod_order(*tx_key(height)));
-    EdwardsPoint::mul_base(&r).compress().to_bytes()
+    TxKey::seeded(r)
 }
 
 /// The output paying `amount` to `recipient` at `height`, as output `0`.
@@ -52,9 +42,9 @@ pub fn tx_pubkey(height: u64) -> [u8; 32] {
 /// A recipient whose spend key is not a canonical, torsion-free,
 /// non-identity point, or whose ML-KEM key is not 1184 bytes, is not a
 /// wallet this crate derived — a harness bug, not an input to handle.
-fn output(recipient: &Recipient, height: u64, amount: u64) -> OutputData {
+fn output(recipient: &Recipient, tx_key: &TxKey, amount: u64) -> OutputData {
     construct_output(
-        &tx_key(height),
+        tx_key,
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,
@@ -85,14 +75,15 @@ fn output(recipient: &Recipient, height: u64, amount: u64) -> OutputData {
 /// refuses nothing a one-output composition hands it.
 #[must_use]
 pub fn paying(recipient: &Recipient, height: u64, unlock_time: u64, amount: u64) -> Transaction {
-    let od = output(recipient, height, amount);
+    let tx_key = tx_key(height);
+    let od = output(recipient, &tx_key, amount);
     let mut kem_blob =
         Vec::with_capacity(od.kem_ciphertext_x25519.len() + od.kem_ciphertext_ml_kem.len());
     kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
     kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
     let leaf_blob = od.pqc_leaf.entry_bytes();
     let extra = tx_extra::build_coinbase_extra(
-        tx_pubkey(height),
+        tx_key.public_bytes(),
         &[0; COINBASE_NONCE_BYTES],
         CONFORMING_DRAW_COMMITMENT,
         1,
@@ -180,7 +171,7 @@ pub fn repay(tx: &mut Transaction, recipient: &Recipient, amount: u64) -> bool {
     else {
         return false;
     };
-    let od = output(recipient, height, amount);
+    let od = output(recipient, &tx_key(height), amount);
     first.amount = amount;
     *commitment = od.commitment;
     *enc_amount = od.enc_amount_wire().to_bytes();

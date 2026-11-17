@@ -1,0 +1,45 @@
+{
+  "cell": "registered",
+  "chain_height": 117,
+  "curve": {
+    "height": 116,
+    "layers": 1,
+    "leaf_count": 125,
+    "root": "0c5bf1d04b951e18db99a1b915da628b30ef0a292be713d37d8e6ed22c34e813"
+  },
+  "fanout_txs": 4,
+  "shapes": [
+    [
+      1,
+      2
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      4,
+      2
+    ],
+    [
+      8,
+      2
+    ],
+    [
+      1,
+      16
+    ],
+    [
+      2,
+      16
+    ],
+    [
+      4,
+      16
+    ],
+    [
+      8,
+      16
+    ]
+  ]
+}

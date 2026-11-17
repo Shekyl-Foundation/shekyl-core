@@ -8,8 +8,11 @@
 //! reads it composes: the ledger's [`BalanceSummary`] and the sealed staking
 //! view's [`StakedBalance`].
 //!
-//! Before this module the projection — which leg is "liquid", how the two
-//! bonded legs sum, what an unreadable staking seal does to the staking
+//! The ledger's half is [`BalanceSummary`] whole: balance = spendable +
+//! incoming, with outgoing and unspendable beside it
+//! (A17; the legs are defined in `shekyl-scanner`'s `balance` module).
+//!
+//! Before this module the projection — how the two bonded legs sum, what an unreadable staking seal does to the staking
 //! fields — lived in `shekyl-wallet-rpc` alone, and every other consumer of
 //! the engine (the desktop wallet embeds it directly) either restated it or
 //! shipped a different balance under the same name. A projection restated
@@ -20,7 +23,7 @@
 //!
 //! - **Degrade.** The sealed `.wallet.pscan` / `.wallet.pending` files could
 //!   not be *read* ([`StakingReadError::File`] / [`StakingReadError::Codec`]):
-//!   the liquid fields stay authoritative and [`BalanceView::staking`] is
+//!   the ledger's legs stay authoritative and [`BalanceView::staking`] is
 //!   `None`. Absence is structurally distinct from `0` — a staker must never
 //!   be shown "nothing staked" over a bad seal.
 //! - **Loud.** A seal that *loaded* but whose money totals overflow the
@@ -68,20 +71,8 @@ pub struct StakedTotals {
 /// The contract's `get_balance`, as engine facts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BalanceView {
-    /// Spendable now. Maps from `unlocked` until staking splits liquid from
-    /// locked principal; carried as its own field so that split is a change
-    /// here, not in every consumer.
-    pub liquid: AtomicUnits,
-    /// Unlocked and not frozen ([`BalanceSummary::unlocked`]).
-    pub unlocked: AtomicUnits,
-    /// Committed to a network-exposed spend awaiting confirmation
-    /// ([`BalanceSummary::awaiting_confirmation`]): counted in the total,
-    /// never spendable.
-    pub pending: AtomicUnits,
-    /// Received-but-unspendable outputs ([`BalanceSummary::unspendable`]):
-    /// on chain, retained, never spendable by this wallet; counted nowhere
-    /// else.
-    pub unspendable: AtomicUnits,
+    /// The ledger's legs at the synced tip: the balance and each leg once.
+    pub legs: BalanceSummary,
     /// The staking totals, or `None` when the sealed staking state could
     /// not be read (the degrade arm). A non-staker's totals are present and
     /// genuinely zero.
@@ -147,10 +138,7 @@ pub(crate) fn project_balance(
         })
         .transpose()?;
     Ok(BalanceView {
-        liquid: summary.unlocked,
-        unlocked: summary.unlocked,
-        pending: summary.awaiting_confirmation,
-        unspendable: summary.unspendable,
+        legs: *summary,
         staking,
     })
 }
@@ -206,24 +194,20 @@ where
 mod tests {
     use super::*;
 
-    fn summary(unlocked: u64, pending: u64, unspendable: u64) -> BalanceSummary {
+    fn summary(spendable: u64, outgoing: u64, unspendable: u64) -> BalanceSummary {
         BalanceSummary {
-            total: AtomicUnits::from_raw(unlocked + pending + unspendable),
-            unlocked: AtomicUnits::from_raw(unlocked),
-            locked_by_timelock: AtomicUnits::ZERO,
-            frozen: AtomicUnits::ZERO,
+            spendable: AtomicUnits::from_raw(spendable),
+            outgoing: AtomicUnits::from_raw(outgoing),
             unspendable: AtomicUnits::from_raw(unspendable),
-            awaiting_confirmation: AtomicUnits::from_raw(pending),
+            ..BalanceSummary::default()
         }
     }
 
     #[test]
-    fn liquid_maps_from_unlocked_and_the_other_legs_are_verbatim() {
-        let v = project_balance(&summary(40, 5, 7), Some(&StakedBalance::ZERO)).unwrap();
-        assert_eq!(v.liquid, AtomicUnits::from_raw(40));
-        assert_eq!(v.unlocked, AtomicUnits::from_raw(40));
-        assert_eq!(v.pending, AtomicUnits::from_raw(5));
-        assert_eq!(v.unspendable, AtomicUnits::from_raw(7));
+    fn the_ledger_legs_pass_through_whole() {
+        let legs = summary(40, 5, 7);
+        let v = project_balance(&legs, Some(&StakedBalance::ZERO)).unwrap();
+        assert_eq!(v.legs, legs);
         // A non-staker's zeros are true zeros, present, not the degrade arm.
         assert_eq!(
             v.staking,
@@ -246,9 +230,9 @@ mod tests {
         assert_eq!(totals.staked, AtomicUnits::from_raw(100_000));
         assert_eq!(totals.claimable_rewards, AtomicUnits::from_raw(1_234));
         assert_eq!(
-            v.unlocked,
+            v.legs.spendable,
             AtomicUnits::from_raw(40),
-            "principal legs untouched"
+            "the ledger legs untouched"
         );
     }
 
@@ -257,9 +241,9 @@ mod tests {
         let v = project_balance(&summary(40, 0, 0), None).unwrap();
         assert_eq!(v.staking, None);
         assert_eq!(
-            v.liquid,
+            v.legs.spendable,
             AtomicUnits::from_raw(40),
-            "liquid stays authoritative"
+            "the ledger legs stay authoritative"
         );
     }
 

@@ -81,11 +81,6 @@ const DISPATCH_BENCH_SEED: [u8; 32] = [0x5Bu8; 32];
 /// (paid to a stranger; the wallet under measurement does not own it).
 const DISPATCH_BENCH_STRANGER_SEED: [u8; 32] = [0x9Eu8; 32];
 
-/// Sender-side tx-key secret for `construct_output`. Its value does not
-/// affect receiver-side recovery (the recipient only sees the
-/// ciphertext), so any fixed non-zero value is fine.
-const DISPATCH_BENCH_TX_KEY_SECRET: [u8; 32] = [0x11u8; 32];
-
 /// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet).
 ///
 /// Duplicated from the `key_actor` / `local_keys` test helpers per the
@@ -110,8 +105,11 @@ fn build_output_paid_to(
     amount: u64,
     tx_hash: TxHash,
 ) -> OutputDetectionInput {
+    // The sender's key does not affect receiver-side recovery (the
+    // recipient only sees the ciphertext), so a fresh one serves.
+    let tx_key = shekyl_crypto_pq::TxKey::random().expect("the OS draws a key");
     let constructed = construct_output(
-        &DISPATCH_BENCH_TX_KEY_SECRET,
+        &tx_key,
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         recipient.spend_pk.as_canonical_bytes(),
@@ -369,7 +367,6 @@ fn unpopulated_transfer(seed: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
-        frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),

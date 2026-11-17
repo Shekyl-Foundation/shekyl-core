@@ -346,8 +346,10 @@ presented. Nothing published per output is a function of the key alone
 Each transaction output receives a unique PQC keypair to prevent transaction
 linkability. KEM encapsulation is **deterministic** from the transaction key,
 recipient public keys, and output index. This allows the sender to re-derive
-`combined_ss` at proof time from `tx_key_secret` (stored in `m_tx_keys`)
-and public data, without caching per-output shared secrets.
+`combined_ss` at proof time from the transaction key (the wallet keeps its
+stored form, `shekyl_crypto_pq::tx_key::StoredTxKey`, in
+`TxMetaBlock.tx_keys`) and public data, without caching per-output shared
+secrets.
 
 The derivation flow is:
 
@@ -413,8 +415,9 @@ ML-KEM-768 key, ensuring per-output PQC uniqueness even for miner rewards.
 
 The sender can re-derive `combined_ss` at proof time without storing it:
 
-- **`rederive_combined_ss(tx_key_secret, x25519_pk, ml_kem_ek, output_index)`**:
-  Replays steps 2-5 above. Returns `(combined_ss, x25519_eph_pk, ml_kem_ct)`.
+- **`TxKey::rederive_combined_ss(x25519_pk, ml_kem_ek, output_index)`**
+  (the sender's) and **`DisclosedTxKey::rederive_combined_ss`** (an outbound
+  proof's verifier, over the key the proof discloses): Replays steps 2-5 above. Returns `(combined_ss, x25519_eph_pk, ml_kem_ct)`.
   The verifier compares `x25519_eph_pk` and `ml_kem_ct` against on-chain data
   for integrity.
 

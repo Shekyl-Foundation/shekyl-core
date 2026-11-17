@@ -87,64 +87,6 @@ pub enum WindowSource {
     Published,
 }
 
-/// Whether an attempt that opened a stream on this connector shows the
-/// link working (`DIALER_OUTAGE_EVIDENCE.md` §3.3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StreamOpens {
-    /// A stream opened on this connector shows its link works.
-    Corroborate,
-    /// It does not: on this connector a stream to one destination says
-    /// nothing about the path to another.
-    Ignore,
-}
-
-/// Which held sessions' received bytes show the link working. A session
-/// merely held never does: a byte must arrive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionTraffic {
-    /// Bytes received on any session, inbound included. Right where every
-    /// session crosses one link an observer cannot split by destination.
-    AnySession,
-    /// Bytes received on outbound sessions only. An inbound peer chose this
-    /// node, and a party that blocks this node's outbound connects can let
-    /// established inbound flows continue.
-    OutboundOnly,
-}
-
-/// What shows this connector's link working around an uncertain failure:
-/// the connector's input to the judge. A closed list the dialer can
-/// observe; never the probe of this node's own onion, and never anything
-/// Tor says about its network (`TSR-Q14`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Corroboration {
-    /// Whether a stream that opened counts.
-    pub stream_opens: StreamOpens,
-    /// Whose received bytes count.
-    pub session_traffic: SessionTraffic,
-}
-
-/// How the judge reads this connector's failures (Rick, 2026-10-31): its
-/// corroboration and its two values. Each value is the connector's own,
-/// an `Assumption` with its basis in `DAEMON_RELAY_PRIVACY.md` §97. The
-/// mapping of each failure to its evidence is the connector's own stamping
-/// into [`crate::DialFailure`], not a field here, so there is one source.
-/// Clearing is the judge's behaviour, not a field: a per-connector clearing
-/// rule is rejected (rule 21; reopen when a connector shows signs of life
-/// while its dials still cannot succeed).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FailureJudging {
-    /// What shows the link working.
-    pub corroboration: Corroboration,
-    /// δ: an uncertain failure counts only when the link was shown working
-    /// within this span before it and within this span after it (the
-    /// bracket, `OE-D5`). In nanoseconds.
-    pub bracket_nanos: u64,
-    /// How long an excused address with no counted failure waits before it
-    /// can be drawn again. An address with counted failures cools at its
-    /// current rung instead (hold the rung, `OE-D6`).
-    pub outage_retry: JitteredSpan,
-}
-
 /// One connector's dial profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DialProfile {
@@ -164,8 +106,12 @@ pub struct DialProfile {
     pub window: WindowSource,
     /// The gap between the dialer's wakes (R3): one wake, one dial.
     pub wake: JitteredSpan,
-    /// How the judge reads this connector's failures.
-    pub judging: FailureJudging,
+    /// How long an excused address with no counted failure waits before it
+    /// can be drawn again. An address with counted failures cools at its
+    /// current rung instead (hold the rung, `OE-D6`). Whether a failure is
+    /// excused is the judge's, from the connector's path reading
+    /// ([`crate::PathSource`]); this is only what an excusal costs.
+    pub outage_retry: JitteredSpan,
 }
 
 impl DialProfile {
@@ -241,41 +187,40 @@ const CLEARNET_WHITE_ATTEMPTS: u8 = 2;
 /// descriptor that has not propagated against a peer that is up.
 const TOR_ATTEMPTS_PER_TEST: u8 = 3;
 
-/// Tor's δ, 15 s. **Assumption** (§97, "Tor failure bracket"). Basis: the
-/// 60 s mean timed sync (`shekyl-p2p-session`'s `TIMED_SYNC_MIN` plus half
-/// `TIMED_SYNC_JITTER`) gives each session
-/// about two received messages a minute, and every Tor stream crosses the
-/// one guard link, so with `n` sessions a healthy link shows nothing in δ
-/// with probability `exp(−n · δ / 30 s)`. Re-derived if that interval moves.
-const TOR_BRACKET_NANOS: u64 = 15 * SECOND_NANOS;
-
 /// Tor's outage retry, 10 s + U(0, 5 s). **Assumption** (§97, "Tor outage
 /// retry"). Basis: it stays under the slot turnover, `window / bound`, so
 /// an excused address is drawable again before a slot comes free and the
 /// outage cooldown never holds a slot idle. At today's managed-Tor window
 /// (`SocksTimeout`, about 105 s) the turnover is 105 s / 5 = 21 s, a 6 s
 /// margin over the 15 s longest retry. The window is published at runtime,
-/// so the build-time check below uses the row's dial deadline, an upper
-/// bound on the turnover (120 s / 5 = 24 s): necessary, not sufficient. The
-/// Pi run (brief §7) measures it at the real window.
+/// so the build-time check after [`dial_profile`] uses the row's dial
+/// deadline, an upper bound on the turnover (120 s / 5 = 24 s): necessary,
+/// not sufficient. The Pi run (brief §7) measures it at the real window.
 const TOR_OUTAGE_RETRY: JitteredSpan = JitteredSpan {
     base_nanos: 10 * SECOND_NANOS,
     jitter_nanos: 5 * SECOND_NANOS,
 };
 
-/// Clearnet's δ, 15 s. **Assumption** (§97, "Clearnet failure bracket").
-/// Basis: the 60 s timed sync, on outbound sessions only (clearnet's
-/// corroboration excludes inbound). Re-derived if that interval moves.
-const CLEARNET_BRACKET_NANOS: u64 = 15 * SECOND_NANOS;
+/// How long the judge waits for clearnet's path reading after a failure,
+/// 15 s. **Assumption** (§97, "Clearnet path-reading wait"). Clearnet's
+/// reading is a byte received on one of its outbound sessions after the
+/// failure: inbound sessions do not count, since an inbound peer chose
+/// this node and a party that blocks this node's outbound connects can let
+/// established inbound flows continue. Basis: the 60 s mean timed sync
+/// (`shekyl-p2p-session`'s `TIMED_SYNC_MIN` plus half `TIMED_SYNC_JITTER`)
+/// gives each outbound session about two received messages a minute.
+/// Re-derived if that interval moves. The clearnet connector's source
+/// declares it; the judge reads it from the source.
+pub const CLEARNET_READING_WAIT_NANOS: u64 = 15 * SECOND_NANOS;
 
 /// Clearnet's outage retry, 10 s + U(0, 5 s). **Assumption** (§97,
 /// "Clearnet outage retry"). Basis: it caps redials of an unproven address
 /// at one per `outage_retry`, 10–15 s, while the link shows no sign of
 /// life. The 10 s is the chosen cap, not a derived one; the Pi measures it.
-/// What the build-time check below holds is the structural half: the
-/// shortest retry is longer than one fill round (the dial deadline and the
-/// longest wake), so an excused address is never redialed in the round
-/// that excused it.
+/// What the build-time check after [`dial_profile`] holds is the
+/// structural half: the shortest retry is longer than one fill round (the
+/// dial deadline and the longest wake), so an excused address is never
+/// redialed in the round that excused it.
 const CLEARNET_OUTAGE_RETRY: JitteredSpan = JitteredSpan {
     base_nanos: 10 * SECOND_NANOS,
     jitter_nanos: 5 * SECOND_NANOS,
@@ -302,18 +247,7 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             dial_deadline_nanos: CLEARNET_DIAL_WITHIN_NANOS,
             window: WindowSource::Deadline,
             wake: WAKE,
-            // A clearnet path is per destination: an on-path party can pass
-            // one session and drop the rest, and an inbound peer chose this
-            // node. A stream that opened says nothing about another path
-            // (`OE-D5`): corroboration is a byte on an outbound session.
-            judging: FailureJudging {
-                corroboration: Corroboration {
-                    stream_opens: StreamOpens::Ignore,
-                    session_traffic: SessionTraffic::OutboundOnly,
-                },
-                bracket_nanos: CLEARNET_BRACKET_NANOS,
-                outage_retry: CLEARNET_OUTAGE_RETRY,
-            },
+            outage_retry: CLEARNET_OUTAGE_RETRY,
         },
         // Tor: the bound is Measured on the floor device (§97, "In-flight
         // dial bound"). The retry cutoff is the managed Tor's window,
@@ -333,19 +267,26 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             dial_deadline_nanos: TOR_DIAL_WITHIN_NANOS,
             window: WindowSource::Published,
             wake: WAKE,
-            // Every Tor stream crosses the one guard link, and an observer
-            // on it cannot tell streams apart: it passes all or none.
-            judging: FailureJudging {
-                corroboration: Corroboration {
-                    stream_opens: StreamOpens::Corroborate,
-                    session_traffic: SessionTraffic::AnySession,
-                },
-                bracket_nanos: TOR_BRACKET_NANOS,
-                outage_retry: TOR_OUTAGE_RETRY,
-            },
+            outage_retry: TOR_OUTAGE_RETRY,
         },
     }
 }
+
+/// The longest one draw of `span` can be.
+const fn longest(span: JitteredSpan) -> u64 {
+    span.base_nanos.saturating_add(span.jitter_nanos)
+}
+
+/// Tor's longest outage retry stays under the slot turnover at the row's
+/// dial deadline, `deadline / bound`: an excused address is drawable again
+/// before a slot comes free ([`TOR_OUTAGE_RETRY`]'s basis).
+const _: () =
+    assert!(longest(TOR_OUTAGE_RETRY) < TOR_DIAL_WITHIN_NANOS / TOR_IN_FLIGHT_BOUND as u64);
+
+/// Clearnet's shortest outage retry outlasts one fill round, the dial
+/// deadline and the longest wake ([`CLEARNET_OUTAGE_RETRY`]'s basis).
+const _: () =
+    assert!(CLEARNET_OUTAGE_RETRY.base_nanos > CLEARNET_DIAL_WITHIN_NANOS + longest(WAKE));
 
 #[cfg(test)]
 mod tests {

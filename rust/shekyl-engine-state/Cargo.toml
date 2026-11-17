@@ -38,6 +38,13 @@ shekyl-address = { path = "../shekyl-address" }
 # docs/design/ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6). Featherweight dep
 # (thiserror + serde only, no reverse dep).
 shekyl-consensus = { path = "../shekyl-consensus" }
+# The reference rule an output is spendable by (`in_tree_at_reference`,
+# `select_reference_height`, `tip_blocks_until_in_tree`): the one
+# classifier of an output's state (`output_state`) calls the predicate its
+# owner defines rather than restating it as a sum (A17). The edge adds
+# `shekyl-fcmp`, `shekyl-fcmp-proofs` and `redb` to this crate's graph; the
+# curve tree depends on nothing of the wallet's, so there is no cycle.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # `KeyImage` newtype consumed by `TransferDetails::key_image` for
 # type-system protection at the engine-state boundary; serialization
 # is `#[serde(transparent)]` so the on-disk format is unchanged.
@@ -56,6 +63,9 @@ shekyl-units = { path = "../shekyl-units", features = ["schema"] }
 shekyl-types = { path = "../shekyl-types", features = ["schema"] }
 
 [dev-dependencies]
+# `seeded-rng` (TEST_ONLY): the fixtures' stored transaction keys are made
+# from pinned keys (`TxKey::seeded`, R-21); a dev edge only.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 serde_json = "1"
 proptest = "1"
 

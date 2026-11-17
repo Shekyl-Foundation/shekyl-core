@@ -126,16 +126,14 @@ fn onion_causes() -> Vec<OnionCause> {
 
 fn quiet_arm(quiet: &TorQuiet) -> u8 {
     match quiet {
-        TorQuiet::Empty => 0,
-        TorQuiet::Failing { .. } => 1,
-        TorQuiet::Unknown { .. } => 2,
+        TorQuiet::Unreached { .. } => 0,
+        TorQuiet::Unknown { .. } => 1,
     }
 }
 
 fn quiets() -> Vec<TorQuiet> {
     vec![
-        TorQuiet::Empty,
-        TorQuiet::Failing { age: 130 },
+        TorQuiet::Unreached { age: 130 },
         TorQuiet::Unknown {
             tag: unknown("muted"),
         },
@@ -306,7 +304,7 @@ fn the_table_covers_every_arm() {
     });
     assert_eq!(onion.len(), 5, "{onion:?}");
     let quiet = seen(&|s| s.tor_quiet.as_ref().map(quiet_arm));
-    assert_eq!(quiet.len(), 3, "{quiet:?}");
+    assert_eq!(quiet.len(), 2, "{quiet:?}");
     let skews: HashSet<_> = causes_of(&table)
         .filter_map(|cause| match cause {
             TorCause::ClockSkew(Some(skew)) => Some(discriminant(skew)),
@@ -365,10 +363,8 @@ fn the_wire_is_the_ruled_shape() {
     assert_eq!(value["tor"]["onion"]["cause"]["clock-behind"], 3_600);
     assert_eq!(value["tor"]["age"], 12);
     assert!(value["tor_quiet"].is_null());
-    let quiet = serde_json::to_value(TorQuiet::Failing { age: 130 }).expect("encodes");
-    assert_eq!(quiet, serde_json::json!({"failing": {"age": 130}}));
-    let empty = serde_json::to_value(TorQuiet::Empty).expect("encodes");
-    assert_eq!(empty, serde_json::json!({"empty": null}));
+    let quiet = serde_json::to_value(TorQuiet::Unreached { age: 130 }).expect("encodes");
+    assert_eq!(quiet, serde_json::json!({"unreached": {"age": 130}}));
     let hold = serde_json::to_value(TorCause::Unusable(Some(Unusable::Exhausted {
         free: 1,
         needed: 2,

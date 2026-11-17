@@ -177,6 +177,79 @@ fn candidate(tag: u8, amount: u64) -> ReserveCandidate {
     }
 }
 
+/// One ledger row, disclosable (key image and source ciphertext set),
+/// eligible at `eligible` (tagged `tag` throughout).
+fn row(tag: u8, amount: u64, eligible: u64) -> shekyl_engine_state::TransferDetails {
+    shekyl_engine_state::TransferDetails {
+        tx_hash: shekyl_types::TxHash::from_bytes([tag; 32]),
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(u64::from(tag)),
+        block_height: shekyl_types::BlockHeight::from_raw(eligible.saturating_sub(10)),
+        key: curve25519_dalek::constants::ED25519_BASEPOINT_POINT,
+        key_offset: curve25519_dalek::Scalar::ZERO,
+        commitment: shekyl_curve_primitives::Commitment::new(
+            curve25519_dalek::Scalar::ZERO,
+            amount,
+        ),
+        payment_id: None,
+        spent: false,
+        spent_height: None,
+        key_image: Some(KeyImage::from_canonical_bytes([tag; 32])),
+        spending_tx_hash: None,
+        source_ciphertext: Some(HybridCiphertext {
+            x25519: [tag; 32],
+            ml_kem: vec![tag; 4],
+        }),
+        output_handle: None,
+        eligible_height: shekyl_types::BlockHeight::from_raw(eligible),
+        unspendable: None,
+        fcmp_precomputed_path: None,
+        receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
+    }
+}
+
+/// A reserve proof discloses money held: every on-chain output in the
+/// balance. An output still incoming (on chain, not yet in the reference
+/// block's tree) is a candidate, as is a spendable one; an
+/// in-flight send's input, an unspendable output and a spent one are not.
+/// Bites if the candidates go back to the spendable set (the incoming
+/// output drops out).
+#[test]
+fn a_reserve_proof_includes_money_still_incoming() {
+    use shekyl_engine_state::{SendInputRef, SendJournalBlock, SpendHorizon, UnspendableReason};
+    let tip = 1_000;
+    let spendable = row(1, 100, 10);
+    let incoming = row(2, 200, tip - 1);
+    let in_flight = row(4, 400, 10);
+    let mut unspendable = row(5, 500, 10);
+    unspendable.unspendable = Some(UnspendableReason::PqcLeafMismatch);
+    let mut spent = row(6, 600, 10);
+    spent.spent = true;
+
+    let mut journal = SendJournalBlock::empty();
+    journal.record_dispatched(
+        [9; 32],
+        shekyl_types::BlockHeight::from_raw(tip),
+        0,
+        Vec::new(),
+        vec![SendInputRef {
+            gindex: 4,
+            amount: 400,
+        }],
+        vec![0xAA],
+    );
+    assert!(journal.stamp_lock_baseline(&[9; 32], tip));
+
+    let candidates = reserve_candidates(
+        &[spendable, incoming, in_flight, unspendable, spent],
+        SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(tip)),
+        &journal.spend_locks(),
+    );
+    let mut tags: Vec<u8> = candidates.iter().map(|c| c.txid[0]).collect();
+    tags.sort_unstable();
+    assert_eq!(tags, vec![1, 2], "spendable and incoming");
+}
+
 #[test]
 fn selection_is_largest_first_and_minimal_for_amount_bounds() {
     let candidates = vec![candidate(1, 100), candidate(2, 500), candidate(3, 300)];
@@ -443,7 +516,7 @@ mod check_workflows {
             .enumerate()
             .map(|(i, &amount)| {
                 construct_output(
-                    &TX_KEY_SECRET,
+                    &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
                     &keys.x25519_pk,
                     &keys.ml_kem_ek,
                     keys.spend_pk.as_canonical_bytes(),
@@ -657,7 +730,7 @@ mod check_workflows {
         // after vout discovery.
         let bytes = generate_outbound_proof(
             &fx.address.network.network_id(),
-            &TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &canonical_address_bytes(&fx.address),
             MSG.as_bytes(),
@@ -1137,15 +1210,19 @@ mod check_workflows {
             .expect("fixture tx fetches");
         let on_chain = on_chain_outputs_of(&fetched.tx).expect("outputs project");
 
-        let discovered =
-            discover_recipient_outputs(&TX_KEY_SECRET, &keys.x25519_pk, &keys.ml_kem_ek, &on_chain);
+        let discovered = discover_recipient_outputs(
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
+            &keys.x25519_pk,
+            &keys.ml_kem_ek,
+            &on_chain,
+        );
         let vouts: Vec<u64> = discovered.iter().map(|(i, _)| *i).collect();
         assert_eq!(vouts, vec![0, 1], "both fixture outputs pay the wallet");
 
         let address_bytes = canonical_address_bytes(&fx.address);
         let with_secrets = generate_outbound_proof_with_secrets(
             &shekyl_network::HARNESS_NETWORK_ID,
-            &TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &address_bytes,
             MSG.as_bytes(),
@@ -1154,7 +1231,7 @@ mod check_workflows {
         .expect("with-secrets generation succeeds");
         let rederived = generate_outbound_proof(
             &shekyl_network::HARNESS_NETWORK_ID,
-            &TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &address_bytes,
             MSG.as_bytes(),
@@ -1181,6 +1258,98 @@ mod check_workflows {
         )
         .expect("with-secrets proof verifies");
         assert_eq!(verified.len(), 2);
+    }
+
+    /// What `get_tx_proof` reads for an OUTBOUND proof: the fixture's
+    /// ledger holding `retained` (if any) under the fixture's txid, a key
+    /// actor for another wallet (OUTBOUND never signs in the actor), and
+    /// that other wallet's address as the primary, so the fixture's own
+    /// address is a counterparty.
+    async fn outbound_from_ledger(
+        fx: &CheckFixture,
+        retained: Option<shekyl_engine_state::TxSecretKey>,
+    ) -> Result<GeneratedTxProof, ProofsError> {
+        const SENDER_SEED: [u8; 32] = [0x5C; 32];
+        let (_, blob) =
+            shekyl_crypto_pq::account::account_from_seed(&SENDER_SEED, Network::Testnet)
+                .expect("the sender's account derives");
+        let key = KeyEngineHandle::spawn(blob);
+        let sender = LocalKeys::from_test_seed(SENDER_SEED);
+        let ledger = LocalLedger::from_test_blocks(Vec::new());
+        if let Some(retained) = retained {
+            ledger
+                .write()
+                .ledger
+                .record_retained_tx_key(fx.txid, retained);
+        }
+        let ctx = ProofsCtx {
+            key: &key,
+            daemon: &fx.rpc,
+            ledger: &ledger,
+            primary_address: sender.keys.to_address(Network::Testnet),
+        };
+        get_tx_proof(&ctx, TxHash::from_bytes(fx.txid), &fx.address, MSG).await
+    }
+
+    /// The OUTBOUND ledger path end to end: the key the sender retained,
+    /// stored and opened again, proves both outputs, and the proof checks.
+    #[tokio::test]
+    async fn an_outbound_proof_from_the_retained_key_checks() {
+        let fx = make_fixture(vec![]);
+        let retained = shekyl_engine_state::TxSecretKey::new(
+            shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET).store(),
+        );
+        let generated = outbound_from_ledger(&fx, Some(retained))
+            .await
+            .expect("the retained key proves the payment");
+        assert_eq!(generated.direction, TxProofDirection::Outbound);
+        let checked = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &generated.proof)
+            .await
+            .expect("check succeeds");
+        let CheckedTxProof::Valid {
+            direction, outputs, ..
+        } = checked
+        else {
+            panic!("expected Valid, got Invalid");
+        };
+        assert_eq!(direction, TxProofDirection::Outbound);
+        assert_eq!(outputs.len(), 2);
+    }
+
+    /// A retained record that is not a canonical scalar loads with the
+    /// ledger but does not open, and the proof is refused by name.
+    #[tokio::test]
+    async fn a_retained_key_that_does_not_open_is_refused() {
+        let fx = make_fixture(vec![]);
+        // The record's bytes, read as the ledger reads any record (its
+        // serialized form is the 32 bytes); only `TxKey::store` writes one in
+        // code.
+        let unreadable: shekyl_engine_state::TxSecretKey =
+            serde_json::from_value(serde_json::json!([0xFFu8; 32].to_vec()))
+                .expect("the record reads");
+        let err = outbound_from_ledger(&fx, Some(unreadable))
+            .await
+            .expect_err("a record that does not open proves nothing");
+        assert!(
+            matches!(
+                err,
+                ProofsError::TxSecretUnreadable(StoredKeyError::NotCanonical)
+            ),
+            "expected TxSecretUnreadable, got {err:?}"
+        );
+    }
+
+    /// No retained record: this wallet did not send the transaction.
+    #[tokio::test]
+    async fn an_outbound_proof_with_no_retained_key_is_unavailable() {
+        let fx = make_fixture(vec![]);
+        let err = outbound_from_ledger(&fx, None)
+            .await
+            .expect_err("no retained key proves nothing");
+        assert!(
+            matches!(err, ProofsError::TxSecretUnavailable),
+            "expected TxSecretUnavailable, got {err:?}"
+        );
     }
 }
 

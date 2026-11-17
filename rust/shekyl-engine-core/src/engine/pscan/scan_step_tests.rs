@@ -21,7 +21,7 @@ use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_scanner::bench_fixtures::{
-    build_typical_case_scannable_block, scannable_block_for_recipient,
+    build_typical_case_scannable_block, fresh_tx_key, scannable_block_for_recipient,
 };
 use shekyl_wire::transaction::{BondPost, BondPostKind};
 use shekyl_wire::{BoundTx, Holdings};
@@ -49,7 +49,12 @@ fn funding_block(recipient: &ArchivalPKeys) -> ScannableBlock {
         x25519: recipient.x25519_pk,
         ml_kem: recipient.ml_kem_ek.to_vec(),
     };
-    scannable_block_for_recipient(1, &kem, recipient.spend_pk.as_canonical_bytes())
+    scannable_block_for_recipient(
+        1,
+        &kem,
+        recipient.spend_pk.as_canonical_bytes(),
+        &fresh_tx_key(),
+    )
 }
 
 /// A JoinMarket bond-post for persona `p`.
@@ -396,7 +401,7 @@ fn bond_post_matches_only_known_canonical_ids() {
 
     // A foreign block (no outputs we own) carrying two bond-posts: ours + a
     // stranger's. Adding inputs to an existing tx keeps its Ct valid.
-    let mut block = build_typical_case_scannable_block(1);
+    let mut block = build_typical_case_scannable_block(1, &fresh_tx_key());
     block.transactions[0].modify(|tx| {
         tx.prefix
             .inputs
@@ -451,7 +456,7 @@ fn extractor_carries_the_consensus_release_byte() {
     assert_eq!(release_byte, 2, "genesis-frozen Release discriminant");
 
     let mine = persona(0);
-    let mut block = build_typical_case_scannable_block(1);
+    let mut block = build_typical_case_scannable_block(1, &fresh_tx_key());
     // A Release bond-post: the consensus Release byte on the wire as `Other(b)`
     // (genesis wire is JoinMarket-only, so this models the post-genesis form).
     let mut post = bond_post_for(&mine);
@@ -831,7 +836,7 @@ fn lineage_fails_toward_forbidden_for_emission_vin_in_a_different_tx() {
     // Tx 0 carries our funding output; a second, foreign tx carries our
     // emission vin. Appending keeps tx 0's outputs and gindexes intact.
     let mut block = funding_block(&p);
-    let mut emission_tx = build_typical_case_scannable_block(1)
+    let mut emission_tx = build_typical_case_scannable_block(1, &fresh_tx_key())
         .transactions
         .first()
         .expect("a non-miner tx")

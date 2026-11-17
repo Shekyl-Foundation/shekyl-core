@@ -6,9 +6,11 @@
   "origination": "connecting",
   "sync_connector": [],
   "tor_quiet": {
-    "empty": null,
-    "failing": {
+    "unreached": {
       "age": 1
+    },
+    "throttled": {
+      "age": 9
     }
   },
   "tor": {

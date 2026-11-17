@@ -22,7 +22,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 pub struct AnchoredReduction {
     pub traffic_model: &'static str,
-    /// Tier shares ×1000, in economy / standard / priority order.
+    /// Tier shares ×1000, in economy / standard / high order.
     pub shares_milli: [u64; 3],
     /// `1/share` ×1000, per rung.
     pub reduction_factor_milli: [u64; 3],
@@ -67,7 +67,7 @@ pub fn anchored_reduction(
 
 /// The registered traffic models (§1.8) and the sensitivity arms.
 ///
-/// Shares are economy / standard / priority. The defaulted model puts the
+/// Shares are economy / standard / high. The defaulted model puts the
 /// 80 % majority on standard. Equal thirds do not divide 1000, so 33/33/33
 /// is 334 + 333 + 333.
 pub fn registered_models() -> Vec<AnchoredReduction> {

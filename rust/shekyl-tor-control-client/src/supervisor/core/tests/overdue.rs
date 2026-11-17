@@ -104,8 +104,19 @@ fn jump_sample_answered(core: &mut Core, at: u64) {
 /// which the next lifetime counts.
 fn reached(round_at: u64) -> (Core, u64) {
     let mut core = published();
-    core.on(Input::UploadRoundStarted, round_at);
-    core.on(Input::FirstUploaded { draw: 0 }, round_at);
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        round_at,
+    );
+    core.on(
+        Input::FirstUploaded {
+            descriptor: super::D0,
+            draw: 0,
+        },
+        round_at,
+    );
     core.on(uploaded(0), round_at + secs(5));
     let (probe_at, step) = run_timed(&mut core, round_at + secs(20));
     assert_eq!(probes(&step), 1, "the round's probe");
@@ -129,7 +140,7 @@ fn reached(round_at: u64) -> (Core, u64) {
 fn the_descriptor_lifetime_is_tors_three_hours() {
     assert_eq!(DESCRIPTOR_LIFETIME, Duration::from_secs(3 * 60 * 60));
     assert_eq!(
-        Policy::provisional(Duration::from_secs(1)).descriptor_lifetime,
+        Policy::provisional().descriptor_lifetime,
         DESCRIPTOR_LIFETIME
     );
 }
@@ -214,7 +225,9 @@ fn a_round_just_inside_the_lifetime_gives_no_republish() {
         []
     );
     core.on(
-        Input::UploadRoundStarted,
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
         uploaded_at + lifetime() - secs(1),
     );
     assert_eq!(
@@ -231,7 +244,12 @@ fn a_round_that_ends_with_no_upload_leaves_the_upload_overdue() {
     let (mut core, uploaded_at) = reached(0);
     let started = uploaded_at + lifetime() - secs(60);
     assert_eq!(overdue_to(&mut core, started), []);
-    core.on(Input::UploadRoundStarted, started);
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        started,
+    );
     let ended = uploaded_at + lifetime() + secs(60);
     assert_eq!(overdue_to(&mut core, ended), []);
     core.on(not_uploaded(), ended);
@@ -242,6 +260,57 @@ fn a_round_that_ends_with_no_upload_leaves_the_upload_overdue() {
     let step = core.on_deadline(ended);
     assert_eq!(overdue(&step), 1);
     assert_eq!(republishes(&step), 1);
+}
+
+/// **A republish's round that reaches nothing waits for the other
+/// descriptor's round** (the brief's B: a republish uploads both
+/// descriptors). The overdue republish is judging; its current
+/// descriptor's round ends with nothing uploaded while the next one's is
+/// still open, so the republish is still judging. Only when that round ends
+/// with nothing too does the wait end with nothing to judge. Fails if
+/// `round_ended` fails the republish on the first empty round.
+#[test]
+fn a_republishs_empty_round_waits_for_the_other_descriptors_round() {
+    let (mut core, uploaded_at) = reached(0);
+    let due = uploaded_at + lifetime();
+    assert_eq!(overdue_to(&mut core, due), [due]);
+    let deleted = replied(&mut core, due);
+    assert!(deleted.actions.contains(&Action::AddOnion));
+    core.on(Input::OnionPublished, due);
+    replied(&mut core, due);
+    assert!(core.republish_is_judging());
+    let next = super::D1;
+    core.on(
+        Input::UploadRoundStarted {
+            descriptor: super::D0,
+        },
+        due + secs(1),
+    );
+    core.on(
+        Input::UploadRoundStarted { descriptor: next },
+        due + secs(2),
+    );
+    core.on(not_uploaded(), due + secs(30));
+    assert!(
+        core.republish_is_judging(),
+        "the other descriptor's round may still reach a directory"
+    );
+    core.on(
+        Input::UploadRoundEnded {
+            descriptor: next,
+            tally: super::super::RoundTally {
+                uploaded: 0,
+                refused: 0,
+                begun: 8,
+            },
+            draw: 0,
+        },
+        due + secs(40),
+    );
+    assert!(
+        !core.republish_is_judging(),
+        "both rounds reached nothing: the wait ends"
+    );
 }
 
 /// `CLOCK_JUMPED` while Running asks one probe, a jittered delay later; with

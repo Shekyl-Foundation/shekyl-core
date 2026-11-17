@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use log_capture::log_text;
 use rig::{peer, reply, reply_at, wait_until, Answer, Rig, Told, NETWORK};
-use shekyl_dialer::{session_of, DialAim, TorCensus, TorLinkTally};
+use shekyl_dialer::{session_of, DialAim, LinkCensus};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_onion_v3::v3_onion_hostname;
 use shekyl_p2p_session::harness::new_transactions;
@@ -605,14 +605,14 @@ fn a_wake_publishes_how_many_tor_addresses_the_dialer_holds() {
     let rig = Rig::new();
     let mut rng = SplitMix64::new(3);
     assert_eq!(
-        rig.dialer.tor_link_tally().census,
-        TorCensus::Pending,
+        rig.dialer.link_tally(TOR).census,
+        LinkCensus::Pending,
         "no census yet"
     );
     rig.dialer.wake(TOR, &mut rng);
     assert_eq!(
-        rig.dialer.tor_link_tally().census,
-        TorCensus::Empty,
+        rig.dialer.link_tally(TOR).census,
+        LinkCensus::Empty,
         "nothing held"
     );
     admit(&rig, &onion(), 5);
@@ -626,11 +626,11 @@ fn a_wake_publishes_how_many_tor_addresses_the_dialer_holds() {
     assert!(waker.join().expect("the wake"), "the onion was dialed");
     assert!(
         matches!(
-            rig.dialer.tor_link_tally().census,
-            TorCensus::Held { seats: 1, .. }
+            rig.dialer.link_tally(TOR).census,
+            LinkCensus::Held { seats: 1, .. }
         ),
         "one onion held: {:?}",
-        rig.dialer.tor_link_tally().census
+        rig.dialer.link_tally(TOR).census
     );
 }
 
@@ -648,10 +648,10 @@ fn a_retry_wake_publishes_the_census_too() {
     rig.peer
         .refuse_after(shekyl_tor::reply_end(0x06), Duration::from_secs(1));
     assert!(rig.dialer.wake(TOR, &mut rng), "the first dial");
-    let TorCensus::Held { seats: 1, since } = rig.dialer.tor_link_tally().census else {
+    let LinkCensus::Held { seats: 1, since } = rig.dialer.link_tally(TOR).census else {
         panic!(
             "the first census holds the onion: {:?}",
-            rig.dialer.tor_link_tally().census
+            rig.dialer.link_tally(TOR).census
         );
     };
     admit(&rig, &onion_n(2), 9);
@@ -662,37 +662,27 @@ fn a_retry_wake_publishes_the_census_too() {
         .refuse_after(shekyl_tor::reply_end(0x06), Duration::from_secs(1));
     assert!(rig.dialer.wake(TOR, &mut rng), "the retry");
     assert_eq!(
-        rig.dialer.tor_link_tally().census,
-        TorCensus::Held { seats: 2, since },
+        rig.dialer.link_tally(TOR).census,
+        LinkCensus::Held { seats: 2, since },
         "the retry wake published the new seat and kept the run"
     );
 }
 
-/// The payload owner declines a delivery on a session whose dial already
-/// counted as opened. The close must not count as another open. The fold
-/// test holds the unopened count across that outcome; this one holds the
-/// close path.
+/// The payload owner declines a delivery on a session whose dial
+/// already opened a stream. The close is not a failed dial: the tally's
+/// failed launch stays where it was. The fold's own test holds that
+/// outcome; this one holds the close path.
 #[test]
-fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
+fn a_refused_payload_on_a_kept_tor_session_is_not_a_failed_dial() {
     let rig = Rig::new();
     let peer = onion();
     admit(&rig, &peer, 9);
     let (id, _wire) = rig.dial_with(TOR, &peer, DialAim::Keep, vec![reply(NETWORK, vec![])]);
     let id = id.expect("adopted");
-    let opened = rig.dialer.tor_link_tally();
-    assert!(
-        opened.last_sign_of_life.is_some(),
-        "the stream that opened is a sign of life"
-    );
+    let opened = rig.dialer.link_tally(TOR);
     assert_eq!(
-        opened,
-        TorLinkTally {
-            opened: 1,
-            unopened: 0,
-            last_sign_of_life: opened.last_sign_of_life,
-            failed_attempt_began: None,
-            census: opened.census,
-        }
+        opened.failed_attempt_began, None,
+        "the dial opened a stream"
     );
 
     rig.layer.close(id, tables::session_refused());
@@ -700,15 +690,9 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
         rig.recorder.was_told_closed(id)
     });
     assert_eq!(
-        rig.dialer.tor_link_tally(),
-        TorLinkTally {
-            opened: 1,
-            unopened: 0,
-            last_sign_of_life: opened.last_sign_of_life,
-            failed_attempt_began: None,
-            census: opened.census,
-        },
-        "the close is not a new stream"
+        rig.dialer.link_tally(TOR),
+        opened,
+        "the close is not a failed dial"
     );
     assert!(
         rig.dialer.shared().lists.is_white(&peer),

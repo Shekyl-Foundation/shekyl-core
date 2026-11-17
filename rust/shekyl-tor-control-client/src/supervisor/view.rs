@@ -49,8 +49,7 @@ pub fn snapshot(status: &Status, connectors: Connectors, now: u64) -> TorStatus 
         .filter_map(|(on, connector)| on.then_some(connector))
         .collect(),
         tor_quiet: status.tor_quiet.map(|quiet| match quiet {
-            TorQuiet::NoPeersKnown => wire::TorQuiet::Empty,
-            TorQuiet::Unanswered { since } => wire::TorQuiet::Failing {
+            TorQuiet::Unreached { since } => wire::TorQuiet::Unreached {
                 age: age(since, now),
             },
         }),

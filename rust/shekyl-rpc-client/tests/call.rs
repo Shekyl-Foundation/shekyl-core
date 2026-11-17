@@ -178,14 +178,11 @@ fn the_fee_read_names_its_tiers() {
     let daemon = Canned::new(&result(&json!({
         "economy": "10", "standard": "20", "high": "40"
     })));
-    let rate = |priority| {
-        block_on(daemon.get_fee_rate(priority))
-            .unwrap()
-            .per_weight()
-    };
-    assert_eq!(rate(shekyl_rpc_client::FeePriority::Unimportant), 10);
-    assert_eq!(rate(shekyl_rpc_client::FeePriority::Normal), 20);
-    assert_eq!(rate(shekyl_rpc_client::FeePriority::Priority), 40);
+    let fee = block_on(daemon.call::<wire::Fee>(NoParams)).unwrap();
+    let raw = |tier: &shekyl_units::wire::AtomicUnitsString| tier.to_atomic_units().to_raw();
+    assert_eq!(raw(&fee.economy), 10);
+    assert_eq!(raw(&fee.standard), 20);
+    assert_eq!(raw(&fee.high), 40);
 }
 
 /// A `result` of `null` is an answer: `ban_show` for a host not banned.

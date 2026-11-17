@@ -25,13 +25,14 @@ mod clock_jump;
 mod dials;
 mod directories;
 mod network_view;
+mod onion_path;
 mod probe;
 mod requests;
 mod resume;
 mod running;
 
 use crate::binary::VerifiedTorBinary;
-use crate::control::{NetworkView, RelayFingerprint, ServiceDescriptor};
+use crate::control::{DescriptorKey, NetworkView, RelayFingerprint, ServiceDescriptor};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 use dials::Dials;
@@ -39,6 +40,7 @@ pub use dials::{DialTally, TorCensus};
 pub use directories::{
     Counted, DirectoryAnswer, DirectoryFetch, DirectoryReport, Exclusion, OpenUploads,
 };
+pub use onion_path::{OnionPath, PathReading, CHECK_LONGEST, CHECK_SPACING, READING_WAIT};
 use probe::Probe;
 
 /// How long a respawn waits, and how often a failure is said again.
@@ -64,14 +66,6 @@ pub struct Policy {
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
     pub fresh_directory_after: u32,
-    /// How long nothing comes through Tor, with a Tor dial failed since and
-    /// Tor saying nothing about its network, before the posture line says
-    /// so (§4.2): a neutral fact, never a cause. The daemon passes Tor's
-    /// `SocksTimeout` plus the Tor connector's judging bracket δ
-    /// (`DIALER_OUTAGE_EVIDENCE.md` §6): by then a dial started at the last
-    /// sign of life has used Tor's own retries and its bracket has closed
-    /// empty, so the judge has excused it as the link's.
-    pub quiet_after: Duration,
     /// The probe's delay after a round's first upload is drawn uniformly
     /// from this to [`Self::probe_after_max`] (§4.5, §10): long enough for
     /// the descriptor to reach the directories, and spread so a directory
@@ -123,9 +117,9 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// The waits the driver uses, with the caller's quiet stretch.
+    /// The waits the driver uses.
     #[must_use]
-    pub const fn provisional(quiet_after: Duration) -> Self {
+    pub const fn provisional() -> Self {
         Self {
             base: Duration::from_secs(1),
             cap: Duration::from_secs(60),
@@ -134,10 +128,6 @@ impl Policy {
             // about a minute: the same order as `TSR-M2`'s 60 s bound.
             alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
-            // Time since the judge's last sign of life on Tor, or since this
-            // Tor reached Running, with a Tor dial failed since. Not a count
-            // of dials.
-            quiet_after,
             // Upload p50 4.6 s (`TSR-M7`); the descriptor then has to reach
             // the directories the probe's own fetch asks (§10).
             probe_after_min: Duration::from_secs(15),
@@ -184,12 +174,12 @@ pub const PROBE_AFTER_MAX: Duration = Duration::from_secs(60);
 /// The probe's bound, and one directory fetch's answer window (`TSR-M2`).
 pub const PROBE_WITHIN: Duration = Duration::from_secs(60);
 
-/// [`Policy::republish_after`] (`TSR-M14`): the round's wait, then a probe
-/// and the refetch's probe, each at its longest delay and its bound. A wait
-/// shorter than one judgment republishes inside the previous check.
 /// The reply bound the daemon uses ([`Policy::reply_bound`]).
 pub const REPLY_BOUND: Duration = Duration::from_secs(30);
 
+/// [`Policy::republish_after`] (`TSR-M14`): the round's wait, then a probe
+/// and the refetch's probe, each at its longest delay and its bound. A wait
+/// shorter than one judgment republishes inside the previous check.
 pub const REPUBLISH_AFTER: Duration = {
     let one_probe = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
     ROUND_WAIT
@@ -272,6 +262,9 @@ pub struct Launch {
 pub enum Action {
     /// Discover and pin. No spawn until this accepts.
     CheckPin,
+    /// Publish the onion-path reading on the Tor link for the connector's
+    /// path source (§4.5a): it changed.
+    PathReading(PathReading),
     /// Stop and reap the incarnation that ended, keeping its data
     /// directory for the next launch: the owning connection closes, Tor is
     /// given its grace to exit, and is killed past it. A request: the
@@ -331,9 +324,11 @@ pub enum Action {
     /// Said at info. The [`Self::RepublishOnion`] that follows forces a
     /// fresh upload.
     DescriptorOverdue,
-    /// A probe's check began: give every upload of the latest round that
-    /// reached a directory, each with a CSPRNG draw for its own fetch delay
-    /// (§4.5, the directory check). The driver answers
+    /// A probe went out: give every upload of each descriptor's latest
+    /// round that reached a directory, each with a CSPRNG draw for its own
+    /// fetch delay (§4.5, the directory check). Asked when the probe fires,
+    /// once every open round is older than `Policy::round_wait`, so the list
+    /// holds what the rounds did. The driver answers
     /// [`Input::DirectoriesDrawn`].
     CheckDirectories,
     /// `HSFETCH` this node's onion from `hsdir` alone (`SERVER=`). Tor
@@ -355,9 +350,13 @@ pub enum Action {
     /// Publish the inbound facet on the managed route's link (§4.1).
     PublishInbound(Inbound),
     /// A descriptor round has been open for `Policy::round_stuck_after`:
-    /// say it once at debug, and end the coalescer's open round so the next
-    /// round's uploads start a round of their own. Counted in Status.
-    RoundStuck,
+    /// say it once at debug, and end that descriptor's open round in the
+    /// coalescer so its next uploads start a round of their own. Counted in
+    /// Status.
+    RoundStuck {
+        /// The descriptor whose round is stuck.
+        descriptor: DescriptorKey,
+    },
     /// A timer the driver was waiting on fired `late_by` late: the machine
     /// slept, and every window started again from the wake. Said once at info.
     Resumed {
@@ -497,12 +496,18 @@ pub enum Input {
         /// Sockets Tor reported open.
         open: u64,
     },
-    /// A descriptor round began: its first `HS_DESC UPLOAD`.
-    UploadRoundStarted,
+    /// A descriptor round began: its first `HS_DESC UPLOAD`. Each of the
+    /// service's two descriptors has its own rounds (`UploadRounds`).
+    UploadRoundStarted {
+        /// The descriptor the round uploads.
+        descriptor: DescriptorKey,
+    },
     /// A round's first upload reached a directory. The probe follows the
     /// round's end, or `Policy::round_wait` after this, whichever comes
     /// first; `draw` sets the delay if the wait runs out first.
     FirstUploaded {
+        /// The descriptor the round uploads.
+        descriptor: DescriptorKey,
         /// Uniform over `u64`.
         draw: u64,
     },
@@ -513,11 +518,22 @@ pub enum Input {
     /// uniform random number from the daemon's CSPRNG; the core maps it onto
     /// the probe's delay range.
     UploadRoundEnded {
+        /// The descriptor the round uploaded.
+        descriptor: DescriptorKey,
         /// How many reached a directory, how many of those that began were
         /// refused, and how many began.
         tally: RoundTally,
         /// Uniform over `u64`.
         draw: u64,
+    },
+    /// A descriptor left the tracker: Tor freed it at a time-period
+    /// rotation. An open round, if it had one, is forgotten rather than
+    /// judged. The descriptor's refusal no longer stands. The key will
+    /// not be accepted after this, so keeping the refusal would leave
+    /// the facet refused.
+    UploadRoundForgotten {
+        /// The descriptor dropped.
+        descriptor: DescriptorKey,
     },
     /// The consensus's `valid-after` and this machine's wall time, both in
     /// Unix seconds, read at a liveness sample (§4.2). The core compares
@@ -542,7 +558,7 @@ pub enum Input {
     },
     /// The directories for the check [`Action::CheckDirectories`] asked for.
     DirectoriesDrawn {
-        /// One per directory, each with its own draw. Empty when the round
+        /// One per directory, each with its own draw. Empty when the rounds
         /// reached none: the probe alone decides. A list that was never
         /// folded is not this: the verdict waits.
         fetches: Vec<DirectoryFetch>,
@@ -552,9 +568,10 @@ pub enum Input {
         /// counts by being there. `None` when Tor gave none: the check
         /// counts nothing and the probe alone decides.
         ours: Option<ServiceDescriptor>,
-        /// How the round this list was read from treats uploads still open.
+        /// Which descriptors' rounds were still younger than
+        /// `Policy::round_wait`: their uploads still open are in flight.
         /// Read in the same turn as `fetches`. The check keeps this reading
-        /// and does not consult the live round.
+        /// and does not consult the live rounds.
         open_uploads: OpenUploads,
     },
     /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
@@ -617,6 +634,27 @@ pub enum Input {
     /// Tor says it reaches its network: `NETWORK_LIVENESS UP` or
     /// `CIRCUIT_ESTABLISHED`.
     ExternalCleared,
+    /// The Tor connector completed an outbound onion dial at `at`: the
+    /// onion path worked (§4.5a).
+    OnionDialOpened {
+        /// When the stream opened, on this core's clock.
+        at: u64,
+    },
+    /// A new inbound Tor session was established at `at`: a peer reached
+    /// this node's onion. The probe of this node's own onion is dropped in
+    /// its handshake, so it is never one (§4.5a).
+    InboundTorSession {
+        /// When the session's handshake finished, on this core's clock.
+        at: u64,
+    },
+    /// The Tor connector asks for a reading after `after`: a failed dial
+    /// waits on it (§4.5a). `draw` is a CSPRNG draw for a check's delay.
+    PathWanted {
+        /// The failure's instant, on this core's clock.
+        after: u64,
+        /// The draw for the check's delay.
+        draw: u64,
+    },
 }
 
 impl Input {
@@ -757,6 +795,8 @@ pub struct Core {
     progress: ProgressWindow,
     /// What this node's own Tor dials show (§4.2). Display only.
     dials: Dials,
+    /// Whether the onion path works (§4.5a).
+    path: onion_path::PathState,
     /// When the next pin check is due. Only while [`Phase::Absent`] is
     /// [`AbsentDuty::Retry`] or [`AbsentDuty::Held`].
     pin_at: Option<u64>,
@@ -778,8 +818,8 @@ pub struct Core {
     /// open. [`directories::DirectoryHalf::AwaitingDraw`] until the driver
     /// folds the list.
     directories: Option<directories::DirectoryHalf>,
-    /// The descriptor round open now, while one is.
-    round: Option<probe::RoundTrack>,
+    /// The descriptor rounds open now, at most one per descriptor.
+    rounds: Vec<probe::RoundTrack>,
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
     /// Where the descriptor's lifetime is counted from (§4.5, "Overdue"):
@@ -792,12 +832,17 @@ pub struct Core {
     /// The anchor and hold to restore if the remedial send in
     /// [`clock::QueuedSend`] is withheld before it is published.
     queued_send: Option<clock::QueuedSend>,
+    /// When the probe in hand was scheduled: its check's fetches count their
+    /// delays from here, though the list is drawn when the probe goes out.
+    check_from: u64,
     /// The probe in hand was scheduled from a republish's own upload round,
     /// so its Reachable confirms that republish. A clock-jump probe and a
     /// probe scheduled before the republish do not.
     probe_confirms: bool,
-    /// More than half of the latest round's directories refused its upload.
-    uploads_refused: bool,
+    /// Refusals of descriptors this publication still holds (§4.5). A
+    /// sibling's accepted round does not clear one. Retiring the
+    /// descriptor, or the publication, does.
+    refusals: clock::Refusals,
     /// Whether Tor's standing skew report owns a bootstrap block.
     skew_hold: clock::SkewHold,
     /// The republish backoff (§4.5).
@@ -837,6 +882,7 @@ impl Core {
             backoff: Backoff::new(),
             progress: ProgressWindow::start(now, policy.alive_every),
             dials: Dials::new(now),
+            path: onion_path::PathState::default(),
             pin_at: None,
             sample_at: None,
             alive_at: None,
@@ -845,12 +891,13 @@ impl Core {
             outbound_since: None,
             probe: Probe::Idle,
             directories: None,
-            round: None,
+            rounds: Vec::new(),
             stuck_rounds: 0,
             lifetime_from: None,
             queued_send: None,
+            check_from: 0,
             probe_confirms: false,
-            uploads_refused: false,
+            refusals: clock::Refusals::new(),
             skew_hold: clock::SkewHold::Holding,
             republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
@@ -902,9 +949,14 @@ impl Core {
             Input::RouteInstalled => self.route_installed(now),
             Input::ForwardAbsent => self.forward_absent(),
             Input::OnionPublished => self.onion_published(now),
-            Input::UploadRoundStarted => self.round_started(now),
-            Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
-            Input::UploadRoundEnded { tally, draw } => self.round_ended(now, tally, draw),
+            Input::UploadRoundStarted { descriptor } => self.round_started(now, descriptor),
+            Input::FirstUploaded { descriptor, draw } => self.first_uploaded(now, descriptor, draw),
+            Input::UploadRoundEnded {
+                descriptor,
+                tally,
+                draw,
+            } => self.round_ended(now, descriptor, tally, draw),
+            Input::UploadRoundForgotten { descriptor } => self.round_forgotten(now, descriptor),
             Input::ConsensusClock { valid_after, wall } => {
                 self.consensus_clock(now, valid_after, wall)
             }
@@ -914,7 +966,7 @@ impl Core {
                 fetches,
                 ours,
                 open_uploads,
-            } => self.directories_drawn(now, fetches, ours, open_uploads),
+            } => self.directories_drawn(now, fetches, ours, &open_uploads),
             Input::DirectoryFetchAccepted { hsdir } => self.directory_fetch_accepted(now, hsdir),
             Input::DirectoryAsked {
                 hsdir,
@@ -948,14 +1000,29 @@ impl Core {
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
             Input::AddressHidingOrigin(verdict) => self.origin_verdict(verdict, now),
-            Input::DialEvidence(tally) => self.dial_evidence(tally, now),
+            Input::DialEvidence(tally) => self.dial_evidence(tally),
             Input::Sessions(sessions) => {
                 self.sessions = sessions;
                 Vec::new()
             }
             Input::NetworkView(view) => self.network_view(now, view),
             Input::ExternalCleared => self.external_cleared(now),
+            Input::OnionDialOpened { at } | Input::InboundTorSession { at } => {
+                self.path_fact(OnionPath::Working, at)
+            }
+            Input::PathWanted { after, draw } => self.path_wanted(now, after, draw),
         };
+        let mut actions = actions;
+        // Tor's own statement that it cannot reach its network is an
+        // impaired reading, however it arrived (an event or a sample).
+        if self.tor_says_unreachable()
+            && self
+                .path
+                .latest()
+                .is_none_or(|reading| reading.path == OnionPath::Working)
+        {
+            actions.extend(self.path_fact(OnionPath::Impaired, now));
+        }
         self.step(now, actions)
     }
 
@@ -1045,7 +1112,7 @@ impl Core {
             match self.phase {
                 Phase::Running { .. } => {
                     actions.push(Action::Sample);
-                    actions.extend(self.quiet_line(now));
+                    actions.extend(self.quiet_line());
                     self.arm_alive(now);
                 }
                 Phase::Bootstrapping { .. } => {
@@ -1082,6 +1149,9 @@ impl Core {
         }
         if self.republish_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_republish_deadline(now));
+        }
+        if self.path_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_path_deadline(now));
         }
         self.step(now, actions)
     }
@@ -1142,6 +1212,7 @@ impl Core {
             self.overdue_due(),
             self.directories_due(),
             self.republish_due(),
+            self.path_due(),
             self.requests.due(duration_ns(self.policy.reply_bound)),
         ]
         .into_iter()

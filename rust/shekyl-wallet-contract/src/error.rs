@@ -14,7 +14,7 @@ use shekyl_engine_core::engine::{ResendError, SubmitError};
 use shekyl_engine_core::{
     ChangePasswordError, CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError,
     PScanStartError, PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError,
-    SetTxNoteError, StakeInError, StoreOpenFault,
+    SetTxNoteError, SignFault, StakeInError, StoreOpenFault, MAX_INPUTS, MAX_OUTPUTS,
 };
 use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
 use shekyl_engine_prefs::PrefsError;
@@ -224,7 +224,8 @@ wallet_rpc_error_codes! {
     ReselectionRequired = -29117 => "RESELECTION_REQUIRED",
     /// Build: the daemon's fee answer could not be read.
     DaemonFeeResponseInvalid = -29118 => "DAEMON_FEE_RESPONSE_INVALID",
-    /// Build: the signer tried and a downstream failure stopped it.
+    /// Build: the wallet's own signer hit an internal fault; `data.fault`
+    /// names which.
     SignerFailed = -29119 => "SIGNER_FAILED",
     /// Submit: the send's record could not be saved, so nothing was sent;
     /// the reservation is kept (A19).
@@ -233,6 +234,19 @@ wallet_rpc_error_codes! {
     TxNotHeld = -29121 => "TX_NOT_HELD",
     /// `tx_resend`: the held send has no saved bytes to resend.
     TxBytesMissing = -29122 => "TX_BYTES_MISSING",
+    /// Build: the spend needs more inputs than one transaction may carry.
+    TooManyInputs = -29123 => "TOO_MANY_INPUTS",
+    /// Build: the request has more recipients than one transaction may
+    /// carry with its change.
+    TooManyOutputs = -29124 => "TOO_MANY_OUTPUTS",
+    /// Build: an input's tree path does not hold the output it spends.
+    InputNotInTree = -29125 => "INPUT_NOT_IN_TREE",
+    /// Build: an input was received but can never be spent.
+    InputUnspendable = -29126 => "INPUT_UNSPENDABLE",
+    // -29127 OUTPUTS_PARKED is RETIRED (never reuse): the wallet has no
+    // user-set hold on outputs (V3_WALLET_DECISION_LOG.md, 2026-11-15).
+    // The number stays recorded in wallet_rpc.yaml so it is never
+    // reallocated with a new meaning.
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200 => "REFRESH_IN_PROGRESS",
     /// Refresh / rescan / proofs / build: the daemon did not answer.
@@ -462,6 +476,16 @@ pub enum WalletRpcError {
     /// Method name is unknown, RESERVED, or not yet implemented.
     #[error("method not found: {0}")]
     MethodNotFound(String),
+    /// Method name is REJECTED in the contract
+    /// ([`crate::rejected::REJECTED_METHODS`]): answered `-32601` like any
+    /// name the server does not serve, with the reason it is refused.
+    #[error("{method} is not offered: {reason}")]
+    MethodRejected {
+        /// The name the caller sent.
+        method: String,
+        /// Why the contract refuses it.
+        reason: &'static str,
+    },
     /// Params failed schema / type checks.
     #[error("invalid params: {0}")]
     InvalidParams(String),
@@ -519,7 +543,11 @@ pub enum WalletRpcError {
     WalletFileCorrupt,
     /// `-29012`: a wallet file was written by a version, or in a shape, this
     /// build cannot read.
-    #[error("the wallet's files were written by a version this build cannot read")]
+    #[error(
+        "the wallet's files were written by a version this build cannot read — open them \
+         with the build that wrote them, or restore the wallet from your seed; your send \
+         history, proofs for earlier sends, notes and payment requests are not restored"
+    )]
     WalletFileVersionUnsupported,
     /// `-29013`: a read or write of the wallet's files failed underneath —
     /// disk full, filesystem error. The cause stays in the server log.
@@ -725,11 +753,55 @@ pub enum WalletRpcError {
     /// answer refused as unreasonable).
     #[error("the daemon's fee answer could not be read")]
     DaemonFeeResponseInvalid,
-    /// `-29119`: the signer tried and a downstream failure stopped it.
-    #[error("the signer failed: {reason}")]
+    /// `-29119`: the wallet's own signer hit an internal fault, named by
+    /// one keyword: a builder invariant ([`InternalSignFault`]) or the
+    /// wallet state signing reads. A bug, never the request's doing.
+    #[error("the wallet's signer hit an internal fault ({fault}) — report it; the wallet log has the detail")]
     SignerFailed {
-        /// Compile-time-fixed description of the failure.
-        reason: &'static str,
+        /// The fault, one keyword from a closed set.
+        fault: &'static str,
+    },
+    /// `-29123`: the amount needs more inputs than one transaction spends.
+    #[error(
+        "this send needs {count} inputs and one transaction spends at most {limit} — send less, \
+         or first send part of your balance to yourself to merge small amounts"
+    )]
+    TooManyInputs {
+        /// The inputs the build needed.
+        count: usize,
+        /// [`MAX_INPUTS`].
+        limit: usize,
+    },
+    /// `-29124`: more recipients than one transaction carries.
+    #[error(
+        "this send has {count} outputs with its change and one transaction carries at most \
+         {limit} — split the recipients across two sends"
+    )]
+    TooManyOutputs {
+        /// The outputs the request needs, change included.
+        count: usize,
+        /// [`MAX_OUTPUTS`].
+        limit: usize,
+    },
+    /// `-29125`: an input's assembled tree path does not hold it — the
+    /// wallet's copy of the membership data disagrees with the output.
+    #[error(
+        "the wallet's membership data does not hold an output this send spends — refresh the \
+         wallet and build again"
+    )]
+    InputNotInTree {
+        /// The input's position in the transaction.
+        input: usize,
+    },
+    /// `-29126`: an input was received but its leaf does not open to this
+    /// wallet's keys, so it can never be spent.
+    #[error(
+        "an output this send would spend was received but can never be spent by this wallet \
+         (its sender published a leaf this wallet cannot open) — report it"
+    )]
+    InputUnspendable {
+        /// The input's position in the transaction.
+        input: usize,
     },
     /// `-29120`: the send's record (with its signed bytes and tx secret)
     /// could not be saved, so the wallet sent nothing (A19). The
@@ -1184,7 +1256,9 @@ impl WalletRpcError {
         match self {
             Self::ParseError => WalletRpcErrorCode::ParseError,
             Self::InvalidRequest(_) | Self::Unauthorized => WalletRpcErrorCode::InvalidRequest,
-            Self::MethodNotFound(_) => WalletRpcErrorCode::MethodNotFound,
+            Self::MethodNotFound(_) | Self::MethodRejected { .. } => {
+                WalletRpcErrorCode::MethodNotFound
+            }
             Self::InvalidParams(_) => WalletRpcErrorCode::InvalidParams,
             Self::InternalError(_) => WalletRpcErrorCode::InternalError,
             Self::WalletAlreadyOpen => WalletRpcErrorCode::WalletAlreadyOpen,
@@ -1230,6 +1304,10 @@ impl WalletRpcError {
             Self::ReselectionRequired => WalletRpcErrorCode::ReselectionRequired,
             Self::DaemonFeeResponseInvalid => WalletRpcErrorCode::DaemonFeeResponseInvalid,
             Self::SignerFailed { .. } => WalletRpcErrorCode::SignerFailed,
+            Self::TooManyInputs { .. } => WalletRpcErrorCode::TooManyInputs,
+            Self::TooManyOutputs { .. } => WalletRpcErrorCode::TooManyOutputs,
+            Self::InputNotInTree { .. } => WalletRpcErrorCode::InputNotInTree,
+            Self::InputUnspendable { .. } => WalletRpcErrorCode::InputUnspendable,
             Self::SendNotSaved => WalletRpcErrorCode::SendNotSaved,
             Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
             Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
@@ -1378,6 +1456,13 @@ impl WalletRpcError {
             })),
             Self::OutputNotYetSpendable { wait_blocks } => {
                 Some(json!({ "wait_blocks": wait_blocks }))
+            }
+            Self::SignerFailed { fault } => Some(json!({ "fault": fault })),
+            Self::TooManyInputs { count, limit } | Self::TooManyOutputs { count, limit } => {
+                Some(json!({ "count": count, "limit": limit }))
+            }
+            Self::InputNotInTree { input } | Self::InputUnspendable { input } => {
+                Some(json!({ "input": input }))
             }
             Self::ChainTooShortToSpend {
                 synced_height,
@@ -1637,11 +1722,6 @@ impl From<FeeEstimatorError> for WalletRpcError {
                 rate: v.rate(),
                 bound: v.bound(),
             },
-            // The caller's Custom rate is out of band: a request error,
-            // -32602 — never blamed on the daemon (rule 82).
-            FeeEstimatorError::CustomFeeOutOfRange(band) => {
-                Self::InvalidParams(format!("custom fee rate out of range: {band}"))
-            }
             // `FeeEstimatorError` is `#[non_exhaustive]` (Phase 0a, semver for
             // consumers outside the workspace), so this arm is forced. Inside
             // one workspace build it is unreachable: every variant is named
@@ -1661,12 +1741,14 @@ impl From<SendError> for WalletRpcError {
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
             SendError::Io(io) => from_io_error(io),
-            SendError::Tx(e) => internal_detail("transaction construction", e),
+            SendError::Sign(fault) => from_sign_fault(fault),
             SendError::NotSynced => Self::WalletNotSynced,
             // No spend-key material in scope: the session's signer is gone,
             // which is what `-29006` names — reopen the wallet.
             SendError::SignerUnavailable => Self::WalletSessionEnded,
-            SendError::SignerFailed { reason } => Self::SignerFailed { reason },
+            SendError::SignerFailed { fault } => Self::SignerFailed {
+                fault: fault.keyword(),
+            },
             SendError::BuildInvariant { reason } => internal_detail("build invariant", reason),
             SendError::SpendUnavailableRebuilding { .. } => Self::SpendUnavailableRebuilding,
             SendError::CurveTreeUnavailable { detail } => {
@@ -1687,6 +1769,27 @@ impl From<SendError> for WalletRpcError {
                 cause: terminal_to_reject_cause(kind),
             },
         }
+    }
+}
+
+/// The signing pass's fault to its code: the four the user acts on each
+/// get their own, with the limit or the input named; every internal
+/// invariant is `-29119`, named by its keyword (A16).
+fn from_sign_fault(fault: SignFault) -> WalletRpcError {
+    match fault {
+        SignFault::TooManyInputs { count } => WalletRpcError::TooManyInputs {
+            count,
+            limit: MAX_INPUTS,
+        },
+        SignFault::TooManyOutputs { count } => WalletRpcError::TooManyOutputs {
+            count,
+            limit: MAX_OUTPUTS,
+        },
+        SignFault::SpentOutputNotInLeafChunk { input } => WalletRpcError::InputNotInTree { input },
+        SignFault::PqcLeafMismatch { input } => WalletRpcError::InputUnspendable { input },
+        SignFault::Internal(internal) => WalletRpcError::SignerFailed {
+            fault: internal.keyword(),
+        },
     }
 }
 
@@ -3362,6 +3465,34 @@ mod tests {
         }
     }
 
+    /// A wallet file whose ledger block an earlier build wrote (version 14,
+    /// before the user freeze was removed) is refused `-29012`, and the
+    /// message names the remedy, restoring the wallet from its seed, and
+    /// what that restore does not bring back (rule 82).
+    #[test]
+    fn an_earlier_ledger_version_is_refused_with_the_remedy() {
+        let err = file_err(WalletFileError::Ledger(
+            WalletLedgerError::UnsupportedBlockVersion {
+                block: "ledger",
+                file: 14,
+                binary: 15,
+            },
+        ));
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletFileVersionUnsupported);
+        let message = err.message();
+        assert!(
+            message.contains("restore the wallet from your seed"),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "your send history, proofs for earlier sends, notes and payment requests are \
+                 not restored"
+            ),
+            "{message}"
+        );
+    }
+
     /// The network mismatch names both networks (public), in `data` too.
     #[test]
     fn a_network_mismatch_names_both_networks() {
@@ -3442,8 +3573,30 @@ mod tests {
             ),
             (
                 SendError::SignerFailed {
-                    reason: "device unplugged",
+                    fault: shekyl_engine_core::SignerFault::HandleMismatch,
                 },
+                WalletRpcErrorCode::SignerFailed,
+            ),
+            (
+                SendError::Sign(SignFault::TooManyInputs { count: 9 }),
+                WalletRpcErrorCode::TooManyInputs,
+            ),
+            (
+                SendError::Sign(SignFault::TooManyOutputs { count: 17 }),
+                WalletRpcErrorCode::TooManyOutputs,
+            ),
+            (
+                SendError::Sign(SignFault::SpentOutputNotInLeafChunk { input: 1 }),
+                WalletRpcErrorCode::InputNotInTree,
+            ),
+            (
+                SendError::Sign(SignFault::PqcLeafMismatch { input: 0 }),
+                WalletRpcErrorCode::InputUnspendable,
+            ),
+            (
+                SendError::Sign(SignFault::Internal(
+                    shekyl_engine_core::InternalSignFault::BalanceSelfCheck,
+                )),
                 WalletRpcErrorCode::SignerFailed,
             ),
             (
@@ -3809,5 +3962,61 @@ mod tests {
             unlisted.is_empty() && unbacked.is_empty(),
             "emitted but not in the contract: {unlisted:?}; in the contract with no variant: {unbacked:?}"
         );
+    }
+
+    /// `-29119`'s `data.fault` is one keyword of a closed set: the builder's
+    /// invariants and the wallet-side faults. The contract and the input
+    /// grammar list that set; both lists are the two enums' keywords. Bites
+    /// when a fault is added, renamed or removed in the code without the
+    /// docs, or the docs name a keyword nothing emits.
+    #[test]
+    fn the_signer_fault_keywords_are_the_documented_set() {
+        use std::collections::BTreeSet;
+        let emitted: BTreeSet<&str> = shekyl_engine_core::InternalSignFault::ALL
+            .iter()
+            .map(|f| f.keyword())
+            .chain(
+                shekyl_engine_core::SignerFault::ALL
+                    .iter()
+                    .map(|f| f.keyword()),
+            )
+            .collect();
+        assert_eq!(
+            emitted.len(),
+            shekyl_engine_core::InternalSignFault::ALL.len()
+                + shekyl_engine_core::SignerFault::ALL.len(),
+            "no keyword names two faults"
+        );
+
+        fn between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
+            let from = text.find(start).expect(start) + start.len();
+            let len = text[from..].find(end).expect(end);
+            &text[from..from + len]
+        }
+
+        let contract = include_str!("../../../docs/api/wallet_rpc.yaml");
+        // The entry wraps across the YAML's description column: one space
+        // between words, so a phrase reads whole.
+        let entry = between(contract, "-29119 SIGNER_FAILED", "-29120 SEND_NOT_SAVED")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let builder = between(&entry, "a builder invariant — ", " — or the wallet");
+        let wallet = between(&entry, "signing reads — ", ").");
+        let listed: BTreeSet<&str> = builder
+            .split(',')
+            .chain(wallet.split(','))
+            .map(str::trim)
+            .collect();
+        assert_eq!(listed, emitted, "wallet_rpc.yaml's -29119 keywords");
+
+        let grammar = include_str!("../../../docs/design/INPUT_GRAMMAR.md");
+        let sentence = between(
+            grammar,
+            "`-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set:",
+            "(the wallet state signing reads",
+        );
+        let listed: BTreeSet<&str> = sentence.split('`').skip(1).step_by(2).collect();
+        assert_eq!(listed, emitted, "INPUT_GRAMMAR.md's -29119 keywords");
     }
 }

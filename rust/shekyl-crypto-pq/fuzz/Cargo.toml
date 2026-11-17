@@ -31,7 +31,9 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 rand = "0.8"
-shekyl-crypto-pq = { path = ".." }
+# `seeded-rng` (TEST_ONLY): a fuzz input becomes a transaction key through
+# `TxKey::seeded` (R-21); the fuzz crate is outside the workspace and ships nothing.
+shekyl-crypto-pq = { path = "..", features = ["seeded-rng"] }
 shekyl-types = { path = "../../shekyl-types" }
 
 [[bin]]

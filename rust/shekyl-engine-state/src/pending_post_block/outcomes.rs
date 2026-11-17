@@ -316,7 +316,7 @@ impl PendingPostBlock {
 
     /// The durable outcomes. A `(kind, persona)` has one entry, except
     /// `spent_elsewhere`, which can sit beside a later ending of the same
-    /// pair (see [`Self::replace_outcome`]).
+    /// pair (see `Self::replace_outcome`).
     pub fn outcomes(&self) -> &[StakingOutcome] {
         &self.outcomes
     }

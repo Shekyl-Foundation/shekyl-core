@@ -836,19 +836,19 @@ Two regimes, both mispriced today, in opposite directions:
 ### §4.3 Spacing and coverage of the served ladder (FL-C2/C3 input)
 
 Average-cost `x` per rung and adjacent fee ratios, measured on the **served
-three-tier ladder** — `[economy, standard, priority]`, the shape the daemon
+three-tier ladder** — `[economy, standard, high]`, the shape the daemon
 emits — through the production owner `shekyl_economics::corrected_fee_ladder`.
 
 `x_i = f_i·M/R` is the expansion fraction of the median that rung `i` funds on
 an average-cost basis. Measured at genesis with baseline volume, where
 `R` = 1,024 SKL and the correction is **`C` = 0.85**. **Every row states `C`
 because `x` is not invariant under it:** the correction sits inside the floor
-and the priority rung while `R` is the `M_r`-neutral total, so `C` scales the
+and the high rung while `R` is the `M_r`-neutral total, so `C` scales the
 fee side without scaling the divisor. (This is a change from the previous
 characterisation, whose `x` *was* `C`-invariant only because the shape it
 measured had no correction at all.)
 
-| `M` | `x(economy)` | `x(standard)` | `x(priority)` | ratios `std/eco, pri/std` |
+| `M` | `x(economy)` | `x(standard)` | `x(high)` | ratios `std/eco, high/std` |
 | --- | --- | --- | --- | --- |
 | `Zm` (300 000) | 0.850% | 3.400% | **170.0%** | 4.00, **50** |
 | `3·Zm` | 0.283% | 1.133% | **170.0%** | 4.00, **150** |
@@ -877,8 +877,8 @@ short-term median; that arm is deleted, FL-R5.)
 
 What the measurement shows:
 
-- **`x(priority)` is exactly `2C` at every median** — 170% at `C` = 0.85 — and
-  is therefore flat across the sweep. The priority rung is the
+- **`x(high)` is exactly `2C` at every median** — 170% at `C` = 0.85 — and
+  is therefore flat across the sweep. The high rung is the
   full-expansion rung (`2RC/M`), so `x = 2RC/M · M/R = 2C` identically. It
   funds a full doubling of the median plus the correction's margin, at every
   chain width. This is the property the ladder exists to provide and it holds
@@ -890,12 +890,12 @@ What the measurement shows:
 - **`std/eco` is exactly 4.00 everywhere**, by construction (`standard = 4F`),
   so the bottom of the ladder is uniformly spaced by design rather than by
   accident.
-- **`pri/std` grows linearly with `M`** — 50× at the zone to 2523× at
+- **`high/std` grows linearly with `M`** — 50× at the zone to 2523× at
   `50·Zm` — because the two rungs have different exponents in `M` (`1/M`
   against `1/M²`). **This is the FL-C2/C3 tension, and it is structural, not a
   defect of calibration:** a floor that prices a transaction and a top rung
   that prices an expansion cannot stay a fixed ratio apart as the median
-  moves. Mechanical FL-C2+C3 coverage arithmetic: the economy-to-priority span
+  moves. Mechanical FL-C2+C3 coverage arithmetic: the economy-to-high span
   is 200× at `M = Zm` (needs ≥ 3 rungs at `r ≤ 10`) and 10 000× at `50·Zm`
   (needs 5). A strict reading of C2+C3 therefore wants **4–5 rungs at large
   medians** while FL-C4b supports **3** — the round's registered conflict,
@@ -1323,17 +1323,17 @@ Readings, as corrected at round 6:
 - **The reduction is real, bounded, and minority-borne.** An anchored
   observer divides the height window's candidate set by ≈ the inverse
   usage share of the transaction's rung — once, for that transaction. At
-  5% priority usage that is ~20× against the standard-tier set in the
+  5% high usage that is ~20× against the standard-tier set in the
   same window. It is not a behavior the user can opt out of by
-  randomizing: a priority transaction sits in the priority bucket
+  randomizing: a high transaction sits in the high bucket
   regardless of why it is there. A uniform rate makes every
   transaction's candidate set the full window (×1).
-- ~~A habitual priority payer is a linkable pseudonym in fee-space~~ —
+- ~~A habitual high payer is a linkable pseudonym in fee-space~~ —
   **struck at round 6 (maintainer's own correction)**: cross-transaction
   linkage requires an adversary who *already holds* a set of the user's
   transactions from an external source, at which point fee habit is a
   weak confirmation signal on a much stronger leak (and if they hold the
-  submission path, fee is irrelevant). Without the anchor, "all priority
+  submission path, fee is irrelevant). Without the anchor, "all high
   fees" is a **partition, not a cluster**. Tier choice uncorrelated with
   identity carries zero cross-transaction information even with an
   anchor set. The earlier ×0.1ⁿ set-measure compounding is withdrawn
@@ -1351,7 +1351,7 @@ Readings, as corrected at round 6:
 | Criterion | Verdict | Where |
 | --- | --- | --- |
 | FL-C1 continuous | **rejected** — never triggered: discrete ladders satisfy the registered set; the exception clause stays unfired | §4.3 |
-| FL-C2 coverage | met by floor + `2R/M` top — `x(priority)` = `2C` at every median. The inherited **surge arm failed C2(b)** and was deleted (FL-R5), so the served ladder has no surge-discounted top | §4.3, §5.2 |
+| FL-C2 coverage | met by floor + `2R/M` top — `x(high)` = `2C` at every median. The inherited **surge arm failed C2(b)** and was deleted (FL-R5), so the served ladder has no surge-discounted top | §4.3, §5.2 |
 | FL-C3 spacing ≤ 10× | **conflict with C4b** — registered outcome, resolved on the record in §5.3 | §4.3 |
 | FL-C4a dwell | raw `C` fails; **the adopted ceiling passes the 240-block gate in every scenario at every registered age on drift-honest traces, with or without the §7 band** (round 12 behind the band: min median 446, min in-ramp 274; #640 un-banded — which is what the daemon now serves, FL-R3: min median **464**, so this criterion is insensitive to the band's removal; secular reward-decay steps ~1 per 10–20 k blocks are shared by every mode incl. current). **The registered nearest rule FAILS at age 12 under drift** (median 2–3 blocks — per-block flicker at the √2 midpoint), a second independent ground for the ceiling. **Rounds 14–15: the criterion's anonymity rationale is REFUTED and NOT replaced by another anonymity one** — a conforming transaction's fee is redundant with the block carrying it, construction time is already public via `reference_block`, and round 14's fallback (stale-quote self-marking) was itself retracted at round 15 because `check_fee` is a floor, not an equality. What survives is **quantization quality and user predictability**, on which every decision this criterion drove still holds (§1.4 note, §4.5b) | §4.4, §4.5b |
 | FL-C4b usage floor | `Fm` at **0% measured production usage** (FL-V3) → **delete** (emergency-lane branch examined and rejected: an emergency lane nobody was using marks the first user who ever touches it) | §5.3 |
@@ -1373,7 +1373,7 @@ re-passed the full dwell gate):
 ```text
 fees[0]  economy   = max( round_up2( C_q · R·w_ref/Mfw² ),  relay_floor )
 fees[1]  standard  =      round_up2( C_q · 4·R·w_ref/Mfw² )
-fees[2]  priority  =      round_up2( C_q · 2·R/Mfw )
+fees[2]  high      =      round_up2( C_q · 2·R/Mfw )
 ```
 
 *Operand resolution (round 8, amendment ADOPTED):* `R` above is the
@@ -1420,7 +1420,7 @@ state drift.
   self-funding admission), clamped per §5.4.
 - **standard** keeps `Fn = 4·Fl` (admission family; the 4× spacing to
   economy is constant at every median).
-- **priority** is the inherited `Fh` **main arm made unconditional** —
+- **high** is the inherited `Fh` **main arm made unconditional** —
   exact marginal-cost pricing of expansion to the 2×median cap, with the
   surge discount removed (fixes the FL-C2(b) gap: full expansion is now
   funded in every state, surge included).
@@ -1472,7 +1472,7 @@ named as misfitting a two-family ladder.**
    right back.
 3. The scary C3 numbers are *inter-family* gaps: they compare an admission
    price to an expansion price, which diverge as 1/M² vs 1/M by
-   construction (§3.2). On the served ladder this is the `pri/std` column
+   construction (§3.2). On the served ladder this is the `high/std` column
    of §4.3 — 50× at the zone rising to 2523× at `50·Zm` — and on the
    inherited shape it was the `Fn→Fm` gap reaching 200×. Same seam, either
    shape. Uniform-geometric spacing across that
@@ -1530,7 +1530,7 @@ future parameter change pushes reachable `C` below 0.5.
   for the default choice was explicitly DISCOUNTED by the maintainer at
   signature* ("no privacy argument for the default case") — recorded so
   the default is not later defended on a ground its signer rejected.
-- **Priority — the guaranteed-inclusion rung** (`C_q·2R/Mfw`,
+- **High — the guaranteed-inclusion rung** (`C_q·2R/Mfw`,
   unconditional main arm): exact marginal-cost pricing of expansion to
   the 2×median cap — next-block inclusion from a rational miner in any
   state, surge included. Disclosed cost: the §4.7 anchored divisor
@@ -1539,7 +1539,7 @@ future parameter change pushes reachable `C` below 0.5.
   for any anchor looser than ~13 minutes at baseline volume (FL-R17).
 
 The default choice sets the realized shares C9 is computed over, so the
-**defaulted 15/80/5 model (economy/standard/priority) is the operative row** of §4.7's table; the
+**defaulted 15/80/5 model (economy/standard/high) is the operative row** of §4.7's table; the
 registered 50/40/10 remains the pre-signature reference.
 
 ## §6 Wargame
@@ -1548,7 +1548,7 @@ registered 50/40/10 remains the pre-signature reference.
 | --- | --- | --- | --- | --- | --- |
 | W1 | Miner who ignores the ladder and mines only the penalty-free zone | Refuses all expansion regardless of fees | Individually rational whenever `C > 1` (fees at the served ladder genuinely don't cover cost — measured 5.6–12.9× short in congestion): congestion persists *because* the ladder lies | Forgoes real profit: corrected rungs actually clear the miner's cost, so a refusing miner cedes fee income to competitors; expansion market functions | The ladder is an offer curve; no defence needed beyond pricing it honestly |
 | W2 | User pays the top rung, gets no expansion | Buys priority during mature-chain congestion | **Real and measured**: top rung offers as little as 8% of the miner's cost; rational miners take queue-jumping money and never expand; the product sold does not exist | Top rung = exact marginal cost of full expansion in every state incl. surge (§5.2); a rational miner expands | Residual: collusive non-expansion cartel is a mining-cartel question (out of scope, unchanged by this round) |
-| W3 | Fee-fingerprint adversary (links txs / identifies wallet software by fee values) — **round 14: this row's own determinism observation is what refutes §4.4's cohort premise (§4.5b). Round 15 narrows the residual further: `check_fee` is a floor, so a mismatched fee is ordinary and unmarked; the only real observable is a fee outside the `C_q` set spanning the construction window, i.e. IMPLEMENTATION DIVERGENCE** | Reads the public fee field | 4 static-formula values; but any wallet deviating from daemon values is marked (unchanged) | 3 values; `C_q` is a deterministic function of public chain state, so all conforming wallets at a height agree; measured dwell on drift-honest traces (round 12 behind the band; #640 for the un-banded map the daemon actually serves, FL-R3): stationary scenarios post at most the shared secular reward-decay step (~1 per 10–20 k blocks, common to every mode incl. today's ladder); minimum median dwell **464 blocks served** (446 banded), min in-ramp 274 (gate: 240) — the band's removal does not weaken this row — cohorts ~10⁶ txs/rung-value in quiet states, worst-case ~1.4–5.5 × 10⁴ inside an old-age ramp window, vs ~150–300 for raw `C`, whose alphabet is only 2–3 values but flickers every 3–6 blocks | Raw `C` was the hazard and is rejected by FL-C4a; custom-fee users remain self-marked (pre-existing, out of scope) |
+| W3 | Fee-fingerprint adversary (links txs / identifies wallet software by fee values) — **round 14: this row's own determinism observation is what refutes §4.4's cohort premise (§4.5b). Round 15 narrows the residual further: `check_fee` is a floor, so a mismatched fee is ordinary and unmarked; the only real observable is a fee outside the `C_q` set spanning the construction window, i.e. IMPLEMENTATION DIVERGENCE** | Reads the public fee field | 4 static-formula values; but any wallet deviating from daemon values is marked (unchanged) | 3 values; `C_q` is a deterministic function of public chain state, so all conforming wallets at a height agree; measured dwell on drift-honest traces (round 12 behind the band; #640 for the un-banded map the daemon actually serves, FL-R3): stationary scenarios post at most the shared secular reward-decay step (~1 per 10–20 k blocks, common to every mode incl. today's ladder); minimum median dwell **464 blocks served** (446 banded), min in-ramp 274 (gate: 240) — the band's removal does not weaken this row — cohorts ~10⁶ txs/rung-value in quiet states, worst-case ~1.4–5.5 × 10⁴ inside an old-age ramp window, vs ~150–300 for raw `C`, whose alphabet is only 2–3 values but flickers every 3–6 blocks | Raw `C` was the hazard and is rejected by FL-C4a. No custom rate exists (Rick, 2026-11-15): a wallet pays one of the three values every conforming wallet derives, so it hides in that tier's cohort. Reopens only on a measured case where `high` misses its confirmation target under congestion; the fix then goes in the derivation of the top rung, so every wallet still pays the same top rate — never a per-wallet rate |
 | W4 | `tx_volume` manipulator (moves `b` and `M_r`) | Self-trades to raise `tx_volume_avg` | Same lever exists and *worsens* mispricing (raises `M_r` 1.3× while ladder ignores it) | Manipulation is at least priced consistently: raising `v` raises `C_q` for everyone including the adversary; pow2 plateaus mean small manipulations usually move nothing | Cost: burn share of every spam fee is destroyed; young chain (`b≈0`) self-mining spam is near-free — but that is the release-multiplier's own emission surface (economics lane, unchanged by this round); the ladder correction adds no new profit path for it |
 | W5 | Exhaustion-era spammer (post-mining-era, `R = 0`) | Expands every block to the 2× cap for free | Estimate quotes fees from a reward that no longer exists ([20,80,320,4000] vs true [0,0,0,0]); penalty prices nothing; growth governed only by the 1.7×/window clamp and a 1-atomic floor | RESOLVED at round 8: FL-R12′'s signed composition (`paid = max(M_r·curve, TAIL)·penalty(x)`) keeps the penalty biting at the tail permanently — expansion to the cap costs the full `TAIL` at `x = 1` | ~~FL-D1~~ closed as answered (§9) |
 | W6 | Quiet-chain wallet (honest) | Pays served economy rung | Overpays ~1.2–1.5×, or — if the ladder were naively corrected without FL-C6 — bounces off the relay floor entirely (three of six states) | Clamp guarantees relayability; overpayment bounded at measured 1.5× worst case until CEN-M3 re-derives the floor | FL-D2 |
@@ -1567,7 +1567,7 @@ registered 50/40/10 remains the pre-signature reference.
 | `fee_policy.rs` absolute cap | **DONE at #640, and NOT as this row instructed — do not pin a swept maximum here.** The row's plan was to re-derive the cap as the swept maximum of the served top rung over the reachable young-chain grid (young-congested 25 000 000; genesis-congested 28 000 000). That framing was measured and found wrong in the expensive direction: it locates the peak at genesis, where the operand reward peaks, missing that `C_q` GROWS with age while `R` decays slowly, so the product peaks in the interior — the 28 000 000 bound sits BELOW honest daemon quotes from ≈ year 3 and would refuse correct snapshots. The cap shipped as a **structural bound** (220 000 000, every factor at its own extreme) with the sweep kept only as a floor under its adequacy. See FL-R9 | No | **cleared at #640** |
 | `check_fee` / `get_dynamic_base_fee` | **unchanged** this round (clamp absorbs the collision); re-derivation is CEN-M3's | — | FL-D2 |
 | Hysteresis construction requirement | implementation must not flicker at a pow2 boundary: enter a new `C_q` step only when `C` crosses the boundary by a margin. **Measured (rounds 11–12): LOAD-BEARING and NOT SUFFICIENT alone** — without it the map oscillates broadly (20 cells, worst 1 177 transitions on drift-honest traces at round 12; 1 161 re-measured at #640 against the shipped owner — and since #640 that un-banded map is the one SERVED, FL-R3); with the 3% band the residual is 14 boundary-parked high-elasticity cells (7–24 transitions, one `C_q` step), which **FL-R18 accepts as bounded at round 14**: the band stays as built (it is what damps boundary noise ~50×), and **nothing is composed on top of it** — the minimum-dwell floor briefly ruled at round 13 is withdrawn on two independent grounds: the anonymity harm it was to prevent does not exist (§4.5b), and it was measured to destabilise the loop it was meant to calm (§4.5a). The mechanism therefore remains exactly the implementing branch's `fee_correction_quantized` as already built — **no rework** *(Implementation note added after this row was written: #640 review cycle 5 took the band OFF the served path. Round 17 ruled it back ON — FL-R3 — so "no rework" still holds for the MECHANISM, which is unchanged and stays; what is owed is the served-path restoration under FL-R3's two constraints, on the time-grid branch. The measurements in this row are of the banded map and stand.)* | No | implementing PR (built on `feat/fee-ladder-impl-1`; the instrument's transliterated copy retires at that merge) |
-| Wallet/CLI tier-picker disclosure (rule-81 obligation **created by FL-R17's signature**, flagged at steering) | Three tiers put a privacy cost behind a user-facing choice (×1.25 default / ×6.7 / ×20 operative divisors, §4.7) — a user selecting "priority" cannot be expected to price a candidate-set divisor, so the surface must disclose the trade in terms a non-protocol user can act on, or the choice is uninformed by construction. Copy is owned by the wallet/GUI lane (rules 80/81/82), **not this round** — handed off via the round record; the engine mapping change is the natural carrier | No | with the engine tier-mapping change; owner: wallet/GUI surfaces |
+| Wallet/CLI tier-picker disclosure (rule-81 obligation **created by FL-R17's signature**, flagged at steering) | Three tiers put a privacy cost behind a user-facing choice (×1.25 default / ×6.7 / ×20 operative divisors, §4.7) — a user selecting "high" cannot be expected to price a candidate-set divisor, so the surface must disclose the trade in terms a non-protocol user can act on, or the choice is uninformed by construction. Copy is owned by the wallet/GUI lane (rules 80/81/82), **not this round** — handed off via the round record; the engine mapping change is the natural carrier | No | with the engine tier-mapping change; owner: wallet/GUI surfaces |
 
 ## §8 Ratification table — FL-R12′/FL-R17 SIGNED, FL-R14 RULED (per-row provenance); census overlap per §0.1
 
@@ -1616,7 +1616,7 @@ ride each row.
 | FL-R25 | **The fourth fee slot is DELETED, not bridged.** FL-V3 (cycle 1) found slot 2 reachable only through `FeePriority::Elevated` — *"the `Elevated` priority, as defined by Monero"* — with **zero production callers, the GUI included**: wire-served and dead. The round's response was to build the RK-5 bridge (slot 2 mirrors slot 1) so a transliterated `Elevated` caller would pay the standard rate and stay in the largest anonymity set, then a contract test to assert the bridge holds, and round 19 then had to ask which slot the priority formula occupies. **Three artifacts protecting one dead enum variant, and the anonymity set the bridge protected had no members.** The premise also fails on its own terms: we are not wire-compatible with Monero — different address format, transaction format and proof system — so nothing that speaks Monero's RPC can reach this chain. The slot existed because ArticMine's 2021 ladder produced four numbers. **RK-5 REOPENED under rule 21** (our own pre-genesis ruling; its premise was that something consumes four slots, and nothing does) and discharged by deletion: `fees.resize(3)`, `FeeTiers([u64; 3])`, `FeeTier::Medium` and `FeePriority::Elevated` deleted, `fee_tier_for` collapsed to a bijection, the `chain_facts` pod and its vectors cut to three, the #640 contract test asserting three ascending tiers with no mirror clause, and both `get_fee_estimate` oracle vectors **regenerated, not edited**. Rules 60 and 15; pre-genesis, daemon and wallet ship together, no deployed network to skew. **§11.6 item 4's `fees[2] = 2RC/M` was never a slip — the wire was.** One behaviour change, named: priority `3` reached the bridge slot at the standard rate and now reaches `High`. | **RULED in-channel 2026-09-11** | minted at round 19, landed before PR B |
 | FL-R26 | **`grace_blocks` is DELETED from the estimate path and the RPC — not zeroed.** FL-R20's un-gracing (ruled 2026-09-11) makes the served ladder a function of chain state alone: `Mlw` is the un-graced long-term effective median, so `grace_blocks` moves no rung. What it used to buy was a lookahead — zeroes inserted into the long-term window pulled `M` down and the quote UP, so a quote survived the next few blocks — and **FL-R23 does that job exactly rather than probabilistically**, which is the same argument that withdrew the fixed pad (FL-R22): every economy user paid the premium forever for protection the lookback already gives by identity. It was redundant on *every* rung, not only slot 0: grace protected quotes taken AT the floor, and a standard quote is `4F`. **A tunable with no effect is worse than no tunable**, so the parameter goes rather than being pinned at zero. **Measured while implementing, and it sharpens the ruling: the lookahead was already all but inert in production.** `grace_blocks` is capped at `CRYPTONOTE_REWARD_BLOCKS_WINDOW` = 100 against a `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` = 100 000 window, so the zeroes move the median by at most 100 ranks in 100 000 — and on a locally flat weight distribution, by nothing at all. Restoring the graced shape verbatim left both a floor-pinned fixture and a 5 000-block high-median fixture **bit-for-bit unchanged**; `fee_2021_scaling.grace_blocks_do_not_move_the_served_ladder` therefore pins the mechanism at a window equal to the grace cap, where the zeroes saturate, and says so in its own comment. **Wire change** (`grace_blocks` is an RPC parameter), so it carries a `CORE_RPC_VERSION` bump and belongs with the RK-5 wire lane or PR C — explicitly **not** PR B. **Reopener (rule 21), cross-referenced to FL-R19:** if a long-gap construction path ever lands — cold signing, offline signing, multisig — `G` = 5 may not cover the quote-to-broadcast gap, at which point the lookahead question returns. FL-R19's sizing premise was voided on "there is no offline signing" (decision log 2026-09-07); **this row is where that premise is re-examined if that changes**, and a lookahead restored here would need FL-R19's binding constraint (fixed, deterministic, never per-wallet) rather than the inherited zero-insertion shape. | **RULED in-channel 2026-09-11** (with the un-graced `M`: *"the right end state is `grace_blocks` deleted from the estimate path and from the RPC — not zeroed, deleted"*) | not PR B — wire change; queued with the RK-5 lane / PR C |
 | FL-R27 | **The fee lattice is a Rust constant, off the wire:** `shekyl_economics::FEE_QUANTIZATION_MASK` (1 000 atomic units, from `DISPLAY_DECIMAL_POINT` and the fee's six decimal places) and `quantized_fee`, the one rounding relay admission and the wallet both call; `relay_floor_admits(fee, weight, floors)` takes neither the mask nor the slack; the C++ mask, its three hand-offs and `get_fee_estimate.quantization_mask` deleted at `CORE_RPC_VERSION` 3.57. One fact had four sources, and a per-daemon mask is a per-daemon fingerprint (FL-C1). Relay policy, not chain identity. §11.2 | **RULED in-channel 2026-10-16** (PR C, #1096) | none — CEN-M3's formula text updated by PR C |
-| FL-R28 | **The wallet's absolute cap is the exact structural maximum of `C`, checked on the rate:** `C_max = ⌊SCALE·release_max/(SCALE−burn_cap)⌋` = 13.0 (the expression is monotone in each clamped operand), cap `2·R₀·C_max/(Zm·SCALE)` = 88 746 666, swept reachable peak 36 904 281 under it; no pow2 snap, and with no served mask the check reads the raw per-weight rate for every tier and `Custom`. §11.2 | **RULED in-channel 2026-10-16** (PR C, #1096) | none — wallet-side |
+| FL-R28 | **The wallet's absolute cap is the exact structural maximum of `C`, checked on the rate:** `C_max = ⌊SCALE·release_max/(SCALE−burn_cap)⌋` = 13.0 (the expression is monotone in each clamped operand), cap `2·R₀·C_max/(Zm·SCALE)` = 88 746 666, swept reachable peak 36 904 281 under it; no pow2 snap, and with no served mask the check reads the raw per-weight rate for every tier. §11.2 | **RULED in-channel 2026-10-16** (PR C, #1096) | none — wallet-side |
 
 Signatures are recorded per-row with their provenance (in-channel, review
 rounds 4–8); this line remains for any wholesale countersign the
@@ -2954,7 +2954,7 @@ only loosened the bound. The cap is `2·R₀·C_max/(Zm·SCALE)` =
 **88 746 666** (R₀ = 1 024 SKL, Zm = 300 000), pinned, and the swept
 reachable peak, 36 904 281, stays under it. With no daemon-served mask
 (FL-R27) the "effective weight-1 charge" the cap used to read has no
-subject: every tier and `Custom` are checked on the raw per-weight rate.
+subject: every tier is checked on the raw per-weight rate.
 
 ### §11.3 Roads not taken
 

@@ -43,13 +43,13 @@ use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_block_template::{build, EmissionOperands, MinerKeys, Template, TemplateContext};
 use shekyl_chain_ingest::bench_support::{blocks_of, RULES};
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+use shekyl_crypto_pq::TxKey;
 use shekyl_economics::{economic_params, ClosedShardCount, EconomicParams, TxVolume};
 use shekyl_types::{BlockHeight, Timestamp};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::block::Block;
 use shekyl_wire::transaction::Transaction;
 use shekyl_wire::tx_extra;
-use zeroize::Zeroizing;
 
 const DESIGN_LOAD: &[u8] = include_bytes!("fixtures/block_path_spend_2in_2out_design.corpus");
 
@@ -64,6 +64,7 @@ struct Operands {
     listed: Vec<Transaction>,
     params: &'static EconomicParams,
     miner: MinerKeys,
+    tx_key: TxKey,
 }
 
 impl Operands {
@@ -88,7 +89,7 @@ impl Operands {
             },
             params: self.params,
             miner: &self.miner,
-            tx_key_secret: Zeroizing::new([0x77; 32]),
+            tx_key: &self.tx_key,
             extra_nonce: [0; tx_extra::COINBASE_NONCE_BYTES],
             draw_commitment: tx_extra::CONFORMING_DRAW_COMMITMENT,
             listed: &self.listed,
@@ -121,6 +122,8 @@ fn operands(corpus: &[u8]) -> Operands {
             x25519_pk: pk.x25519,
             ml_kem_ek: pk.ml_kem,
         },
+        // Pinned, so the instruction count does not move with the OS.
+        tx_key: TxKey::seeded([0x77; 32]),
     };
     // A context `build` refuses would count the refusal.
     let template = build(&operands.context()).expect("the template builds");

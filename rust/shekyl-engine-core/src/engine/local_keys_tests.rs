@@ -67,7 +67,7 @@ fn build_paid_to_self(
     use shekyl_crypto_pq::kem::HybridCiphertext;
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
@@ -138,7 +138,7 @@ fn make_recipient_output_info(
     use shekyl_tx_builder::types::OutputInfo;
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
@@ -271,7 +271,7 @@ async fn try_claim_output_for_derived_spend_point_returns_not_mine() {
     );
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         &derived_spend_pk,
@@ -319,7 +319,7 @@ fn derive_primary_source_secrets_bundle_returns_deterministic_bundle() {
     let keys = LocalKeys::from_test_seed(TEST_SEED);
     let output_index = 3u64;
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
@@ -358,7 +358,7 @@ fn derive_primary_source_secrets_bundle_rejects_low_order_x25519_component() {
 
     let keys = LocalKeys::from_test_seed(TEST_SEED);
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
@@ -460,7 +460,7 @@ fn derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain() {
     // bundle arithmetic — `construct_output` is unaware of it.
     for (output_index, tx_hash) in inputs.iter().copied() {
         let constructed = construct_output(
-            &TEST_TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             keys.keys.spend_pk.as_canonical_bytes(),
@@ -774,7 +774,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             input_amounts.push(amount);
 
             let constructed = construct_output(
-                &TEST_TX_KEY_SECRET,
+                &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
                 &keys.keys.x25519_pk,
                 &keys.keys.ml_kem_ek,
                 &recipient_spend_pk,
@@ -1242,7 +1242,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     let input_amount: u64 = floor + fee + 1_000_000;
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         &recipient_spend_pk,
@@ -1500,7 +1500,7 @@ fn derive_primary_source_secrets_bundle_diverges_across_distinct_seeds() {
     let keys_b = LocalKeys::from_test_seed([0xAAu8; 32]);
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys_a.keys.x25519_pk,
         &keys_a.keys.ml_kem_ek,
         keys_a.keys.spend_pk.as_canonical_bytes(),
@@ -1573,8 +1573,7 @@ async fn sign_transaction_rejects_empty_inputs() {
         },
         fee: FeeDirective {
             fee_no_change: 0,
-            fee_with_change: 0,
-            dust_threshold: 0,
+            fee_with_change: Some(0),
         },
     };
     let err = keys

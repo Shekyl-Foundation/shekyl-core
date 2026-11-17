@@ -11,7 +11,7 @@ use crate::common::{
 };
 use crate::session_test;
 use shekyl_levin::{PortableMap, Received};
-use shekyl_p2p_session::{CloseKind, Command, ConnectorId, Endpoint};
+use shekyl_p2p_session::{CloseKind, Command, ConnectorId, Direction, Endpoint};
 use shekyl_timing_engine::{Clock, Tick};
 
 session_test!(this_nodes_own_dial_arriving_is_dropped_silently, async {
@@ -65,6 +65,30 @@ session_test!(a_probe_of_this_nodes_onion_reaches_the_sink, async {
     let (facts, end) = rig.closed(wire.id).await;
     assert!(!facts.established);
     assert_eq!(kind(end), CloseKind::LocalClose);
+    // The probe is not a session: the Tor Manager never hears it as a new
+    // inbound Tor session (`TOR_SUPERVISOR.md` §4.5a). Reporting the
+    // handshake before the nonce is read fails this.
+    assert!(
+        rig.established.lock().expect("established").is_empty(),
+        "the probe is never an established session"
+    );
+});
+
+// **A new inbound Tor session is reported once its handshake finishes**
+// (`TOR_SUPERVISOR.md` §4.5a): the Tor Manager's working fact. Reporting
+// at accept, before the handshake, or never, fails this.
+session_test!(an_inbound_tor_session_is_reported_when_established, async {
+    let mut rig = Rig::new(Settings::default());
+    let (mut wire, _gap) = rig.accept(Endpoint::TorInbound);
+    assert!(
+        rig.established.lock().expect("established").is_empty(),
+        "an accept is not a session"
+    );
+    rig.establish_inbound(&mut wire).await;
+    assert_eq!(
+        *rig.established.lock().expect("established"),
+        vec![(ConnectorId::Tor, Direction::Inbound)]
+    );
 });
 
 session_test!(
