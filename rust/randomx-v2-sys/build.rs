@@ -68,7 +68,7 @@ fn main() {
             // Platform-specific because the runtime library name
             // differs by toolchain (GNU/libstdc++ vs. LLVM/libc++).
             let cxx_runtime = match env::var("CARGO_CFG_TARGET_OS").as_deref() {
-                Ok("macos" | "ios" | "freebsd" | "openbsd") => "c++",
+                Ok("macos" | "ios" | "freebsd") => "c++",
                 _ => "stdc++",
             };
             println!("cargo:rustc-link-lib=dylib={cxx_runtime}");

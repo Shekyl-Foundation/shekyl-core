@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The account walk's next entry by `getpwent` (musl, macOS and iOS,
-//! OpenBSD, illumos, Solaris). The libc crate declares no `getpwent_r` for
-//! these targets, musl defines none, and illumos's has another signature.
+//! The account walk's next entry by `getpwent` (musl, macOS and iOS). The
+//! libc crate declares no `getpwent_r` for these targets, and musl defines
+//! none.
 //! The entry is the library's own storage, read before the next call and
 //! never kept. The call tells its end from an error by `errno` alone.
 
@@ -66,14 +66,6 @@ fn clear_errno() {
         {
             *libc::__error() = 0;
         }
-        #[cfg(target_os = "openbsd")]
-        {
-            *libc::__errno() = 0;
-        }
-        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
-        {
-            *libc::___errno() = 0;
-        }
     }
 }
 
@@ -82,9 +74,6 @@ fn clear_errno() {
 #[cfg(not(any(
     all(target_os = "linux", target_env = "musl"),
     target_os = "macos",
-    target_os = "ios",
-    target_os = "openbsd",
-    target_os = "illumos",
-    target_os = "solaris"
+    target_os = "ios"
 )))]
 compile_error!("group: name this target's errno accessor as the libc crate declares it");

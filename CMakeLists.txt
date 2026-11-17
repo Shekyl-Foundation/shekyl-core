@@ -225,18 +225,8 @@ set(RISCV   1)
 set(RISCV32 1)
 endif()
 
-if(CMAKE_SYSTEM_NAME MATCHES "kOpenBSD.*|OpenBSD.*")
-  set(OPENBSD TRUE)
-endif()
-
 function(set_default_arch)
-  if (OPENBSD)
-    set(ARCH default)
-  else()
-    set(ARCH native)
-  endif()
-
-  set(ARCH ${ARCH} CACHE STRING "CPU to build for: -march value or 'default' to not pass -march at all")
+  set(ARCH native CACHE STRING "CPU to build for: -march value or 'default' to not pass -march at all")
 endfunction()
 
 if (NOT (MSVC OR ARCH))
@@ -308,7 +298,7 @@ if(NOT MSVC)
 
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-strict-aliasing")
 
-  if(CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT OPENBSD)
+  if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(C_SECURITY_FLAGS "${C_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1")
   endif()
 
@@ -330,16 +320,16 @@ if(NOT MSVC)
   endif()
 
   # -fstack-protector
-  if (NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
+  if (NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
     add_c_flag_if_supported(-fstack-protector C_SECURITY_FLAGS)
     add_c_flag_if_supported(-fstack-protector-strong C_SECURITY_FLAGS)
   endif()
 
   # New in GCC 8.2 -- CET is x86 Linux only; macOS lacks cet.h
-  if (NOT APPLE AND NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
+  if (NOT APPLE AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
     add_c_flag_if_supported(-fcf-protection=full C_SECURITY_FLAGS)
   endif()
-  if (NOT WIN32 AND NOT OPENBSD)
+  if (NOT WIN32)
     add_c_flag_if_supported(-fstack-clash-protection C_SECURITY_FLAGS)
   endif()
 
