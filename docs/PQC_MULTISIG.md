@@ -1154,38 +1154,48 @@ construction: no copy of a wallet contains one.
 
 ### 11.5 What a member brings
 
-- **`GroupOutput`**: the member's ledger record of each output the
-  group holds, named by its global index. It holds public values and
+- **`GroupOutputRecord`**: the member's ledger record of each output
+  the group holds, named by its global index. It holds public values and
   ciphertexts only, as the solo ledger does: `O`, `C`, the output's index
   in its transaction, its `0x06` ciphertext, its key image, its leaf
-  point, its committed form, the member's own `0x0D` ciphertexts, and its
-  membership path (`AssembledPath`, public material) to the curve tree at
-  the intent's reference block. The ledger is read through
-  `GroupOutputs`, a lookup by global index.
+  point, its committed form and the member's own `0x0D` ciphertexts. No
+  path and no secret (R-26). The ledger is read through `GroupOutputs`, a
+  lookup by global index and reference block hash: it returns a
+  `GroupOutput`, the record with its membership path (`AssembledPath`,
+  public material, sealed by the checked assembler, R-25) assembled to
+  that block. It refuses an output it does not hold, and, apart from that,
+  an output whose path does not assemble there.
 - **`DerivedSpend`**, made only by `DerivedSpend::derive` from the
   validated intent, the member's ledger and the group's key from the
   member file (`MultisigGroupKey`: the group KEM secret and `b`) (R-7,
-  §9.5). It looks each of the intent's inputs up itself, and re-derives
-  the input's secrets (`x = ho + b`, `y_kem`, `z`, the leaf blind) from
-  the record's `0x06` ciphertext in `shekyl-crypto-pq`
-  (`recover_group_spend`, the scanner's own steps), then checks the
-  record's key image and leaf point against what they derive, and that
-  the path's leaf chunk holds the output. Every input's path names the
-  intent's reference block and one tree; that tree (root and layer
-  count) is the spend's. It consumes the intent, so no spend can be
-  paired with another intent. Recipient `i`
-  is output `i`, built to its resolved payee by the builder every spend
-  uses, under the transaction key the intent's seed derives; that gives
-  the outputs, their `tx_extra` and the committed base, and each
-  output's opening (a commitment that wipes on drop, for the range
-  proof). Input `j` of the intent takes the `j`-th derived pseudo-out
-  blind and rerandomization seed; the last blind balances the outputs'
-  masks. The inputs are then put in the transaction's order. The
-  derivation refuses, each by name, an input the ledger lacks, an input
-  whose secrets do not derive, a record whose key image or leaf point is
-  not the one its secrets derive, a path to another block or another
-  tree, a path that does not hold its output, and two inputs with one
-  key image. `InputContext` and `UnsignedSpend` have private fields and no
+  §9.5). It looks each of the intent's inputs up itself, at the intent's
+  reference block, and re-derives the input's secrets (`x = ho + b`,
+  `y_kem`, `z`, the leaf blind) from the record's `0x06` ciphertext in
+  `shekyl-crypto-pq` (`recover_group_spend`, the scanner's own steps). It
+  then checks the record's key image and leaf point against what they
+  derive; that the input's commitment on the chain opens to the
+  re-derived `z` at the amount the member's ledger states for that input,
+  the amount the balance and the chain-state fingerprint were checked
+  against (R-27, before any nonce exists); and that the path's leaf chunk
+  holds the output. Every input's path is to the intent's reference block
+  and all name one tree; that tree (root and layer count) is the spend's.
+  It consumes the intent, so no spend can be paired with another intent.
+  Recipient `i` is output `π(i)`, the order the intent's transaction key
+  derives (R-24), built to its resolved payee by the builder every spend
+  uses, under that key; that gives the outputs, their `tx_extra` and the
+  committed base, and each output's mask as a scalar (`OutputMask`) and
+  so its opening (a commitment that wipes on drop, for the range proof).
+  Input `j` of the intent takes the `j`-th derived pseudo-out blind and
+  rerandomization seed; the last blind balances the outputs' masks. The
+  inputs are then put in the transaction's order. The derivation
+  refuses, each by name, an input the ledger lacks, an input whose path
+  does not assemble at the reference block, an input whose secrets do
+  not derive, a record whose key image or leaf point is not the one its
+  secrets derive, a commitment that does not open at the stated amount,
+  paths to two trees, a path that does not hold its output, and two
+  inputs with one key image. A ledger that states a different number of
+  amounts than the intent has inputs is refused when the intent is
+  validated. `InputContext` and `UnsignedSpend` have private fields and no
   other constructor: a member cannot sign a blind, a seed or an output
   the intent does not determine.
 - **`SigningContext`**, built from the `DerivedSpend` and the member
@@ -1872,11 +1882,14 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
 - The proposer restarting after step 7, straight after it and after one
   hybrid signature (the spend completes); it resumes only from its own
   `FinalTx`
-- A ledger that lacks an input, a record whose key image or leaf point is
-  not the one its secrets derive, a record holding another output's
-  ciphertext, a path to another block or another tree or one that does
-  not hold its output, and one output recorded at two global indices
-  (each refused by the derivation, by name); a ledger holding more than the
+- A ledger that lacks an input, one that holds an input but cannot
+  assemble its path to the reference block, a record whose key image or
+  leaf point is not the one its secrets derive, a record holding another
+  output's ciphertext or another coin's commitment, inputs whose stated
+  amounts are swapped (they balance and match the chain-state
+  fingerprint), paths to two trees or one that does not hold its output,
+  and one output recorded at two global indices (each refused by the
+  derivation, by name); a ledger holding more than the
   intent spends, and records handed over in any order (the derivation
   looks up what it spends and puts it in the transaction's order)
 
