@@ -322,7 +322,7 @@ pub fn claim_signed_under(
 
     // The slots over the re-signed body: the fee spends' first, then the
     // emission slot, the persona's identity key.
-    let hashes = body.pqc_signing_payload_hashes(network);
+    let hashes: Vec<SigningPayloadHash> = body.pqc_signing_payload_hashes(network);
     assert_eq!(
         hashes.len(),
         fee_inputs.len() + 1,
