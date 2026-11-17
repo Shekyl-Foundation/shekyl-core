@@ -149,8 +149,12 @@ fn spawn(what: &'static str, mut command: Command, stderr: PathBuf) -> Running {
 /// The owner's leg, once the daemon answers on it, and the node's bundle as
 /// `rpc bundle show` prints it.
 fn wait_for_owner(daemon: &mut Running, dir: &Path) -> (LocalTarget, String) {
-    let owner = LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(&socket_dir(dir)))
-        .expect("a named directory");
+    let owner = LocalTarget::resolve(
+        Network::Regtest,
+        &Instance::Default,
+        Some(&socket_dir(dir)),
+        None,
+    );
     let deadline = Instant::now() + READY;
     while Instant::now() < deadline {
         if let Some(status) = daemon.child.try_wait().expect("the child") {

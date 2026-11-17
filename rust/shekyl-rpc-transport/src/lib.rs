@@ -138,6 +138,45 @@ enum Authentication {
     },
 }
 
+/// A wallet's one daemon target (`RPC_CHANNEL.md` RT-15): "this computer",
+/// the owner's leg of the node this account runs, or a named address over
+/// HTTP until RT-W12. A client holds exactly one: it connects to it or says
+/// why it cannot, and never falls back to the other.
+#[derive(Clone, Debug)]
+pub enum DaemonTransport {
+    /// "This computer": the owner's socket or pipe ([`local::LocalRpc`]).
+    ThisComputer(local::LocalRpc),
+    /// A named address.
+    Address(HttpRpc),
+}
+
+impl From<HttpRpc> for DaemonTransport {
+    fn from(rpc: HttpRpc) -> Self {
+        Self::Address(rpc)
+    }
+}
+
+impl From<local::LocalRpc> for DaemonTransport {
+    fn from(rpc: local::LocalRpc) -> Self {
+        Self::ThisComputer(rpc)
+    }
+}
+
+impl Rpc for DaemonTransport {
+    fn post(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+    ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
+        async move {
+            match self {
+                Self::ThisComputer(rpc) => rpc.post(route, body).await,
+                Self::Address(rpc) => rpc.post(route, body).await,
+            }
+        }
+    }
+}
+
 /// An HTTP(S) transport for the RPC.
 ///
 /// Requires tokio.

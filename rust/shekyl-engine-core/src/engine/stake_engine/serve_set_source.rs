@@ -338,6 +338,15 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                          disagrees on its identity. No pin is released and holdings are \
                          retained. Connect to a daemon on this wallet's network and build"
                     ),
+                    TimelineBreak::PeerCheckFailed => tracing::error!(
+                        "serve-set refresh: something other than this account's node answers \
+                         at this computer's rendezvous, so the wallet did not connect. No pin is \
+                         released and holdings are retained"
+                    ),
+                    TimelineBreak::ServiceHere(view) => tracing::error!(
+                        "serve-set refresh: {}. No pin is released and holdings are retained",
+                        shekyl_rpc_client::service_refusal(view)
+                    ),
                     TimelineBreak::WitnessBlockReplaced => tracing::warn!(
                         "serve-set refresh: the block the sync witness stood on was replaced \
                          while the bond record was being read — a reorg crossed it, so nothing \

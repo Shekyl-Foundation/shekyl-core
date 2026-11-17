@@ -265,9 +265,10 @@ impl EnrolLeg {
         if let Some(leg) = service_console(options.network, request)? {
             return Ok(leg);
         }
-        LocalTarget::this_computer(options.network)
-            .map(Self::Owner)
-            .map_err(|fault| fault.to_string())
+        Ok(Self::Owner(LocalTarget::this_computer(
+            options.network,
+            shekyl_process::platform::service_rendezvous().as_deref(),
+        )))
     }
 
     fn call<M: RpcMethod>(&self, request: &M::Request) -> Result<M::Reply, String> {

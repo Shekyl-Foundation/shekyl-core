@@ -298,10 +298,12 @@ root per platform, checked and never created.
 - *Revocation:* revoke a fingerprint with the session index removed; the
   live-session test must fail.
 - *Peer check (step 5):* fold `LocalFault::PeerCheck` into a connection
-  error; the engine test with a wrong peer at the rendezvous must fail (it
-  expects the security failure and no second dial).
-- *Service detection (step 5):* drop the record read; the three tests (a
-  service with a view endpoint, one without, no record) must fail.
+  error; the client test with the wrong thing at the rendezvous must fail
+  (it expects the peer check as its own error, whose fault is not
+  retryable).
+- *Service detection (step 5):* drop the record read; the test of the
+  three cases (a service with a view endpoint, one without, no record)
+  must fail.
 
 **What stops the slice.** The parent design describes what is built. If
 building a step shows the design is wrong anywhere, the work stops and

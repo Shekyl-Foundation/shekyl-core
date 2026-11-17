@@ -73,6 +73,40 @@ pub enum RpcError {
     /// RPC versions, or a method the daemon was built without.
     #[error("the daemon has no method {0}")]
     NoSuchMethod(&'static str),
+    /// Something other than this account's node answers at "this
+    /// computer"'s rendezvous (`RPC_CHANNEL.md` RT-15): another account's
+    /// socket, a pipe that is not this user's, a file that is not a
+    /// rendezvous record. A security failure: never retried, never routed
+    /// around. The text is this side's description of what it found.
+    #[error(
+        "something other than your Shekyl node is answering at its local address; not \
+         connecting ({0})"
+    )]
+    PeerCheck(String),
+    /// "This computer"'s node runs as a service (RT-16), which a wallet
+    /// reaches only over the channel from RT-W12. Until then the wallet names
+    /// the service's view listener as its `daemon-address`: `Some` is that
+    /// listener, as the service's rendezvous record names it, `None` a
+    /// service with no view listener. Nothing was dialled.
+    #[error("{}", service_refusal(*.0))]
+    Service(Option<core::net::SocketAddr>),
+}
+
+/// What a wallet says when "this computer"'s node is a service (Rick,
+/// 2026-11-17): the one wording, which every layer that reports it uses.
+#[must_use]
+pub fn service_refusal(view: Option<core::net::SocketAddr>) -> String {
+    match view {
+        Some(view) => format!(
+            "The node on this computer runs as a service. Until wallets reach a service over \
+             the channel, set daemon-address = {view}"
+        ),
+        None => "The node on this computer runs as a service and serves no wallet leg: it has \
+                 no view listener. Until wallets reach a service over the channel, its \
+                 operator sets rpc-view-listen, and this wallet sets daemon-address to that \
+                 listener."
+            .to_string(),
+    }
 }
 
 /// A daemon's refusal: its class and its typed diagnostic (RW-Q3).
@@ -105,6 +139,13 @@ pub enum DaemonFault {
     /// The daemon refused the call as outside this connection's grant. The
     /// same call with the same key repeats the refusal.
     NotPermitted,
+    /// Something other than this account's node answers at "this
+    /// computer"'s rendezvous: a security failure (RT-15). Never retried.
+    PeerCheck,
+    /// "This computer"'s node is a service, which a wallet names by its view
+    /// listener until RT-W12 ([`RpcError::Service`]). Retrying cannot
+    /// succeed until the wallet's setting changes.
+    Service(Option<core::net::SocketAddr>),
 }
 
 impl core::fmt::Display for DaemonFault {
@@ -120,6 +161,10 @@ impl core::fmt::Display for DaemonFault {
             Self::NotPermitted => {
                 f.write_str("the daemon refused the call as outside this connection's grant")
             }
+            Self::PeerCheck => {
+                f.write_str("something other than this account's node answers at its rendezvous")
+            }
+            Self::Service(_) => f.write_str("this computer's node runs as a service"),
         }
     }
 }
@@ -129,7 +174,10 @@ impl DaemonFault {
     /// refusal is cached by the client and repeats on every request.
     #[must_use]
     pub const fn is_retryable(self) -> bool {
-        !matches!(self, Self::Identity(_) | Self::NotPermitted)
+        !matches!(
+            self,
+            Self::Identity(_) | Self::NotPermitted | Self::PeerCheck | Self::Service(_)
+        )
     }
 }
 
@@ -149,6 +197,8 @@ impl RpcError {
             Self::InvalidFee => DaemonFault::FeeResponse,
             Self::InternalError(_) | Self::InvalidPriority => DaemonFault::Internal,
             Self::NoSuchMethod(_) => DaemonFault::Protocol,
+            Self::PeerCheck(_) => DaemonFault::PeerCheck,
+            Self::Service(view) => DaemonFault::Service(*view),
             Self::Refused(refusal) => match refusal.class {
                 // Asking again later, or another daemon, may succeed.
                 ErrorClass::NotReady | ErrorClass::OverResourceBound => DaemonFault::Unreachable,
