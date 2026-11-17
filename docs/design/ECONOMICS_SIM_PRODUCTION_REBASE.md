@@ -4416,6 +4416,144 @@ readings; predicted in ECONOMICS_SIM_PRODUCTION_REBASE.md §5.34 and read
 in §5.34.1 (the variable arm at seeds 1, 2 and 3, the restated median,
 the break-even burn)"`. No other fixture moved.
 
+### 5.35 Standard traffic: every scenario on drawn honest counts, predicted before it is built (2026-11-17)
+
+Written against `dev` at `3cfe6921df`, before any code or run. It follows
+Rick's ruling of 2026-11-15: realistic traffic becomes the sim's standard
+scenario, in its own PR after §5.34's. It also follows his rulings of
+2026-11-16 on the draw, the slice's header and the capacity columns
+(§5.34.1). No design arm is promoted: J stays open, with every signal arm
+graded as before. The family is `STD-1`…`STD-9`. Nothing below is a
+result.
+
+**What is built.**
+
+- **The draw.** It replaces the geometric count of §5.34, with the
+  interval made explicit.
+  - Each block's interval `T` is drawn exponential with mean 120 s, keyed
+    on the seed and the chain height. It is a function of its own, so a
+    later column (the inclusion check's orphan risk) can read it.
+  - Each fee rung's arrivals over that `T` are Poisson, with mean λ·`T`.
+    λ is the rung's share of the schedule's demand, which is per 120 s.
+    Each rung's draw is keyed on the seed, the height and the rung, so a
+    stuffed fold, its counterfactual and every thread of a parallel map
+    see the same honest blocks.
+  - Knuth's sampler underflows near a mean of 745. A mean above one named
+    chunk under that limit is split into equal chunks, each drawn and the
+    draws summed. A sum of Poissons is Poisson, so the draw stays exact at
+    any demand the schedules reach (about 1 900 a block in the growth
+    scenario's year 20).
+  - The rungs' arrivals sum to the geometric count of §5.34: Poisson
+    arrivals over one exponential interval. So the restated median, 35 at
+    a mean of 50, stays as derived.
+  - `exp` and `ln` come from the `libm` crate (0.2.16, already in the
+    lockfile through `num-traits`). Its double-precision `exp` and `log`
+    are pure Rust with no hardware dispatch on x86_64 or aarch64, so a pin
+    made on one host holds on every host, as the integer draw's did.
+  - Steady traffic keeps the rung split of today, so the control arm is
+    the current arithmetic unchanged.
+  - `rng::honest_count` loses its last reader and is deleted.
+    `rng::geometric_median` stays, as the restated baseline's derivation.
+- **The default.** One named constant, the standard traffic, is
+  `Variable` at the canonical seed 1. Both of `SimParams`'s constructors
+  read it, so the CLI's runs, its printed baselines and the narration pins
+  all draw.
+- **The control.** `steady` stays as a named arm: the edge case and the
+  regression anchor.
+  - The committed per-PR narrations move to on-demand control pins under
+    `_steady` names, byte for byte (STD-2). The grid prints its own steady
+    rows, as before.
+  - Three things stay on `steady` by their purpose:
+    - the recorded baseline fixture
+      (`docs/test_vectors/economics/baseline_steady_state.json`), a
+      differential vector whose job in `shekyl-engine-core` is arithmetic
+      agreement;
+    - the unit tests that pin steady arithmetic, which name the control
+      arm rather than being re-pinned;
+    - the closed-form rows that never read a block.
+- **Seeds.** The declared set stays 1, 2 and 3 (`rng::HONEST_SEEDS`).
+  - The narration pins carry seed 1.
+  - The spread runs on demand. Each narration runs at all three seeds,
+    and each figure that differs prints as its median and [its range].
+  - The grid keeps its own family formatting.
+- **The four capacity columns** (Rick, 2026-11-16) are measured on every
+  run of the grid's honest rows:
+  - the cap in transactions, as its range over the run;
+  - the share of blocks whose arrivals alone overflow it;
+  - the share of blocks that leave a backlog;
+  - the median offered against the median carried.
+  The one-off probe of §5.34.1 measured these at N = 90 by hand.
+- **The predictability row** of the umbrella's §4 is restated (Rick,
+  2026-11-17): every scenario's emitted fraction by year stays inside the
+  rails' envelope, with total supply unchanged. The regenerated EI-2 lines
+  are what it reads.
+
+**Where the draw can and cannot act.** The inherited zone's blocks are
+full until capacity crosses the baseline's demand (EUP-4's EI-4: "carries
+50 from y20"). A full block lists the same count whatever arrived, so up
+to that crossing a drawn count changes which rung's bodies a block lists,
+not how many. The re-derived zone carries 50 from year 1. There the draw
+leaves the mean carried unchanged, because the pool carries any overflow
+into the next block, and adds a spread around it.
+
+**STD-1. The draw (blind, from the derivation).** Over 100 000 heights at
+a mean of 50, at each seed:
+- the rungs' summed count has median 34 or 35 and mean within 1 % of 50;
+- the interval's mean is within 1 % of 120 s.
+At a mean of 1 900, the chunked draw's mean is within 1 % of its target.
+
+**STD-2. The control (blind; it holds by construction or the flip is
+wrong).** Every narration run on `steady` reproduces its committed fixture
+byte for byte: both stage-2 narrations, ESR-10's and EUP-4's (both
+scopes), the grid's steady rows, and the recorded baseline fixture.
+
+**STD-3. The inherited zone up to the crossing (blind).** Within 0.5 % of
+`steady` in every year where blocks are full:
+- EI-1's miner income;
+- EI-2's emitted fractions, and its 50 % year (y13.83, the 0.8 rail's);
+- the stage-2 burden rows.
+The fee part of miner income may move more, up to 5 % of itself, because
+the rungs' shares of the listed bodies now vary block to block.
+
+**STD-4. The crossing (blind).**
+- EI-4's inherited "carries 50 from y20" reads y20 or y21. Blocks with room
+  only on average still overflow on high draws, so a year's mean carried
+  reaches 50 no earlier.
+- The growth gate's crossing year (y19 today) reads y19 to y21.
+
+**STD-5. The re-derived zone (blind).** Against `steady`, at seed 1:
+- the release multiplier's yearly mean within 0.01;
+- EI-1's miner income and the burn's yearly mean within 1 %;
+- EI-2's crossing years within 0.05 years.
+
+**STD-6. What moves visibly (blind).**
+- With room, a few percent to about a tenth of blocks leave a backlog,
+  where `steady` leaves none. The age at inclusion moves off zero.
+- EI-3's 95 % settle times move by up to 100 blocks at seed 1. The spread
+  across the seeds is about that size.
+- The window-edge stuffer's and every-miner's gains in the re-derived
+  zone stay within 10 % of `steady`'s.
+
+**STD-7. ESR-10 (blind).** m* stays in its registered band, 1.300 to 1.400,
+and the cell set does not change.
+
+**STD-8. The grid (blind).**
+- Its steady rows do not move.
+- Its variable rows move within §5.34.1's ranges across the seeds: the
+  distribution is the same, from a different stream.
+- At N = 90, year 1, the new columns read near the one-off probe at
+  `3066f51832`: a cap of 122 to 131, about 8 % of blocks overflowed by
+  their arrivals, about 10 % leaving a backlog, and a median offered of 35
+  against about 39 carried.
+
+**STD-9. The cost (blind).** The draw costs about one uniform draw per
+arrival and one `exp` per chunk and rung. That is small beside a block's
+fill and pricing.
+- The per-PR narrations job: from 885 s to under 1 100 s.
+- The grid's regeneration stays near 9 h.
+- If either passes its budget, the budget goes to Rick before anything is
+  trimmed.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
