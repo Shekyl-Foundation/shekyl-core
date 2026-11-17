@@ -58,6 +58,16 @@ shekyl-network = { path = "../shekyl-network" }
 # check (`SO_PEERCRED`, `getpeereid`): the leaf with no network stack that
 # the daemon's process crate reads the same root from.
 shekyl-os-account = { path = "../shekyl-os-account" }
+# The RPC channel's client (`channel`, RT-W11): the hybridXK handshake and
+# its retry policy, the record stream it carries, and the grant a session
+# asks for. The handshake brings ML-KEM into every client of this crate,
+# which RT-W12 moves onto the channel.
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-stream = { path = "../shekyl-rpc-stream" }
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
+# The handshake retry's jitter (`retry::HandshakeRetry` takes the source).
+rand_core = { version = "0.6", features = ["getrandom"] }
+tracing = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 # The logon session, and the pipe's open with its peer check

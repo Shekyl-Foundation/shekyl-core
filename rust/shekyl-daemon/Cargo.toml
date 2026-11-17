@@ -22,6 +22,9 @@ shekyl-options = { path = "../shekyl-options" }
 shekyl-logging = { path = "../shekyl-logging" }
 # The RPC owner, started on the node's handles.
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+# Where a service's rendezvous record is, as the start-up line names it:
+# the one function the daemon publishes through and a client reads through.
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 # The one Node (DRS-X N1): the store, ingest, the pool, chain sync and the
 # network built from the plan.
 shekyl-node = { path = "../shekyl-node" }
@@ -58,9 +61,9 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 tempfile = "3"
 # The owning connection's tests (tests/owning_connection.rs) call the
 # daemon as a GUI does: "this computer"'s client on the owner's leg, the
-# rendezvous naming it resolves with, and the methods' table.
+# rendezvous naming it resolves with (a normal dependency, above), and the
+# methods' table.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
-shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-network = { path = "../shekyl-network" }

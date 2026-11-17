@@ -496,6 +496,23 @@ fn read_log_words(r: &mut Reader<'_>) -> Option<(&'static str, Vec<(String, &'st
     Some((level?, categories))
 }
 
+/// The logging section of another binary's resolved table whose logging
+/// rows are the daemon's (`log-level`, `log-category`, `log-size-max`, of
+/// the kinds [`crate::table::LEVEL`], [`crate::table::LOG_CATEGORY`] and
+/// [`crate::table::BYTES`]), its log at `file`: one mapping to the logging
+/// owner for every binary that has these rows (`shekyl-rpc-tunnel`).
+///
+/// # Errors
+/// A logging row absent where the table fills it, or a word outside it.
+pub fn logging(resolved: &Resolved, file: PathBuf) -> Result<Logging, Vec<Diagnostic>> {
+    let mut r = Reader::new(resolved);
+    let logging = logging_section(&mut r, file);
+    if !r.faults.is_empty() {
+        return Err(r.faults);
+    }
+    Ok(logging.expect("the logging rows were read or a fault was recorded"))
+}
+
 /// Installs the logging rows on the live filter.
 ///
 /// The directive is [`shekyl_logging::subsystem::directive_from_words`], the

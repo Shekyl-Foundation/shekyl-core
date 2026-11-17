@@ -16,15 +16,19 @@ fuzz_target!(|data: &[u8]| {
 
     let _ = ShekylAddress::decode(input);
 
-    // Also test with segment separators injected at various positions
+    // Also test with segment separators injected at various positions.
+    // The cuts are at the thirds of the byte length, moved back to the
+    // nearest character boundary: input that is valid UTF-8 but not ASCII
+    // still reaches the decoder, split.
     if data.len() > 4 {
         let mut with_slashes = String::with_capacity(input.len() + 4);
-        let third = input.len() / 3;
-        with_slashes.push_str(&input[..third]);
+        let first = char_boundary_at_or_before(input, input.len() / 3);
+        let second = char_boundary_at_or_before(input, input.len() / 3 * 2);
+        with_slashes.push_str(&input[..first]);
         with_slashes.push('/');
-        with_slashes.push_str(&input[third..third * 2]);
+        with_slashes.push_str(&input[first..second]);
         with_slashes.push('/');
-        with_slashes.push_str(&input[third * 2..]);
+        with_slashes.push_str(&input[second..]);
         let _ = ShekylAddress::decode(&with_slashes);
     }
 
@@ -43,3 +47,12 @@ fuzz_target!(|data: &[u8]| {
         }
     }
 });
+
+/// The largest character boundary of `s` at or before byte `i`.
+/// Offset 0 is always a boundary, so the walk stops there.
+fn char_boundary_at_or_before(s: &str, mut i: usize) -> usize {
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}

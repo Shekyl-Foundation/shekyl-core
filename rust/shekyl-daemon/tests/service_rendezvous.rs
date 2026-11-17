@@ -21,17 +21,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper_util::rt::TokioIo;
 use shekyl_daemon_config::{Network, Platform};
-use shekyl_rpc_channel::handshake::{
-    Client, StaticKeypair, StaticPublic, MESSAGE2_LEN, MESSAGE4_LEN,
-};
+use shekyl_rpc_channel::handshake::{StaticKeypair, StaticPublic};
 use shekyl_rpc_grants::GrantSet;
 use shekyl_rpc_rendezvous::ServiceRecord;
-use shekyl_rpc_stream::RecordStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use shekyl_rpc_transport::channel::{ChannelDaemon, ChannelTarget, Leg};
 
 const CHILD_DIR: &str = "SHEKYL_TEST_SERVICE_CHILD_DIR";
 const CHILD_LISTEN: &str = "SHEKYL_TEST_SERVICE_CHILD_LISTEN";
@@ -228,57 +222,36 @@ impl Service {
     }
 }
 
-/// One call over the channel, as the console key: the reply's body.
-async fn call_over_the_channel(
-    addr: std::net::SocketAddr,
+/// One call over the channel on `leg`, as the console key read from
+/// `console_file`, through RT-W11's production initiator: the reply's
+/// envelope.
+fn call_over_the_channel(
+    leg: Leg,
     daemon: &StaticPublic,
-    console: &StaticKeypair,
+    console_file: &Path,
     method: &str,
 ) -> serde_json::Value {
-    let network_id = Network::Regtest.network_id();
-    let mut tcp = tokio::net::TcpStream::connect(addr).await.expect("connect");
-    let (c, message1) = Client::start(&network_id, console, daemon).expect("message 1");
-    tcp.write_all(&message1).await.expect("message 1");
-    let mut message2 = vec![0u8; MESSAGE2_LEN];
-    tcp.read_exact(&mut message2).await.expect("message 2");
-    let c = c.read_message2(&message2).expect("the bundle's daemon");
-    let (c, message3) = c
-        .write_message3(&GrantSet::ALL.to_payload())
-        .expect("message 3");
-    tcp.write_all(&message3).await.expect("message 3");
-    let mut message4 = vec![0u8; MESSAGE4_LEN];
-    tcp.read_exact(&mut message4)
-        .await
-        .expect("admitted: message 4");
-    let (established, _ceiling) = c.read_message4(&message4).expect("message 4");
-    let (send, recv) = established.into_directions();
-    let (mut sender, connection) =
-        hyper::client::conn::http1::handshake(TokioIo::new(RecordStream::new(tcp, send, recv)))
-            .await
-            .expect("http");
-    tokio::spawn(connection);
+    let console =
+        StaticKeypair::from_key_file(&std::fs::read(console_file).expect("the console key"))
+            .expect("a key");
+    let target = ChannelTarget::new(Network::Regtest.network_id(), daemon.clone(), console, leg);
+    let channel = ChannelDaemon::connect(&target, GrantSet::ALL).expect("admitted");
     let body = serde_json::to_vec(
         &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}}),
     )
     .unwrap();
-    let response = sender
-        .send_request(
-            hyper::Request::post("/json_rpc")
-                .header("content-type", "application/json")
-                .body(Full::new(Bytes::from(body)))
-                .unwrap(),
-        )
-        .await
-        .expect("a reply");
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&body).expect("JSON")
+    let reply = channel.post("json_rpc", body).expect("a reply");
+    serde_json::from_slice(&reply).expect("JSON")
 }
 
 /// **A service that listens publishes its record, a client reaches it as
 /// the record says, and a clean stop removes it.** The record names the
 /// loopback channel address and the bundle; the console key, read from the
-/// data directory, is admitted over that address. Red edit: skip the
-/// publication in `run::start`, and no record appears.
+/// data directory, is admitted over that address, and over the console's
+/// leg (RT-O37), the socket in the data directory, through RT-W11's
+/// production initiator. Red edits: skip the publication in `run::start`,
+/// and no record appears; bind no console leg in `run::start`, and its
+/// socket is absent.
 #[test]
 fn a_listening_service_publishes_its_rendezvous_and_a_client_reaches_it() {
     const NAME: &str = "a_listening_service_publishes_its_rendezvous_and_a_client_reaches_it";
@@ -308,15 +281,28 @@ fn a_listening_service_publishes_its_rendezvous_and_a_client_reaches_it() {
         .join("shekyl")
         .join("regtest")
         .join("rpc-console.key");
-    let console =
-        StaticKeypair::from_key_file(&std::fs::read(&console_file).expect("the console key"))
-            .expect("a key");
+    let reply = call_over_the_channel(Leg::ip(addr, None), &daemon, &console_file, "version");
+    assert!(
+        reply["result"].is_object(),
+        "{reply}\n{}",
+        service.evidence()
+    );
 
-    let reply = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(call_over_the_channel(addr, &daemon, &console, "version"));
+    // The console's leg (RT-O37): the socket in the data directory, the
+    // service account's alone, serves the console key.
+    let console_leg = console_file.with_file_name("rpc-console.sock");
+    let mode = std::os::unix::fs::PermissionsExt::mode(
+        &std::fs::metadata(&console_leg)
+            .expect("the console's leg is bound")
+            .permissions(),
+    ) & 0o777;
+    assert_eq!(mode, 0o600);
+    let reply = call_over_the_channel(
+        Leg::Socket(console_leg.clone()),
+        &daemon,
+        &console_file,
+        "version",
+    );
     assert!(
         reply["result"].is_object(),
         "{reply}\n{}",
@@ -326,6 +312,10 @@ fn a_listening_service_publishes_its_rendezvous_and_a_client_reaches_it() {
     let status = service.stop();
     assert!(status.success(), "{status}\n{}", service.evidence());
     assert!(!record.exists(), "a clean stop removes the record");
+    assert!(
+        !console_leg.exists(),
+        "a clean stop removes the console's leg"
+    );
 }
 
 /// **A service that does not listen publishes nothing and says so** (Rick,

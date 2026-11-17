@@ -13,6 +13,7 @@ pub mod commands;
 pub(crate) mod console;
 pub mod daemon;
 pub mod display;
+pub mod enroll;
 pub mod grammar;
 pub mod outcome;
 pub mod resolve;

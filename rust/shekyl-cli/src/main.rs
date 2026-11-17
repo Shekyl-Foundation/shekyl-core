@@ -110,6 +110,21 @@ pub struct ReplArgs {
     #[arg(long, global = true)]
     proxy: Option<String>,
 
+    /// The node's public bundle, as `rpc bundle show` prints it on that
+    /// node. Set, the enrollment words reach the node at --daemon-address
+    /// over the channel, as this client's key (--rpc-key-file). The address
+    /// is required then: it is the channel listener, and the usual daemon
+    /// port is the plaintext listener. Unset, the enrollment words reach
+    /// this computer's node (`INPUT_GRAMMAR.md` IG-Q108).
+    #[arg(long, global = true, value_name = "PATH")]
+    daemon_bundle_file: Option<std::path::PathBuf>,
+
+    /// This client's channel key, readable by this account alone (made with
+    /// `rpc key create`). Default: the account root and
+    /// `rpc-shekyl-cli-<network>.key` (IG-Q108, IG-Q109).
+    #[arg(long, global = true, value_name = "PATH")]
+    rpc_key_file: Option<std::path::PathBuf>,
+
     /// Show structured RPC error details (error.data) on failures.
     #[arg(long, global = true, default_value_t = false)]
     pub debug: bool,
@@ -170,6 +185,23 @@ impl ReplArgs {
                 parse_network(self.network_name())?.ports().rpc
             )),
         }
+    }
+
+    /// The node on another host the enrollment words reach, when
+    /// `--daemon-bundle-file` is set (IG-Q108). These are flags the person
+    /// typed, so a bad combination fails here, before a session or a wallet
+    /// opens; the key's default path is left to the words that read it.
+    fn enroll_remote(&self) -> Result<Option<shekyl_cli::enroll::Remote>, String> {
+        let Some(bundle_file) = &self.daemon_bundle_file else {
+            return Ok(None);
+        };
+        let Some(address) = &self.daemon_address else {
+            return Err(shekyl_cli::enroll::CHANNEL_ADDRESS_REQUIRED.to_owned());
+        };
+        Ok(Some(shekyl_cli::enroll::Remote {
+            leg: shekyl_cli::enroll::channel_leg(address, self.proxy.as_deref())?,
+            bundle_file: bundle_file.clone(),
+        }))
     }
 
     /// The wallet-file directory: `--wallet-dir` as given, else the
@@ -545,6 +577,7 @@ fn run_repl_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
+    let enroll_remote = cli.enroll_remote()?;
     let endpoints = Endpoints::resolve(cli, true)?;
     let rpc = build_session(cli, &endpoints)?;
     disclose_network_posture(cli, &endpoints);
@@ -644,7 +677,19 @@ fn run_repl_command(
         }
     }
 
-    commands::run(rpc, daemon_client.as_ref(), network, *presentation, source)
+    let enroll = shekyl_cli::enroll::EnrollOptions {
+        network,
+        remote: enroll_remote,
+        key_file: cli.rpc_key_file.clone(),
+    };
+    commands::run(
+        rpc,
+        daemon_client.as_ref(),
+        &enroll,
+        network,
+        *presentation,
+        source,
+    )
 }
 
 #[cfg(test)]
@@ -728,6 +773,40 @@ mod tests {
         ]);
         let repl = Endpoints::resolve(&named, true).expect("the daemon is named");
         assert_eq!(repl.daemon().expect("a daemon").address, "127.0.0.1:11029");
+    }
+
+    /// The enrollment flags are checked before a session opens, and the
+    /// check reads only what was typed: no bundle file, no remote; a bundle
+    /// file without the channel's address is refused; with one, the remote
+    /// is the bundle and that address. The key's path is not resolved here
+    /// (`EnrollOptions::key_file` is the flag as given), so a session whose
+    /// account has no home is not refused for a key it never reads. The
+    /// edit that turns this red is dropping the address check: the bundle
+    /// alone would then reach the plaintext port's default.
+    #[test]
+    fn the_enrollment_flags_are_checked_as_typed() {
+        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
+        assert!(args(&["shekyl-cli"])
+            .enroll_remote()
+            .expect("no bundle")
+            .is_none());
+        assert_eq!(
+            args(&["shekyl-cli", "--daemon-bundle-file", "node.bundle"])
+                .enroll_remote()
+                .expect_err("a bundle without the channel's address"),
+            shekyl_cli::enroll::CHANNEL_ADDRESS_REQUIRED
+        );
+        let remote = args(&[
+            "shekyl-cli",
+            "--daemon-bundle-file",
+            "node.bundle",
+            "--daemon-address",
+            "192.0.2.7:11031",
+        ])
+        .enroll_remote()
+        .expect("a bundle and the channel's address")
+        .expect("a remote");
+        assert_eq!(remote.bundle_file, std::path::PathBuf::from("node.bundle"));
     }
 
     /// `--testnet` / `--stagenet` are shorthand for `--network testnet` /

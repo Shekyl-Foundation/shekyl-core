@@ -1948,6 +1948,7 @@ dependencies = [
  "shekyl-logging",
  "shekyl-network",
  "shekyl-options",
+ "shekyl-os-account",
  "shekyl-rpc-rendezvous",
  "shekyl-win-sec",
  "toml",
@@ -1964,7 +1965,6 @@ dependencies = [
  "hyper-util",
  "rand_core",
  "redb",
- "rustix",
  "serde",
  "serde_json",
  "shekyl-archival-retention",
@@ -1983,6 +1983,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-noise",
  "shekyl-options",
+ "shekyl-os-account",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
  "shekyl-rpc-channel",
@@ -2001,7 +2002,6 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
- "zeroize",
 ]
 
 [[package]]
@@ -2197,6 +2197,7 @@ version = "3.1.0"
 dependencies = [
  "libc",
  "shekyl-win-sec",
+ "zeroize",
 ]
 
 [[package]]
@@ -2310,17 +2311,22 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "rand_core",
  "serde",
  "serde_json",
  "shekyl-network",
  "shekyl-os-account",
+ "shekyl-rpc-channel",
  "shekyl-rpc-client",
+ "shekyl-rpc-grants",
  "shekyl-rpc-rendezvous",
+ "shekyl-rpc-stream",
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",
  "tokio",
  "tower-service",
+ "tracing",
  "zeroize",
 ]
 

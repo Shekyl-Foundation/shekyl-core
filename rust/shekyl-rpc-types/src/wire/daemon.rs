@@ -63,7 +63,7 @@ crate::wire_keywords! {
         Bans = "bans",
         Node = "node",
         Config = "config",
-        Enrol = "enrol",
+        Enroll = "enroll",
     }
 }
 
@@ -81,7 +81,7 @@ impl From<Grant> for GrantName {
             Grant::Bans => Self::Bans,
             Grant::Node => Self::Node,
             Grant::Config => Self::Config,
-            Grant::Enrol => Self::Enrol,
+            Grant::Enroll => Self::Enroll,
         }
     }
 }

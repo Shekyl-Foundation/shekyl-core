@@ -123,8 +123,15 @@ mod windows {
         record: Vec<u8>,
     }
 
-    /// The owner's pipe as the server accepts on it.
+    /// The owner's pipe as the server accepts on it; a service's console
+    /// pipe is accepted the same way ([`crate::channel::console_leg`]).
     pub struct OwnerListener(OwnerOnlyPipeListener);
+
+    impl From<OwnerOnlyPipeListener> for OwnerListener {
+        fn from(listener: OwnerOnlyPipeListener) -> Self {
+            Self(listener)
+        }
+    }
 
     fn running(plan: &OwnerSocketPlan, network: &str) -> Diagnostic {
         Diagnostic::new(Code::SocketRunning, Source::Machine)

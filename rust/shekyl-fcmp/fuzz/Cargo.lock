@@ -1203,7 +1203,10 @@ dependencies = [
 name = "shekyl-fcmp-fuzz"
 version = "0.0.0"
 dependencies = [
+ "curve25519-dalek",
  "libfuzzer-sys",
+ "rand_chacha",
+ "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp",
  "shekyl-types",

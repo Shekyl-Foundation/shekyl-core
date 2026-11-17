@@ -132,10 +132,11 @@ fn config_file(
 /// `opened` is `None` when no file was read, which is production's own
 /// value on a host whose default file is absent. A test that is not about
 /// reading a file calls this with `None`: it then takes every step `load`
-/// takes, and reads nothing from the host it runs on. The steps
-/// themselves (`choosers`, `resolve`, `sections::build`) are not callable
-/// from outside this crate, so there is no second composition of them to
-/// fall behind this one.
+/// takes, and reads nothing from the host it runs on. `choosers` and
+/// [`crate::sections::build`](crate::sections) stay in this crate, so a
+/// daemon configuration is not built by a second composition. Precedence
+/// ([`crate::resolve::resolve`]) is public for a binary that resolves its
+/// own table.
 ///
 /// # Errors
 ///

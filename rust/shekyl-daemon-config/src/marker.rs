@@ -174,29 +174,7 @@ fn write(
         f.sync_all()?;
     }
     std::fs::rename(&staged, path)?;
-    sync_dir(data_dir)
-}
-
-/// Make `dir`'s entries durable: a file created or renamed in it survives a
-/// power loss once this returns. Unix syncs the directory itself.
-///
-/// # Errors
-///
-/// The directory could not be opened or synced.
-#[cfg(unix)]
-pub fn sync_dir(dir: &Path) -> std::io::Result<()> {
-    File::open(dir)?.sync_all()
-}
-
-/// Make `dir`'s entries durable. Windows has no directory handle to sync;
-/// the rename is durable on its own once the file was.
-///
-/// # Errors
-///
-/// None on Windows; the Unix arm's signature.
-#[cfg(windows)]
-pub fn sync_dir(_dir: &Path) -> std::io::Result<()> {
-    Ok(())
+    shekyl_os_account::private_file::sync_dir(data_dir)
 }
 
 #[cfg(test)]

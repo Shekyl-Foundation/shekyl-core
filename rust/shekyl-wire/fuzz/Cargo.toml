@@ -3,14 +3,14 @@
 # All rights reserved.
 # BSD-3-Clause
 
-# Local-only cargo-fuzz harnesses for the wire parsers that read untrusted
+# cargo-fuzz harnesses for the wire parsers that read untrusted
 # bytes: the `tx_extra` codec (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q5b), the
 # block parser and the transaction parser. Isolated from the parent
 # workspace via its own [workspace] table and lockfile (same shape as
 # shekyl-fcmp/fuzz), so the workspace's own checks never resolve
-# libfuzzer-sys. The Rust CI job type-checks the harnesses on the pinned
-# stable toolchain (`cargo check --manifest-path`), the API-drift gate;
-# running them needs nightly:
+# libfuzzer-sys. `ci/fuzz-harness` type-checks the harnesses on the pinned
+# stable toolchain (`cargo check --locked --manifest-path`), the API-drift
+# gate; the nightly workflow's `fuzz` job runs them, which needs nightly:
 #   cargo +nightly fuzz run <target> corpus/<target> seeds/<target>
 # `seeds/<target>/` is committed: the tx_extra seeds are the inherited
 # fuzzer's tx-extra corpus; the block seeds are the regtest coinbase blocks

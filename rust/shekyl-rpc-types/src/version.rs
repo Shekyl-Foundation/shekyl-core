@@ -78,11 +78,26 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// alternative block, or a height below the draw rows' floor. A 4.4 reader
 /// refuses a 4.5 block after the version read reports the daemon newer.
 ///
-/// 4.6: enrolment over the channel (RT-W10 step 4; `INPUT_GRAMMAR.md`
+/// 4.6: enrollment over the channel (RT-W10 step 4; `INPUT_GRAMMAR.md`
 /// IG-Q87). Five methods under `enrol`: `rpc_client_add`, `rpc_client_set`,
 /// `rpc_client_remove`, `rpc_client_list` and `rpc_bundle_show`. A ceiling
 /// is named by grant and preset keywords and listed as its expanded grants.
-pub const CORE_RPC_VERSION_MINOR: u32 = 6;
+///
+/// 4.7: a channel session past its key's cap (`SESSIONS_PER_CLIENT`,
+/// `RPC_CHANNEL.md` RT-O37) is answered with `OverResourceBound`,
+/// diagnostic `bound.sessions`, and closed. A 4.6 client meets a code it
+/// does not know only after the version read reports the daemon newer.
+/// And `daemon_status`'s `tor_quiet` (PR #1404; `INPUT_GRAMMAR.md` IG-Q99,
+/// amended) loses `{"empty": null}` and `{"failing": {"age": s}}`: it is
+/// `null`, or `{"unreached": {"age": s}}` when peers are known, the Tor
+/// Manager's onion-path reading has been impaired for `s` seconds of awake
+/// time, and a Tor dial launched since failed. A 4.6 reader decodes
+/// `unreached` as a key it does not know. And the grant keyword `enrol`,
+/// named since alpha.11, is `enroll`: in a ceiling, in `daemon_status`'s
+/// `grant`, and under the five methods 4.6 added. Grant keywords are a
+/// closed set, so a 4.7 daemon refuses a ceiling or a configuration that
+/// names `enrol`, and a 4.6 reader refuses a reply that lists `enroll`.
+pub const CORE_RPC_VERSION_MINOR: u32 = 7;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -96,15 +111,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 6)` is `(4 << 16) | 6` = 262150. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 7)` is `(4 << 16) | 7` = 262151. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_150);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 6);
+        assert_eq!(CORE_RPC_VERSION, 262_151);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 7);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 6);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.6");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 7);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.7");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

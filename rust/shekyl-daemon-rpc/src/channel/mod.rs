@@ -10,9 +10,9 @@
 //!   bundle, in the network's data directory, generated on the first start
 //!   and readable by the daemon's account alone (RT-O34).
 //! - **The enrolled set** ([`store`]): each client's fingerprint and its
-//!   ceiling as expanded grants, changed only through the enrolment
+//!   ceiling as expanded grants, changed only through the enrollment
 //!   methods (IG-Q87). A service also holds a console key, the host
-//!   administrator's credential, which is not an enrolment (§5).
+//!   administrator's credential, which is not an enrollment (§5).
 //! - **Live sessions** ([`sessions`]), indexed by fingerprint, so a removal
 //!   or a lowered ceiling closes them at once.
 //! - **The listener** ([`listener`]): the handshake under its deadlines and
@@ -21,12 +21,12 @@
 //!   request stamped with the connection's effective grant (RT-O32).
 
 mod console;
+pub mod console_leg;
 pub mod files;
 pub mod listener;
 mod message;
 pub mod rendezvous;
 pub mod sessions;
-mod stage;
 pub mod store;
 
 #[cfg(test)]
@@ -47,20 +47,20 @@ use shekyl_rpc_types::wire::rpc::{self as wire_rpc, CeilingWord};
 
 use crate::authority::Authority;
 use sessions::Sessions;
-use store::{Enroller, Enrolment, Store, StoreError};
+use store::{Enroller, Enrollment, Store, StoreError};
 
-/// The enrolment methods' diagnostic codes.
+/// The enrollment methods' diagnostic codes.
 pub mod codes {
     /// `rpc_client_add` on a fingerprint already enrolled; `set` changes it.
     pub const ENROLLED: &str = "rpc.client.enrolled";
     /// `rpc_client_set` or `rpc_client_remove` on a fingerprint not
-    /// enrolled; `add` enrols it.
+    /// enrolled; `add` enrolls it.
     pub const NOT_ENROLLED: &str = "rpc.client.not-enrolled";
     /// A ceiling, given or held, beyond the caller's own grant (RT-O9.1).
     pub const BEYOND_CALLER: &str = "rpc.client.beyond-caller";
-    /// The console key, which is not an enrolment (§5).
+    /// The console key, which is not an enrollment (§5).
     pub const CONSOLE: &str = "rpc.client.console";
-    /// Enrolment on a plaintext listener. It is served on the owner's
+    /// Enrollment on a plaintext listener. It is served on the owner's
     /// socket and over the channel (§5).
     pub const PLAINTEXT: &str = "rpc.client.plaintext";
     /// The enrolled set could not be read or written.
@@ -107,13 +107,13 @@ pub struct ChannelCall {
 
 /// Who is enrolling. A channel caller is that caller. The owner's socket
 /// is the host. A plaintext listener is refused: it is reachable by any
-/// local account until RT-W12, and an enrolment made there would outlive
+/// local account until RT-W12, and an enrollment made there would outlive
 /// it (§5, RT-O33).
 ///
 /// # Errors
 ///
 /// [`codes::PLAINTEXT`] when the caller is a plaintext listener.
-pub fn enrolment_caller(call: Option<&ChannelCall>, owner: bool) -> Result<Enroller, RpcError> {
+pub fn enrollment_caller(call: Option<&ChannelCall>, owner: bool) -> Result<Enroller, RpcError> {
     if let Some(call) = call {
         return Ok(call.enroller());
     }
@@ -124,13 +124,13 @@ pub fn enrolment_caller(call: Option<&ChannelCall>, owner: bool) -> Result<Enrol
         ErrorClass::RefusedByMethod,
         Diagnostic::new(
             codes::PLAINTEXT,
-            "enrolment is served on the owner's socket and over the channel".to_owned(),
+            "enrollment is served on the owner's socket and over the channel".to_owned(),
         ),
     ))
 }
 
 impl ChannelCall {
-    /// Who enrols, as the enrolled set records it.
+    /// Who enrolls, as the enrolled set records it.
     #[must_use]
     pub fn enroller(&self) -> Enroller {
         if self.console {
@@ -170,6 +170,9 @@ pub struct Channel {
     pub(crate) budget: HandshakeBudget,
     /// Where a service publishes its rendezvous record, when it listens.
     pub(crate) service_rendezvous: Option<PathBuf>,
+    /// A service's data directory, where its console leg is bound
+    /// ([`console_leg`]); `None` for a daemon run as its user.
+    pub(crate) console_dir: Option<PathBuf>,
 }
 
 impl Channel {
@@ -198,8 +201,12 @@ impl Channel {
                 key
             }
         };
-        files::replace_private(&dir.join(files::BUNDLE_FILE), &bundle(&key))
-            .map_err(|e| e.to_string())?;
+        shekyl_os_account::private_file::replace_console(
+            &dir.join(files::BUNDLE_FILE),
+            &bundle(&key),
+        )
+        .map_err(files::FileRefused::from)
+        .map_err(|e| e.to_string())?;
         let store = Store::open(dir).map_err(|e| e.to_string())?;
         // The console key's file and its cell are one change. A start
         // finishes a commit the last process did not rename, and only then
@@ -238,10 +245,10 @@ impl Channel {
             store,
             sessions: Arc::new(Sessions::default()),
             budget: HandshakeBudget::new(Instant::now()),
-            service_rendezvous: setup
-                .service_rendezvous
-                .as_deref()
-                .map(|dir| rendezvous::record_path(dir, &setup.network_id, &setup.instance)),
+            service_rendezvous: setup.service_rendezvous.as_deref().map(|dir| {
+                shekyl_rpc_rendezvous::service_record_path(dir, &setup.network_id, &setup.instance)
+            }),
+            console_dir: setup.service.then(|| setup.data_dir.clone()),
         }))
     }
 
@@ -257,7 +264,7 @@ impl Channel {
         Ok(self
             .store
             .get(fingerprint)?
-            .map(|enrolment| Admitted::Client(enrolment.ceiling)))
+            .map(|enrollment| Admitted::Client(enrollment.ceiling)))
     }
 
     /// `rpc_bundle_show`.
@@ -268,7 +275,7 @@ impl Channel {
         }
     }
 
-    /// `rpc_client_list`: the enrolments whose ceiling lies within the
+    /// `rpc_client_list`: the enrollments whose ceiling lies within the
     /// caller's grant; the others are absent (IG-Q87).
     ///
     /// # Errors
@@ -280,15 +287,15 @@ impl Channel {
             .list()
             .map_err(store_fault)?
             .into_iter()
-            .filter(|(_, enrolment)| enrolment.ceiling.within(caller.grants()))
-            .map(|(fingerprint, enrolment)| wire_rpc::Client {
+            .filter(|(_, enrollment)| enrollment.ceiling.within(caller.grants()))
+            .map(|(fingerprint, enrollment)| wire_rpc::Client {
                 fingerprint: HashHex::from_bytes(fingerprint),
-                ceiling: wire_rpc::grant_names(enrolment.ceiling),
+                ceiling: wire_rpc::grant_names(enrollment.ceiling),
             })
             .collect())
     }
 
-    /// `rpc_client_add`: enrol a fingerprint not enrolled, under a ceiling
+    /// `rpc_client_add`: enroll a fingerprint not enrolled, under a ceiling
     /// within the caller's grant (RT-O9.1).
     ///
     /// # Errors
@@ -315,7 +322,7 @@ impl Channel {
             self.store
                 .put(
                     &fingerprint,
-                    Enrolment {
+                    Enrollment {
                         ceiling,
                         enrolled_at: now(),
                         by,
@@ -347,7 +354,7 @@ impl Channel {
             };
             within_caller(caller, held.ceiling)?;
             self.store
-                .put(&fingerprint, Enrolment { ceiling, ..held })
+                .put(&fingerprint, Enrollment { ceiling, ..held })
                 .map_err(store_fault)?;
             if !held.ceiling.within(ceiling) {
                 changing.close(&fingerprint);
@@ -356,7 +363,7 @@ impl Channel {
         })
     }
 
-    /// `rpc_client_remove`: revoke an enrolment within the caller's grant,
+    /// `rpc_client_remove`: revoke an enrollment within the caller's grant,
     /// and close every session the fingerprint holds (§5).
     ///
     /// # Errors
@@ -380,7 +387,7 @@ impl Channel {
         if self.store.console().map_err(store_fault)?.as_ref() == Some(fingerprint) {
             return Err(refused(
                 codes::CONSOLE,
-                "this is the console key, which is not an enrolment; `shekyld --rpc-console-key-reset` replaces it",
+                "this is the console key, which is not an enrollment; `shekyld --rpc-console-key-reset` replaces it",
                 fingerprint,
             ));
         }
@@ -405,7 +412,7 @@ pub fn unpadded_submission() -> RpcError {
 /// Replace a service's console key. The new private half, the fingerprint
 /// and the reset note are one change ([`console::install`]): a crash leaves
 /// a journal the next start finishes, or the previous key. The caller holds
-/// the data directory's lock (IG-Q88, §5); no other enrolment is touched.
+/// the data directory's lock (IG-Q88, §5); no other enrollment is touched.
 /// Returns where the private half was written.
 ///
 /// # Errors
@@ -455,7 +462,7 @@ fn refused(code: &'static str, message: &str, fingerprint: &[u8; 32]) -> RpcErro
 fn not_enrolled(fingerprint: &[u8; 32]) -> RpcError {
     refused(
         codes::NOT_ENROLLED,
-        "this client is not enrolled; `rpc client add` enrols it",
+        "this client is not enrolled; `rpc client add` enrolls it",
         fingerprint,
     )
 }

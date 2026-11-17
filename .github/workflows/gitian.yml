@@ -215,6 +215,19 @@ jobs:
             mkdir -p "$root/lib/systemd/system"
             cp contrib/packaging/linux/shekyl.slice "$root/lib/systemd/system/"
           }
+          # The RPC tunnel (RPC_CHANNEL.md §8; Rick, 2026-11-16): its binary
+          # beside shekyl-cli, and its unit installed but not enabled. fpm's
+          # systemd hook enables and starts what --deb-systemd names; the
+          # tunnel needs a configuration and a key before its first start,
+          # so its unit is a plain file the operator enables.
+          #
+          # stage_tunnel <bin-dir> <stage-root>
+          stage_tunnel() {
+            local bin="$1" root="$2"
+            cp "$bin"/shekyl-rpc-tunnel "$root/usr/local/bin/"
+            mkdir -p "$root/lib/systemd/system"
+            cp contrib/packaging/linux/shekyl-rpc-tunnel.service "$root/lib/systemd/system/"
+          }
           # And again on what the package tool actually produced, unpacked:
           # a packager that strips or rewrites a binary ships a tor the
           # daemon refuses at first launch.
@@ -259,6 +272,7 @@ jobs:
           # --- Linux x86_64: .deb and .rpm ---
           LINUX_X86=$(find gitian-out -name "shekyl-x86_64-linux-gnu-*.tar.bz2" | head -1)
           if [ -n "$LINUX_X86" ]; then
+            # The tunnel is a guaranteed product beside them (stage_tunnel).
             # The three wallet binaries are guaranteed products since the
             # C1/C2 install cutover (shekyld from C++, shekyl-cli and
             # shekyl-wallet-rpc from cmake/BuildRust.cmake, staged into
@@ -275,6 +289,7 @@ jobs:
             cp "$BIN_X86"/shekyld "$STAGE/usr/local/bin/"
             cp "$BIN_X86"/shekyl-cli "$STAGE/usr/local/bin/"
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
+            stage_tunnel "$BIN_X86" "$STAGE"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE"
             stage_slice "$STAGE"
             fpm -s dir -t deb \
@@ -297,6 +312,7 @@ jobs:
             cp "$BIN_X86"/shekyld "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_X86"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
+            stage_tunnel "$BIN_X86" "$STAGE_RPM"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE_RPM"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
@@ -325,6 +341,7 @@ jobs:
             cp "$BIN_ARM"/shekyld "$STAGE/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-cli "$STAGE/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
+            stage_tunnel "$BIN_ARM" "$STAGE"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE"
             stage_slice "$STAGE"
             fpm -s dir -t deb \
@@ -347,6 +364,7 @@ jobs:
             cp "$BIN_ARM"/shekyld "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
+            stage_tunnel "$BIN_ARM" "$STAGE_RPM"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE_RPM"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \

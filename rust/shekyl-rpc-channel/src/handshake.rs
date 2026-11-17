@@ -36,7 +36,7 @@
 //!
 //! Message 3 proves the client's X25519 key and not its ML-KEM key. Between
 //! message 3 and message 4, [`DaemonReadyForMessage4::fingerprint`] is the
-//! enrolment lookup and a claim. A copy of that fingerprint kept afterwards
+//! enrollment lookup and a claim. A copy of that fingerprint kept afterwards
 //! is still only a claim. After message 4 the daemon holds a
 //! [`PendingSession`]. The directions, the authenticated client and what it
 //! asked for come out together, through [`PendingSession::open_first_message`]
@@ -543,7 +543,7 @@ pub struct DaemonAwaitingMessage3 {
 /// The daemon after message 3, before message 4.
 ///
 /// [`Self::fingerprint`] is who message 3 claims the client is, for the
-/// enrolment lookup that decides whether to write message 4. It is a claim:
+/// enrollment lookup that decides whether to write message 4. It is a claim:
 /// the client's X25519 key is proven and its ML-KEM key is not. Someone who
 /// can break X25519 can produce a message 3 that claims any enrolled client.
 /// A copy kept after [`Self::write_message4`] is still only that claim.
@@ -721,7 +721,7 @@ impl DaemonReadyForMessage2 {
 
 impl DaemonAwaitingMessage3 {
     /// Read message 3. Returns the state that can write message 4, whose
-    /// [`DaemonReadyForMessage4::fingerprint`] is the enrolment lookup.
+    /// [`DaemonReadyForMessage4::fingerprint`] is the enrollment lookup.
     /// Message 3's payload stays inside that state until the client is
     /// authenticated against both primitives.
     ///
@@ -773,7 +773,7 @@ impl DaemonAwaitingMessage3 {
 }
 
 impl DaemonReadyForMessage4 {
-    /// The fingerprint to look up in the enrolment list.
+    /// The fingerprint to look up in the enrollment list.
     ///
     /// A claim, not an authenticated client. [`StaticFingerprint`] is
     /// `Copy`, so a caller can keep this value past [`Self::write_message4`].

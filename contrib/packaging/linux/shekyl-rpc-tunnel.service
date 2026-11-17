@@ -1,0 +1,72 @@
+[Unit]
+Description=Shekyl RPC tunnel
+After=network-online.target
+Wants=network-online.target
+
+# The tunnel (RPC_CHANNEL.md §8) on a consumer's host: it serves a node's
+# RPC to this host's consumers in plaintext on loopback, and reaches the
+# node over the channel as its own key (Rick, 2026-11-16).
+#
+# Installed, not enabled: it needs a configuration and a key first.
+#
+#   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin shekyl-tunnel
+#   install -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/lib/shekyl-tunnel
+#   runuser -u shekyl-tunnel -- shekyl-rpc-tunnel --rpc-key-create \
+#       --rpc-key-file /var/lib/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key
+#     (prints the fingerprint; enroll it on the node with
+#      `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`)
+#   write /etc/shekyl/shekyl-rpc-tunnel.toml: daemon-endpoint,
+#     daemon-bundle-file (the node's `rpc bundle show`), and listen, a
+#     loopback address and port; rpc-grant if the default `view` is not
+#     what the consumers need
+#   systemctl enable --now shekyl-rpc-tunnel
+#
+# Another network: a drop-in whose ExecStart adds `--network testnet`.
+# The launch-recipe gate holds this file to the tunnel's table.
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/shekyl-rpc-tunnel --config-file /etc/shekyl/shekyl-rpc-tunnel.toml --rpc-key-file /var/lib/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key --log-file /var/log/shekyl-tunnel/shekyl-rpc-tunnel.log
+
+# Its own account: never the daemon's `shekyl`, never root.
+User=shekyl-tunnel
+Group=shekyl-tunnel
+
+# /var/lib/shekyl-tunnel: the tunnel's key, its account's alone.
+StateDirectory=shekyl-tunnel
+StateDirectoryMode=0700
+LogsDirectory=shekyl-tunnel
+
+Restart=on-failure
+RestartSec=30
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/shekyl-tunnel /var/log/shekyl-tunnel
+
+# The hardening set (Rick, 2026-11-16); the launch-recipe gate holds the
+# unit to it. The tunnel needs no capability, opens IP and local sockets
+# only, and runs no JIT, so W^X stays on (shekyld's unit cannot set
+# MemoryDenyWriteExecute: RandomX's JIT writes code).
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 
 use shekyl_rpc_client::{Rpc, RpcError};
 
+pub mod channel;
 mod http_client;
 pub mod listen;
 pub mod local;

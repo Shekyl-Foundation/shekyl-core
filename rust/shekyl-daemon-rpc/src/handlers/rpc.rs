@@ -449,31 +449,31 @@ async fn dispatch(
         }
         Id::RpcClientAdd => {
             let req = request::<wire::RpcClientAdd>(params)?;
-            let by = crate::channel::enrolment_caller(call, owner)?;
+            let by = crate::channel::enrollment_caller(call, owner)?;
             let channel = channel_of(state)?;
             channel.client_add(authority, by, req.fingerprint.to_bytes(), &req.ceiling)?;
             framed(Done)
         }
         Id::RpcClientSet => {
             let req = request::<wire::RpcClientSet>(params)?;
-            crate::channel::enrolment_caller(call, owner)?;
+            crate::channel::enrollment_caller(call, owner)?;
             channel_of(state)?.client_set(authority, req.fingerprint.to_bytes(), &req.ceiling)?;
             framed(Done)
         }
         Id::RpcClientRemove => {
             let req = request::<wire::RpcClientRemove>(params)?;
-            crate::channel::enrolment_caller(call, owner)?;
+            crate::channel::enrollment_caller(call, owner)?;
             channel_of(state)?.client_remove(authority, req.fingerprint.to_bytes())?;
             framed(Done)
         }
         Id::RpcClientList => {
             request::<wire::RpcClientList>(params)?;
-            crate::channel::enrolment_caller(call, owner)?;
+            crate::channel::enrollment_caller(call, owner)?;
             framed(channel_of(state)?.client_list(authority)?)
         }
         Id::RpcBundleShow => {
             request::<wire::RpcBundleShow>(params)?;
-            crate::channel::enrolment_caller(call, owner)?;
+            crate::channel::enrollment_caller(call, owner)?;
             framed(channel_of(state)?.bundle_show())
         }
         Id::RelayStats => {
