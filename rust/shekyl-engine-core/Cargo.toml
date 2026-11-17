@@ -270,6 +270,10 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper"] 
 # Test doubles answer with the daemon's own wire types (RK-D1), so a double
 # cannot drift from the contract the way a hand-written JSON literal can.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The RT-P5 instrument (`engine::regtest_e2e_rt_p5`) splits a message at the
+# channel's record payload, `MAX_RECORD_PLAINTEXT` less `OCCUPANCY_LEN`,
+# read from the crate that owns them rather than restated.
+shekyl-noise = { path = "../shekyl-noise" }
 # The regtest walks' simulated Levin peer (`regtest_e2e_peer.rs`): the
 # adversary lives in the test, speaking the daemon's own codec and its
 # network id derivation. Both are workspace crates already in the graph.

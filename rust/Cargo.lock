@@ -4421,6 +4421,7 @@ dependencies = [
  "shekyl-levin",
  "shekyl-multisig",
  "shekyl-network",
+ "shekyl-noise",
  "shekyl-onion-key",
  "shekyl-operator-alarm",
  "shekyl-p-host",
