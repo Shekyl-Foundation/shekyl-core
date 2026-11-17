@@ -114,13 +114,19 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   diff since the last green run on `dev`, find the two changes that
   disagree, and fix it on a new PR before more merges land on top; every
   open PR that merges `dev` until then inherits the red.
-- **A burst of merges is tested once, at its newest commit.** A
-  workflow's concurrency group is its ref, so a push to `dev` cancels the
-  run of the push before it. The build and Rust scope jobs measure a push
-  from the last commit that workflow passed on
-  (`scripts/ci/push_scope_base.sh`), not from the previous push, so a
-  cancelled run's commits stay in scope and a docs-only merge cannot skip
-  them. A red names the merges since the last green run, not one PR.
+- **A run on `dev` that has started finishes.** A workflow's concurrency
+  group is its ref, so every push to `dev` shares one. In the build, Rust,
+  fuzz-harness and benchmark workflows, a merge queues behind the running
+  `dev` run, and a newer merge replaces the queued one: a burst of merges
+  is tested at the commit already running and at its newest. Only a pull
+  request's newer push cancels its older run
+  (`scripts/ci/check_dev_push_runs_finish.py`). The shorter gates still
+  cancel, since their next run soon tests every commit the cancelled one
+  held. The build and Rust scope jobs measure a push from the last commit
+  that workflow passed on (`scripts/ci/push_scope_base.sh`), not from the
+  previous push, so a replaced or cancelled run's commits stay in scope
+  and a docs-only merge cannot skip them. A red names the merges since the
+  last green run, not one PR.
 - **A gate on a PR's own diff runs on PRs only:** the schema snapshots'
   version-bump pairing (the snapshot tests themselves are in the Rust
   suite) and the benchmark comparator. CodeQL analyses each push to `dev`

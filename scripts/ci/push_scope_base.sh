@@ -14,11 +14,14 @@
 # answers docs_only=false and everything runs.
 #
 # Why not the push's own `before`: the workflows' concurrency group is the
-# branch, so a push to `dev` cancels the run of the push before it. Measured
-# from `before`, a docs-only merge landing while a code merge's run is in
-# progress would cancel that run and then skip the suite itself, and the
-# code merge would never be tested on `dev`. Measured from the last green
-# run, the diff holds every commit no run of this workflow has passed.
+# branch, so a push to `dev` that arrives while a run is queued replaces
+# that queued run (check_dev_push_runs_finish.py). Measured from `before`,
+# a docs-only merge replacing a code merge's queued run would skip the
+# suite itself, and the code merge would never be tested on `dev`.
+# Measured from the last green run, the diff holds every commit no run of
+# this workflow has passed. The base is read when the scope step runs, not
+# when the push lands, so a run that waited in the queue still sees the
+# runs that finished ahead of it.
 #
 # That is also why a docs-only run may conclude success with the suite
 # skipped: its own diff started at the last green run, so its verdict
