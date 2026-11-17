@@ -87,6 +87,12 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// `RPC_CHANNEL.md` RT-O37) is answered with `OverResourceBound`,
 /// diagnostic `bound.sessions`, and closed. A 4.6 client meets a code it
 /// does not know only after the version read reports the daemon newer.
+/// And `daemon_status`'s `tor_quiet` (PR #1404; `INPUT_GRAMMAR.md` IG-Q99,
+/// amended) loses `{"empty": null}` and `{"failing": {"age": s}}`: it is
+/// `null`, or `{"unreached": {"age": s}}` when peers are known, the Tor
+/// Manager's onion-path reading has been impaired for `s` seconds of awake
+/// time, and a Tor dial launched since failed. A 4.6 reader decodes
+/// `unreached` as a key it does not know.
 pub const CORE_RPC_VERSION_MINOR: u32 = 7;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
