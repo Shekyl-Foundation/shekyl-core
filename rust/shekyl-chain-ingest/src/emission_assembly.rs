@@ -109,16 +109,13 @@ pub struct EmissionSeeds {
 #[cfg(not(feature = "forge"))]
 pub enum EmissionSeeds {}
 
-/// Where one claim's proofs and signatures draw. [`ClaimDraws::Os`] is every
-/// claim the driver and the engine pin build. [`ClaimDraws::Seeded`] is a
-/// forged chain's, from [`EmissionSeeds`]. The assembly calls the policy, so
-/// the steps stay one straight line and the OS-or-seed choice lives here.
-enum ClaimDraws<'a> {
-    /// The OS, as the production signers and provers draw.
-    Os,
-    /// The plan's seeds.
-    #[cfg(feature = "forge")]
-    Seeded(&'a EmissionSeeds),
+/// Where one claim's proofs and signatures draw. `seeds` is `None` for every
+/// claim the driver and the engine pin build, and `Some` for a forged chain's,
+/// from [`EmissionSeeds`]. Without `forge`, [`EmissionSeeds`] has no value, so
+/// `seeds` is `None`; the reference is still the field, so the lifetime names
+/// the borrow in every build.
+struct ClaimDraws<'a> {
+    seeds: Option<&'a EmissionSeeds>,
 }
 
 impl ClaimDraws<'_> {
@@ -128,15 +125,15 @@ impl ClaimDraws<'_> {
         tree: &TreeContext,
         tx_signable: TxSignableHash,
     ) -> Result<shekyl_tx_builder::MembershipOnlyProof, shekyl_tx_builder::TxBuilderError> {
-        match self {
-            Self::Os => prove_backing_membership(backing, tree, tx_signable),
+        match self.seeds {
             #[cfg(feature = "forge")]
-            Self::Seeded(seeds) => shekyl_tx_builder::prove_backing_membership_seeded(
+            Some(seeds) => shekyl_tx_builder::prove_backing_membership_seeded(
                 &seeds.backing,
                 backing,
                 tree,
                 tx_signable,
             ),
+            _ => prove_backing_membership(backing, tree, tx_signable),
         }
     }
 
@@ -146,10 +143,9 @@ impl ClaimDraws<'_> {
         output_index: u64,
         message: &shekyl_network::envelope::Framed64,
     ) -> Result<shekyl_crypto_pq::output::PqcAuthSignature, shekyl_crypto_pq::CryptoError> {
-        match self {
-            Self::Os => sign_emission_backing_for_output(combined, output_index, message),
+        match self.seeds {
             #[cfg(feature = "forge")]
-            Self::Seeded(seeds) => {
+            Some(seeds) => {
                 shekyl_crypto_pq::output::sign_emission_backing_for_output_with_ml_dsa_seed(
                     combined,
                     output_index,
@@ -157,6 +153,7 @@ impl ClaimDraws<'_> {
                     &seeds.backing_auth,
                 )
             }
+            _ => sign_emission_backing_for_output(combined, output_index, message),
         }
     }
 
@@ -165,16 +162,14 @@ impl ClaimDraws<'_> {
         secret: &shekyl_crypto_pq::signature::HybridSecretKey,
         message: &shekyl_network::envelope::Framed64,
     ) -> Result<shekyl_crypto_pq::signature::HybridSignature, shekyl_crypto_pq::CryptoError> {
-        match self {
-            Self::Os => sign_emission_claim(secret, message),
+        match self.seeds {
             #[cfg(feature = "forge")]
-            Self::Seeded(seeds) => {
-                shekyl_crypto_pq::signature::sign_emission_claim_with_ml_dsa_seed(
-                    secret,
-                    message,
-                    &seeds.claim_auth,
-                )
-            }
+            Some(seeds) => shekyl_crypto_pq::signature::sign_emission_claim_with_ml_dsa_seed(
+                secret,
+                message,
+                &seeds.claim_auth,
+            ),
+            _ => sign_emission_claim(secret, message),
         }
     }
 
@@ -192,8 +187,10 @@ impl ClaimDraws<'_> {
         mint: &[InputTerm],
         tree: &TreeContext,
     ) -> Result<shekyl_tx_builder::SignedProofs, shekyl_tx_builder::TxBuilderError> {
-        match self {
-            Self::Os => sign_transaction_with_terms(
+        match self.seeds {
+            #[cfg(feature = "forge")]
+            Some(seeds) => shekyl_tx_builder::sign_transaction_with_terms_seeded(
+                &seeds.proofs,
                 network,
                 signable,
                 spend_inputs,
@@ -203,9 +200,7 @@ impl ClaimDraws<'_> {
                 &[],
                 tree,
             ),
-            #[cfg(feature = "forge")]
-            Self::Seeded(seeds) => shekyl_tx_builder::sign_transaction_with_terms_seeded(
-                &seeds.proofs,
+            _ => sign_transaction_with_terms(
                 network,
                 signable,
                 spend_inputs,
@@ -225,16 +220,16 @@ impl ClaimDraws<'_> {
         layout: SpendLayout,
         network: &NetworkId,
     ) -> Result<shekyl_tx_builder::OpenSpend, shekyl_tx_builder::TxBuilderError> {
-        match self {
-            Self::Os => open_spend(signed, spend_inputs, layout, network),
+        match self.seeds {
             #[cfg(feature = "forge")]
-            Self::Seeded(seeds) => shekyl_tx_builder::open_spend_seeded(
+            Some(seeds) => shekyl_tx_builder::open_spend_seeded(
                 &seeds.fee_slots,
                 signed,
                 spend_inputs,
                 layout,
                 network,
             ),
+            _ => open_spend(signed, spend_inputs, layout, network),
         }
     }
 
@@ -243,17 +238,15 @@ impl ClaimDraws<'_> {
         secret: &shekyl_crypto_pq::signature::HybridSecretKey,
         payload: &SigningPayloadHash,
     ) -> Result<shekyl_crypto_pq::signature::HybridSignature, shekyl_crypto_pq::CryptoError> {
-        match self {
-            Self::Os => {
-                HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_PQC_AUTH_TX, payload.as_bytes())
-            }
+        match self.seeds {
             #[cfg(feature = "forge")]
-            Self::Seeded(seeds) => HybridEd25519MlDsa.sign_with_ml_dsa_seed(
+            Some(seeds) => HybridEd25519MlDsa.sign_with_ml_dsa_seed(
                 secret,
                 SCHEME_DOMAIN_PQC_AUTH_TX,
                 payload.as_bytes(),
                 &seeds.emission_slot,
             ),
+            _ => HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_PQC_AUTH_TX, payload.as_bytes()),
         }
     }
 }
@@ -343,10 +336,12 @@ pub fn assemble_emission_claim_drawing(
     network: &NetworkId,
     tree: &TreeContext,
 ) -> AssembledClaim {
-    let draws = match seeds {
-        #[cfg(feature = "forge")]
-        Some(seeds) => ClaimDraws::Seeded(seeds),
-        _ => ClaimDraws::Os,
+    let draws = ClaimDraws {
+        seeds: match seeds {
+            #[cfg(feature = "forge")]
+            Some(seeds) => Some(seeds),
+            _ => None,
+        },
     };
     assemble(
         network,
@@ -395,7 +390,7 @@ pub fn assemble_emission_claim_breaking_fee_proof(
         fee,
         tree,
         FeeProof::FlippedBeforeSigning,
-        &ClaimDraws::Os,
+        &ClaimDraws { seeds: None },
     )
 }
 
