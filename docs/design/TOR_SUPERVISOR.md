@@ -1204,13 +1204,17 @@ check runs once standing down clears.
   and rendezvous circuits and one circuit per directory through this node's
   guard. At the spacing, no directory is asked for this onion more often
   than Tor's own client would ask it.
-- **`CHECK_LONGEST`, 240 s**: the two-miss rule's two probes, each at its
-  longest delay and its bound (§4.5). A typical bound, not a hard one: a
-  directory fetch's answer window runs from Tor's acceptance, and fetches
-  wait behind the request queue's replies, so a check can run longer when
-  Tor answers slowly. The wait errs toward excusing, so a reading after it
-  is not waited for.
-- **`READING_WAIT`, 19 minutes**, "Tor path-reading wait": the Tor
+- **`CHECK_LONGEST`, 300 s**: the round wait (`ROUND_WAIT`, 60 s), then
+  the two-miss rule's two probes, each at its longest delay and its bound
+  (§4.5). A check begins when its probe is scheduled, and the probe goes
+  out with its directory list only once every open upload round is
+  `ROUND_WAIT` old, so a check that begins beside a round waits that long
+  first. A typical bound, not a hard one: a round that opens during the
+  check holds its second probe again (at most 360 s then), a directory
+  fetch's answer window runs from Tor's acceptance, and fetches wait behind
+  the request queue's replies, so a check can run longer. The wait errs
+  toward excusing, so a reading after it is not waited for.
+- **`READING_WAIT`, 20 minutes**, "Tor path-reading wait": the Tor
   connector's declared wait, the spacing plus one check. A failure just
   after a check began waits out the spacing, then one check. With no
   reading by then, the judge excuses the failure.

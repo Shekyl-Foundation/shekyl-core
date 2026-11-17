@@ -31,7 +31,7 @@
 use std::time::Duration;
 
 use super::super::posture::Cause;
-use super::{duration_ns, Action, Core, Phase, PROBE_AFTER_MAX, PROBE_WITHIN};
+use super::{duration_ns, Action, Core, Phase, PROBE_AFTER_MAX, PROBE_WITHIN, ROUND_WAIT};
 
 /// The least time between the start of one check and the start of a check
 /// run on demand, 15 minutes (Rick, 2026-11-15). **Assumption** (§97,
@@ -50,19 +50,22 @@ use super::{duration_ns, Action, Core, Phase, PROBE_AFTER_MAX, PROBE_WITHIN};
 pub const CHECK_SPACING: Duration = Duration::from_secs(15 * 60);
 
 /// How long one check typically runs, from its start to its verdict,
-/// 240 s: the two-miss rule's two probes, each at its longest delay and its
-/// bound (§4.5). It is not a hard bound. A directory fetch's answer window
+/// 300 s: the round wait, then the two-miss rule's two probes, each at its
+/// longest delay and its bound (§4.5). A check begins when its probe is
+/// scheduled, and the probe goes out only once every open upload round is
+/// [`ROUND_WAIT`] old, so a check that begins beside a round waits that
+/// long first. It is not a hard bound. A round that opens while the check
+/// runs holds its second probe again, a directory fetch's answer window
 /// runs from Tor's acceptance of it, and fetches wait their turn behind the
-/// request queue's replies, so a check can run longer when Tor answers
-/// slowly. The wait built on it errs toward excusing: a reading after it
-/// is not waited for.
+/// request queue's replies, so a check can run longer. The wait built on it
+/// errs toward excusing: a reading after it is not waited for.
 pub const CHECK_LONGEST: Duration = {
     let one_probe = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
-    one_probe.saturating_add(one_probe)
+    ROUND_WAIT.saturating_add(one_probe.saturating_add(one_probe))
 };
 
 /// How long the Tor connector declares the judge waits for a reading after
-/// a failure, 19 minutes: the spacing plus one check (Rick, 2026-11-15).
+/// a failure, 20 minutes: the spacing plus one check (Rick, 2026-11-15).
 /// **Assumption** (§97, "Tor path-reading wait") until the floor device
 /// measures it. A failure that arrives just after a check began waits out
 /// the spacing, then one check.
@@ -212,6 +215,15 @@ impl Core {
     /// A check began, scheduled or on demand.
     pub(super) fn check_began(&mut self, now: u64) {
         self.path.last_check_began = Some(now);
+    }
+
+    /// When the latest check began. A check's start is its schedule, and
+    /// nothing goes out then: its probe and directory check wait for the
+    /// probe's delay and for every open round to be [`ROUND_WAIT`] old. The
+    /// tests read a start here.
+    #[cfg(test)]
+    pub(super) fn last_check_began(&self) -> Option<u64> {
+        self.path.last_check_began
     }
 
     /// Whether Tor itself says it cannot reach its network, or that no

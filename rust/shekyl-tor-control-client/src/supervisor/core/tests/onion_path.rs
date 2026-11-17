@@ -8,14 +8,30 @@
 //! core's own pathways. The check's verdicts as facts are the directory
 //! check's tests (`directories.rs`). Each test names the edit that makes it
 //! fail.
+//!
+//! A check begins when its probe is scheduled, and nothing goes out then:
+//! the probe and its directory check wait for the probe's delay and for
+//! every open upload round to be `round_wait` old (§4.5). So a test reads a
+//! check's start from the core ([`began`], [`ran`]), never from an action.
 
 use super::super::super::posture::Cause;
-use super::super::{duration_ns, Action, Input, OnionPath, PathReading, Step};
-use super::super::{CHECK_LONGEST, CHECK_SPACING};
-use super::probe::{count, published, run_to, secs};
+use super::super::{duration_ns, Action, Core, Input, OnionPath, PathReading, Step};
+use super::super::{CHECK_LONGEST, CHECK_SPACING, ROUND_WAIT};
+use super::probe::{published, run_to, secs};
 
-fn checks(step: &Step) -> usize {
-    count(step, |action| matches!(action, Action::CheckDirectories))
+/// Fold `input` at `at`: the step, and whether a check began in it.
+fn began(core: &mut Core, input: Input, at: u64) -> (Step, bool) {
+    let before = core.last_check_began();
+    let step = core.on(input, at);
+    (step, core.last_check_began() != before)
+}
+
+/// Run deadlines up to `at` ([`run_to`]): the step, and whether a check
+/// began on the way.
+fn ran(core: &mut Core, at: u64) -> (Step, bool) {
+    let before = core.last_check_began();
+    let step = run_to(core, at);
+    (step, core.last_check_began() != before)
 }
 
 fn readings(step: &Step) -> Vec<PathReading> {
@@ -44,8 +60,9 @@ fn working(at: u64) -> PathReading {
 #[test]
 fn a_want_with_no_reading_starts_a_check() {
     let mut core = published();
-    let step = core.on(want(secs(1)), secs(2));
-    assert_eq!(checks(&step), 1, "the check began on the want");
+    let (_, started) = began(&mut core, want(secs(1)), secs(2));
+    assert!(started, "the check began on the want");
+    assert_eq!(core.last_check_began(), Some(secs(2)));
 }
 
 /// **A completed onion dial and a new inbound Tor session are working
@@ -57,12 +74,8 @@ fn a_completed_dial_or_a_new_inbound_session_reads_working() {
     let mut core = published();
     let opened = core.on(Input::OnionDialOpened { at: secs(5) }, secs(6));
     assert_eq!(readings(&opened), [working(secs(5))]);
-    let answered = core.on(want(secs(3)), secs(7));
-    assert_eq!(
-        checks(&answered),
-        0,
-        "the dial after the failure answers it"
-    );
+    let (_, started) = began(&mut core, want(secs(3)), secs(7));
+    assert!(!started, "the dial after the failure answers it");
     let inbound = core.on(Input::InboundTorSession { at: secs(9) }, secs(9));
     assert_eq!(readings(&inbound), [working(secs(9))]);
     let older = core.on(Input::OnionDialOpened { at: secs(8) }, secs(10));
@@ -86,8 +99,8 @@ fn while_tor_says_it_cannot_reach_its_network_no_check_runs() {
         }],
         "Tor's statement is an impaired reading"
     );
-    let asked = core.on(want(secs(11)), secs(12));
-    assert_eq!(checks(&asked), 0, "no check while Tor says so");
+    let (asked, started) = began(&mut core, want(secs(11)), secs(12));
+    assert!(!started, "no check while Tor says so");
     assert_eq!(
         readings(&asked),
         [PathReading {
@@ -108,7 +121,7 @@ fn while_tor_says_it_cannot_reach_its_network_no_check_runs() {
 fn checks_never_run_closer_together_than_the_spacing() {
     let mut core = published();
     let start = secs(1);
-    assert_eq!(checks(&core.on(want(start), start)), 1, "the first check");
+    assert!(began(&mut core, want(start), start).1, "the first check");
     let spacing = duration_ns(CHECK_SPACING);
     assert!(
         CHECK_LONGEST < CHECK_SPACING,
@@ -118,22 +131,18 @@ fn checks_never_run_closer_together_than_the_spacing() {
     let mut started = Vec::new();
     while at < start + spacing + secs(30) {
         at += secs(30);
-        let step = run_to(&mut core, at);
+        let (step, deadline_began) = ran(&mut core, at);
         // The driver answers a first miss's refetch, as it does in the
-        // daemon, so the check goes on to its second probe.
-        if step.actions.contains(&Action::RefetchDescriptor) {
-            core.on(Input::DescriptorRefetched { draw: 0 }, at);
-        }
-        let asked = core.on(want(at - secs(1)), at);
-        if checks(&step) + checks(&asked) > 0 && at < start + spacing {
-            // The first check's own second probe, after its refetch, is the
-            // same check: it begins no new one.
+        // daemon, so the check goes on to its second probe. That probe is
+        // the same check: it begins no new one.
+        let refetch_began = step.actions.contains(&Action::RefetchDescriptor)
+            && began(&mut core, Input::DescriptorRefetched { draw: 0 }, at).1;
+        let (_, asked) = began(&mut core, want(at - secs(1)), at);
+        if deadline_began || refetch_began || asked {
             assert!(
-                at <= start + duration_ns(CHECK_LONGEST) + secs(30),
+                at >= start + spacing,
                 "a check began inside the spacing at {at}"
             );
-        }
-        if at >= start + spacing && checks(&step) + checks(&asked) > 0 {
             started.push(at);
         }
     }
@@ -146,17 +155,20 @@ fn checks_never_run_closer_together_than_the_spacing() {
 }
 
 /// **The Tor connector's declared wait is the spacing plus one check**
-/// (Rick, 2026-11-15): 15 minutes, then the two-miss rule's two probes at
-/// their longest delay and bound, 240 s, so 19 minutes. A failure just
-/// after a check began waits out the spacing, then a check. The edit that
-/// makes this red is a wait shorter than a spaced check can answer.
+/// (Rick, 2026-11-15): 15 minutes, then one check, 300 s: the round wait
+/// its probe can be held for (§4.5), then the two-miss rule's two probes at
+/// their longest delay and bound. So 20 minutes. A failure just after a
+/// check began waits out the spacing, then a check. The edits that make
+/// this red: a wait shorter than a spaced check can answer, or a check
+/// span without the round wait.
 #[test]
 fn the_tor_wait_is_the_spacing_plus_one_check() {
     use std::time::Duration;
     assert_eq!(CHECK_SPACING, Duration::from_secs(15 * 60));
-    assert_eq!(CHECK_LONGEST, Duration::from_secs(240));
+    assert_eq!(ROUND_WAIT, Duration::from_secs(60));
+    assert_eq!(CHECK_LONGEST, Duration::from_secs(300));
     assert_eq!(super::super::READING_WAIT, CHECK_SPACING + CHECK_LONGEST);
-    assert_eq!(super::super::READING_WAIT, Duration::from_secs(19 * 60));
+    assert_eq!(super::super::READING_WAIT, Duration::from_secs(20 * 60));
 }
 
 /// **A want during a check that ends without a fact is asked again at the
@@ -170,10 +182,14 @@ fn the_tor_wait_is_the_spacing_plus_one_check() {
 fn a_want_during_a_check_that_ends_without_a_fact_is_asked_again() {
     use super::probe::{arrival, uploaded};
     let mut core = published();
-    let ended = core.on(uploaded(0), secs(100));
-    assert_eq!(checks(&ended), 1, "the round's check began at 100 s");
-    let asked = core.on(want(secs(101)), secs(102));
-    assert_eq!(checks(&asked), 0, "the round's check is in hand");
+    assert!(
+        began(&mut core, uploaded(0), secs(100)).1,
+        "the round's check began at 100 s"
+    );
+    assert!(
+        !began(&mut core, want(secs(101)), secs(102)).1,
+        "the round's check is in hand"
+    );
     run_to(&mut core, secs(115));
     core.on(
         Input::ProbeDialed {
@@ -187,8 +203,8 @@ fn a_want_during_a_check_that_ends_without_a_fact_is_asked_again() {
         "the probe alone decided: no fact, so the want still waits"
     );
     let due = secs(100) + duration_ns(CHECK_SPACING);
-    let step = run_to(&mut core, due);
-    assert_eq!(checks(&step), 1, "asked again once the spacing passed");
+    assert!(ran(&mut core, due).1, "asked again once the spacing passed");
+    assert_eq!(core.last_check_began(), Some(due));
 }
 
 /// **While the check's gates refuse it, a want is asked again one check's
@@ -208,8 +224,8 @@ fn while_the_check_stands_down_a_want_is_asked_again() {
         },
         secs(5),
     );
-    let asked = core.on(want(secs(6)), secs(7));
-    assert_eq!(checks(&asked), 0, "no check while the clock is named");
+    let (asked, started) = began(&mut core, want(secs(6)), secs(7));
+    assert!(!started, "no check while the clock is named");
     assert!(readings(&asked).is_empty(), "and no impaired reading");
     core.on(
         Input::ConsensusClock {
@@ -219,8 +235,11 @@ fn while_the_check_stands_down_a_want_is_asked_again() {
         secs(8),
     );
     let retry = secs(7) + duration_ns(CHECK_LONGEST);
-    let step = run_to(&mut core, retry);
-    assert_eq!(checks(&step), 1, "a check once the clock has cleared");
+    assert!(
+        ran(&mut core, retry).1,
+        "a check once the clock has cleared"
+    );
+    assert_eq!(core.last_check_began(), Some(retry));
 }
 
 /// **A fact between two waiting failures answers only the earlier.** The
@@ -231,13 +250,14 @@ fn while_the_check_stands_down_a_want_is_asked_again() {
 #[test]
 fn a_fact_between_two_wants_leaves_the_later_one_waiting() {
     let mut core = published();
-    assert_eq!(
-        checks(&core.on(want(secs(1)), secs(2))),
-        1,
+    assert!(
+        began(&mut core, want(secs(1)), secs(2)).1,
         "the first check"
     );
-    let later = core.on(want(secs(10)), secs(11));
-    assert_eq!(checks(&later), 0, "the first check is still in hand");
+    assert!(
+        !began(&mut core, want(secs(10)), secs(11)).1,
+        "the first check is still in hand"
+    );
     let between = core.on(Input::OnionDialOpened { at: secs(5) }, secs(12));
     assert_eq!(readings(&between), [working(secs(5))]);
     assert!(

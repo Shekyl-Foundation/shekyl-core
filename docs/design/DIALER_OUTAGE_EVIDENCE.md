@@ -233,7 +233,7 @@ Each value is the connector's own, an `Assumption` with its basis in `DAEMON_REL
 
 | Value | Tor | Clearnet |
 | --- | --- | --- |
-| The reading wait | 19 minutes: the on-demand check spacing (15 min) plus one check (240 s), `READING_WAIT` ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a) | 15 s, `CLEARNET_READING_WAIT_NANOS` |
+| The reading wait | 20 minutes: the on-demand check spacing (15 min) plus one check (300 s, the round wait and two probes), `READING_WAIT` ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a) | 15 s, `CLEARNET_READING_WAIT_NANOS` |
 | `outage_retry` | 10 s + U(5 s) | 10 s + U(5 s) |
 | **Basis of `outage_retry`** | Stays under the slot turnover, `window / bound` (105 s / 5 = 21 s): an excused address is drawable again before a slot comes free, so the outage cooldown never holds a slot idle | Caps redials of an unproven address: with bound 1 and a 1.415 s deadline, at most one redial of such an address per 10–15 s |
 | **Basis of the wait** | A failure just after a check began waits out the spacing, then one check; with no reading by then the manager could not answer | The 60 s mean timed-sync interval (`TIMED_SYNC_MIN` plus half `TIMED_SYNC_JITTER`, `shekyl-p2p-session` `timing.rs`), on outbound sessions only (inbound is excluded from clearnet's source) |
