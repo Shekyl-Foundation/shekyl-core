@@ -100,8 +100,9 @@ impl Session {
     /// # Errors
     ///
     /// [`ChannelFault::Closed`] when the node drops the session before
-    /// `version` is answered. [`ChannelFault::Local`] when the request
-    /// cannot be built.
+    /// `version` is answered. [`ChannelFault::SessionCap`] when that answer
+    /// is `bound.sessions`: the session was not admitted.
+    /// [`ChannelFault::Local`] when the request cannot be built.
     pub async fn confirm(&mut self) -> Result<(), ChannelFault> {
         if self.confirmed {
             return Ok(());
@@ -113,9 +114,11 @@ impl Session {
             "params": {}
         }))
         .map_err(|error| ChannelFault::Local(error.to_string()))?;
-        // Any completed response means the first record opened and the
-        // node finished the handshake. A close before that is `Closed`.
-        self.post("json_rpc", body).await?;
+        // A close before any answer is `Closed`. A `bound.sessions` answer
+        // means this session was not admitted. Any other answer, including
+        // a method refusal, means the node admitted the session.
+        let response = self.post("json_rpc", body).await?;
+        admission(&response)?;
         self.confirmed = true;
         Ok(())
     }
@@ -168,7 +171,12 @@ impl Session {
             .await
             .map_err(|_| ChannelFault::Closed)?
             .to_bytes();
-        self.confirmed = true;
+        // The first record has been opened. A session-cap refusal is not
+        // admission: the node closed this connection, and a later confirm
+        // must not treat the session as established.
+        if admission(&body).is_ok() {
+            self.confirmed = true;
+        }
         Ok(hyper::Response::from_parts(parts, body))
     }
 
@@ -184,6 +192,34 @@ impl Session {
             .body(Bytes::from(body))
             .map_err(|e| ChannelFault::Local(e.to_string()))?;
         Ok(self.send(request).await?.into_body().to_vec())
+    }
+}
+
+/// The diagnostic a session past its key's cap carries (`IG-Q79`). The
+/// daemon spells it `methods::codes::BOUND_SESSIONS`; this is that spelling
+/// on the wire.
+const BOUND_SESSIONS: &str = "bound.sessions";
+
+/// Whether `body` shows the node admitted the session.
+///
+/// `bound.sessions` is the one refusal that means it did not: the first
+/// request was answered and the connection closed. A result, and every
+/// other method refusal, means the session is in the node's index.
+fn admission(body: &[u8]) -> Result<(), ChannelFault> {
+    let code = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")?
+                .get("data")?
+                .get("code")?
+                .as_str()
+                .map(str::to_owned)
+        });
+    if code.as_deref() == Some(BOUND_SESSIONS) {
+        Err(ChannelFault::SessionCap)
+    } else {
+        Ok(())
     }
 }
 
@@ -203,5 +239,17 @@ mod tests {
             br#"{"jsonrpc":"2.0","id":1,"method":"tx_relay","params":{}}"#
         ));
         assert!(!is_submission(b"not json"));
+    }
+
+    /// `bound.sessions` is not admission. Another refusal, and a result,
+    /// are. Red edit: treat every error object as success in `admission`,
+    /// and the cap refusal confirms the session.
+    #[test]
+    fn a_session_cap_refusal_is_not_admission() {
+        let cap = br#"{"jsonrpc":"2.0","id":"1","error":{"code":-32003,"message":"over","data":{"code":"bound.sessions"}}}"#;
+        assert_eq!(admission(cap), Err(ChannelFault::SessionCap));
+        let unready = br#"{"jsonrpc":"2.0","id":"1","error":{"code":-32001,"message":"not ready","data":{"code":"daemon.unready"}}}"#;
+        assert!(admission(unready).is_ok());
+        assert!(admission(br#"{"jsonrpc":"2.0","id":"1","result":{"version":1}}"#).is_ok());
     }
 }

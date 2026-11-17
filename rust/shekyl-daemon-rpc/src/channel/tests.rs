@@ -377,6 +377,32 @@ async fn a_key_past_its_session_cap_is_refused_by_name() {
     }
 }
 
+/// The pool does not announce a kept session the node refused at the cap.
+/// Four sessions of the same key are already admitted; `open_kept` sends
+/// `version` as its first record and the node answers `bound.sessions`.
+/// Red edit: ignore that code in `admission`, and `open_kept` returns the
+/// grants of a session the node did not keep.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kept_session_past_the_cap_is_not_announced() {
+    let served = Served::start(false).await;
+    let key = StaticKeypair::generate().unwrap();
+    served.enrol(&key, &[CeilingWord::View]);
+    let mut held = Vec::new();
+    for _ in 0..shekyl_rpc_channel::SESSIONS_PER_CLIENT {
+        let mut session = connect(&served, &key, Preset::View.grants())
+            .await
+            .expect("a session");
+        session.call("version", json!({})).await.expect("served");
+        held.push(session);
+    }
+    let pool = pool_to(&served, key, Preset::View.grants());
+    assert_eq!(
+        pool.open_kept().await.expect_err("the cap"),
+        client::ChannelFault::SessionCap
+    );
+    drop(held);
+}
+
 /// A pool to `served` as `key`, asking for `request`.
 fn pool_to(served: &Served, key: StaticKeypair, request: GrantSet) -> Arc<client::Pool> {
     client::Pool::new(

@@ -5,6 +5,8 @@
 
 //! Why a channel call did not complete, in the words its reader can act on.
 
+use shekyl_rpc_channel::SESSIONS_PER_CLIENT;
+
 /// Why the channel did not carry a call. Each variant is one thing the
 /// person reading it can act on (§4.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,6 +48,10 @@ pub enum ChannelFault {
     /// No session came free within the handshake deadline: this client
     /// already holds `SESSIONS_PER_CLIENT`, each busy.
     PoolFull,
+    /// The node's first answer was `bound.sessions`: this key already
+    /// holds `SESSIONS_PER_CLIENT` sessions there, so this one was not
+    /// admitted. The connection is closed.
+    SessionCap,
     /// The connection closed under a call.
     Closed,
     /// This client's own state failed: its key, or randomness.
@@ -83,6 +89,11 @@ impl std::fmt::Display for ChannelFault {
             Self::PoolFull => f.write_str(
                 "Every connection this client may hold to the node is busy; none came free in \
                  time.",
+            ),
+            Self::SessionCap => write!(
+                f,
+                "This client already holds {SESSIONS_PER_CLIENT} connections to the node, the \
+                 most one client may hold."
             ),
             Self::Closed => f.write_str("The node closed the connection."),
             Self::Local(why) => write!(f, "This client could not use the channel: {why}."),
