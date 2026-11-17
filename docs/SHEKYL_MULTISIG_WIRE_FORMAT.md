@@ -200,8 +200,11 @@ A group recipient carries no label: a group output always encrypts the
 sentinel. A spend's change is a recipient: the paying group's own
 address.
 
-**Output order:** the recipients' order is the outputs' order. Recipient
-`i` is the transaction's output `i`.
+**Output order:** recipient `i` is the transaction's output at position
+`π(i)`, the permutation the intent's transaction key derives
+(`TxKey::output_order`, R-24; `PQC_MULTISIG.md` §9.5). The sort below
+keeps the intent's encoding canonical; `π` decides where each recipient
+lands, and every member derives it alike.
 
 **Sort order:** Recipients MUST be sorted by `(kind, address, label,
 amount)`: `kind` ascending; `address` as raw bytes by unsigned byte-wise
@@ -433,4 +436,4 @@ An implementation claiming conformance MUST:
 | 1.2 | 2026-11-12 | The E′ seal: XChaCha20-Poly1305 under an HKDF-SHA-512 key from the group transport secret, a random 24-byte nonce, a clear 66-byte header as associated data |
 | 2 | 2026-11-13 | R-6, R-9, R-10, R-12, R-13 (slice 3 PR-B): the header moves inside the ciphertext and a file shows only its version; one key per group and trial decryption on import; a sender signature under a per-member envelope key; intent version 2 with the signer set and responder, without the proposer signature or wall-clock expiry; the persisted message counter and the intent's `tx_counter` deleted (replay is the reference block's age, the per-intent held nonce and consensus key images); message types `0x0C`–`0x11`; files are the only transport |
 | 2.1 | 2026-11-14 | Slice 3 PR-C: each live type's body (§3.1); `0x09` and `0x0B` REJECTED. The file format byte is unchanged |
-| 2.2 | 2026-11-15 | Slice 4a-1: intent version 3, each recipient named by kind, a single-signer address with its output's label block or a group's payload (§2.3); the recipients' order is the outputs' order. The file format byte is unchanged |
+| 2.2 | 2026-11-15 | Slice 4a-1: intent version 3, each recipient named by kind, a single-signer address with its output's label block or a group's payload (§2.3); recipient `i` is output `π(i)`, the order the intent's transaction key derives (R-24). The file format byte is unchanged |

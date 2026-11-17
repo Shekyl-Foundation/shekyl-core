@@ -549,7 +549,7 @@ pub(crate) struct DrainCtx<'a> {
     /// bond posts, claims, or other drains). Excluded from selection so a
     /// drain can never double-spend an in-flight funding input.
     pub reserved: &'a BTreeSet<GlobalOutputIndex>,
-    /// The wallet's own principal destination (vout 0), resolved engine-side
+    /// The wallet's own principal destination, resolved engine-side
     /// from the primary address (T-DS-3: never caller-supplied).
     pub dest: DrainDestination,
     /// What the drain moves. `Payment`: the selection covers `payment + fee`;

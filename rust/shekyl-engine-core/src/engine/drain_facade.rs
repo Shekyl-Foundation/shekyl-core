@@ -26,8 +26,8 @@
 //!   function the bond post uses
 //!   ([`p_lane_floor_fee`](super::bond_orchestrator::p_lane_floor_fee)) — a
 //!   user fee control would be a wallet fingerprint in a cleartext field.
-//! - **No `destination` parameter.** The dispatch seam pins vout 0 to the
-//!   wallet's own principal address (T-DS-3); the façade adds nothing a
+//! - **No `destination` parameter.** The dispatch seam pins the principal
+//!   output to the wallet's own principal address (T-DS-3); the façade adds nothing a
 //!   caller could redirect.
 //! - **Production prune witness.** The façade mints
 //!   [`SpentRecordsDurablyPruned::arm1_watch_pruning_live`] the same way the

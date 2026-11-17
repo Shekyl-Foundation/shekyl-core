@@ -15,6 +15,25 @@
 //! then run this code, so a group's transaction is built exactly as a solo
 //! one is.
 //!
+//! **Order (R-24).** A caller hands [`BuiltSpend::build`] its recipients
+//! and never a position: the builder places recipient `i` at position
+//! `π(i)`, the order the transaction key derives
+//! ([`TxKey::output_order`]), and builds the output at position `p` with
+//! derivation index `p`. Nothing else in this crate builds an output, so
+//! no wallet-built transaction says by its layout which output is the
+//! change. A caller that needs one recipient's output asks for it by
+//! recipient ([`BuiltSpend::output_for`]).
+//!
+//! ```compile_fail,E0603
+//! use shekyl_crypto_pq::TxKey;
+//! use shekyl_tx_builder::outputs::{build_output, BuiltOutput, Payee};
+//!
+//! // An output at a position of the caller's choosing.
+//! fn place(key: &TxKey, payee: Payee<'_>) -> BuiltOutput {
+//!     build_output(key, payee, 1, 0).unwrap()
+//! }
+//! ```
+//!
 //! `tx_extra` carries the transaction public key, every output's hybrid
 //! KEM ciphertext in one `0x06` field, every output's `0x07` leaf entry,
 //! and, when an output pays a group, the `0x0D` member entries (CEN-I19),
@@ -27,6 +46,7 @@ use shekyl_address::ShekylAddress;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
 use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
+use shekyl_crypto_pq::output_order::OutputOrder;
 use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_network::NetworkId;
 use shekyl_units::AtomicUnits;
@@ -35,7 +55,7 @@ use shekyl_wire::{CtBase, Output};
 
 use crate::types::OutputInfo;
 use crate::wire::committed_base;
-use crate::TxBuilderError;
+use crate::{TxBuilderError, MAX_OUTPUTS};
 
 /// Who an output pays.
 #[derive(Clone, Copy)]
@@ -143,7 +163,8 @@ impl<'a> RecipientKeys<'a> {
 }
 
 /// One output, built: what the transaction's prefix, base and `tx_extra`
-/// carry for it.
+/// carry for it. Made only by [`BuiltSpend::build`].
+#[derive(Clone)]
 pub struct BuiltOutput {
     /// What the signer needs: the one-time key, the amount, the commitment
     /// mask and the encrypted fields.
@@ -209,14 +230,15 @@ fn multisig_entry(
 }
 
 /// Build the output at `output_index` paying `amount` to `payee`, under the
-/// transaction key `tx_key`.
+/// transaction key `tx_key`. Private: the index is a position, and only
+/// [`BuiltSpend::build`] chooses positions.
 ///
 /// # Errors
 ///
 /// The crypto crate's refusal: a payee key that is not a valid point, an
 /// output index a group entry cannot name, or a member entry that does not
 /// assemble.
-pub fn build_output(
+fn build_output(
     tx_key: &TxKey,
     payee: Payee<'_>,
     amount: u64,
@@ -258,7 +280,7 @@ pub fn build_output(
 /// # Errors
 ///
 /// [`TxBuilderError::WireError`] if the wire codec refuses the fields.
-pub fn build_tx_extra(tx_key: &TxKey, outputs: &[BuiltOutput]) -> Result<Vec<u8>, TxBuilderError> {
+fn build_tx_extra(tx_key: &TxKey, outputs: &[BuiltOutput]) -> Result<Vec<u8>, TxBuilderError> {
     let mut fields = vec![TxExtraField::PubKey(tx_key.public_bytes())];
     if !outputs.is_empty() {
         fields.push(TxExtraField::PqcKemCiphertext(
@@ -281,28 +303,139 @@ pub fn build_tx_extra(tx_key: &TxKey, outputs: &[BuiltOutput]) -> Result<Vec<u8>
     tx_extra::serialize(&fields).map_err(|e| TxBuilderError::WireError(e.to_string()))
 }
 
-/// A confidential spend's outputs as its transaction carries them: the
-/// prefix's outputs, `tx_extra`, and the committed base. A spend whose
-/// transaction is assembled in phases (a multisig spend's) takes its
-/// outputs from here; the one-shot encoder writes the same base through
-/// the same mapping.
-#[derive(Clone, Debug)]
-pub struct SpendOutputs {
-    /// The prefix's outputs, in output order.
-    pub outputs: Vec<Output>,
-    /// `tx_extra`: the transaction public key and every output's PQC fields.
-    pub extra: Vec<u8>,
-    /// The committed base: each output's commitment and encrypted fields.
-    pub base: CtBase,
+/// One output a spend pays: who, and how much.
+#[derive(Clone, Copy)]
+pub struct Recipient<'a> {
+    /// Who the output pays.
+    pub payee: Payee<'a>,
+    /// What it pays, in atomic units.
+    pub amount: u64,
 }
 
-impl SpendOutputs {
-    /// The outputs `built`, in output order, built under `tx_key`.
+/// Why a spend's outputs were not built ([`BuiltSpend::build`]).
+#[derive(Debug, thiserror::Error)]
+pub enum BuildSpendError {
+    /// A spend pays at least one output.
+    #[error("a spend pays no output")]
+    NoOutputs,
+    /// More recipients than a transaction carries outputs.
+    #[error("{count} outputs exceed the transaction's {MAX_OUTPUTS}")]
+    TooManyOutputs {
+        /// The recipients handed in.
+        count: usize,
+    },
+    /// The crypto crate refused recipient `recipient`'s output.
+    #[error("recipient {recipient}'s output: {source}")]
+    Output {
+        /// The recipient's place in the list handed in.
+        recipient: usize,
+        /// The crypto crate's refusal.
+        source: CryptoError,
+    },
+    /// The wire codec refused `tx_extra`.
+    #[error("tx_extra: {0}")]
+    Extra(TxBuilderError),
+}
+
+/// A spend's outputs, built and placed in the order its transaction key
+/// derives (module docs): what the signer takes, and the transaction's
+/// outputs, `tx_extra` and committed base.
+#[derive(Clone)]
+pub struct BuiltSpend {
+    /// The outputs in position order.
+    outputs: Vec<BuiltOutput>,
+    /// Which recipient each position holds.
+    order: OutputOrder,
+    /// The outputs as the transaction carries them.
+    wire: SpendOutputs,
+}
+
+impl BuiltSpend {
+    /// Build an output for each of `recipients` under `tx_key`, recipient
+    /// `i` at position `π(i)` ([`TxKey::output_order`]) with derivation
+    /// index `π(i)`, and the `tx_extra` that carries them.
     ///
     /// # Errors
     ///
-    /// As [`build_tx_extra`].
-    pub fn of(tx_key: &TxKey, built: &[BuiltOutput]) -> Result<Self, TxBuilderError> {
+    /// [`BuildSpendError`]: no recipient or more than [`MAX_OUTPUTS`], a
+    /// recipient's output the crypto crate refuses, or `tx_extra` the wire
+    /// codec refuses.
+    pub fn build(tx_key: &TxKey, recipients: &[Recipient<'_>]) -> Result<Self, BuildSpendError> {
+        let count = recipients.len();
+        if count == 0 {
+            return Err(BuildSpendError::NoOutputs);
+        }
+        if count > MAX_OUTPUTS {
+            return Err(BuildSpendError::TooManyOutputs { count });
+        }
+        let order = tx_key.output_order(count);
+        let outputs = order
+            .recipients()
+            .zip(0u64..)
+            .map(|(recipient, position)| {
+                let Recipient { payee, amount } = recipients[recipient];
+                build_output(tx_key, payee, amount, position)
+                    .map_err(|source| BuildSpendError::Output { recipient, source })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let wire = SpendOutputs::of(tx_key, &outputs).map_err(BuildSpendError::Extra)?;
+        Ok(Self {
+            outputs,
+            order,
+            wire,
+        })
+    }
+
+    /// The outputs in position order: the first is the transaction's
+    /// output 0.
+    #[must_use]
+    pub fn outputs(&self) -> &[BuiltOutput] {
+        &self.outputs
+    }
+
+    /// The position of `recipient`'s output, or `None` for a recipient the
+    /// spend does not pay.
+    #[must_use]
+    pub fn position_of(&self, recipient: usize) -> Option<usize> {
+        self.order.position_of(recipient)
+    }
+
+    /// `recipient`'s output, or `None` for a recipient the spend does not
+    /// pay.
+    #[must_use]
+    pub fn output_for(&self, recipient: usize) -> Option<&BuiltOutput> {
+        self.position_of(recipient).map(|p| &self.outputs[p])
+    }
+
+    /// The outputs as the transaction carries them.
+    #[must_use]
+    pub fn wire(&self) -> &SpendOutputs {
+        &self.wire
+    }
+
+    /// `tx_extra`: the transaction public key and every output's PQC
+    /// fields, in position order.
+    #[must_use]
+    pub fn extra(&self) -> &[u8] {
+        &self.wire.extra
+    }
+}
+
+/// A confidential spend's outputs as its transaction carries them: the
+/// prefix's outputs, `tx_extra`, and the committed base, in position
+/// order. A spend whose transaction is assembled in phases (a multisig
+/// spend's) takes its outputs from here; the one-shot encoder writes the
+/// same base through the same mapping. Made only by [`BuiltSpend::build`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpendOutputs {
+    outputs: Vec<Output>,
+    extra: Vec<u8>,
+    base: CtBase,
+}
+
+impl SpendOutputs {
+    /// The outputs `built`, in position order, built under `tx_key`.
+    fn of(tx_key: &TxKey, built: &[BuiltOutput]) -> Result<Self, TxBuilderError> {
         let enc_amounts: Vec<_> = built.iter().map(|b| b.info.enc_amount).collect();
         let enc_labels: Vec<_> = built.iter().map(|b| b.info.enc_label).collect();
         Ok(Self {
@@ -317,6 +450,25 @@ impl SpendOutputs {
                 built.iter().map(|b| b.commitment).collect(),
             ),
         })
+    }
+
+    /// The prefix's outputs, in position order.
+    #[must_use]
+    pub fn outputs(&self) -> &[Output] {
+        &self.outputs
+    }
+
+    /// `tx_extra`: the transaction public key and every output's PQC
+    /// fields.
+    #[must_use]
+    pub fn extra(&self) -> &[u8] {
+        &self.extra
+    }
+
+    /// The committed base: each output's commitment and encrypted fields.
+    #[must_use]
+    pub fn base(&self) -> &CtBase {
+        &self.base
     }
 }
 
@@ -357,40 +509,55 @@ mod tests {
     }
 
     /// A spend paying one address and one group: the group output carries
-    /// its `0x0D` entry, named by its own index, and the `tx_extra` the
-    /// builder writes is the shape consensus admits (CEN-I19).
+    /// its `0x0D` entry, named by the position it landed at, and the
+    /// `tx_extra` the builder writes is the shape consensus admits
+    /// (CEN-I19).
     #[test]
     fn a_spend_paying_a_group_carries_its_member_entries() {
         let tx_key = TxKey::random().unwrap();
         let (single_pk, _) = HybridX25519MlKem.keypair_generate().unwrap();
         let label = sentinel_plaintext();
         let spend_key = ED25519_BASEPOINT_POINT.compress().to_bytes();
-        let payee = Payee::Single {
-            spend_key: &spend_key,
-            view_x25519: &single_pk.x25519,
-            ml_kem_ek: &single_pk.ml_kem,
-            label_plaintext: &label,
-        };
         let address = group(3, 2);
-        let outputs = [
-            build_output(&tx_key, payee, 500, 0).unwrap(),
-            build_output(
-                &tx_key,
-                Payee::Group {
-                    address: &address,
-                    network: &NET,
+        let spend = BuiltSpend::build(
+            &tx_key,
+            &[
+                Recipient {
+                    payee: Payee::Single {
+                        spend_key: &spend_key,
+                        view_x25519: &single_pk.x25519,
+                        ml_kem_ek: &single_pk.ml_kem,
+                        label_plaintext: &label,
+                    },
+                    amount: 500,
                 },
-                700,
-                1,
-            )
-            .unwrap(),
-        ];
-        assert!(outputs[0].multisig_entry.is_none());
-        assert_eq!(outputs[1].multisig_entry.as_ref().unwrap().out_idx(), 1);
+                Recipient {
+                    payee: Payee::Group {
+                        address: &address,
+                        network: &NET,
+                    },
+                    amount: 700,
+                },
+            ],
+        )
+        .unwrap();
+        let group_position = spend.position_of(1).unwrap();
+        assert!(spend.output_for(0).unwrap().multisig_entry.is_none());
+        assert_eq!(
+            usize::from(
+                spend
+                    .output_for(1)
+                    .unwrap()
+                    .multisig_entry
+                    .as_ref()
+                    .unwrap()
+                    .out_idx()
+            ),
+            group_position
+        );
 
-        let extra = build_tx_extra(&tx_key, &outputs).unwrap();
-        let fields = parse(&extra).unwrap();
-        check_tx_extra_shape(&fields, outputs.len(), ExtraSubject::General).unwrap();
+        let fields = parse(spend.extra()).unwrap();
+        check_tx_extra_shape(&fields, spend.outputs().len(), ExtraSubject::General).unwrap();
         assert!(fields
             .iter()
             .any(|f| matches!(f, TxExtraField::PqcMultisig(entries) if entries.len() == 1)));
@@ -398,7 +565,7 @@ mod tests {
 
     /// The outputs as the transaction carries them: each prefix output is
     /// confidential under its built key and tag, the base holds each
-    /// output's commitment and encrypted fields in output order, and
+    /// output's commitment and encrypted fields in position order, and
     /// `tx_extra` is the builder's.
     #[test]
     fn a_spends_outputs_are_its_built_outputs_in_order() {
@@ -408,23 +575,75 @@ mod tests {
             address: &address,
             network: &NET,
         };
-        let built: Vec<BuiltOutput> = [400, 600]
-            .into_iter()
-            .zip(0u64..)
-            .map(|(amount, index)| build_output(&tx_key, payee, amount, index).unwrap())
-            .collect();
-        let spend = SpendOutputs::of(&tx_key, &built).unwrap();
-        for ((output, built), i) in spend.outputs.iter().zip(&built).zip(0..) {
+        let recipients = [400, 600, 800].map(|amount| Recipient { payee, amount });
+        let spend = BuiltSpend::build(&tx_key, &recipients).unwrap();
+        let wire = spend.wire();
+        for ((output, built), i) in wire.outputs().iter().zip(spend.outputs()).zip(0..) {
             assert_eq!(
                 output,
                 &Output::confidential(built.output_key, built.view_tag)
             );
-            assert_eq!(spend.base.commitments[i], built.commitment);
-            assert_eq!(spend.base.enc_amounts[i], built.info.enc_amount.to_bytes());
-            assert_eq!(spend.base.enc_labels[i], built.info.enc_label.to_bytes());
+            assert_eq!(wire.base().commitments[i], built.commitment);
+            assert_eq!(wire.base().enc_amounts[i], built.info.enc_amount.to_bytes());
+            assert_eq!(wire.base().enc_labels[i], built.info.enc_label.to_bytes());
         }
-        assert_eq!(spend.outputs.len(), built.len());
-        assert_eq!(spend.extra, build_tx_extra(&tx_key, &built).unwrap());
+        assert_eq!(wire.outputs().len(), recipients.len());
+        assert_eq!(
+            wire.extra(),
+            build_tx_extra(&tx_key, spend.outputs()).unwrap()
+        );
+    }
+
+    /// Recipient `i` sits at position `π(i)`, the key's order, and is built
+    /// with derivation index `π(i)`: the output a caller asks for by
+    /// recipient is the one the order puts there, and building it alone at
+    /// that index gives the same bytes.
+    #[test]
+    fn recipient_i_is_the_output_at_its_position_in_the_keys_order() {
+        let tx_key = TxKey::random().unwrap();
+        let address = group(3, 2);
+        let payee = Payee::Group {
+            address: &address,
+            network: &NET,
+        };
+        let recipients: Vec<Recipient<'_>> = (1..=5)
+            .map(|n| Recipient {
+                payee,
+                amount: 100 * n,
+            })
+            .collect();
+        let spend = BuiltSpend::build(&tx_key, &recipients).unwrap();
+        let order = tx_key.output_order(recipients.len());
+        for (recipient, r) in recipients.iter().enumerate() {
+            let position = order.position_of(recipient).unwrap();
+            assert_eq!(spend.position_of(recipient), Some(position));
+            let built = spend.output_for(recipient).unwrap();
+            assert_eq!(built.info.amount.to_raw(), r.amount);
+            let alone = build_output(&tx_key, payee, r.amount, position as u64).unwrap();
+            assert_eq!(built.output_key, alone.output_key);
+            assert_eq!(built.commitment, alone.commitment);
+        }
+        assert_eq!(spend.position_of(recipients.len()), None);
+    }
+
+    /// No recipient, or more than a transaction carries, builds nothing.
+    #[test]
+    fn a_spend_pays_one_to_max_outputs() {
+        let tx_key = TxKey::random().unwrap();
+        assert!(matches!(
+            BuiltSpend::build(&tx_key, &[]),
+            Err(BuildSpendError::NoOutputs)
+        ));
+        let address = group(3, 2);
+        let payee = Payee::Group {
+            address: &address,
+            network: &NET,
+        };
+        let over = vec![Recipient { payee, amount: 1 }; MAX_OUTPUTS + 1];
+        assert!(matches!(
+            BuiltSpend::build(&tx_key, &over),
+            Err(BuildSpendError::TooManyOutputs { count }) if count == MAX_OUTPUTS + 1
+        ));
     }
 
     /// The same transaction key, payee and index build the same output:

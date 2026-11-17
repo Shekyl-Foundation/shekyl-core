@@ -18,7 +18,7 @@ use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_crypto_pq::TxKey;
-use shekyl_tx_builder::outputs::{build_output, build_tx_extra, BuiltOutput, Payee, RecipientKeys};
+use shekyl_tx_builder::outputs::{BuildSpendError, BuiltSpend, Payee, Recipient, RecipientKeys};
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
     tx_prefix_hash_from_parts, InternalSignFault, LeafEntry, OutputInfo, PqcAuth, SignFault,
@@ -241,6 +241,25 @@ fn payment_outputs_of(
     Ok((total, payments))
 }
 
+impl From<BuildSpendError> for KeyEngineError {
+    fn from(fault: BuildSpendError) -> Self {
+        match fault {
+            BuildSpendError::NoOutputs => Self::Primitive {
+                detail: "no outputs after fee variant selection",
+            },
+            BuildSpendError::TooManyOutputs { count } => {
+                Self::Sign(SignFault::TooManyOutputs { count })
+            }
+            BuildSpendError::Output { source, .. } => {
+                Self::SourceCiphertextDecapsulationFailed(source)
+            }
+            BuildSpendError::Extra(_) => Self::Primitive {
+                detail: "tx_extra does not encode",
+            },
+        }
+    }
+}
+
 impl From<FeeVariantFault> for KeyEngineError {
     fn from(fault: FeeVariantFault) -> Self {
         match fault {
@@ -295,55 +314,43 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     // The transaction key: retained for the OUTBOUND proof (WI-RPC-3).
     let tx_key = TxKey::random()?;
 
-    let mut built_outputs: Vec<BuiltOutput> = Vec::new();
-    let mut output_index: u64 = 0;
-
-    for PaymentOutput {
-        destination,
-        amount,
-        label_plaintext,
-    } in payment_outputs
-    {
-        // The recipient's view key is mapped to X25519 by `RecipientKeys`.
-        let recipient = recipient_keys(&destination, network)?;
-        built_outputs.push(build_output(
-            &tx_key,
-            recipient.payee(&label_plaintext),
-            amount,
-            output_index,
-        )?);
-        output_index += 1;
-    }
-
+    // Each payment's keys, mapped once (the view key to X25519 by
+    // `RecipientKeys`); the recipients borrow them.
+    let payment_keys = payment_outputs
+        .iter()
+        .map(|payment| recipient_keys(&payment.destination, network))
+        .collect::<Result<Vec<_>, _>>()?;
+    let change_pk = derived.change_spend_pk();
+    let sentinel = sentinel_plaintext();
+    let mut recipients: Vec<Recipient<'_>> = payment_outputs
+        .iter()
+        .zip(&payment_keys)
+        .map(|(payment, keys)| Recipient {
+            payee: keys.payee(&payment.label_plaintext),
+            amount: payment.amount,
+        })
+        .collect();
     // A change is at least one unit (`fee_variant::fee_and_change`): when the
     // fee is the with-change fee, the change output is always built.
     if let Some(change_amount) = change.map(NonZeroU64::get) {
-        let change_pk = derived.change_spend_pk();
-        built_outputs.push(build_output(
-            &tx_key,
-            Payee::Single {
+        recipients.push(Recipient {
+            payee: Payee::Single {
                 spend_key: &change_pk,
                 view_x25519: &keys.x25519_pk,
                 ml_kem_ek: &keys.ml_kem_ek,
-                label_plaintext: &sentinel_plaintext(),
+                label_plaintext: &sentinel,
             },
-            change_amount,
-            output_index,
-        )?);
-    }
-
-    if built_outputs.is_empty() {
-        return Err(KeyEngineError::Primitive {
-            detail: "no outputs after fee variant selection",
+            amount: change_amount,
         });
     }
 
-    // tx_extra through the one builder every spend path uses: the tx pubkey,
-    // every output's KEM ciphertext, and the `0x07` leaf entries (CEN-I19).
-    let tx_extra =
-        build_tx_extra(&tx_key, &built_outputs).map_err(|_| KeyEngineError::Primitive {
-            detail: "tx_extra does not encode",
-        })?;
+    // The one builder every spend path uses places each output at the
+    // position the key derives (R-24), so the change sits anywhere, and
+    // writes tx_extra: the tx pubkey, every output's KEM ciphertext, and
+    // the `0x07` leaf entries (CEN-I19).
+    let built = BuiltSpend::build(&tx_key, &recipients)?;
+    let built_outputs = built.outputs();
+    let tx_extra = built.extra().to_vec();
 
     let mut bundles = HashMap::new();
     for input in &tx.inputs {
@@ -568,13 +575,11 @@ mod tests {
     }
 
     /// The bytes a transfer's outputs and `tx_extra` are made of, pinned for
-    /// a fixed transaction key: a payment and a change output built by
-    /// `build_output`, and `tx_extra` assembled as `sign_tx` assembles it
-    /// (recorded from the engine's own builder before it moved into
-    /// `shekyl_tx_builder::outputs`).
-    /// Output construction is deterministic given the transaction key, so a
-    /// move of the builder that changes any byte of a solo transfer fails
-    /// here.
+    /// a fixed transaction key: a payment and a change output built by the
+    /// builder `sign_tx` uses, in the order the key derives (R-24), and
+    /// their `tx_extra`. Output construction and order are deterministic
+    /// given the transaction key, so a change to the builder that moves any
+    /// byte of a solo transfer fails here.
     #[test]
     fn a_transfers_outputs_and_extra_are_pinned_for_a_fixed_tx_key() {
         const SEED: [u8; 32] = [21u8; 32];
@@ -589,20 +594,14 @@ mod tests {
             .expect("encode recipient address");
         let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
         let recipient = RecipientKeys::of_address(&decoded).expect("the address's keys");
-        let outputs: Vec<BuiltOutput> = [(7_000_000u64, 0u64), (2_500_000, 1)]
-            .into_iter()
-            .map(|(amount, index)| {
-                build_output(
-                    &tx_key,
-                    recipient.payee(&sentinel_plaintext()),
-                    amount,
-                    index,
-                )
-                .expect("build output")
-            })
-            .collect();
-        let mut transcript = build_tx_extra(&tx_key, &outputs).expect("tx_extra encodes");
-        for out in &outputs {
+        let label = sentinel_plaintext();
+        let recipients = [7_000_000u64, 2_500_000].map(|amount| Recipient {
+            payee: recipient.payee(&label),
+            amount,
+        });
+        let built = BuiltSpend::build(&tx_key, &recipients).expect("build the outputs");
+        let mut transcript = built.extra().to_vec();
+        for out in built.outputs() {
             transcript.extend_from_slice(&out.output_key);
             transcript.push(out.view_tag);
             transcript.extend_from_slice(&out.info.commitment_mask);
@@ -618,13 +617,13 @@ mod tests {
     /// A payment that answers a `shekyl:` link echoes the request id in its
     /// encrypted label and the recipient reads it back; a payment with no
     /// request carries the sentinel through the same construction. This is
-    /// the wiring `sign_tx` relies on: `build_output` encrypts exactly the
-    /// plaintext `outbound_label` chose for the destination.
+    /// the wiring `sign_tx` relies on: the builder encrypts exactly the
+    /// plaintext `outbound_label` chose for the destination, at whatever
+    /// position the key puts its output.
     #[test]
     fn payment_output_label_echoes_the_recipients_request_id() {
         const SEED: [u8; 32] = [21u8; 32];
         const TX_KEY: [u8; 32] = [23u8; 32];
-        const OUT_IDX: u64 = 1;
         const AMOUNT: u64 = 7_000_000;
 
         let recipient_keys = LocalKeys::from_test_seed(SEED);
@@ -636,7 +635,7 @@ mod tests {
         let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
         let recipient = RecipientKeys::of_address(&decoded).expect("the address's keys");
 
-        let recover = |built: &BuiltOutput| {
+        let recover = |built: &shekyl_tx_builder::outputs::BuiltOutput, position: usize| {
             let (ct_x25519, ct_ml_kem) = built.kem_blob.split_at(32);
             let mask = Scalar::from_bytes_mod_order(built.info.commitment_mask);
             let commitment = ((&mask * ED25519_BASEPOINT_TABLE)
@@ -657,7 +656,7 @@ mod tests {
                 built.info.enc_label.ciphertext(),
                 built.info.enc_label.tag(),
                 built.view_tag,
-                OUT_IDX,
+                position as u64,
             )
             .expect("recipient recovers the payment output")
         };
@@ -670,15 +669,18 @@ mod tests {
             ),
         ] {
             let label = label_plaintext_for_recipient(rid).expect("an encodable rid");
-            let built = build_output(
+            let spend = BuiltSpend::build(
                 &TxKey::seeded(TX_KEY),
-                recipient.payee(&label),
-                AMOUNT,
-                OUT_IDX,
+                &[Recipient {
+                    payee: recipient.payee(&label),
+                    amount: AMOUNT,
+                }],
             )
             .expect("construct payment output");
+            let position = spend.position_of(0).expect("the payment's position");
+            let built = &spend.outputs()[position];
             assert_eq!(
-                classify_label_plaintext(&recover(&built).label_plaintext),
+                classify_label_plaintext(&recover(built, position).label_plaintext),
                 expected,
                 "rid {rid:?}"
             );
@@ -687,14 +689,13 @@ mod tests {
 
     /// `stake_in`'s destination through the sign pass: a persona destination
     /// resolves to that persona's own keys with nothing encoded or decoded,
-    /// and the output `build_output` makes from them is one the persona's
+    /// and the output the builder makes from them is one the persona's
     /// scan recovers, owned by its spend key. A persona destination built
     /// from the wrong keys would leave an output nobody opens.
     #[test]
     fn a_persona_destination_builds_an_output_the_persona_recovers() {
         use crate::engine::stake_engine::test_fixtures::derive_bundle;
         const TX_KEY: [u8; 32] = [29u8; 32];
-        const OUT_IDX: u64 = 0;
         const AMOUNT: u64 = 9_000_000;
 
         let persona = derive_bundle(2);
@@ -708,13 +709,17 @@ mod tests {
         );
         assert_eq!(resolved.ml_kem_ek(), &persona.ml_kem_ek[..]);
 
-        let built = build_output(
+        let label = sentinel_plaintext();
+        let spend = BuiltSpend::build(
             &TxKey::seeded(TX_KEY),
-            resolved.payee(&sentinel_plaintext()),
-            AMOUNT,
-            OUT_IDX,
+            &[Recipient {
+                payee: resolved.payee(&label),
+                amount: AMOUNT,
+            }],
         )
         .expect("construct the persona's output");
+        let position = spend.position_of(0).expect("the persona's position");
+        let built = &spend.outputs()[position];
         let (ct_x25519, ct_ml_kem) = built.kem_blob.split_at(32);
         let mask = Scalar::from_bytes_mod_order(built.info.commitment_mask);
         let commitment = ((&mask * ED25519_BASEPOINT_TABLE)
@@ -735,7 +740,7 @@ mod tests {
             built.info.enc_label.ciphertext(),
             built.info.enc_label.tag(),
             built.view_tag,
-            OUT_IDX,
+            position as u64,
         )
         .expect("the persona recovers the output");
         assert_eq!(recovered.amount, AMOUNT);

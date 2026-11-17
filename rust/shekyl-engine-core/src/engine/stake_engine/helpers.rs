@@ -16,7 +16,7 @@ use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 
 use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
-use shekyl_tx_builder::outputs::{build_output, build_tx_extra, BuiltOutput, Payee};
+use shekyl_tx_builder::outputs::{BuiltOutput, BuiltSpend, Payee, Recipient};
 use shekyl_tx_builder::{LeafEntry, SpendInput};
 use shekyl_types::GlobalOutputIndex;
 use zeroize::Zeroizing;
@@ -55,14 +55,17 @@ pub(crate) struct ConstructedVouts {
     /// The vouts' `tx_extra`: the tx pubkey, every KEM ciphertext and the
     /// `0x07` leaf entries, through the transfer path's builder.
     pub(crate) tx_extra: Vec<u8>,
+    /// Where each amount's vout sits: `positions[i]` is the position of
+    /// `amounts[i]`'s output, the key's order (R-24).
+    pub(crate) positions: Vec<usize>,
 }
 
 /// Construct `amounts` as vouts to `P`'s base address, under the
 /// transaction key `tx_key`, through the builder every spend path uses
-/// (`shekyl_tx_builder::outputs`).
-/// `capture` sees each built output `(index, &BuiltOutput)`, so the
-/// emission path lifts its reward commit without a second loop or a
-/// parallel construction site.
+/// (`shekyl_tx_builder::outputs`), which places them in the key's order
+/// (R-24). `capture` sees each built output as `(i, &BuiltOutput)`, `i` its
+/// place in `amounts`, so the emission path lifts its reward commit without
+/// a second loop or a parallel construction site.
 pub(crate) fn construct_vouts_to_base(
     keys: &ArchivalPKeys,
     tx_key: &shekyl_crypto_pq::TxKey,
@@ -71,33 +74,37 @@ pub(crate) fn construct_vouts_to_base(
     mut capture: impl FnMut(usize, &BuiltOutput),
 ) -> Result<ConstructedVouts, BondAssemblyError> {
     let label = sentinel_plaintext();
-    let built: Vec<BuiltOutput> = amounts
+    let recipients: Vec<Recipient<'_>> = amounts
         .iter()
-        .zip(0u64..)
-        .map(|(&amount, index)| {
-            build_output(
-                tx_key,
-                Payee::Single {
-                    spend_key: keys.spend_pk.as_canonical_bytes(),
-                    view_x25519: &keys.x25519_pk,
-                    ml_kem_ek: &keys.ml_kem_ek,
-                    label_plaintext: &label,
-                },
-                amount,
-                index,
-            )
-            .map_err(|e| BondAssemblyError::build(error_site, e))
+        .map(|&amount| Recipient {
+            payee: Payee::Single {
+                spend_key: keys.spend_pk.as_canonical_bytes(),
+                view_x25519: &keys.x25519_pk,
+                ml_kem_ek: &keys.ml_kem_ek,
+                label_plaintext: &label,
+            },
+            amount,
         })
-        .collect::<Result<_, _>>()?;
-    for (idx, output) in built.iter().enumerate() {
-        capture(idx, output);
+        .collect();
+    let built = BuiltSpend::build(tx_key, &recipients)
+        .map_err(|e| BondAssemblyError::build(error_site, e))?;
+    let positions: Vec<usize> = (0..amounts.len())
+        .map(|i| {
+            built
+                .position_of(i)
+                .expect("the builder places every recipient")
+        })
+        .collect();
+    for (i, &position) in positions.iter().enumerate() {
+        capture(i, &built.outputs()[position]);
     }
+    let outputs = built.outputs();
     Ok(ConstructedVouts {
-        output_infos: built.iter().map(|b| b.info.clone()).collect(),
-        output_keys: built.iter().map(|b| b.output_key).collect(),
-        view_tags: built.iter().map(|b| Some(b.view_tag)).collect(),
-        tx_extra: build_tx_extra(tx_key, &built)
-            .map_err(|e| BondAssemblyError::build(error_site, e))?,
+        output_infos: outputs.iter().map(|b| b.info.clone()).collect(),
+        output_keys: outputs.iter().map(|b| b.output_key).collect(),
+        view_tags: outputs.iter().map(|b| Some(b.view_tag)).collect(),
+        tx_extra: built.extra().to_vec(),
+        positions,
     })
 }
 

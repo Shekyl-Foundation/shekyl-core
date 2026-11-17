@@ -1452,6 +1452,42 @@ The concrete surface deltas, now that W and D are pinned:
 
 ---
 
+### 3.11 Output order (R-24)
+
+Every transaction a wallet builds places its outputs in the order its
+transaction key derives, so no transaction says by its layout which
+output came back to the sender (ruling R-24, 2026-11-15; mission
+commitment 2). The order is `TxKey::output_order` (`shekyl-crypto-pq`
+`output_order.rs`): an unbiased Fisher–Yates shuffle over an HKDF-SHA-512
+stream of the key under `shekyl/tx-output-order-v1`, with pinned vectors
+(`docs/test_vectors/TX_OUTPUT_ORDER_V1.json`) and an independent oracle
+(`scripts/kat/tx_output_order_oracle.py`).
+
+- **One place orders outputs.** `shekyl_tx_builder::outputs::BuiltSpend::build`
+  takes a list of recipients, never a position: recipient `i` lands at
+  `π(i)` and is built with derivation index `π(i)`, so a recipient's scan
+  is unchanged. The single-output builder is private to that crate
+  (a `compile_fail` holds it). A caller that needs one recipient's output
+  asks for it by recipient.
+- **Solo.** The key is drawn from the OS, so the change lands at each
+  position with equal probability (a seeded chi-square test holds it).
+- **Multisig.** The key comes from the intent, so every member derives the
+  same order; the intent's recipients stay sorted (`PQC_MULTISIG.md` §9.5).
+- **Consensus reads no wallet-built output by position.** Each kind:
+
+| Kind | Outputs | Read by position? | Order |
+|---|---|---|---|
+| Transfer | payments and change | no | `π` over all |
+| Drain | principal and `P` change (or two principal halves) | no | `π` over all |
+| Bond post | confidential change to `P` | no | `π` over all |
+| Emission claim | one loud reward vout and two change vouts | no: CEN-J24's reward set is the loud vouts in vout order, wherever they sit | `π` over all; the claim reads its reward's position back for the cross-check and the wire amounts |
+| Group spend | the intent's recipients, change among them | no | `π` over all |
+
+- **Not wallet-built.** The coinbase and the genesis transaction, whose
+  outputs are public by construction, take no order.
+- **An exact spend** (two outputs, no change) pads nothing here; that
+  question is the wallet lane's.
+
 ## 4. Wire encoding ownership (closed — Round 1)
 
 **Decision.** The byte layout `submit_transaction` accepts is **already

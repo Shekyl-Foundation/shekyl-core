@@ -70,13 +70,14 @@ use shekyl_fcmp::frost_sal::{FrostSalError, SalSigningParams, SpentOutput};
 use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::PqcLeafScalar;
 use shekyl_network::NetworkId;
-use shekyl_tx_builder::outputs::{build_output, BuiltOutput, Payee, RecipientKeys, SpendOutputs};
-use shekyl_tx_builder::TxBuilderError;
+use shekyl_tx_builder::outputs::{
+    BuildSpendError, BuiltSpend, Payee, Recipient, RecipientKeys, SpendOutputs,
+};
 use shekyl_types::{KeyImage, TxSignableHash};
 use shekyl_wire::{CtBase, Output};
 use zeroize::Zeroizing;
 
-use crate::intent::{ResolvedPayee, ResolvedRecipient};
+use crate::intent::ResolvedPayee;
 use crate::invariants::ValidatedIntent;
 
 /// A spendable output paid to the group, as this member's ledger records
@@ -234,22 +235,23 @@ pub struct UnsignedSpend {
 }
 
 impl UnsignedSpend {
-    /// The prefix's outputs, in output order.
+    /// The prefix's outputs, in position order (R-24: recipient `i` at
+    /// `π(i)`).
     #[must_use]
     pub fn outputs(&self) -> &[Output] {
-        &self.outputs.outputs
+        self.outputs.outputs()
     }
 
     /// `tx_extra`.
     #[must_use]
     pub fn extra(&self) -> &[u8] {
-        &self.outputs.extra
+        self.outputs.extra()
     }
 
     /// The committed base: each output's commitment and encrypted fields.
     #[must_use]
     pub fn base(&self) -> &CtBase {
-        &self.outputs.base
+        self.outputs.base()
     }
 }
 
@@ -285,16 +287,21 @@ pub enum DeriveError {
     /// Two inputs have one key image: one output spent twice.
     #[error("two inputs have one key image")]
     DuplicateKeyImage,
-    /// An output cannot be built to its recipient.
-    #[error("output {index} does not build: {source}")]
-    Output {
-        index: usize,
+    /// A single-signer recipient's address keys do not map to the keys its
+    /// output is built to.
+    #[error("recipient {recipient}'s keys do not map: {source}")]
+    Recipient {
+        recipient: usize,
         #[source]
         source: CryptoError,
     },
-    /// The outputs' `tx_extra` does not encode.
-    #[error("the outputs' tx_extra does not encode: {0}")]
-    Extra(TxBuilderError),
+    /// The builder refused the outputs.
+    #[error("the outputs do not build: {0}")]
+    Outputs(#[source] BuildSpendError),
+    /// The output at `position` does not open at its amount: its mask is
+    /// not a canonical scalar.
+    #[error("the output at position {position} does not open")]
+    Opening { position: usize },
     /// The pseudo-out blinds do not derive.
     #[error("the pseudo-out blinds do not derive: {0}")]
     Blinds(CryptoError),
@@ -320,8 +327,10 @@ impl DerivedSpend {
     /// global indices and re-deriving its secrets under `key`, the group's
     /// key from this member's file.
     ///
-    /// Recipient `i` is output `i`; each output is built to its resolved
-    /// payee under the intent's transaction key. Input `j` of the intent
+    /// Recipient `i` is the output at position `π(i)`, the order the
+    /// intent's transaction key derives (R-24), so every member places the
+    /// outputs alike; each is built to its resolved payee under that key.
+    /// Input `j` of the intent
     /// takes the `j`-th derived pseudo-out blind and rerandomization seed;
     /// the last blind balances the outputs' masks. The inputs are then put
     /// in the transaction's order.
@@ -344,27 +353,57 @@ impl DerivedSpend {
         let tree = one_tree(&intent, &records)?;
         let seed = &intent.intent().kem_randomness_seed;
         let tx_key = TxKey::from_intent_seed(seed);
-        let built = intent
+        // A single-signer recipient's keys, mapped once; the payees borrow
+        // them.
+        let single_keys = intent
             .recipients()
             .iter()
-            .zip(0u64..)
             .enumerate()
-            .map(|(index, (recipient, output_index))| {
-                build_recipient_output(&tx_key, recipient, output_index, &network_id)
-                    .map_err(|source| DeriveError::Output { index, source })
+            .filter_map(|(recipient, r)| match &r.payee {
+                ResolvedPayee::Single { address, .. } => Some(
+                    RecipientKeys::of_address(address.as_address())
+                        .map_err(|source| DeriveError::Recipient { recipient, source }),
+                ),
+                ResolvedPayee::Group(_) => None,
             })
-            .collect::<Result<Vec<BuiltOutput>, _>>()?;
-        let output_masks: Zeroizing<Vec<[u8; 32]>> =
-            Zeroizing::new(built.iter().map(|b| b.info.commitment_mask).collect());
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut keys = single_keys.iter();
+        let recipients: Vec<Recipient<'_>> = intent
+            .recipients()
+            .iter()
+            .map(|r| Recipient {
+                payee: match &r.payee {
+                    ResolvedPayee::Single {
+                        label_plaintext, ..
+                    } => keys
+                        .next()
+                        .expect("one mapped key per single-signer recipient")
+                        .payee(label_plaintext),
+                    ResolvedPayee::Group(address) => Payee::Group {
+                        address,
+                        network: &network_id,
+                    },
+                },
+                amount: r.amount.to_raw(),
+            })
+            .collect();
+        // Recipient `i` lands at `π(i)`, the order the intent's key derives,
+        // alike for every member (R-24).
+        let built = BuiltSpend::build(&tx_key, &recipients).map_err(DeriveError::Outputs)?;
+        let output_masks: Zeroizing<Vec<[u8; 32]>> = Zeroizing::new(
+            built
+                .outputs()
+                .iter()
+                .map(|b| b.info.commitment_mask)
+                .collect(),
+        );
         let output_openings = built
+            .outputs()
             .iter()
             .enumerate()
-            .map(|(index, b)| {
+            .map(|(position, b)| {
                 Commitment::from_canonical_mask(&b.info.commitment_mask, b.info.amount.to_raw())
-                    .ok_or(DeriveError::Output {
-                        index,
-                        source: CryptoError::InvalidKeyMaterial,
-                    })
+                    .ok_or(DeriveError::Opening { position })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let blinds = seed
@@ -391,7 +430,7 @@ impl DerivedSpend {
             return Err(DeriveError::DuplicateKeyImage);
         }
         let unsigned = UnsignedSpend {
-            outputs: SpendOutputs::of(&tx_key, &built).map_err(DeriveError::Extra)?,
+            outputs: built.wire().clone(),
         };
         Ok(Self {
             network_id,
@@ -475,34 +514,6 @@ fn one_tree(
         }
     }
     Ok(tree.expect("a validated intent spends at least one input"))
-}
-
-/// The output paying `recipient` at `output_index`, under `tx_key`.
-fn build_recipient_output(
-    tx_key: &TxKey,
-    recipient: &ResolvedRecipient,
-    output_index: u64,
-    network_id: &NetworkId,
-) -> Result<BuiltOutput, CryptoError> {
-    let amount = recipient.amount.to_raw();
-    match &recipient.payee {
-        ResolvedPayee::Single {
-            address,
-            label_plaintext,
-        } => {
-            let keys = RecipientKeys::of_address(address.as_address())?;
-            build_output(tx_key, keys.payee(label_plaintext), amount, output_index)
-        }
-        ResolvedPayee::Group(address) => build_output(
-            tx_key,
-            Payee::Group {
-                address,
-                network: network_id,
-            },
-            amount,
-            output_index,
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -901,20 +912,20 @@ mod tests {
         }
     }
 
-    /// Recipient `i` is output `i`, opened at its amount; the blinds
+    /// Recipient `i` is the output at position `π(i)`, the order the
+    /// intent's key derives (R-24), opened at its amount; the blinds
     /// balance the outputs' masks.
     #[test]
-    fn the_outputs_are_the_recipients_in_order() {
+    fn recipient_i_is_the_output_at_its_position_in_the_intents_order() {
         let g = group();
-        let derived = DerivedSpend::derive(
-            validated(&g, bytes32()),
-            &ledger(&pay(&g), 0),
-            &g.key(),
-            NET_ID,
-        )
-        .unwrap();
+        let seed = bytes32();
+        let derived =
+            DerivedSpend::derive(validated(&g, seed), &ledger(&pay(&g), 0), &g.key(), NET_ID)
+                .unwrap();
+        let order = TxKey::from_intent_seed(&IntentSeed::new(&seed)).output_order(OUTPUTS.len());
         let amounts: Vec<u64> = derived.output_openings.iter().map(|o| o.amount).collect();
-        assert_eq!(amounts, OUTPUTS);
+        let expected: Vec<u64> = order.recipients().map(|r| OUTPUTS[r]).collect();
+        assert_eq!(amounts, expected);
         assert_eq!(derived.unsigned.outputs().len(), OUTPUTS.len());
         let blinds: Scalar = derived
             .inputs

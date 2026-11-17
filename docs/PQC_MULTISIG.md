@@ -781,7 +781,7 @@ SpendIntent {
     // Content
     recipients: [
         { kind: u8, address: bytes, label: [u8; 8] (single-signer only), amount: u64 }
-    ]   // sorted; recipient i is output i
+    ]   // sorted; recipient i is output π(i) (R-24, §9.5)
     fee:                      u64
     input_global_indices:     [u64]
 
@@ -914,8 +914,13 @@ checked by an independent oracle (`scripts/kat/multisig_intent_derive_oracle.py`
 
 `j` is the input's position in the intent's `input_global_indices`, not
 in the transaction, so a member derives every value before it knows the
-key images that order the transaction's inputs. Recipient `i` is output
-`i`. The range proof's and the membership proof's own blinds are not
+key images that order the transaction's inputs. Recipient `i` is the
+output at position `π(i)`, the order the transaction key derives
+(`TxKey::output_order`, under `shekyl/tx-output-order-v1`; R-24), which
+is the order every wallet-built transaction takes. The key comes from the
+intent, so every member derives the same `π`; the recipients stay sorted,
+so the intent's encoding stays canonical, and `π` decides where each
+lands. The range proof's and the membership proof's own blinds are not
 derived: the proposer draws them, and every member verifies the proofs
 instead of rebuilding them. The labels are registered in
 `CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 2), and
@@ -948,7 +953,8 @@ Given verified `SpendIntent`, every member runs:
    refuse (§2.7); do not proceed.
 2. **Output derivation** (§7.1). For each recipient (including change
    output, if any), derive the output key, the KEM ciphertexts and the
-   leaf commitment.
+   leaf commitment at the position `π(i)` the transaction key derives
+   (§9.5, R-24), which is also the output's derivation index.
 3. **Transaction prefix construction.** Inputs reference each input's
    key image, which every member computes alone (§15.4a); outputs are
    derived per step 2; `tx_extra` carries each multisig output's `0x0D`

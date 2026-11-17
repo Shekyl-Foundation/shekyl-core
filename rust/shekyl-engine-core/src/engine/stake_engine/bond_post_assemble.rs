@@ -108,6 +108,9 @@ pub(crate) async fn assemble_signed_bond_post(
         output_keys,
         view_tags,
         tx_extra,
+        // Every bond-post vout is confidential change to `P`: their places
+        // name nothing.
+        positions: _,
     } = construct_vouts_to_base(
         args.keys,
         &tx_key,
