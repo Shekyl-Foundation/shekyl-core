@@ -92,7 +92,7 @@ use super::prpc::PersonaIsolatedTransport;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
     AssembleEmissionClaim, AssembledEmissionClaim, PersonaHandle, StakeEngineError,
-    StakeEngineHandle, TxKeyDraw,
+    StakeEngineHandle,
 };
 
 /// Why the claim pipeline refused before (or at) the actor hand-off. Every
@@ -129,6 +129,10 @@ pub(crate) enum ClaimOrchestrationError {
     /// The actor refused or failed the assembly itself.
     #[error(transparent)]
     Stake(#[from] StakeEngineError),
+    /// The OS's random source failed while drawing the claim's transaction
+    /// key; nothing was assembled.
+    #[error(transparent)]
+    Randomness(#[from] shekyl_crypto_pq::tx_key::RandomnessUnavailable),
     /// The daemon reports it is still synchronizing (`WSS-Q14`), so the
     /// record it would answer with is not a settled view of the chain.
     ///
@@ -377,7 +381,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
             tree_ctx,
             // Ruling 9: the set clears the live fee, floored by the hold.
             fee_floor: super::emission_claim::claim_value_floor(ctx.fee, ctx.fee_floor),
-            tx_key: TxKeyDraw::Fresh,
+            tx_key: shekyl_crypto_pq::TxKey::random()?,
         })
         .await?;
     Ok(OrchestratedClaim {

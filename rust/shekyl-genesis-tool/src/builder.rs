@@ -29,7 +29,7 @@ use shekyl_wire::tx_extra::{
 };
 
 use crate::recipients::{Recipient, GENESIS_TOTAL_ATOMIC};
-use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
+use crate::txkey::genesis_tx_key;
 use crate::{invalid, GenesisToolError};
 use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot, TxHash};
 
@@ -69,8 +69,8 @@ pub fn build_genesis_tx(
     net: Network,
     recipients: &[Recipient],
 ) -> Result<BuiltGenesis, GenesisToolError> {
-    let tx_secret = derive_genesis_tx_secret(net, recipients);
-    let tx_pub = tx_pubkey(&tx_secret);
+    let tx_key = genesis_tx_key(net, recipients);
+    let tx_pub = tx_key.public_bytes();
 
     let mut outputs = Vec::with_capacity(recipients.len());
     let mut enc_amounts = Vec::with_capacity(recipients.len());
@@ -90,7 +90,7 @@ pub fn build_genesis_tx(
 
         let index = u64::try_from(i).expect("recipient index fits u64");
         let od = construct_output(
-            &tx_secret,
+            &tx_key,
             &x25519_pk,
             &r.address.ml_kem_encap_key,
             &r.address.spend_key,

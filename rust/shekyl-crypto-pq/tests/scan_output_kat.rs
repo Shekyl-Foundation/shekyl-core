@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation, MlKemDecapsKey};
 use shekyl_crypto_pq::output::{construct_output, scan_output_recover_with_ml_kem_dk};
+use shekyl_crypto_pq::TxKey;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Vector {
@@ -106,7 +107,7 @@ fn scan_output_view_tag_kat() {
     for (i, v) in file.vectors.iter().enumerate() {
         // ── builder pin: reconstruct the output and assert byte-identity ──
         let out = construct_output(
-            &h32(&v.tx_key),
+            &TxKey::seeded(h32(&v.tx_key)),
             &h32(&v.recipient_x25519_pk),
             &hv(&v.recipient_ml_kem_ek),
             &h32(&v.spend_key),
@@ -279,7 +280,7 @@ fn gen_scan_output_kat() {
         .iter()
         .map(|s| {
             let out = construct_output(
-                &s.tx_key,
+                &TxKey::seeded(s.tx_key),
                 &s.x25519_pk,
                 &s.ml_kem_ek,
                 &s.spend_key,

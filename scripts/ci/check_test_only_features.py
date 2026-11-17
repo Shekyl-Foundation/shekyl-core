@@ -364,6 +364,17 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "shekyl-crypto-pq's seeded-rng. The crate is test support reached through dev "
     "edges only; this row keeps the seeded surface there too",
     (
+        "shekyl-harness-wallet",
+        "seeded-rng",
+    ): "exposes the fixture coinbase (coinbase.rs: paying, repay, paid), whose "
+    "transaction key is pinned per height through shekyl-crypto-pq's "
+    "TxKey::seeded (R-21), so one recipient's coinbase at one height is the same "
+    "bytes in every run. Forwards shekyl-crypto-pq's seeded-rng; forwarded by "
+    "shekyl-chain-rules' TEST_ONLY harness and shekyl-harness-spender's "
+    "TEST_ONLY seeded-rng (CF-F5's rule accepts both), and enabled on the store's, "
+    "the ingest's and the rules crate's dev edges. A shipped build has no coinbase "
+    "a caller can pin",
+    (
         "shekyl-network",
         "harness",
     ): "exposes HARNESS_NETWORK_ID, the id a harness chain that mines its own "
@@ -557,6 +568,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-crypto-pq",
         "shekyl-tx-builder",
         "shekyl-harness-spender",
+        "shekyl-harness-wallet",
     }
 )
 

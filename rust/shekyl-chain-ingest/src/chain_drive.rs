@@ -39,10 +39,10 @@ use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::codec::{PropertyCell, UndoLogFloorCell};
 use shekyl_chain_store::store::RawRows;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::TxKey;
 use shekyl_harness_spender::{Owner, Spender};
 use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::Transaction;
-use zeroize::Zeroizing;
 
 use crate::archival_driver::FEE;
 use crate::connector::{ArchivalState, Rewound};
@@ -187,7 +187,7 @@ pub async fn priced_emission_claim(
         let claim = assemble_emission_claim_drawing(
             parts.seeds,
             parts.keys,
-            &Zeroizing::new(parts.tx_key),
+            &TxKey::seeded(parts.tx_key),
             vec![fee_input.input],
             backing.input,
             parts.terms.clone(),

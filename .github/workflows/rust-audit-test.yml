@@ -10,11 +10,9 @@ name: ci/gh-actions/rust
 # purely a re-run-isolation change, not a graph change.
 #
 # Branch-protection note: required status checks are keyed by the bare job
-# name ("Rust: audit, test, determinism") plus the GitHub Actions app, not by
-# the workflow name — the "ci/gh-actions/cli /" prefix in the PR UI is display
-# grouping only. Because this split keeps the job name identical, the existing
-# required-check context keeps matching this job in its new workflow; no
-# ruleset / branch-protection change is needed.
+# name plus the GitHub Actions app, not by the workflow name. The one this
+# workflow reports is `rust-pass` (the `pass` job at the end), which stands
+# for every job in it (ruled 2026-11-16).
 
 on:
   push:
@@ -26,7 +24,9 @@ on:
     # suppress the required check.
     branches: [dev, main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `ready_for_review`: the heavy jobs below skip a draft, and run when it
+    # is marked ready (ruled 2026-11-16).
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
@@ -54,7 +54,7 @@ jobs:
   # See build.yml's `changes` job for why this is a job-level condition rather
   # than a workflow `paths` filter: a path filter suppresses the WORKFLOW, so a
   # docs-only PR gets no check at all and branch protection waits forever for
-  # `Rust: audit, test, determinism`. A skipped job still reports.
+  # `rust-pass`. A job skipped by its `if:` is accepted by `rust-pass`.
   #
   # Code inputs under docs/ (docs/design/CRYPTO_DOMAIN_REGISTRY.tsv, which
   # shekyl-crypto-pq's tests include_str!, and the test vectors) are found by
@@ -114,9 +114,13 @@ jobs:
     name: "Rust: audit, test, determinism"
     needs: changes
     # Skipped for a docs-only change, and for a change owned by other jobs
-    # alone (a documentation gate, another workflow's job). It still
-    # reports, as "skipped", so branch protection does not wait on it.
-    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.rust_job != 'skip'
+    # alone (a documentation gate, another workflow's job). Skipped on a
+    # draft pull request too (ruled 2026-11-16): the `ready_for_review` run
+    # runs it on the same head. `rust-pass` accepts a skip by scope and
+    # reports only once this job has finished.
+    if: >-
+      needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.rust_job != 'skip'
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     # The six green runs under nextest (2026-11-07) took 120, 179, 180,
     # 181, 183 and 236 min, so twice the p90 passes the 360 min platform
@@ -669,7 +673,7 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-bundle-producer -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-wire --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-bundle-producer -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-harness-wallet -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-wire --lib -- -D warnings
       - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
         working-directory: rust
         # The economics sim depends on shekyl-mempool with
@@ -861,10 +865,15 @@ jobs:
     # any test the Rust job runs: #1323 (the block-weight surge factor, 4 to
     # 3) merged green and the nightly lane stayed red for three nights
     # (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.30). This job runs the pins on
-    # every change whose test scope reaches the sim, on its own runner beside
+    # every change to what a narration is made of (`sim_narrations` in
+    # scripts/ci/change_scope.py: the consensus configuration, the economics
+    # crates, the block-weight rule and the sim), on its own runner beside
     # the Rust job, so it adds runner time and no wall time. The nightly lane
     # still runs them, with the tests too long for a pull request.
-    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.sim_narrations == 'run'
+    # Skipped on a draft pull request, like the Rust job (ruled 2026-11-16).
+    if: >-
+      needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.sim_narrations == 'run'
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     timeout-minutes: 55  # one run, 26.7 min (#1375 at daff21237: release build 4.6, four pins 21.7); about twice it
     steps:
@@ -879,8 +888,34 @@ jobs:
         # against the crate's ignored set before it runs.
         run: bash scripts/ci/ignored_set_economics_sim.sh --narrations
 
-  report-dev-red:
+  # The one required check for this workflow: `rust-pass`
+  # (scripts/ci/workflow_pass.py, ruled 2026-11-16). It needs every other
+  # job but the reporter and runs whatever they did, so it reports once all
+  # of them have finished: green when each succeeded or was skipped by
+  # scope, red when the scope job did not succeed or any job failed or was
+  # cancelled. On a draft it reports as `rust-pass (draft)`, a name
+  # protection does not require, so a draft never satisfies it and a PR
+  # marked ready waits for its own `rust-pass`. build.yml's `pass` job
+  # carries the full reasoning; `workflow_pass.py --check` holds both.
+  pass:
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'rust-pass (draft)' || 'rust-pass' }}
     needs: [changes, rust-audit-and-test, economics-sim-narrations]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/ci/workflow_pass.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: every job succeeded or was skipped by scope
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/workflow_pass.py --decide --scope changes
+
+  report-dev-red:
+    needs: [changes, rust-audit-and-test, economics-sim-narrations, pass]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
       actions: read

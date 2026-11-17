@@ -5,7 +5,7 @@
 
 //! Outbound and inbound transaction proofs.
 //!
-//! Outbound: sender reveals tx_key_secret; verifier re-derives combined_ss
+//! Outbound: sender discloses the transaction key; verifier re-derives combined_ss
 //! via deterministic KEM encapsulation, checks the derived ciphertexts
 //! match on-chain, then projects to ProofSecrets and verifies O, C, and
 //! amount. Ed25519 Schnorr signature seals the proof contents.
@@ -16,20 +16,22 @@
 //!
 //! Wire format (hand-rolled canonical, no bincode):
 //!
-//! Outbound: `101 + 132*N` bytes
-//!   header: version[1] + tx_key_secret[32] + schnorr[64] + output_count[4]
+//! ```text
+//! Outbound: 101 + 132*N bytes
+//!   header: version[1] + tx_key[32] (disclosed) + schnorr[64] + output_count[4]
 //!   per-output: vout_index[u32 LE] + ho[32] + y[32] + z[32] + k_amount[32]
 //!
-//! Inbound: `69 + 132*N` bytes
+//! Inbound: 69 + 132*N bytes
 //!   header: version[1] + schnorr[64] + output_count[4]
 //!   per-output: vout_index[u32 LE] + ho[32] + y[32] + z[32] + k_amount[32]
+//! ```
 //!
 //! Each entry carries the transaction-level output index (`vout_index`) it
 //! proves, and entries are ordered strictly increasing by that index. The
 //! carried index is load-bearing twice over: the verifier holds only
 //! `(proof, txid, address)` and needs to know WHICH tx outputs each entry
 //! refers to, and outbound KEM re-derivation is per-output-index
-//! (`rederive_combined_ss(tx_key_secret, …, vout_index)`), so a positional
+//! (`DisclosedTxKey::rederive_combined_ss(…, vout_index)`), so a positional
 //! convention would silently mis-verify any proof over a non-prefix output
 //! subset (e.g. the second recipient of a two-recipient tx). The index rides
 //! inside the Schnorr-signed per-output blob; independently of the
@@ -48,8 +50,10 @@ use shekyl_curve_generators::{H as H_POINT_LAZY, T as T_LAZY};
 
 use crate::error::ProofError;
 use shekyl_crypto_pq::kem::SharedSecret;
-use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};
+use shekyl_crypto_pq::output::{derive_proof_secrets, ProofSecrets};
 use shekyl_crypto_pq::schnorr;
+use shekyl_crypto_pq::tx_key::DisclosedTxKey;
+use shekyl_crypto_pq::TxKey;
 use shekyl_network::envelope::{Framed32, IdDomain};
 use shekyl_network::NetworkId;
 
@@ -73,7 +77,7 @@ pub const OUTBOUND_MESSAGE: IdDomain<4> = IdDomain::new(b"shekyl/tx-proof-outbou
 pub const INBOUND_MESSAGE: IdDomain<4> = IdDomain::new(b"shekyl/tx-proof-inbound-v1");
 
 const PER_OUTPUT_SIZE: usize = 132; // vout[4] + ho[32] + y[32] + z[32] + k_amount[32]
-const OUTBOUND_HEADER_SIZE: usize = 101; // version[1] + tx_key_secret[32] + sig[64] + count[4]
+const OUTBOUND_HEADER_SIZE: usize = 101; // version[1] + tx_key[32] + sig[64] + count[4]
 const INBOUND_HEADER_SIZE: usize = 69; // version[1] + sig[64] + count[4]
 
 // ── Per-output entry serialization ──────────────────────────────────
@@ -180,12 +184,12 @@ pub struct VerifiedOutput {
 
 /// Generate an outbound transaction proof.
 ///
-/// The sender reveals `tx_key_secret` and signs with it. The verifier
-/// can re-derive combined_ss via KEM re-encapsulation and check that the
-/// per-output ProofSecrets match.
+/// The sender discloses the transaction key and signs with it
+/// ([`TxKey::disclose`]). The verifier re-derives combined_ss via KEM
+/// re-encapsulation and checks that the per-output ProofSecrets match.
 ///
 /// # Arguments
-/// - `tx_key_secret`: the per-tx ephemeral secret (32 bytes)
+/// - `tx_key`: the transaction's key, as the wallet stored it
 /// - `txid`: transaction hash (32 bytes)
 /// - `address_bytes`: canonical encoding of the recipient address
 /// - `user_message`: arbitrary user-supplied message string
@@ -200,7 +204,7 @@ pub struct VerifiedOutput {
 )]
 pub fn generate_outbound_proof(
     network_id: &NetworkId,
-    tx_key_secret: &[u8; 32],
+    tx_key: &TxKey,
     txid: &[u8; 32],
     address_bytes: &[u8],
     user_message: &[u8],
@@ -217,13 +221,13 @@ pub fn generate_outbound_proof(
     let mut per_output_secrets: Vec<(u64, SharedSecret)> = Vec::with_capacity(output_indices.len());
     for &idx in output_indices {
         let (combined_ss, _x25519_eph_pk, _ml_kem_ct) =
-            rederive_combined_ss(tx_key_secret, recipient_x25519_pk, recipient_ml_kem_ek, idx)?;
+            tx_key.rederive_combined_ss(recipient_x25519_pk, recipient_ml_kem_ek, idx)?;
         per_output_secrets.push((idx, combined_ss));
     }
 
     generate_outbound_proof_with_secrets(
         network_id,
-        tx_key_secret,
+        tx_key,
         txid,
         address_bytes,
         user_message,
@@ -234,7 +238,7 @@ pub fn generate_outbound_proof(
 /// As [`generate_outbound_proof`], but over **pre-derived** per-output
 /// shared secrets: `(vout_index, combined_ss)` pairs, strictly increasing
 /// by index, where each `combined_ss` is the
-/// [`rederive_combined_ss`]`(tx_key_secret, …, vout_index)` result the
+/// [`TxKey::rederive_combined_ss`]`(…, vout_index)` result the
 /// caller already holds (a generator that discovered the recipient's
 /// outputs by KEM re-derivation has run the hybrid KEM once per output
 /// and need not run it again here).
@@ -242,12 +246,12 @@ pub fn generate_outbound_proof(
 /// The wire format is byte-identical to [`generate_outbound_proof`] —
 /// that entry point derives the same pairs and delegates to this one, so
 /// there is exactly one serializer. The caller is responsible for the
-/// pairs actually matching `tx_key_secret` (a mismatched secret produces
+/// pairs actually matching `tx_key` (a mismatched key produces
 /// a proof that fails the verifier's KEM re-derivation check).
 #[allow(clippy::cast_possible_truncation)]
 pub fn generate_outbound_proof_with_secrets(
     network_id: &NetworkId,
-    tx_key_secret: &[u8; 32],
+    tx_key: &TxKey,
     txid: &[u8; 32],
     address_bytes: &[u8],
     user_message: &[u8],
@@ -273,7 +277,9 @@ pub fn generate_outbound_proof_with_secrets(
         // `ps` drops here; `ProofSecrets` is `ZeroizeOnDrop`.
     }
 
-    let message = assemble_proof_message(
+    // Typed so the domain-binding gate sees `OUTBOUND_DOMAIN` held to a
+    // `Framed32` here; the key's signing method takes one across the crate.
+    let message: Framed32 = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -282,17 +288,12 @@ pub fn generate_outbound_proof_with_secrets(
         &per_output_blob,
     );
 
-    let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*tx_key_secret)).ok_or(
-        ProofError::InvalidFormat("tx_key_secret is not a canonical scalar".into()),
-    )?;
-    let pk_point = sk_scalar * G_POINT;
-
-    let sig = sign_framed(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, &message);
+    let disclosure = tx_key.disclose(OUTBOUND_DOMAIN, &message);
 
     let mut proof = Vec::with_capacity(OUTBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
-    proof.extend_from_slice(tx_key_secret);
-    proof.extend_from_slice(&sig);
+    proof.extend_from_slice(&disclosure.key.to_bytes());
+    proof.extend_from_slice(&disclosure.signature);
     proof.extend_from_slice(&(n as u32).to_le_bytes());
     proof.extend_from_slice(&per_output_blob);
 
@@ -348,8 +349,8 @@ pub fn verify_outbound_proof(
         )));
     }
 
-    let mut tx_key_secret = [0u8; 32];
-    tx_key_secret.copy_from_slice(&proof_bytes[1..33]);
+    let mut disclosed = [0u8; 32];
+    disclosed.copy_from_slice(&proof_bytes[1..33]);
 
     let mut sig = [0u8; 64];
     sig.copy_from_slice(&proof_bytes[33..97]);
@@ -373,7 +374,9 @@ pub fn verify_outbound_proof(
 
     let per_output_blob = &proof_bytes[OUTBOUND_HEADER_SIZE..];
 
-    let message = assemble_proof_message(
+    // Typed so the domain-binding gate sees `OUTBOUND_DOMAIN` held to a
+    // `Framed32` here; the key's signing method takes one across the crate.
+    let message: Framed32 = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -382,12 +385,11 @@ pub fn verify_outbound_proof(
         per_output_blob,
     );
 
-    let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(tx_key_secret)).ok_or(
-        ProofError::InvalidFormat("tx_key_secret not canonical".into()),
-    )?;
-    let pk_point = sk_scalar * G_POINT;
+    let tx_key = DisclosedTxKey::from_bytes(&disclosed).ok_or(ProofError::InvalidFormat(
+        "the disclosed transaction key is not canonical".into(),
+    ))?;
 
-    if !framed_holds(OUTBOUND_DOMAIN, &pk_point, &message, &sig) {
+    if !tx_key.signed(OUTBOUND_DOMAIN, &message, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 
@@ -412,12 +414,8 @@ pub fn verify_outbound_proof(
             ))
         })?;
 
-        let (rederived_ss, rederived_x25519_eph, rederived_ml_kem_ct) = rederive_combined_ss(
-            &tx_key_secret,
-            recipient_x25519_pk,
-            recipient_ml_kem_ek,
-            u64::from(vout),
-        )?;
+        let (rederived_ss, rederived_x25519_eph, rederived_ml_kem_ct) = tx_key
+            .rederive_combined_ss(recipient_x25519_pk, recipient_ml_kem_ek, u64::from(vout))?;
 
         if rederived_x25519_eph != on_chain.x25519_eph_pk {
             return Err(ProofError::KemCtMismatch);

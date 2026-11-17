@@ -270,7 +270,6 @@ mod tests {
     };
     use shekyl_types::{BlockHeight, TxHash};
     use shekyl_units::AtomicUnits;
-    use zeroize::Zeroizing;
 
     use super::reset_scan_derived_state;
 
@@ -334,7 +333,7 @@ mod tests {
         wallet.tx_meta.tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([4u8; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([4u8; 32]).store()),
             },
         );
         wallet.tx_meta.scanned_pool_txs.insert(

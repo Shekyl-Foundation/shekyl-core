@@ -10,9 +10,11 @@
 //! the verifier checks against the spent key image pool to confirm the
 //! output is unspent.
 //!
-//! Wire format: `69 + 192*N` bytes
+//! ```text
+//! Wire format: 69 + 192*N bytes
 //!   header: version[1] + schnorr[64] + output_count[4]
 //!   per-output: ho[32] + y[32] + k_amount[32] + key_image[32] + dleq(c[32]+s[32])
+//! ```
 //!
 //! The verifier reads `enc_amount` from the blockchain, NOT from the proof.
 //! This is load-bearing for soundness (see FCMP_PLUS_PLUS.md section 21).
