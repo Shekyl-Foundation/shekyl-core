@@ -299,6 +299,36 @@ fn the_group_key_recovers_the_output_the_sender_built() {
     assert_eq!(secrets.leaf_point(), &out.pqc_leaf.point);
 }
 
+/// The spent output's commitment opens to the re-derived mask at the
+/// output's own amount, and at no other amount; another output's
+/// commitment does not open to it (R-27).
+#[test]
+fn a_spent_commitment_opens_to_its_mask_at_its_amount_only() {
+    let g = group(3, 2);
+    let index = 1u64;
+    let amount = 7_000;
+    let out = construct_multisig_output(&tx_key(), &g.address, amount, index, &NET).unwrap();
+    let other = construct_multisig_output(&tx_key(), &g.address, amount, index, &NET).unwrap();
+    let committed = open_as(
+        &g,
+        &out,
+        index,
+        0,
+        3,
+        &out.enc_key_hashes,
+        &out.pqc_leaf.entry_bytes(),
+    )
+    .unwrap();
+    let secrets = recover_group_spend(
+        &MultisigGroupKey::new(&g.group_sk, &g.b),
+        &source(&out, index, &committed),
+    )
+    .unwrap();
+    assert!(secrets.commitment_opens(&out.commitment, amount));
+    assert!(!secrets.commitment_opens(&out.commitment, amount + 1));
+    assert!(!secrets.commitment_opens(&other.commitment, amount));
+}
+
 /// Neither KEM refuses a wrong key (X25519 has no failure, ML-KEM rejects
 /// implicitly), so another group's key derives values, but not this
 /// output's: its key image and leaf point differ, which is what a ledger

@@ -77,6 +77,7 @@ use shekyl_tx_builder::outputs::{
     BuildSpendError, BuiltSpend, Payee, Recipient, RecipientKeys, SpendOutputs,
 };
 use shekyl_types::{BlockHash, KeyImage, TxSignableHash};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{CtBase, Output};
 use zeroize::Zeroizing;
 
@@ -313,6 +314,11 @@ pub enum DeriveError {
     /// An input's record names a leaf point its secrets do not derive.
     #[error("input {global_index}'s recorded leaf is not the one its secrets derive")]
     Leaf { global_index: u64 },
+    /// An input's commitment on the chain does not open to the mask its
+    /// secrets derive and the amount the validated intent pairs with it
+    /// (R-27): the stated amount is not this coin's.
+    #[error("input {global_index}'s commitment does not open at its stated amount")]
+    InputCommitment { global_index: u64 },
     /// Two inputs' paths name different trees at the reference block.
     #[error("input {global_index}'s path names another tree than the other inputs'")]
     Tree { global_index: u64 },
@@ -380,7 +386,10 @@ impl DerivedSpend {
             .intent()
             .input_global_indices
             .iter()
-            .map(|&global_index| spendable(ledger, key, global_index, &reference))
+            .zip(intent.input_amounts())
+            .map(|(&global_index, amount)| {
+                spendable(ledger, key, global_index, *amount, &reference)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let tree = one_tree(&records)?;
         let seed = &intent.intent().kem_randomness_seed;
@@ -489,11 +498,13 @@ impl DerivedSpend {
 
 /// Input `global_index` from the ledger, its path assembled to
 /// `reference`, and the secrets `key` re-derives from it, checked against
-/// the record's key image and leaf.
+/// the record's key image and leaf, and against its commitment at `amount`
+/// (R-27).
 fn spendable(
     ledger: &impl GroupOutputs,
     key: &MultisigGroupKey<'_>,
     global_index: u64,
+    amount: AtomicUnits,
     reference: &BlockHash,
 ) -> Result<(GroupOutput, GroupSpendSecrets), DeriveError> {
     let output = ledger
@@ -519,6 +530,9 @@ fn spendable(
     }
     let cm_x = PqcLeafScalar::from_commitment_point(&record.leaf_point)
         .ok_or(DeriveError::Leaf { global_index })?;
+    if !secrets.commitment_opens(&record.commitment, amount.to_raw()) {
+        return Err(DeriveError::InputCommitment { global_index });
+    }
     // Consensus does not forbid two leaves with one `(O, C)` in a chunk;
     // `CM.x` names the spent one.
     if !output.path.leaf_chunk().iter().any(|leaf| {
@@ -565,7 +579,6 @@ mod tests {
     use shekyl_curve_tree::{ChunkLeaf, PathParts};
     use shekyl_fcmp::tree::key_image_generator;
     use shekyl_types::{BlockHash, CommitmentBytes, CurveTreeRoot, OneTimePubkey};
-    use shekyl_units::AtomicUnits;
 
     use super::*;
     use crate::intent::{
@@ -650,6 +663,20 @@ mod tests {
     /// An intent paying a single-signer address and the group's change,
     /// spending [`INPUTS`], validated against the ledger that holds them.
     fn validated(g: &Group, seed: [u8; 32]) -> ValidatedIntent {
+        let amounts: Vec<AtomicUnits> = INPUTS
+            .iter()
+            .map(|&(_, amount)| AtomicUnits::from_raw(amount))
+            .collect();
+        validated_with(g, seed, &amounts)
+    }
+
+    /// The intent, validated against a ledger that names `ledger_amounts`
+    /// for its inputs.
+    fn validated_with(
+        g: &Group,
+        seed: [u8; 32],
+        ledger_amounts: &[AtomicUnits],
+    ) -> ValidatedIntent {
         let payload = &g.payload;
         let (kem, _) = HybridX25519MlKem.keypair_generate().unwrap();
         let single =
@@ -707,7 +734,7 @@ mod tests {
                 chain_tip_height: 105,
                 local_ref_block_hash: &reference_block_hash,
                 local_chain_state_fingerprint: &fingerprint,
-                input_amounts: &amounts,
+                input_amounts: ledger_amounts,
                 seen_seeds: &HashSet::new(),
             },
         )
@@ -862,6 +889,29 @@ mod tests {
             records: paid.iter().map(|p| record(p, member)).collect(),
             tree: path(paid).into_parts(),
         }
+    }
+
+    /// Two inputs' amounts swapped in this member's ledger still balance
+    /// and still match the chain-state fingerprint, which sorts them; only
+    /// the coins' commitments tell. The derivation refuses the first input
+    /// paired with the other's amount, before any nonce exists (R-27).
+    #[test]
+    fn an_amount_paired_with_another_input_is_refused() {
+        let g = group();
+        let mut amounts: Vec<AtomicUnits> = INPUTS
+            .iter()
+            .map(|&(_, amount)| AtomicUnits::from_raw(amount))
+            .collect();
+        amounts.swap(0, 1);
+        let intent = validated_with(&g, bytes32(), &amounts);
+        let refused = DerivedSpend::derive(intent, &ledger(&pay(&g), 0), &g.key(), NET_ID).err();
+        assert!(
+            matches!(
+                refused,
+                Some(DeriveError::InputCommitment { global_index }) if global_index == INPUTS[0].0
+            ),
+            "{refused:?}"
+        );
     }
 
     /// Two members holding one intent derive one spend from their own

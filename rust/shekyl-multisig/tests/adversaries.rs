@@ -773,6 +773,12 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
         derive_from(&|l| l[0].0.leaf_point = l[1].0.leaf_point),
         Some(DeriveError::Leaf { .. })
     ));
+    // A record whose commitment is another coin's: it does not open to
+    // the mask this input's secrets derive at its stated amount (R-27).
+    assert!(matches!(
+        derive_from(&|l| l[0].0.commitment = l[1].0.commitment),
+        Some(DeriveError::InputCommitment { .. })
+    ));
     assert!(matches!(
         derive_from(&|l| {
             l[0].0.source_x25519_ct = l[1].0.source_x25519_ct;

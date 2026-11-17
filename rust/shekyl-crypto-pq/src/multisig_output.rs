@@ -32,9 +32,11 @@
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
+use curve25519_dalek::Scalar;
 use hkdf::Hkdf;
 use sha2::Sha512;
 use shekyl_address::multisig_address::{MultisigAddressPayload, HYBRID_KEM_PUBKEY_LEN};
+use shekyl_curve_primitives::Commitment;
 use shekyl_network::NetworkId;
 use subtle::ConstantTimeEq;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -629,6 +631,22 @@ impl GroupSpendSecrets {
     #[must_use]
     pub fn commitment_mask(&self) -> &[u8; 32] {
         &self.commitment_mask
+    }
+
+    /// Whether `commitment`, the spent output's commitment as the chain
+    /// holds it, opens to this output's re-derived mask `z` and `amount`:
+    /// `C = z·G + amount·H` (R-27).
+    #[must_use]
+    pub fn commitment_opens(&self, commitment: &[u8; 32], amount: u64) -> bool {
+        Option::<Scalar>::from(Scalar::from_canonical_bytes(*self.commitment_mask))
+            .map(Zeroizing::new)
+            .is_some_and(|mask| {
+                Commitment::new(*mask, amount)
+                    .calculate()
+                    .compress()
+                    .to_bytes()
+                    == *commitment
+            })
     }
 
     /// The leaf commitment's blind `r`, the prover's witness.

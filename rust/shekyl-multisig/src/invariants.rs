@@ -43,7 +43,10 @@ pub struct LedgerView<'a> {
     /// The chain state fingerprint this member computes over the intent's
     /// inputs.
     pub local_chain_state_fingerprint: &'a [u8; 32],
-    /// The amounts of the intent's inputs, in this member's ledger.
+    /// The amounts of the intent's inputs, in this member's ledger, one per
+    /// input in the intent's input order. The balance is checked against
+    /// them, and the derivation checks each against its coin's commitment
+    /// (R-27).
     pub input_amounts: &'a [AtomicUnits],
     /// The fingerprint of every `kem_randomness_seed` this member has seen
     /// in an intent: never the seeds (`PQC_MULTISIG.md` §9.5).
@@ -65,6 +68,10 @@ pub enum IntentRefusal {
     /// I1: a recipient cannot be paid on the group's network (§9.2 item 10).
     #[error("the intent pays a recipient this group cannot: {0}")]
     Recipient(SpendIntentError),
+    /// This member's ledger names a different number of amounts than the
+    /// intent has inputs: the amounts cannot be paired with the inputs.
+    #[error("the ledger names {amounts} amounts for the intent's {inputs} inputs")]
+    InputAmounts { inputs: usize, amounts: usize },
     /// I1: the amounts do not balance (§9.2 item 11).
     #[error("the intent does not balance: {0}")]
     Balance(SpendIntentError),
@@ -82,6 +89,7 @@ pub enum IntentRefusal {
 pub struct ValidatedIntent {
     intent: SpendIntent,
     recipients: Vec<ResolvedRecipient>,
+    input_amounts: Vec<AtomicUnits>,
     hash: [u8; 32],
 }
 
@@ -104,6 +112,12 @@ impl ValidatedIntent {
         intent
             .validate_temporal(ledger.chain_tip_height, ledger.local_ref_block_hash)
             .map_err(IntentRefusal::ReferenceBlock)?;
+        if ledger.input_amounts.len() != intent.input_global_indices.len() {
+            return Err(IntentRefusal::InputAmounts {
+                inputs: intent.input_global_indices.len(),
+                amounts: ledger.input_amounts.len(),
+            });
+        }
         intent
             .validate_balance(ledger.input_amounts)
             .map_err(IntentRefusal::Balance)?;
@@ -120,6 +134,7 @@ impl ValidatedIntent {
         Ok(Self {
             intent,
             recipients,
+            input_amounts: ledger.input_amounts.to_vec(),
             hash,
         })
     }
@@ -128,6 +143,14 @@ impl ValidatedIntent {
     #[must_use]
     pub fn intent(&self) -> &SpendIntent {
         &self.intent
+    }
+
+    /// The amount of each of the intent's inputs, in the intent's input
+    /// order, as this member's ledger named it and the balance was checked
+    /// against.
+    #[must_use]
+    pub fn input_amounts(&self) -> &[AtomicUnits] {
+        &self.input_amounts
     }
 
     /// Its recipients, resolved, in output order.
@@ -210,6 +233,7 @@ mod tests {
     fn a_valid_intent_validates_and_carries_its_hash() {
         let validated = check(intent(), &HashSet::new()).unwrap();
         assert_eq!(*validated.hash(), intent().intent_hash().unwrap());
+        assert_eq!(validated.input_amounts(), &[AtomicUnits::from_raw(310)]);
         assert!(matches!(
             validated.recipients(),
             [ResolvedRecipient {
@@ -250,6 +274,13 @@ mod tests {
         assert!(matches!(
             refused(&|i| i.reference_block_hash = [0xCD; 32]),
             Some(IntentRefusal::ReferenceBlock(_))
+        ));
+        assert!(matches!(
+            refused(&|i| i.input_global_indices.push(43)),
+            Some(IntentRefusal::InputAmounts {
+                inputs: 2,
+                amounts: 1
+            })
         ));
         assert!(matches!(
             refused(&|i| i.fee = AtomicUnits::from_raw(11)),
