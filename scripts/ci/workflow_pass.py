@@ -85,7 +85,9 @@ def decide(needs: dict, scope: str) -> list[str]:
     if why:
         for job, result in sorted(results.items()):
             if result == "skipped":
-                why.append(f"`{job}`: skipped in a run where something failed, not by scope")
+                # The pass job cannot see why a job was skipped; a skip is
+                # read as scope only when nothing in the run failed.
+                why.append(f"`{job}`: skipped, not counted as scope because something in this run failed")
     return why
 
 
@@ -201,7 +203,7 @@ def selftest() -> int:
         if got != want:
             bad.append(f"verdict, {why}: wanted pass={want}, got pass={got} ({decide(case, 'changes')})")
     reasons = decide(needs(changes=s, build=f, test=k), "changes")
-    if not any("`test`: skipped" in r for r in reasons):
+    if not any(r.startswith("`test`: skipped") for r in reasons):
         bad.append(f"a skip after a failure is not named: {reasons}")
 
     wf, ctx, scope = ".github/workflows/x.yml", "x-pass", "changes"
