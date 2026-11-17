@@ -764,33 +764,79 @@ impl TorStatus {
             || self.tor.as_ref().is_some_and(ManagedTor::has_unknown)
     }
 
-    /// Whether the node's own transactions leave on a session that hides
-    /// its address now: the one read a send decision makes, and the only
-    /// accessor that answers it. It fails closed: an unknown origination, a
-    /// `tor` or `clearnet` setting this build does not know, or Tor off, is
-    /// not that, and the send holds (Rick, 2026-11-12).
+    /// Where the node's own transactions go now: the one classification,
+    /// and the only place the reply's settings, origination and carriage
+    /// are read together for that (Rick, 2026-11-17). The renderer picks
+    /// its first sentence from it, and a send decision reads it or
+    /// [`Self::own_tx_hides_address`], never the fields.
     ///
-    /// Under a managed Tor the link must also still carry the node's
-    /// traffic (`carriage` is `carries` or `open-only`): the relay's
-    /// verdict lags a Tor that ended until the relay sees its sessions
-    /// close, and the renderer already says such a node is holding. A
-    /// carriage of `gone`, one this build does not know, or a managed
-    /// setting with no `tor` object, is not hiding (Rick, 2026-11-17). An
-    /// operator's Tor has no carriage; the origination alone answers.
+    /// It fails closed. [`OwnTxFate::Hidden`] needs all of: a `tor` setting
+    /// of `managed` or `operator`, a `clearnet` setting this build knows,
+    /// the origination `address-hiding`, and under a managed Tor a link
+    /// that still carries the node's traffic (`carriage` is `carries` or
+    /// `open-only`). The relay's verdict lags a Tor that ended until the
+    /// relay sees its sessions close, so `address-hiding` beside a carriage
+    /// of `gone` is held. Anything this build cannot read as one of the
+    /// four known fates is [`OwnTxFate::Unknown`]: a setting, an
+    /// origination or (where it decides) a carriage it does not know; an
+    /// origination that needs Tor beside a `tor` setting of `off`; and
+    /// `address-hiding` under a managed setting with no `tor` object.
+    #[must_use]
+    pub fn own_tx_fate(&self) -> OwnTxFate {
+        if !matches!(self.posture.clearnet, Clearnet::On | Clearnet::Off) {
+            return OwnTxFate::Unknown;
+        }
+        let tor_on = match &self.posture.tor {
+            TorSetting::Managed | TorSetting::Operator => true,
+            TorSetting::Off => false,
+            TorSetting::Unknown { .. } => return OwnTxFate::Unknown,
+        };
+        match &self.origination {
+            Origination::ClearnetOnly => OwnTxFate::OpenNetwork,
+            Origination::Offline => OwnTxFate::Offline,
+            Origination::Connecting | Origination::Rebuilding if tor_on => OwnTxFate::Held,
+            Origination::AddressHiding if tor_on => match (&self.posture.tor, &self.tor) {
+                // An operator's Tor has no carriage: the origination alone
+                // answers.
+                (TorSetting::Operator, _) => OwnTxFate::Hidden,
+                (_, Some(tor)) => match tor.carriage {
+                    Carriage::Carries | Carriage::OpenOnly => OwnTxFate::Hidden,
+                    Carriage::Gone => OwnTxFate::Held,
+                    Carriage::Unknown { .. } => OwnTxFate::Unknown,
+                },
+                (_, None) => OwnTxFate::Unknown,
+            },
+            Origination::AddressHiding
+            | Origination::Connecting
+            | Origination::Rebuilding
+            | Origination::Unknown { .. } => OwnTxFate::Unknown,
+        }
+    }
+
+    /// Whether the node's own transactions leave on a session that hides
+    /// its address now: [`Self::own_tx_fate`] is [`OwnTxFate::Hidden`], and
+    /// nothing else (Rick, 2026-11-12, 2026-11-17).
     #[must_use]
     pub fn own_tx_hides_address(&self) -> bool {
-        let link_carries = match &self.posture.tor {
-            TorSetting::Managed => self
-                .tor
-                .as_ref()
-                .is_some_and(|tor| matches!(tor.carriage, Carriage::Carries | Carriage::OpenOnly)),
-            TorSetting::Operator => true,
-            TorSetting::Off | TorSetting::Unknown { .. } => false,
-        };
-        link_carries
-            && matches!(self.posture.clearnet, Clearnet::On | Clearnet::Off)
-            && matches!(self.origination, Origination::AddressHiding)
+        self.own_tx_fate() == OwnTxFate::Hidden
     }
+}
+
+/// Where the node's own transactions go now ([`TorStatus::own_tx_fate`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OwnTxFate {
+    /// They leave on a session that hides this node's address.
+    Hidden,
+    /// The node holds them until Tor carries them. They do not go out over
+    /// clearnet.
+    Held,
+    /// They go out over the open network: Tor is off and clearnet is on.
+    OpenNetwork,
+    /// The node is offline: nothing is sent.
+    Offline,
+    /// The reply is not one this build can read as any of the above.
+    /// Nothing is promised about a transaction.
+    Unknown,
 }
 
 #[cfg(test)]

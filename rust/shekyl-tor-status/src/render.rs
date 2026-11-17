@@ -12,7 +12,7 @@
 
 use crate::{
     Bootstrap, Carriage, Clearnet, Connector, Fix, ManagedTor, OnionCause, OnionState, Origination,
-    Pace, Skew, TorCause, TorQuiet, TorSetting, TorStatus, Unusable,
+    OwnTxFate, Pace, Skew, TorCause, TorQuiet, TorSetting, TorStatus, Unusable,
 };
 
 /// Said once when the reply carries a keyword this build does not know
@@ -29,6 +29,18 @@ pub(crate) const CARRYING: &str = "Tor is carrying this node's traffic.";
 /// Said while they do, over connections that were already open.
 pub(crate) const CARRYING_OPEN_ONLY: &str =
     "Connections already open through Tor still carry this node's traffic.";
+
+/// Said while the node holds its own transactions beside a link that is up.
+pub(crate) const HOLDING: &str = "This node is holding its own transactions.";
+
+/// Said while it holds them and the link is not up.
+pub(crate) const WAITING: &str = "This node is waiting for Tor and holding its own transactions.";
+
+/// Said while Tor is off and the node sends over clearnet.
+pub(crate) const OPEN_NETWORK: &str = "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.";
+
+/// Said while Tor and clearnet are both off.
+pub(crate) const OFFLINE: &str = "This node is offline.";
 
 /// Whether [`render`] names a data directory for `status`. Only the
 /// unusable sentence has a place for the path (IG-Q97). A caller that
@@ -86,32 +98,35 @@ fn append(text: &mut String, sentence: &str) {
     text.push_str(sentence);
 }
 
-/// What the node does with its traffic. Under a managed Tor the carriage
-/// picks the sentence: the verdict lags a Tor that ended until the relay
-/// sees its sessions close. Under an operator's Tor the origination alone
-/// says it (Rick, 2026-11-12).
+/// What the node does with its traffic: the sentence for the fate of its
+/// own transactions ([`TorStatus::own_tx_fate`], the one classification),
+/// with what it syncs over where it holds. The fate picks the sentence;
+/// this function decides nothing about where a transaction goes.
+///
+/// Two things the fate does not carry choose between sentences of one
+/// fate. Hidden over a managed link says whether the link carries the
+/// traffic or only connections already open do. Held says "waiting for
+/// Tor" only while the link is not up: under a managed Tor that is the
+/// carriage, and under an operator's a session that hides the address
+/// exists while the origin pin is rebuilt and none does while it connects
+/// (Rick, 2026-11-12).
 fn behaviour(status: &TorStatus, unknown: &mut bool) -> String {
     let carriage = status.tor.as_ref().map(|tor| &tor.carriage);
-    match (&status.origination, carriage) {
-        (Origination::AddressHiding, Some(Carriage::Carries) | None) => CARRYING.to_owned(),
-        (Origination::AddressHiding, Some(Carriage::OpenOnly)) => CARRYING_OPEN_ONLY.to_owned(),
-        (Origination::AddressHiding, Some(Carriage::Gone)) => {
-            held_sentence(false, &status.sync_connector, unknown)
+    match status.own_tx_fate() {
+        OwnTxFate::Hidden => match carriage {
+            Some(Carriage::OpenOnly) => CARRYING_OPEN_ONLY.to_owned(),
+            _ => CARRYING.to_owned(),
+        },
+        OwnTxFate::Held => {
+            let tor_up = match carriage {
+                Some(carriage) => *carriage == Carriage::Carries,
+                None => status.origination == Origination::Rebuilding,
+            };
+            held_sentence(tor_up, &status.sync_connector, unknown)
         }
-        (Origination::Connecting | Origination::Rebuilding, Some(carriage)) => {
-            if let Carriage::Unknown { .. } = carriage {
-                *unknown = true;
-            }
-            held_sentence(*carriage == Carriage::Carries, &status.sync_connector, unknown)
-        }
-        // An operator's Tor: a session that hides the address exists while
-        // the origin pin is rebuilt; none does while it connects.
-        (Origination::Connecting, None) => held_sentence(false, &status.sync_connector, unknown),
-        (Origination::Rebuilding, None) => held_sentence(true, &status.sync_connector, unknown),
-        (Origination::ClearnetOnly, _) => "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.".to_owned(),
-        (Origination::Offline, _) => "This node is offline.".to_owned(),
-        (Origination::AddressHiding, Some(Carriage::Unknown { .. }))
-        | (Origination::Unknown { .. }, _) => {
+        OwnTxFate::OpenNetwork => OPEN_NETWORK.to_owned(),
+        OwnTxFate::Offline => OFFLINE.to_owned(),
+        OwnTxFate::Unknown => {
             *unknown = true;
             String::new()
         }
@@ -136,9 +151,9 @@ fn held_sentence(tor_up: bool, sync: &[Connector], unknown: &mut bool) -> String
         (false, false) => "It is not syncing.",
     };
     if tor_up {
-        format!("This node is holding its own transactions. {syncing}")
+        format!("{HOLDING} {syncing}")
     } else {
-        format!("This node is waiting for Tor and holding its own transactions. {syncing}")
+        format!("{WAITING} {syncing}")
     }
 }
 

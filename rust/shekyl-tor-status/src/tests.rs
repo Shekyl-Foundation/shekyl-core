@@ -610,80 +610,161 @@ fn the_fixes_sentence_is_each_fix_s_own_words_joined() {
     );
 }
 
-/// **The send decision and the status line never disagree** (Rick,
-/// 2026-11-17). Over every origination and every carriage, known and
-/// unknown, `own_tx_hides_address` is true exactly when the line's first
-/// sentence says Tor carries the node's traffic. Under a managed Tor that
-/// needs the link to carry it still (`carries` or `open-only`): with
-/// `address-hiding` and a carriage of `gone` the line says the node is
-/// holding, and the accessor once said hiding. An operator's Tor has no
-/// carriage, and the origination alone answers. Red edit: drop the carriage
-/// condition from `own_tx_hides_address`.
+/// **One fate, and the line says it** (Rick, 2026-11-17). Over every
+/// origination, every carriage (and none), and every `tor` and `clearnet`
+/// setting, known and unknown, `own_tx_fate` gives one fate, the line's
+/// first sentence is that fate's, and `own_tx_hides_address` is the fate
+/// being hidden. Hidden is exactly: Tor on, `address-hiding`, and under a
+/// managed Tor a link that still carries (`carries` or `open-only`). With
+/// `address-hiding` and a carriage of `gone` the node is holding, and the
+/// accessor once said hiding. Red edit: in `own_tx_fate`, read
+/// `Carriage::Gone` as hidden.
 #[test]
-fn the_send_decision_agrees_with_the_line_over_every_origination_and_carriage() {
-    let says_carrying = |status: &TorStatus| {
-        let line = render(status, None);
-        line.starts_with(crate::render::CARRYING)
-            || line.starts_with(crate::render::CARRYING_OPEN_ONLY)
-    };
-    let mut originations = Origination::known();
-    originations.push(serde_json::from_value(serde_json::json!("mixnet")).expect("decodes"));
-    let mut carriages = Carriage::known();
-    carriages.push(serde_json::from_value(serde_json::json!("half")).expect("decodes"));
+fn every_combination_has_one_fate_and_the_line_says_it() {
+    use crate::render::{CARRYING, CARRYING_OPEN_ONLY, HOLDING, OFFLINE, OPEN_NETWORK, WAITING};
 
-    let mut hiding = Vec::new();
+    /// The fate the line's first sentence speaks.
+    fn spoken(line: &str) -> OwnTxFate {
+        if line.starts_with(CARRYING) || line.starts_with(CARRYING_OPEN_ONLY) {
+            OwnTxFate::Hidden
+        } else if line.starts_with(HOLDING) || line.starts_with(WAITING) {
+            OwnTxFate::Held
+        } else if line.starts_with(OPEN_NETWORK) {
+            OwnTxFate::OpenNetwork
+        } else if line.starts_with(OFFLINE) {
+            OwnTxFate::Offline
+        } else {
+            OwnTxFate::Unknown
+        }
+    }
+
+    let word = |tag: &str| serde_json::json!(tag);
+    let mut originations = Origination::known();
+    originations.push(serde_json::from_value(word("mixnet")).expect("decodes"));
+    let mut carriages: Vec<Option<Carriage>> = Carriage::known().into_iter().map(Some).collect();
+    carriages.push(Some(serde_json::from_value(word("half")).expect("decodes")));
+    carriages.push(None);
+    let mut tors = TorSetting::known();
+    tors.push(serde_json::from_value(word("bridge")).expect("decodes"));
+    let mut clearnets = Clearnet::known();
+    clearnets.push(serde_json::from_value(word("relay-only")).expect("decodes"));
+
+    let mut hidden = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut combinations = 0;
     for origination in &originations {
         for carriage in &carriages {
-            let mut status = with_tor(|tor| {
-                tor.carriage = carriage.clone();
-                tor.state = TorState::Usable;
-                tor.progress = None;
-            });
-            status.origination = origination.clone();
-            assert_eq!(
-                status.own_tx_hides_address(),
-                says_carrying(&status),
-                "managed, {origination:?}, {carriage:?}: {}",
-                render(&status, None)
-            );
-            if status.own_tx_hides_address() {
-                hiding.push((origination.clone(), carriage.clone()));
+            for tor in &tors {
+                for clearnet in &clearnets {
+                    let status = TorStatus {
+                        posture: Posture {
+                            tor: tor.clone(),
+                            clearnet: clearnet.clone(),
+                        },
+                        origination: origination.clone(),
+                        sync_connector: vec![Connector::Tor],
+                        tor_quiet: None,
+                        tor: carriage.clone().map(|carriage| ManagedTor {
+                            state: TorState::Usable,
+                            cause: None,
+                            age: 12,
+                            respawn_count: 0,
+                            progress: None,
+                            flagged: false,
+                            fix: vec![],
+                            onion: None,
+                            bootstrap: None,
+                            carriage,
+                        }),
+                    };
+                    let fate = status.own_tx_fate();
+                    let line = render(&status, None);
+                    let what =
+                        format!("{origination:?}, {carriage:?}, {tor:?}, {clearnet:?}: {line}");
+                    assert_eq!(spoken(&line), fate, "{what}");
+                    assert_eq!(
+                        status.own_tx_hides_address(),
+                        fate == OwnTxFate::Hidden,
+                        "{what}"
+                    );
+                    if fate == OwnTxFate::Unknown {
+                        assert!(line.contains(UNKNOWN_SENTENCE), "{what}");
+                    }
+                    // A setting this build does not know is never read past.
+                    if matches!(tor, TorSetting::Unknown { .. })
+                        || matches!(clearnet, Clearnet::Unknown { .. })
+                    {
+                        assert_eq!(fate, OwnTxFate::Unknown, "{what}");
+                    }
+                    if fate == OwnTxFate::Hidden {
+                        hidden.insert((origination.clone(), carriage.clone(), tor.clone()));
+                    }
+                    seen.insert(fate);
+                    combinations += 1;
+                }
             }
         }
-        let operator = TorStatus {
-            posture: Posture {
-                tor: TorSetting::Operator,
-                clearnet: Clearnet::Off,
-            },
-            origination: origination.clone(),
-            sync_connector: vec![Connector::Tor],
-            tor_quiet: None,
-            tor: None,
-        };
-        assert_eq!(
-            operator.own_tx_hides_address(),
-            says_carrying(&operator),
-            "operator, {origination:?}: {}",
-            render(&operator, None)
-        );
-        assert_eq!(
-            operator.own_tx_hides_address(),
-            *origination == Origination::AddressHiding
-        );
     }
-    assert_eq!(
-        hiding,
-        [
-            (Origination::AddressHiding, Carriage::Carries),
-            (Origination::AddressHiding, Carriage::OpenOnly),
-        ],
-        "under a managed Tor, hiding is address-hiding on a link that still carries"
-    );
+    assert_eq!(combinations, 6 * 5 * 4 * 3);
+    assert_eq!(seen.len(), 5, "every fate is reached: {seen:?}");
 
-    // A managed setting with no `tor` object is a reply the node does not
-    // send; the decision fails closed on it.
-    let mut bare = managed();
-    bare.origination = Origination::AddressHiding;
-    bare.tor = None;
-    assert!(!bare.own_tx_hides_address());
+    // Hidden, whole: under either clearnet setting.
+    let hiding = Origination::AddressHiding;
+    let mut want = HashSet::new();
+    for carriage in [Carriage::Carries, Carriage::OpenOnly] {
+        want.insert((hiding.clone(), Some(carriage), TorSetting::Managed));
+    }
+    for carriage in &carriages {
+        want.insert((hiding.clone(), carriage.clone(), TorSetting::Operator));
+    }
+    assert_eq!(hidden, want);
+
+    // The fates by name, one sample each.
+    let fate = |origination: Origination, tor: TorSetting, carriage: Option<Carriage>| {
+        let mut status = managed();
+        status.origination = origination;
+        status.posture.tor = tor;
+        match carriage {
+            Some(carriage) => status.tor.as_mut().expect("managed").carriage = carriage,
+            None => status.tor = None,
+        }
+        status.own_tx_fate()
+    };
+    let managed_tor = TorSetting::Managed;
+    assert_eq!(
+        fate(hiding.clone(), managed_tor.clone(), Some(Carriage::Gone)),
+        OwnTxFate::Held
+    );
+    assert_eq!(
+        fate(
+            Origination::Connecting,
+            managed_tor.clone(),
+            Some(Carriage::Gone)
+        ),
+        OwnTxFate::Held
+    );
+    assert_eq!(
+        fate(Origination::Rebuilding, TorSetting::Operator, None),
+        OwnTxFate::Held
+    );
+    assert_eq!(
+        fate(Origination::ClearnetOnly, TorSetting::Off, None),
+        OwnTxFate::OpenNetwork
+    );
+    assert_eq!(
+        fate(Origination::Offline, TorSetting::Off, None),
+        OwnTxFate::Offline
+    );
+    // Not readable as any of them: an origination that needs Tor with Tor
+    // off, and `address-hiding` under a managed setting with no `tor`
+    // object, a reply the node does not send.
+    assert_eq!(
+        fate(hiding.clone(), TorSetting::Off, None),
+        OwnTxFate::Unknown
+    );
+    assert_eq!(
+        fate(Origination::Connecting, TorSetting::Off, None),
+        OwnTxFate::Unknown
+    );
+    assert_eq!(fate(hiding, managed_tor, None), OwnTxFate::Unknown);
 }

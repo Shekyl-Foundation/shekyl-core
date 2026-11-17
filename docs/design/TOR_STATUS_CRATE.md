@@ -50,10 +50,19 @@ consumer writes a sentence of its own (`TSR-Q13`; Rick, 2026-11-08).
   Under a managed Tor the link must also still carry the node's traffic:
   a `carriage` of `carries` or `open-only`. `gone`, or a carriage this
   build does not know, is not address-hiding (Rick, 2026-11-17): the
-  relay's verdict lags a Tor that ended, and the renderer says such a node
-  is holding. A table test holds the accessor to the renderer's first
-  sentence over every origination and carriage.
-  No other accessor answers that question.
+  relay's verdict lags a Tor that ended, and such a node is holding.
+- **One classification of where the node's own transactions go** (Rick,
+  2026-11-17). `TorStatus::own_tx_fate` returns `OwnTxFate`: `Hidden`,
+  `Held`, `OpenNetwork`, `Offline` or `Unknown`. It is the only place the
+  settings, the origination and the carriage are read together for that.
+  `own_tx_hides_address` is the fate being `Hidden`. The renderer's first
+  sentence is picked from the fate, so the line and a send decision cannot
+  disagree, and a client (the GUI wallet's send review) maps the fate
+  through and reads no field. `Unknown` is everything this build cannot
+  read as one of the other four, and promises nothing. A table test runs
+  every origination, carriage, `tor` and `clearnet` setting, known and
+  unknown, and asserts one fate each with the line's first sentence
+  matching it.
 
 ## 3. The shape
 
