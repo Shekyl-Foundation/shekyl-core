@@ -55,8 +55,25 @@ pub struct EnrolOptions {
     pub network: Network,
     /// A node on another host, when `daemon-bundle-file` is set.
     pub remote: Option<Remote>,
-    /// This client's channel key (`rpc-key-file`).
-    pub key_file: PathBuf,
+    /// This client's channel key, `rpc-key-file` as given. Unset, it is
+    /// [`default_key_file`]'s, found only by a word that reads the key: a
+    /// shell whose account has no home runs every other word.
+    pub key_file: Option<PathBuf>,
+}
+
+impl EnrolOptions {
+    /// This client's channel key file.
+    ///
+    /// # Errors
+    ///
+    /// `rpc-key-file` is unset and the account has no home
+    /// (`config.path.no-home`).
+    fn key_file(&self) -> Result<PathBuf, String> {
+        match &self.key_file {
+            Some(path) => Ok(path.clone()),
+            None => default_key_file(self.network),
+        }
+    }
 }
 
 /// A node on another host (IG-Q108).
@@ -85,7 +102,7 @@ pub const CHANNEL_ADDRESS_REQUIRED: &str = "This command reaches the node over i
 /// # Errors
 ///
 /// The account has no home (`config.path.no-home`).
-pub fn default_key_file(network: Network) -> Result<PathBuf, String> {
+fn default_key_file(network: Network) -> Result<PathBuf, String> {
     let platform = shekyl_process::platform::current();
     let root = paths::root(&platform, RunMode::User, "rpc-key-file").map_err(|d| d.render())?;
     Ok(root.join(format!("rpc-shekyl-cli-{}.key", network.name())))
@@ -145,8 +162,8 @@ const CONSOLE_KEY_FAILURE: &str = "This command needs the node's console key, wh
 /// What the person reading it can act on.
 pub fn run(options: &EnrolOptions, word: &Enrol) -> Result<String, String> {
     match word {
-        Enrol::KeyCreate => return key_create(&options.key_file),
-        Enrol::KeyShow => return key_show(&options.key_file),
+        Enrol::KeyCreate => return key_create(&options.key_file()?),
+        Enrol::KeyShow => return key_show(&options.key_file()?),
         _ => {}
     }
     let leg = EnrolLeg::resolve(options)?;
@@ -227,11 +244,12 @@ impl EnrolLeg {
                     remote.bundle_file.display()
                 )
             })?;
-            let key = read_client_key(&options.key_file)?.ok_or_else(|| {
+            let key_file = options.key_file()?;
+            let key = read_client_key(&key_file)?.ok_or_else(|| {
                 format!(
                     "this client has no key at {}; make one with `rpc key create`, then enrol \
                      its fingerprint on the node",
-                    options.key_file.display()
+                    key_file.display()
                 )
             })?;
             let target = ChannelTarget::new(

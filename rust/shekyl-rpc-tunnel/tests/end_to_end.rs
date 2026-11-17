@@ -237,7 +237,7 @@ fn enrol_dial_call_revoke_and_a_refused_call_after() {
             leg: Leg::ip(channel_listen.parse().expect("the channel listener"), None),
             bundle_file: bundle_file.clone(),
         }),
-        key_file: dir.path().join("admin.key"),
+        key_file: Some(dir.path().join("admin.key")),
     };
     let admin = enrol::run(&cli, &Enrol::KeyCreate).expect("rpc key create");
     owner
