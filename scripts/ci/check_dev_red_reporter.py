@@ -27,10 +27,12 @@ What passes, in each of these workflows:
   cancelled as a whole and reports nothing. An exact match, because a
   check for the parts would pass the same parts joined by `||`.
 
-`gui-drift.yml` is the one scheduled subject: its nightly holds the GUI
-wallet's pinned shekyl-core edges to the wallet's manifest (CHAIN_FORGE.md
-CF-R26), so its reporter's `if` is exactly `SCHEDULE_CONDITION`, the same
-shape on a scheduled run.
+`gui-drift.yml` and `chain-forge.yml` are the scheduled subjects: the
+first's nightly holds the GUI wallet's pinned shekyl-core edges to the
+wallet's manifest (CHAIN_FORGE.md CF-R26), the second's forges the small
+plan at dev's HEAD and holds it to the committed chain (CHAIN_FORGE.md §9),
+so their reporters' `if` is exactly `SCHEDULE_CONDITION`, the same shape on
+a scheduled run.
 
 Rule 47: the workflows are named here, so a renamed or deleted one,
 or a reporter removed from one of them, fails by name rather than
@@ -54,7 +56,8 @@ CONDITION = (
     "(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}"
 )
 # gui-drift.yml's nightly holds the GUI wallet's pin to its manifest
-# (CHAIN_FORGE.md CF-R26); its red reaches the reporter from the schedule.
+# (CHAIN_FORGE.md CF-R26), and chain-forge.yml's holds the small plan to the
+# committed chain (§9); their reds reach the reporter from the schedule.
 SCHEDULE_CONDITION = (
     "${{ !cancelled() && github.event_name == 'schedule' && "
     "(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}"
@@ -66,6 +69,7 @@ SUBJECTS = {
     "benchmarks.yml": CONDITION,
     "fuzz-harness.yml": CONDITION,
     "gui-drift.yml": SCHEDULE_CONDITION,
+    "chain-forge.yml": SCHEDULE_CONDITION,
 }
 
 
@@ -180,7 +184,7 @@ def main(argv: list[str]) -> int:
     print(
         f"dev-red reporter: {', '.join(SUBJECTS)} each end in one reporter "
         "that needs every other job and reports a failed or timed-out job of a "
-        "push run on dev (gui-drift.yml: of its scheduled run)"
+        "push run on dev (gui-drift.yml, chain-forge.yml: of their scheduled runs)"
     )
     return 0
 

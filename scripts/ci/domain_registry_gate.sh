@@ -455,7 +455,13 @@ count_pattern() {
 # index and fire height (shekyl/archival-serve-challenge-leaf-v2, -fire-v1)
 # and wire.rs's response preimage (shekyl/archival-serve-credit-response-v1)
 # go with the input they served.
-MECH1_EXPECTED=72
+# CF-1c (the chain forge): 72 -> 73. One site in
+# rust/shekyl-chain-forge/src/seed.rs (`seed_for`), under the test-only
+# domain shekyl/chain-forge/seed-v1. The crate is NOT_SHIPPED and its
+# executor a test-kind target; the site is under src/ and so counted.
+# The producer receipt's message-bound seed (`seed_for_message`) is a
+# second call of the same customization: 73 -> 74.
+MECH1_EXPECTED=74
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

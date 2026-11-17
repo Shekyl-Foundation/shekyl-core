@@ -51,17 +51,16 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
-use shekyl_chain_ingest::corpus::{CorpusReader, CorpusWriter};
+use shekyl_chain_ingest::corpus::CorpusWriter;
 use shekyl_chain_ingest::fetch::fetch_corpus;
 use shekyl_chain_ingest::height_digests;
 use shekyl_chain_ingest::metrics::Metrics;
-use shekyl_chain_ingest::pipeline::{run, Disagreement, PipelineConfig, RunReport};
-use shekyl_chain_ingest::rebaseline::write_trace_file;
+use shekyl_chain_ingest::pipeline::{Disagreement, PipelineConfig, RunReport};
+use shekyl_chain_ingest::rebaseline::{self, ReplayFault};
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::trace::Trace;
 use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
-use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
 use shekyl_hash_budget::Budget;
 use shekyl_hasher::Hasher;
@@ -274,13 +273,14 @@ fn digest(store: &std::path::Path, rules: &ChainRules) -> Result<(), Failure> {
 struct Prepared {
     rules: ChainRules,
     cfg: PipelineConfig,
-    horizons: Horizons,
 }
 
 fn prepare(flags: &RunFlags) -> Result<Prepared, Failure> {
     let schedule = schedule_flags(flags.settlement_epoch_blocks, flags.reorg_cap)?;
     let rules = ChainRules::new(flags.chain, flags.fixed_difficulty, schedule)?;
-    let horizons = Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?;
+    // The store's horizons under this schedule, refused here before a hasher
+    // starts; the library opens the store under the same pair.
+    Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?;
     Ok(Prepared {
         rules,
         cfg: PipelineConfig {
@@ -288,46 +288,27 @@ fn prepare(flags: &RunFlags) -> Result<Prepared, Failure> {
             hashers: flags.hashers,
             digest_each_commit: false,
         },
-        horizons,
     })
 }
 
-/// Connect the corpus under the production proof-of-work boundary and `trace`.
+/// Run `with` (the library's replay or baseline) under the production
+/// proof-of-work boundary, on a hasher this run starts and stops.
 ///
 /// The measurement is printed and, when asked, written whether or not the
 /// run finished: hours of hashing are the measurement whether or not the
 /// chain agreed. The connected summary is printed when the run itself
 /// returned.
-async fn drive(
-    flags: &RunFlags,
-    prepared: &Prepared,
-    trace: Arc<Trace>,
-) -> Result<RunReport, Failure> {
-    let mut source = CorpusReader::open(BufReader::new(File::open(&flags.corpus)?))?;
-    if source.net() != flags.chain {
-        return Err(format!(
-            "the corpus is tagged {:?} but --chain says {:?}",
-            source.net(),
-            flags.chain
-        )
-        .into());
-    }
-    let store = ChainStore::with_horizons(&flags.store, ApplyPolicy::default(), prepared.horizons)?;
+async fn drive<F, Fut>(flags: &RunFlags, prepared: &Prepared, with: F) -> Result<RunReport, Failure>
+where
+    F: FnOnce(Arc<ProductionPow>, Arc<Metrics>) -> Fut,
+    Fut: std::future::Future<Output = Result<RunReport, ReplayFault>>,
+{
     let metrics = Arc::new(Metrics::new());
     // The run's own hasher, with one permit per `--hashers`: the same
     // owner of caches the daemon runs, so a replay measures that path.
     let (hasher, owner) = Hasher::start(Budget::new(prepared.cfg.hashers))?;
     let pow = Arc::new(ProductionPow::new(hasher, Arc::clone(&metrics)));
-    let outcome = run(
-        &mut source,
-        Arc::clone(&pow),
-        Arc::clone(&metrics),
-        prepared.rules,
-        store,
-        trace,
-        prepared.cfg,
-    )
-    .await;
+    let outcome = with(Arc::clone(&pow), Arc::clone(&metrics)).await;
 
     let measured = pow.artifact();
     // Every form has ended, so no lease is out: the stop frees the caches
@@ -371,13 +352,6 @@ async fn baseline(
     out: PathBuf,
     digests_out: Option<PathBuf>,
 ) -> Result<(), Failure> {
-    if flags.store.exists() {
-        return Err(format!(
-            "{} exists; a baseline is written from a fresh store",
-            flags.store.display()
-        )
-        .into());
-    }
     // A digest per height is the digest after that height's own commit.
     // The default window commits a batch, and a batch has one digest.
     if digests_out.is_some() {
@@ -385,13 +359,18 @@ async fn baseline(
     }
     let mut prepared = prepare(&flags)?;
     prepared.cfg.digest_each_commit = digests_out.is_some();
-    let report = drive(&flags, &prepared, Arc::new(Trace::empty())).await?;
-    if let Some((height, verdict)) = report.refused {
-        return Err(format!("the corpus does not replay: refused at {height}: {verdict:?}").into());
-    }
-    let store = ChainStore::open_read_only(&flags.store, prepared.horizons)?;
-    let snap = store.begin_read()?;
-    write_trace_file(&snap, &out)?;
+    let report = drive(&flags, &prepared, |pow, metrics| {
+        rebaseline::baseline(
+            &flags.corpus,
+            &flags.store,
+            prepared.rules,
+            prepared.cfg,
+            pow,
+            metrics,
+            &out,
+        )
+    })
+    .await?;
     eprintln!("trace → {}", out.display());
     if let Some(path) = digests_out {
         // A linear baseline (no pop) connected each height once. The table
@@ -461,7 +440,18 @@ async fn replay(flags: RunFlags, trace: PathBuf) -> Result<(), Failure> {
     // different epoch is refused at open.
     let prepared = prepare(&flags)?;
     let trace = Arc::new(Trace::read(BufReader::new(File::open(&trace)?))?);
-    let report = drive(&flags, &prepared, trace).await?;
+    let report = drive(&flags, &prepared, |pow, metrics| {
+        rebaseline::replay_corpus(
+            &flags.corpus,
+            &flags.store,
+            prepared.rules,
+            prepared.cfg,
+            pow,
+            metrics,
+            trace,
+        )
+    })
+    .await?;
     for disagreement in report.disagreements() {
         match disagreement {
             Disagreement::Refused { height, verdict } => {

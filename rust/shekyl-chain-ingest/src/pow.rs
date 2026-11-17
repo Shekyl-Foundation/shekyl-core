@@ -343,14 +343,14 @@ impl Pow for ProductionPow {
 /// A substrate that is its own job: it holds no cache, so `run` and `lend`
 /// call the job with it, a rank is ignored, and every seed reads as warm.
 /// The feature tests' boundary, which never touches RandomX.
-#[cfg(any(test, feature = "bench-internals"))]
+#[cfg(any(test, feature = "bench-internals", feature = "forge"))]
 pub trait Fixture: Substrate + Send + Sync + 'static
 where
     Self::Fault: core::fmt::Debug + Send + 'static,
 {
 }
 
-#[cfg(any(test, feature = "bench-internals"))]
+#[cfg(any(test, feature = "bench-internals", feature = "forge"))]
 impl<S> Pow for S
 where
     S: Fixture,

@@ -1,0 +1,74 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The small plan (CHAIN_FORGE.md CF-1c): the chain the determinism check
+# forges twice, on two architectures, and holds to the blocks.txt and
+# manifest committed beside this file. It reaches every source of
+# randomness in §5.2 at least once:
+#
+#   S1, S3, S5, S6   every spend (the first: the two-input spend)
+#   S2               the two-input spend's first input's blind
+#   S9               the shard fill's parallel spends
+#   S5               the join's bond slot (the persona's signing seed)
+#   S7, S8           the served epoch: draws committed, bundles with
+#                    receipts filed and admitted
+#   S4               the emission claim's backing proof
+#   S1-S3, S5        again on the claim's fee side, and on the reorg's spend
+#
+# Event names are the catalogue's (§3) where the event is one;
+# `first-spend-2in` and `rewound-depth-2` are this plan's own. The reorg
+# is a rewind and a heavier branch (corpus layout 4); CF-E22's
+# `reorg-shallow`, an alternative branch the fork choice switches to, is
+# CF-3's.
+#
+# The seed is SHA-256("shekyl/chain-forge/small-plan-v1").
+
+chain = "small"
+seed = "4caafe22ad997dbcdf53d5a74394c7d9f594482231d080f2e43bb364170cdf9d"
+network = "regtest"
+fixed_difficulty = 1
+block_seconds = 1
+schedule = { settlement_epoch_blocks = "settled", reorg_cap_blocks = 10 }
+
+# The regtest miner's coinbases mature (block 0's pays the table's
+# recipients, so the miner's first is block 1's).
+[[step]]
+do = "mine"
+blocks = 80
+
+[[step]]
+event = "first-spend-2in"
+do = "spend"
+inputs = 2
+
+[[step]]
+event = "shard-0-closed"
+do = "fill-shards"
+count = 1
+
+[[step]]
+event = "first-compact-join"
+do = "join"
+persona = 0
+shards = [0]
+
+[[step]]
+event = "first-serve-credit"
+do = "serve"
+persona = 0
+
+[[step]]
+event = "first-claim"
+do = "claim"
+persona = 0
+
+[[step]]
+do = "mine"
+blocks = 3
+
+[[step]]
+event = "rewound-depth-2"
+do = "reorg"
+depth = 2

@@ -115,6 +115,7 @@ pub(crate) async fn price_trees_claim(
             terms: facts.terms_for(epoch),
             connecting: facts.connecting,
             tx_key,
+            seeds: None,
         },
     )
     .await

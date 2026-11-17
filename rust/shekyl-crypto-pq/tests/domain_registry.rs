@@ -80,7 +80,8 @@ const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
 // channel's hybridXK and the P2P handshake's NNhfs).
 const EXCLUDED_EXPECTED: usize = 10;
 // One derivation (NI-R7): +4 (the harness fixture wallet's fixed salt and its three infos).
-const TEST_ONLY_EXPECTED: usize = 11;
+// CF-1c: +1 (shekyl/chain-forge/seed-v1, the chain forge's seed derivation).
+const TEST_ONLY_EXPECTED: usize = 12;
 /// Labels mainnet used and then retired: none before genesis (Rick,
 /// 2026-11-05). The binding gate refuses their reuse in code.
 const RETIRED_EXPECTED: usize = 0;

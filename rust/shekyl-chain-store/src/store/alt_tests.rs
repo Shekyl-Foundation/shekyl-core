@@ -468,6 +468,73 @@ fn a_removed_row_takes_every_row_built_on_it() {
         .is_none());
 }
 
+/// The alt table's replies come from its key order and its heights, never
+/// from a hash seed (`CHAIN_FORGE.md` §5.2: a forged chain's store and trace
+/// are byte for byte the same in every process). Two stores hold the same
+/// wide branch, six siblings at one height each with a child, and each
+/// store's reads run under their own hash seeds (every `RandomState` a
+/// reader might build draws fresh keys). The stored chains' listing and a
+/// removal's reply are equal between the two stores, and the reply climbs
+/// by height with the table's key order breaking a tie. A reader that walked
+/// a hash collection's order would give the two stores different orders.
+#[test]
+fn the_listing_and_a_removal_are_the_same_under_two_hash_seeds() {
+    let build = |name: &str| {
+        let path = tmp(name);
+        let store = ChainStore::create(&path, EPOCH).expect("create");
+        let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
+        let a = side_candidate(h(1), main[0], 3);
+        let a_id = a.block.hash();
+        insert_admitted(&store, a).expect("a");
+        // Key images 4..=9 for the siblings and 10..=15 for their children:
+        // the fixture's pinned points stop at sixteen.
+        for tag in 4..10 {
+            let sibling = side_candidate(h(2), a_id, tag);
+            let sibling_id = sibling.block.hash();
+            insert_admitted(&store, sibling).expect("sibling");
+            insert_admitted(&store, side_candidate(h(3), sibling_id, tag + 6)).expect("child");
+        }
+        (path, store, a_id)
+    };
+    let (_first_dir, first, a) = build("alt-seed-first");
+    let (_second_dir, second, a_again) = build("alt-seed-second");
+    assert_eq!(a, a_again, "the fixtures are the same blocks");
+
+    let listing = |store: &ChainStore| {
+        store
+            .begin_read()
+            .expect("read")
+            .alternate_chains()
+            .expect("listing")
+    };
+    let listed = listing(&first);
+    assert_eq!(listed.len(), 6, "one chain per sibling's child");
+    assert_eq!(listed, listing(&second));
+
+    let remove = |store: &ChainStore| -> Vec<BlockHash> {
+        let out: Result<Vec<BlockHash>, TestErr> =
+            store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
+        out.expect("the branch")
+    };
+    let removed = remove(&first);
+    assert_eq!(removed.len(), 13);
+    assert_eq!(removed, remove(&second));
+    let heights: Vec<BlockHeight> = removed
+        .iter()
+        .map(|id| {
+            listed
+                .iter()
+                .flat_map(super::alt_view::AltChain::entries)
+                .find(|entry| entry.id == *id)
+                .map_or(h(1), |entry| entry.block.height())
+        })
+        .collect();
+    assert!(
+        heights.windows(2).all(|pair| pair[0] <= pair[1]),
+        "the reply climbs by height: {heights:?}"
+    );
+}
+
 /// A block id has one home (module docs): AL1 refuses a hash the main
 /// chain records, read in the inserting batch, so a verdict minted on a
 /// snapshot from before that block connected cannot add a second copy.

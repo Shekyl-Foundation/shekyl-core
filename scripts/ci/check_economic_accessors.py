@@ -32,14 +32,20 @@
 # three accessors) and the instruments whose modes refuse overrides in
 # main.rs, no sim file calls an accessor, builds a shipped default, or
 # names an owned constant: a read of a static is a field an override would
-# pass and never reach. Tests are not production. Instance of
-# 47-gate-subject-assertion.mdc.
+# pass and never reach. Tests are not production, and neither is code that
+# only a TEST_ONLY feature compiles (check_test_only_features.py's table,
+# read through check_network_uniformity.test_only_features, as the
+# seedable-RNG gate reads it): no shipped build turns one on, which the
+# production graph check proves. Instance of 47-gate-subject-assertion.mdc.
 
 from __future__ import annotations
 
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from check_network_uniformity import test_only_features  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RUST = os.path.join(ROOT, "rust")
@@ -400,44 +406,59 @@ def _cfg_bodies(attr: str) -> list[str]:
         index = cursor
 
 
-def _false_without_test(expr: str) -> bool:
+_FEATURE_ATOM = re.compile(r'^feature\s*=\s*"([^"]+)"$')
+
+
+def _test_atom(expr: str, test_only: frozenset[str]) -> bool:
+    """`test`, or one of the crate's TEST_ONLY features: off in every build
+    that ships."""
+    if expr == "test":
+        return True
+    feature = _FEATURE_ATOM.match(expr)
+    return feature is not None and feature.group(1) in test_only
+
+
+def _false_without_test(expr: str, test_only: frozenset[str] = frozenset()) -> bool:
     """True when `expr` is false in every build where `test` is false.
 
     Other atoms stay unknown. `all` is false when any argument is. `any`
     is false only when every argument is. `not` inverts the always-true
-    case. An atom is that predicate only when it is `test` itself.
+    case. An atom is that predicate when it is `test` itself, or a feature
+    of the crate's in `test_only` (its TEST_ONLY rows), which no shipped
+    build enables.
     """
     expr = expr.strip()
     if expr.startswith("all(") and expr.endswith(")"):
-        return any(_false_without_test(part) for part in _split_top(expr[4:-1]))
+        return any(_false_without_test(part, test_only) for part in _split_top(expr[4:-1]))
     if expr.startswith("any(") and expr.endswith(")"):
-        return all(_false_without_test(part) for part in _split_top(expr[4:-1]))
+        return all(_false_without_test(part, test_only) for part in _split_top(expr[4:-1]))
     if expr.startswith("not(") and expr.endswith(")"):
-        return _true_without_test(expr[4:-1])
-    return expr == "test"
+        return _true_without_test(expr[4:-1], test_only)
+    return _test_atom(expr, test_only)
 
 
-def _true_without_test(expr: str) -> bool:
+def _true_without_test(expr: str, test_only: frozenset[str] = frozenset()) -> bool:
     """True when `expr` is true in every build where `test` is false."""
     expr = expr.strip()
     if expr.startswith("all(") and expr.endswith(")"):
         parts = _split_top(expr[4:-1])
-        return all(_true_without_test(part) for part in parts)
+        return all(_true_without_test(part, test_only) for part in parts)
     if expr.startswith("any(") and expr.endswith(")"):
-        return any(_true_without_test(part) for part in _split_top(expr[4:-1]))
+        return any(_true_without_test(part, test_only) for part in _split_top(expr[4:-1]))
     if expr.startswith("not(") and expr.endswith(")"):
-        return _false_without_test(expr[4:-1])
+        return _false_without_test(expr[4:-1], test_only)
     return False
 
 
-def _cfg_requires_test(attr: str) -> bool:
+def _cfg_requires_test(attr: str, test_only: frozenset[str] = frozenset()) -> bool:
     """True when the attribute list cannot hold in a non-test build.
 
     Attributes combine by conjunction, so one `cfg` that requires `test`
-    is enough. `cfg(any(test, feature = "…"))` can hold with the feature
-    alone, and stays in the scan.
+    (or one of `test_only`, the crate's TEST_ONLY features) is enough.
+    `cfg(any(test, feature = "…"))` can hold with a feature that ships, and
+    stays in the scan.
     """
-    return any(_false_without_test(body) for body in _cfg_bodies(attr))
+    return any(_false_without_test(body, test_only) for body in _cfg_bodies(attr))
 
 
 def cfg_test_module_files() -> set[str]:
@@ -448,15 +469,17 @@ def cfg_test_module_files() -> set[str]:
     same module.
     """
     owned: set[str] = set()
+    test_only = {crate: frozenset(features) for crate, features in test_only_features().items()}
     for dirpath, dirnames, filenames in os.walk(RUST):
         dirnames[:] = [d for d in dirnames if d != "target"]
+        crate = os.path.relpath(dirpath, RUST).split(os.sep)[0]
         for name in filenames:
             if not name.endswith(".rs"):
                 continue
             path = os.path.join(dirpath, name)
             text = open(path, encoding="utf-8").read()
             for match in _CFG_TEST_MOD.finditer(text):
-                if not _cfg_requires_test(match.group("attr")):
+                if not _cfg_requires_test(match.group("attr"), test_only.get(crate, frozenset())):
                     continue
                 attr = match.group("attr").replace(" ", "")
                 mod = match.group("name")
@@ -627,6 +650,23 @@ def selftest() -> int:
         if _cfg_requires_test(attr) != want:
             print(f"selftest: {attr} classified incorrectly", file=sys.stderr)
             return 1
+    # A crate's TEST_ONLY feature is off in every shipped build, so code it
+    # alone compiles is not production; any other feature ships.
+    forge_only = frozenset({"forge"})
+    test_only_cases = {
+        '#[cfg(all(feature = "pipeline", any(test, feature = "forge")))]': True,
+        '#[cfg(feature = "forge")]': True,
+        '#[cfg(any(test, feature = "production"))]': False,
+        '#[cfg(any(feature = "forge", feature = "production"))]': False,
+        '#[cfg(not(feature = "forge"))]': False,
+    }
+    for attr, want in test_only_cases.items():
+        if _cfg_requires_test(attr, forge_only) != want:
+            print(f"selftest: {attr} under TEST_ONLY forge classified incorrectly", file=sys.stderr)
+            return 1
+    if _cfg_requires_test('#[cfg(feature = "forge")]'):
+        print("selftest: a feature not in the crate's TEST_ONLY rows read as test", file=sys.stderr)
+        return 1
     open_mod = (
         '#[cfg(any(test, feature = "production"))]\nmod open;\n'
         '#[cfg(all(test, feature = "pipeline"))]\nmod closed;\n'
