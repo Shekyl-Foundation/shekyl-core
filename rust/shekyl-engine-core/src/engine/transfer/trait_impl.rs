@@ -8,9 +8,7 @@
 use std::collections::HashSet;
 use std::future::Future;
 
-use shekyl_curve_tree::{
-    select_reference_height, BlockHash, BlockHeight, CurveTreeRoot, ReferenceBlock,
-};
+use shekyl_curve_tree::{BlockHash, BlockHeight, CurveTreeRoot, ReferenceBlock};
 use shekyl_engine_state::LedgerBlock;
 
 use super::super::diagnostics::{
@@ -292,53 +290,62 @@ where
         // below refuses (a spend requires the curve tree — no synthetic
         // fallback). The depth sizes the FCMP++ proof weight for fee estimation;
         // its `1` default is inert because those unresolved cases never assemble.
+        // One horizon for the build (A17): the reference it binds and the
+        // classifier that picks its candidates both come from this tip.
+        let horizon = shekyl_engine_state::SpendHorizon::at_tip(
+            self.ledger.with_ledger_block(LedgerBlock::height),
+        );
         let (reference, tree_depth) = match &self.curve_tree {
-            Some(handle) => {
-                let synced = self.ledger.with_ledger_block(LedgerBlock::height);
-                match select_reference_height(synced) {
-                    Some(rh)
-                        if matches!(
-                            tree_gate,
-                            TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
-                        ) =>
-                    {
-                        let (curve_tree_root, depth) =
-                            handle.reference_root_and_depth(rh).await.map_err(|err| {
-                                fail_build_after_attempted(
-                                    self.sink.as_ref(),
-                                    map_curve_tree_handle_error_for_send(&err),
-                                )
-                            })?;
-                        let block_hash = self
-                            .ledger
-                            .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
-                            .ok_or_else(|| {
-                                fail_build_after_attempted(
-                                    self.sink.as_ref(),
-                                    SendError::BuildInvariant {
-                                        reason: "reference-height block hash missing from ledger",
-                                    },
-                                )
-                            })?;
-                        (
-                            Some(ReferenceBlock {
-                                height: rh,
-                                curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-                                block_hash,
-                            }),
-                            depth,
-                        )
-                    }
-                    _ => (None, 1u8),
+            Some(handle) => match horizon.reference() {
+                Some(rh)
+                    if matches!(
+                        tree_gate,
+                        TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
+                    ) =>
+                {
+                    let (curve_tree_root, depth) =
+                        handle.reference_root_and_depth(rh).await.map_err(|err| {
+                            fail_build_after_attempted(
+                                self.sink.as_ref(),
+                                map_curve_tree_handle_error_for_send(&err),
+                            )
+                        })?;
+                    let block_hash = self
+                        .ledger
+                        .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
+                        .ok_or_else(|| {
+                            fail_build_after_attempted(
+                                self.sink.as_ref(),
+                                SendError::BuildInvariant {
+                                    reason: "reference-height block hash missing from ledger",
+                                },
+                            )
+                        })?;
+                    (
+                        Some(ReferenceBlock {
+                            height: rh,
+                            curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+                            block_hash,
+                        }),
+                        depth,
+                    )
                 }
-            }
+                _ => (None, 1u8),
+            },
             None => (None, 1u8),
         };
         let BuildSelected {
             assemble_inputs,
             fee_directive,
             meta,
-        } = self.build_select_sync(&request, fee_snapshot, tree_gate, reference, tree_depth)?;
+        } = self.build_select_sync(
+            &request,
+            fee_snapshot,
+            tree_gate,
+            horizon,
+            reference,
+            tree_depth,
+        )?;
         let mut reservation_cleanup = BuildReservationCleanup::new(self, meta.reservation_id);
 
         // CT-5c: assemble the real FCMP++ membership paths for the whole tx in

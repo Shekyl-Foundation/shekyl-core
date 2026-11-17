@@ -481,11 +481,22 @@ async fn queries_balance_address_transfers_after_create() {
     )
     .await;
     assert!(bal.get("error").is_none(), "{bal}");
-    assert_eq!(bal["result"]["unlocked"], "0");
-    assert_eq!(bal["result"]["liquid"], "0");
+    for leg in [
+        "balance",
+        "spendable",
+        "incoming",
+        "outgoing",
+        "unspendable",
+    ] {
+        assert_eq!(bal["result"][leg], "0", "{leg}");
+    }
+    assert!(
+        bal["result"].get("incoming_wait").is_none(),
+        "nothing incoming: absent"
+    );
+    assert!(bal["result"].get("parked").is_none(), "no parked leg");
     assert_eq!(bal["result"]["staked"], "0");
     assert_eq!(bal["result"]["claimable_rewards"], "0");
-    assert_eq!(bal["result"]["pending"], "0");
 
     let addr = rpc(
         state.clone(),
@@ -615,7 +626,7 @@ async fn queries_balance_address_transfers_after_create() {
             "method": "build_pending_tx",
             "params": {
                 "recipients": [{ "address": "not-an-address", "amount": "1" }],
-                "priority": "STANDARD"
+                "priority": "standard"
             }
         }),
     )

@@ -33,6 +33,7 @@ mod declaration;
 mod dial;
 mod failure;
 mod link;
+mod path;
 mod profile;
 pub mod spans;
 
@@ -63,8 +64,9 @@ pub use link::{
     DownCause, InboundCause, InboundFacet, Link, Links, Outbound, Route, RoutePublish,
     Subscription, Watcher,
 };
+pub use path::{NoReadings, PathReading, PathReady, PathSource};
 pub use profile::{
-    dial_profile, AttemptsPerTest, Cooldown, Corroboration, DialProfile, FailureJudging,
-    JitteredSpan, RetryWaits, SessionTraffic, StreamOpens, WindowSource,
+    dial_profile, AttemptsPerTest, Cooldown, DialProfile, JitteredSpan, RetryWaits, WindowSource,
+    CLEARNET_READING_WAIT_NANOS,
 };
 pub use shekyl_net_address::NetworkAddress;

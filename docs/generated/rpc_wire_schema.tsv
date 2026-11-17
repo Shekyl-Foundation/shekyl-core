@@ -295,7 +295,7 @@ daemon_status	field	posture	tor	status	one-of managed|operator|off
 daemon_status	field	posture	clearnet	status	one-of on|off
 daemon_status	field	daemon	origination	status	one-of address-hiding|connecting|rebuilding|clearnet-only|offline
 daemon_status	field	daemon	sync_connector	status	list of one-of clearnet|tor
-daemon_status	field	daemon	tor_quiet	status	state empty|failing or null
+daemon_status	field	daemon	tor_quiet	status	state unreached or null
 daemon_status	field	tor quiet	age	status	duration
 daemon_status	field	daemon	tor	status	object (tor) or null
 daemon_status	field	tor	state	status	one-of restarting|waiting|bootstrapping|usable|impaired

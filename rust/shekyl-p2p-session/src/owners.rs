@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use shekyl_levin::{Command, CoreSyncData, GetTxpoolComplement, NewTransactions, PeerlistEntry};
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{ConnectorId, DialEnd, SocketId};
+use shekyl_transport_layer::{ConnectorId, DialEnd, Direction, SocketId};
 use tokio::sync::OwnedSemaphorePermit;
 
 use crate::endpoint::Endpoint;
@@ -234,6 +234,13 @@ pub trait ProbeSink: Send + Sync {
 /// the report gate is held across it.
 pub type SessionsSink = Arc<dyn Fn(PerConnector<u32>) + Send + Sync>;
 
+/// Where the layer reports each session whose handshake finished: its
+/// connector and direction. A handshake still open is not a session, so the
+/// probe of this node's own onion, dropped in its handshake, is never one
+/// (`TOR_SUPERVISOR.md` §4.5a). Called from the session's task; it must
+/// return without waiting and must not re-enter the session layer.
+pub type EstablishedSink = Arc<dyn Fn(ConnectorId, Direction) + Send + Sync>;
+
 /// The three owners, as the composition hands them to the layer, and what
 /// the managed Tor supervisor hears from it.
 #[derive(Clone)]
@@ -250,10 +257,16 @@ pub struct Owners {
     /// The sessions each connector holds, for the supervisor's posture
     /// line (`TSR-Q12`). `None` when no supervisor runs.
     pub sessions: Option<SessionsSink>,
+    /// Each session established, for the Tor Manager's onion-path reading
+    /// (`TOR_SUPERVISOR.md` §4.5a). `None` when no supervisor runs.
+    pub established: Option<EstablishedSink>,
 }
 
 impl Owners {
     pub(crate) fn established(&self, session: &Established) {
+        if let Some(sink) = &self.established {
+            sink(session.handle().connector(), session.handle().direction());
+        }
         self.peers.on_established(session);
         self.sync.on_established(session);
         self.relay.on_established(session);

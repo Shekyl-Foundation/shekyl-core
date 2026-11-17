@@ -20,9 +20,9 @@ use shekyl_levin::{
 
 use shekyl_p2p::{
     Admit, BanSpan, BanTarget, ClaimCarrier, ClearnetPlan, CoreSyncData, Established, LinkLimits,
-    Network, NetworkParts, NetworkPlan, NodeSync, OriginVerdict, PeerPlan, PerConnector, PoolDoor,
-    ProbeArrival, ProbeSink, Sockets, SupervisorFeeds, SyncInbound, SyncOwner, Taken, TorLinkTally,
-    TorPlan, TxId,
+    LinkTally, Network, NetworkParts, NetworkPlan, NodeSync, OriginVerdict, PathFact, PeerPlan,
+    PerConnector, PoolDoor, ProbeArrival, ProbeSink, Sockets, SupervisorFeeds, SyncInbound,
+    SyncOwner, Taken, TorPlan, TxId,
 };
 use tokio::sync::watch;
 
@@ -105,7 +105,8 @@ fn offline_starts_and_stops() {
 /// What the supervisor hears, recorded.
 #[derive(Default)]
 struct Heard {
-    tallies: Mutex<Vec<TorLinkTally>>,
+    tallies: Mutex<Vec<LinkTally>>,
+    facts: Mutex<Vec<PathFact>>,
     verdicts: Mutex<Vec<OriginVerdict>>,
     sessions: Mutex<Vec<PerConnector<u32>>>,
 }
@@ -129,6 +130,11 @@ fn the_supervisor_feeds_hear_each_value_at_start() {
             let heard = Arc::clone(&heard);
             Arc::new(move |tally| heard.tallies.lock().expect("tallies").push(tally))
         },
+        path: {
+            let heard = Arc::clone(&heard);
+            Arc::new(move |fact| heard.facts.lock().expect("facts").push(fact))
+        },
+        reading_wait: Duration::from_secs(60),
         probes: Arc::clone(&heard) as Arc<dyn ProbeSink>,
         verdict: {
             let heard = Arc::clone(&heard);
@@ -142,7 +148,11 @@ fn the_supervisor_feeds_hear_each_value_at_start() {
     let network = Network::start(parts).expect("starts");
     assert_eq!(
         *heard.tallies.lock().expect("tallies"),
-        vec![TorLinkTally::default()]
+        vec![LinkTally::default()]
+    );
+    assert!(
+        heard.facts.lock().expect("facts").is_empty(),
+        "no onion-path fact before any Tor session or dial"
     );
     assert_eq!(
         *heard.verdicts.lock().expect("verdicts"),

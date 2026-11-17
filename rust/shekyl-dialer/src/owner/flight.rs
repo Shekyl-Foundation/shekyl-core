@@ -43,7 +43,9 @@ use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_timing_engine::Clock;
 use shekyl_transport_layer::{DialEnd, SocketId};
 
-use super::handshake::{attempt_task, failed_outcome, Attempt, AttemptEnd, Prepared, TaskResult};
+use super::handshake::{
+    attempt_task, failed_outcome, prepare, Attempt, AttemptEnd, Prepared, TaskResult,
+};
 use super::ready::block_on_future;
 use super::{AttemptTimes, Dialer, Shared};
 use crate::fill::DialAim;
@@ -102,20 +104,12 @@ async fn timed<C: Clock + Clone + Send + Sync + 'static>(
     attempt: impl Future<Output = AttemptEnd>,
 ) -> Finished {
     let began = layer.stamp();
-    let AttemptEnd {
-        result,
-        opened_ms,
-        ended_ms,
-    } = attempt.await;
+    let AttemptEnd { result, ended } = attempt.await;
     let ran_nanos = layer.now().get().saturating_sub(began.tick().get());
     Finished {
         result,
         ran_nanos,
-        times: AttemptTimes {
-            began,
-            opened_ms,
-            ended_ms,
-        },
+        times: AttemptTimes { began, ended },
     }
 }
 
@@ -469,7 +463,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         rng: &mut R,
     ) -> Launch {
         tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
-        let prepared = match self.prepare(&address) {
+        let prepared = match prepare(&address) {
             Ok(prepared) => prepared,
             Err(end) => {
                 return self.record_local(connector, address, end, rng).launch();
@@ -500,7 +494,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         rng: &mut R,
     ) -> Drove {
         tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
-        let prepared = match self.prepare(&address) {
+        let prepared = match prepare(&address) {
             Ok(prepared) => prepared,
             Err(end) => {
                 return self.record_local(connector, address, end, rng).drove();
@@ -617,10 +611,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         let at = self.stamp();
         let times = AttemptTimes {
             began: at,
-            opened_ms: None,
-            ended_ms: self.life_now_ms(),
+            ended: at,
         };
-        self.with_sessions(at, |shared| {
+        self.with_shared(|shared| {
             if self.stop.load(Ordering::Acquire) {
                 shared.attempts(connector).cancel(&address);
                 return BeforeIo::Stopped;
@@ -729,8 +722,7 @@ mod tests {
             ran_nanos: 0,
             times: AttemptTimes {
                 began: ManualClock::new(Tick::new(0)).stamp(),
-                opened_ms: None,
-                ended_ms: 0,
+                ended: ManualClock::new(Tick::new(0)).stamp(),
             },
         }
     }

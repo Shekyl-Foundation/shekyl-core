@@ -400,7 +400,7 @@ mod tests {
             ("posture", json!({"tor": "managed", "clearnet": "off"})),
             ("origination", json!("connecting")),
             ("sync_connector", json!(["clearnet"])),
-            ("tor_quiet", json!({"failing": {"age": 130}})),
+            ("tor_quiet", json!({"unreached": {"age": 130}})),
             (
                 "tor",
                 json!({

@@ -255,9 +255,8 @@ fn quiet_sentence(status: &TorStatus, unknown: &mut bool) -> Option<String> {
         return None;
     }
     Some(match status.tor_quiet.as_ref()? {
-        TorQuiet::Empty => "No peers are known yet.".to_owned(),
-        TorQuiet::Failing { age } => format!(
-            "Peers are known; none has answered through Tor for {}.",
+        TorQuiet::Unreached { age } => format!(
+            "Peers are known, but Tor has not been able to reach them for {}.",
             spoken_duration(*age)
         ),
         TorQuiet::Unknown { .. } => {

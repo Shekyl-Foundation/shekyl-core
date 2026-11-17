@@ -143,6 +143,12 @@ pub(crate) enum KeyEngineError {
     #[error("key engine primitive failure: {detail}")]
     Primitive { detail: &'static str },
 
+    /// The transaction builder refused or failed the signing pass; the
+    /// fault keeps its variant by identity, bounded (no inner text: the
+    /// signer logs that locally at debug).
+    #[error("signing failed: {0}")]
+    Sign(shekyl_tx_builder::SignFault),
+
     /// Proof generation failed inside the key actor (WI-RPC-3 inbound
     /// tx proofs / reserve proofs). Wraps [`shekyl_proofs::error::ProofError`]
     /// so the proofs workflow keeps the typed proof failure: its

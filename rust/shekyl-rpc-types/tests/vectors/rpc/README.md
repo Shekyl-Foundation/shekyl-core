@@ -127,10 +127,10 @@ Tor fields, `posture`, `origination`, `sync_connector`, `tor_quiet` and
 `tor`. `tests/tor_vectors.rs` splices each into `wire/daemon_status.reply.json`
 and reads the whole reply as `DaemonStatus`.
 
-- `known/` (27): every `tor.cause` key, `clock-skew` with each of its
+- `known/` (26): every `tor.cause` key, `clock-skew` with each of its
   three payloads, `unusable` with each of its three and `exited` with a
   code and `null`; every `tor.onion.cause` key and the `publishing` onion;
-  both quiet lines; an operator's Tor and Tor off. Each conforms to the
+  the quiet line; an operator's Tor and Tor off. Each conforms to the
   schema, decodes, holds nothing unknown and encodes back to the same
   document.
 - `unknown/` (14): a key or keyword this build does not know, in each closed

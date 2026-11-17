@@ -31,12 +31,16 @@ pub use engine::{
     PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
     RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
     RefreshReorgEvent, RefreshSummary, ReportedOutcome, ReservationId, ScannableBlock, SendError,
-    SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput, StakingLedgerSnapshot,
-    StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SubmitReceipt, SuppressedClass,
-    TracingDiagnosticSink, TxDestination, TxError, TxHash, TxRecipient, TxRecipientSummary,
-    TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial, DAEMON_METHODS,
+    SignerFault, SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput,
+    StakingLedgerSnapshot, StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome,
+    SubmitReceipt, SuppressedClass, TracingDiagnosticSink, TxDestination, TxHash, TxRecipient,
+    TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
+    DAEMON_METHODS,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
+// The signing pass's fault, bounded, that [`SendError::Sign`] carries, and
+// the transaction limits it names.
+pub use shekyl_tx_builder::{InternalSignFault, SignFault, MAX_INPUTS, MAX_OUTPUTS};
 // The fault [`IoError::CurveTreeStore`] carries, re-exported so a consumer can
 // name it without depending on `shekyl-curve-tree`.
 pub use shekyl_curve_tree::StoreOpenFault;

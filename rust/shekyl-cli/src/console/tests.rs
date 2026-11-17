@@ -2061,7 +2061,7 @@ fn the_tor_vectors_read_through_the_client() {
         daemon.daemon_status()
     };
     let known = tor_vectors("known");
-    assert_eq!(known.len(), 27);
+    assert_eq!(known.len(), 26);
     for (name, value) in known {
         let status = read(value).unwrap_or_else(|error| panic!("{name}: {error}"));
         let tor = status.tor_status().expect("Status is shown");

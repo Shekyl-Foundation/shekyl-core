@@ -10,10 +10,10 @@
 //! the caller. Revision 4's tests 12 to 16: a Tor timeout at or after the
 //! managed Tor's window is final within its test (Rick, 2026-10-26).
 
-#[path = "../support/life.rs"]
-mod life;
 #[path = "../support/log_capture.rs"]
 mod log_capture;
+#[path = "../support/path.rs"]
+mod path;
 #[path = "../support/rig.rs"]
 mod rig;
 #[path = "../support/tables.rs"]
@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use shekyl_dialer::Launch;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_p2p_session::{Endpoint, NonceTake};
+use shekyl_p2p_session::NonceTake;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
 use shekyl_timing_engine::{Clock, ManualClock, OwnerClass};
 use shekyl_transport_layer::{DialEnd, Direction};
@@ -537,12 +537,9 @@ fn one_tor_attempt_under(
     let rig = Rig::on(&clock);
     let dialer = &rig.dialer;
     dialer.set_window(TOR, window);
-    // The link works: an inbound Tor session receives throughout, so the
-    // judge counts the attempt's failure once its bracket closes.
-    let mut held = rig.accept(Endpoint::TorInbound);
-    rig.establish_inbound(&mut held);
-    rig.peer.reset_connects();
-    life::Life::install(dialer, &clock).keep_alive();
+    // The path works: the Tor connector's reading counts the attempt's
+    // failure.
+    path::ScriptedPath::working(dialer, TOR);
     rig.peer.refuse_after(cause, took);
     let mut rng = SplitMix64::new(seed);
     let onion = onions(1).remove(0);
@@ -551,40 +548,26 @@ fn one_tor_attempt_under(
         .expect("admitted");
     dialer.wake(TOR, &mut rng);
     assert_eq!(rig.peer.connects(), 1, "one attempt");
-    TorAttempt {
-        rig,
-        onion,
-        rng,
-        _held: held,
-    }
+    TorAttempt { rig, onion, rng }
 }
 
 struct TorAttempt {
     rig: Rig,
     onion: NetworkAddress,
     rng: SplitMix64,
-    /// The inbound session's far side, open for the test.
-    _held: shekyl_p2p_session::harness::Wire,
 }
 
 impl TorAttempt {
-    /// The test ended on its first attempt: once its bracket closes the
-    /// onion cools, its ladder stepped once, and no wake after any retry
-    /// wait dials it again.
+    /// The test ended on its first attempt: the path's working reading
+    /// counted it at once, so the onion cools, its ladder stepped once, and
+    /// no wake after any retry wait dials it again.
     fn assert_final(mut self) {
-        let (clock, dialer) = (self.rig.clock.clone(), Arc::clone(&self.rig.dialer));
+        let dialer = Arc::clone(&self.rig.dialer);
         assert_eq!(
             dialer.pending_verdicts(TOR),
-            1,
-            "the verdict waits for its bracket"
+            0,
+            "the working reading decided it"
         );
-        // A wake inside the bracket sees the live link and counts it; the
-        // rest of the bracket then passes.
-        let bracket = shekyl_peerlist::dial_profile(TOR).judging.bracket_nanos;
-        clock.set(Tick::new(clock.now().get() + 1_000_000_000));
-        dialer.apply_verdicts(&mut self.rng);
-        clock.set(Tick::new(clock.now().get() + bracket));
-        dialer.apply_verdicts(&mut self.rng);
         assert!(
             dialer.shared().lists.is_cooling(&self.onion),
             "the onion cools"
@@ -694,7 +677,15 @@ fn a_transport_timeout_past_the_window_is_final_and_one_inside_retries() {
 #[test]
 fn the_tally_counts_a_failed_attempt_deferred_for_a_retry() {
     let attempt = one_tor_attempt(46, shekyl_tor::reply_end(0xF0), Duration::ZERO);
-    assert_eq!(attempt.rig.dialer.tor_link_tally().unopened, 1);
+    assert!(
+        attempt
+            .rig
+            .dialer
+            .link_tally(TOR)
+            .failed_attempt_began
+            .is_some(),
+        "the failed attempt's launch is in the tally"
+    );
     attempt.assert_retries();
 }
 

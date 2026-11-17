@@ -56,6 +56,56 @@ use std::time::Duration;
 use super::super::posture::{Cause, Inbound, InboundCause, ReportedSkew};
 use super::announce::Cadence;
 use super::{duration_ns, Action, Core, Duty, Phase};
+use crate::control::DescriptorKey;
+
+/// The descriptors of this publication whose latest round was refused.
+///
+/// A key is the order the tracker first saw the descriptor, and a
+/// publication never reuses one (`UploadRounds::next_publication`). The
+/// refusal stands until a round of that same key is accepted, or until
+/// the tracker retires the key. A rotation forgets the descriptor. A
+/// new publication retires every key it holds, because none of them will
+/// be accepted, and the next publication's own rounds note a refusal
+/// again if the directories refuse those.
+#[derive(Debug, Default)]
+pub(super) struct Refusals {
+    descriptors: Vec<DescriptorKey>,
+}
+
+impl Refusals {
+    pub(super) fn new() -> Self {
+        Self {
+            descriptors: Vec::new(),
+        }
+    }
+
+    /// Note `descriptor`'s refused round. The return is whether no
+    /// descriptor of this publication was refused before this call.
+    pub(super) fn note(&mut self, descriptor: DescriptorKey) -> bool {
+        let first = self.descriptors.is_empty();
+        if !self.descriptors.contains(&descriptor) {
+            self.descriptors.push(descriptor);
+        }
+        first
+    }
+
+    /// Drop `descriptor`'s refusal. `None` when it had none. `Some(true)`
+    /// when it was the last one standing.
+    pub(super) fn clear_one(&mut self, descriptor: DescriptorKey) -> Option<bool> {
+        let before = self.descriptors.len();
+        self.descriptors.retain(|held| *held != descriptor);
+        (before != self.descriptors.len()).then_some(self.descriptors.is_empty())
+    }
+
+    /// Drop every refusal. The publication's keys are finished.
+    pub(super) fn clear(&mut self) {
+        self.descriptors.clear();
+    }
+
+    pub(super) fn any(&self) -> bool {
+        !self.descriptors.is_empty()
+    }
+}
 
 /// Whether Tor's skew report owns a bootstrap block.
 ///
@@ -216,7 +266,7 @@ impl Core {
         // report here would let Tor's next report say the same fault again.
         // Refused uploads still stand if they did; otherwise the facet is
         // unknown again until a probe judges it.
-        if self.uploads_refused {
+        if self.any_refused() {
             self.inbound_unreachable(now, InboundCause::UploadsRefused);
         } else {
             self.inbound = if self.onion_published_here() {
@@ -280,12 +330,13 @@ impl Core {
         ) || (self.cause == Cause::None && self.clock_is_behind())
     }
 
-    /// A round in which more than half of the directories refused the
-    /// upload. No republish; the facet says so unless the clock, the cause
-    /// behind it, already does.
-    pub(super) fn uploads_refused(&mut self, now: u64) -> Vec<Action> {
-        let newly = !self.uploads_refused;
-        self.uploads_refused = true;
+    /// A round of `descriptor` in which more than half of the directories
+    /// refused the upload. No republish; the facet says so unless the clock,
+    /// the cause behind it, already does. Either descriptor's refused round
+    /// stands until a round of that same descriptor is accepted, or until
+    /// the tracker retires that descriptor.
+    pub(super) fn uploads_refused(&mut self, now: u64, descriptor: DescriptorKey) -> Vec<Action> {
+        let newly = self.refusals.note(descriptor);
         if self.republish.judging {
             self.republish_failed(now);
         }
@@ -298,10 +349,31 @@ impl Core {
         actions
     }
 
-    /// A round that was not refused clears refused uploads. The facet is
-    /// unknown again until its probe judges it.
-    pub(super) fn uploads_accepted(&mut self, now: u64) {
-        if !std::mem::take(&mut self.uploads_refused) {
+    /// A round of `descriptor` that was not refused clears that
+    /// descriptor's refusal. Once neither descriptor's stands, the facet is
+    /// unknown again until a probe judges it. A descriptor the tracker
+    /// retired is cleared the same way: that key will not be accepted.
+    pub(super) fn uploads_accepted(&mut self, now: u64, descriptor: DescriptorKey) {
+        if self.refusals.clear_one(descriptor) == Some(true) {
+            self.publishing_after_refusal(now);
+        }
+    }
+
+    /// `ADD_ONION` started the next publication. Every key held here is
+    /// finished, and a refusal left on one would stand with no round that
+    /// can clear it. The next publication notes its own.
+    pub(super) fn clear_publication_refusals(&mut self, now: u64) {
+        if !self.refusals.any() {
+            return;
+        }
+        self.refusals.clear();
+        self.publishing_after_refusal(now);
+    }
+
+    /// No refused descriptor remains. A facet that said the uploads were
+    /// refused is publishing again: the next round speaks for itself.
+    fn publishing_after_refusal(&mut self, now: u64) {
+        if self.refusals.any() {
             return;
         }
         if matches!(
@@ -315,10 +387,15 @@ impl Core {
         }
     }
 
-    /// While the clock is named, or the latest round was refused, a
-    /// republish cannot help.
+    /// Either descriptor's latest round was refused.
+    pub(super) fn any_refused(&self) -> bool {
+        self.refusals.any()
+    }
+
+    /// While the clock is named, or either descriptor's latest round was
+    /// refused, a republish cannot help.
     pub(super) fn republish_cannot_help(&self) -> bool {
-        self.clock_is_behind() || self.uploads_refused
+        self.clock_is_behind() || self.any_refused()
     }
 
     /// The republish is waiting on its own round's probe.

@@ -567,7 +567,7 @@ impl Peerlist {
                             address,
                             now,
                             profile.cooldown,
-                            profile.judging.outage_retry,
+                            profile.outage_retry,
                             bans,
                             rng,
                         );

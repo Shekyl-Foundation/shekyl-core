@@ -16,6 +16,13 @@ use super::super::posture::{
 };
 use super::{duration_ns, Action, Core, DirectoryPlan, Input, LaunchDirectory, Policy, Step};
 
+/// The first descriptor a tracker sees: the key every single-descriptor
+/// round in these tests carries.
+pub(super) const D0: crate::control::DescriptorKey = crate::control::DescriptorKey::new(0);
+
+/// The second descriptor a tracker sees.
+pub(super) const D1: crate::control::DescriptorKey = crate::control::DescriptorKey::new(1);
+
 impl Input {
     /// The pin's acceptance, carrying a witness no test spawns: the core
     /// hands it to the launch and never reads it.
@@ -35,7 +42,6 @@ fn policy() -> Policy {
         sample_every: Duration::from_secs(1),
         alive_every: Duration::from_secs(4),
         fresh_directory_after: 3,
-        quiet_after: Duration::from_secs(20),
         probe_after_min: Duration::from_secs(15),
         probe_after_max: super::PROBE_AFTER_MAX,
         probe_within: super::PROBE_WITHIN,
@@ -1042,14 +1048,14 @@ fn every_age_on_the_wire_grows_with_the_asking_clock() {
         let status = Status {
             since: 3 * second,
             inbound,
-            tor_quiet: Some(TorQuiet::Unanswered { since: 5 * second }),
+            tor_quiet: Some(TorQuiet::Unreached { since: 5 * second }),
             ..held_status()
         };
         let ask = 100 * second;
         let first = super::super::snapshot(&status, managed(false), ask);
         let later = super::super::snapshot(&status, managed(false), ask + ten);
-        assert_eq!(first.tor_quiet, Some(WireQuiet::Failing { age: 95 }));
-        assert_eq!(later.tor_quiet, Some(WireQuiet::Failing { age: 105 }));
+        assert_eq!(first.tor_quiet, Some(WireQuiet::Unreached { age: 95 }));
+        assert_eq!(later.tor_quiet, Some(WireQuiet::Unreached { age: 105 }));
         let (first, later) = (first.tor.expect("managed"), later.tor.expect("managed"));
         assert_eq!(first.age, 97, "{inbound:?}");
         assert_eq!(later.age, first.age + 10, "{inbound:?}");
@@ -1306,8 +1312,11 @@ mod clock;
 mod clock_evidence;
 mod clock_jump;
 mod clock_line;
+mod descriptor_rounds;
 mod directories;
+mod directory_silence;
 mod directory_uploads;
+mod onion_path;
 mod overdue;
 mod pace;
 mod probe;

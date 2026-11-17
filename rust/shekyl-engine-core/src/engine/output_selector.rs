@@ -236,13 +236,9 @@ impl OutputSelector for WalletGreedyOutputSelector {
         target: AtomicUnits,
     ) -> Result<SelectedOutputs, OutputSelectorError> {
         // Empty candidate set: distinct from "candidates sum
-        // < target". Caller (`LocalPendingTx::build`) sees
-        // this when the post-filter step against
-        // `output_locks` left nothing; the engine-wide
-        // `From<OutputSelectorError> for SendError` impl
-        // collapses to `InsufficientFunds { needed,
-        // available: 0 }` so the consumer-facing surface
-        // matches the pre-PR-5 behavior.
+        // < target". The build routes both through
+        // `CandidatePartition::refusal`, which names a rebuild
+        // or incoming money when waiting would cover the send.
         if candidates.is_empty() {
             return Err(OutputSelectorError::NoEligibleOutputs);
         }

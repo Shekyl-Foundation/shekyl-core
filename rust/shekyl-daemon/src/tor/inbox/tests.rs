@@ -14,7 +14,8 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use shekyl_p2p::{OriginVerdict, PerConnector, ProbeArrival, SupervisorFeeds, TorLinkTally};
+use shekyl_p2p::{LinkTally, OriginVerdict, PathFact, PerConnector, ProbeArrival, SupervisorFeeds};
+use shekyl_timing_engine::Clock;
 use shekyl_timing_engine::{EngineService, ManualClock, OwnerClass, Tick};
 use shekyl_tor_control_client::control::{
     BootstrapState, ControlReply, EventSink, ReplyFramer, EVENT_QUEUE_EVENTS,
@@ -160,10 +161,7 @@ async fn an_owner_dropped_is_the_stop_said_once() {
 #[tokio::test(start_paused = true)]
 async fn the_networks_feeds_ending_wake_nothing_and_keep_their_last_value() {
     let (_owner, mut inbox, feeds) = inbox();
-    let tally = TorLinkTally {
-        opened: 2,
-        ..TorLinkTally::default()
-    };
+    let tally = failed_at(2);
     (feeds.tally)(tally);
     (feeds.verdict)(OriginVerdict::Connected);
     (feeds.sessions)(PerConnector {
@@ -194,14 +192,8 @@ async fn the_networks_feeds_ending_wake_nothing_and_keep_their_last_value() {
 #[tokio::test(start_paused = true)]
 async fn a_cell_holds_the_latest_value_only() {
     let (_owner, mut inbox, feeds) = inbox();
-    let first = TorLinkTally {
-        unopened: 1,
-        ..TorLinkTally::default()
-    };
-    let second = TorLinkTally {
-        unopened: 2,
-        ..TorLinkTally::default()
-    };
+    let first = failed_at(1);
+    let second = failed_at(2);
     (feeds.tally)(first);
     (feeds.tally)(second);
     assert!(matches!(inbox.wait().await, Woken::Rang));
@@ -223,6 +215,38 @@ async fn the_event_sink_ending_wakes_nothing() {
         Woken::Arrived(Arrival::Event(_))
     ));
     assert!(pending_a_minute(&mut inbox).await.is_none());
+}
+
+/// A tally whose latest failed dial was launched at `nanos`.
+fn failed_at(nanos: u64) -> LinkTally {
+    LinkTally {
+        failed_attempt_began: Some(ManualClock::new(Tick::new(nanos)).stamp()),
+        ..LinkTally::default()
+    }
+}
+
+/// **Each onion-path fact is its own** (`TOR_SUPERVISOR.md` §4.5a): a
+/// completed dial, a new inbound session and a want are three arrivals, in
+/// order. A cell for them would keep only the last, and a want would be
+/// lost behind a fact. Storing the facts in a cell fails this.
+#[tokio::test(start_paused = true)]
+async fn each_onion_path_fact_is_its_own_arrival() {
+    let (_owner, mut inbox, feeds) = inbox();
+    let at = |nanos| ManualClock::new(Tick::new(nanos)).stamp();
+    let facts = [
+        PathFact::OnionDialOpened(at(1)),
+        PathFact::InboundTorSession(at(2)),
+        PathFact::Wanted(at(3)),
+    ];
+    for fact in facts {
+        (feeds.path)(fact);
+    }
+    for fact in facts {
+        let Woken::Arrived(Arrival::Path(arrived)) = inbox.wait().await else {
+            panic!("a path fact");
+        };
+        assert_eq!(arrived, fact);
+    }
 }
 
 /// A probe's arrival is discrete: two arrivals are two, in order. A cell
@@ -582,10 +606,7 @@ impl Live {
             }
             Producer::Network => {
                 if let Some(feeds) = &self.feeds {
-                    (feeds.tally)(TorLinkTally {
-                        opened: u64::try_from(self.fed).expect("small"),
-                        ..TorLinkTally::default()
-                    });
+                    (feeds.tally)(failed_at(u64::try_from(self.fed).expect("small")));
                     feeds.probes.probe_arrived(ProbeArrival {
                         minted_at: Tick::new(1),
                         arrived_at: Tick::new(2),
@@ -763,10 +784,7 @@ async fn the_loop_wakes_for_deadlines_and_what_it_is_fed_not_for_time() {
     ));
     boot.send(BootstrapState::Ready).expect("held");
     drop(boot);
-    (feeds.tally)(TorLinkTally {
-        unopened: 1,
-        ..TorLinkTally::default()
-    });
+    (feeds.tally)(failed_at(1));
     drop(feeds);
     let feed_at = [secs(45), secs(200), secs(410)];
     let mut fed_events = 0;

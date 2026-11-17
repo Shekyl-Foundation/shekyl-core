@@ -1762,7 +1762,6 @@ dependencies = [
 name = "shekyl-address"
 version = "3.1.0"
 dependencies = [
- "bech32",
  "shekyl-crypto-hash",
  "shekyl-encoding",
  "shekyl-network",
@@ -2276,7 +2275,6 @@ dependencies = [
  "shekyl-economics",
  "shekyl-rpc-types",
  "shekyl-types",
- "shekyl-units",
  "std-shims",
  "thiserror",
  "zeroize",
