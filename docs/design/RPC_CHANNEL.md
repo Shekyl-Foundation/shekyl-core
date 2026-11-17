@@ -2001,13 +2001,14 @@ a demonstrated operator recovery need returns it as a ruled capability.
   condition. An explicit `data-dir` with `service` gets the same checks.
 - **The channel listener is off by default (Rick, 2026-11-14).**
   `rpc-listen` is `none` unless the operator gives it: no channel port is
-  ruled. A service publishes its machine-wide rendezvous (§7.1) only when
-  it listens on the channel, naming the address loopback reaches (a
-  wildcard by its family's loopback address) and its public bundle; a
-  service that does not listen publishes none and says so at start, and
-  removes a record a previous run left at its path: a crash does not run
-  the clean-stop removal, and the leftover would still name the previous
-  endpoint.
+  ruled. A service always publishes its machine-wide rendezvous (§7.1;
+  Rick, 2026-11-17, amending 2026-11-14's "only when it listens on the
+  channel"): when it listens on the channel the record names the address
+  loopback reaches (a wildcard by its family's loopback address) and its
+  public bundle, and when its view listener is on it names that listener.
+  A start replaces a record a previous run left at its path, so a crash's
+  leftover never names the previous endpoint, and announces what the
+  record names.
   Until RT-W12, a same-user tool reaches a run-as-me daemon on the owner's
   socket or the plaintext admin listener, and a service on the plaintext
   admin listener. **RT-W12 rules the channel port and gives a service a
@@ -2184,7 +2185,12 @@ client never reaches the wrong network's node.
   check written against either tool will report the design unworkable.
 - **Service mode, every platform:** a machine-wide rendezvous file,
   `<the service's rendezvous directory>/shekyl-<name>`, readable by users,
-  naming the loopback channel address and the daemon's public bundle.
+  always published (Rick, 2026-11-17). It names the loopback channel
+  address and the daemon's public bundle only when the channel is on, and
+  the view listener's endpoint only when that listener is on
+  (`shekyl-rpc-rendezvous`'s `ServiceRecord`, format 2). A wallet on the
+  machine reads it only to tell a service from no node: it dials nothing it
+  names, and says what to set (RT-W10 step 5).
   `<name>` is the RT-O10 derivation — the same function and the same
   known-answer test as the Unix socket and the Windows rendezvous file.
   **The service's rendezvous directory is fixed per platform and separate

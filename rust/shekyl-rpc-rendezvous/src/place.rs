@@ -43,8 +43,10 @@ pub const PIPE_PREFIX: &str = r"\\.\pipe\shekyl-owner-";
 /// read it.
 pub const CONSOLE_PIPE_PREFIX: &str = r"\\.\pipe\shekyl-console-";
 
-/// A service's record's first line: its format and version.
-pub const SERVICE_RECORD_FORMAT: &str = "shekyl-service-rendezvous 1";
+/// A service's record's first line: its format and version. Version 2
+/// (Rick, 2026-11-17): the record is always published, and its channel and
+/// view lines are each present only when that listener is on.
+pub const SERVICE_RECORD_FORMAT: &str = "shekyl-service-rendezvous 2";
 
 /// The rendezvous directory's name inside a Windows data home: the
 /// account's (`Shekyl\rendezvous`, [`account_dir`]) and the service's
@@ -170,50 +172,94 @@ impl Record {
     }
 }
 
-/// A service's record: the channel address a client on this machine dials
-/// and the daemon's public bundle, which the client pins.
+/// A service's channel, as its record names it: the loopback address a
+/// client on this machine dials, and the daemon's public bundle, which the
+/// client pins.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ServiceRecord {
+pub struct ServiceChannel {
     /// The loopback address the service's channel listener answers on.
-    pub channel: SocketAddr,
+    pub address: SocketAddr,
     /// The daemon's public bundle: its X25519 key, then its ML-KEM-768
     /// encapsulation key.
     pub bundle: Vec<u8>,
 }
 
+/// A service's record (`RPC_CHANNEL.md` §7.1, as amended 2026-11-17). A
+/// service always publishes one, so a client on this machine can tell that
+/// "this computer"'s node is a service; what the record names is what the
+/// service serves: its channel when `rpc-listen` is on, its view listener
+/// when `rpc-view-listen` is on, either, both or neither.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceRecord {
+    /// The channel, when the service listens on it.
+    pub channel: Option<ServiceChannel>,
+    /// The plaintext view listener a wallet on this machine is told to name
+    /// as its `daemon-address`, when the service has one.
+    pub view: Option<SocketAddr>,
+}
+
 impl ServiceRecord {
-    /// The record's bytes, as the service publishes them.
+    /// The record's bytes, as the service publishes them: the format line,
+    /// then `channel` and `bundle` together when the channel is on, then
+    /// `view` when the view listener is on.
     #[must_use]
     pub fn bytes(&self) -> Vec<u8> {
-        let mut text = format!("{SERVICE_RECORD_FORMAT}\nchannel {}\nbundle ", self.channel);
-        for byte in &self.bundle {
-            text.push(hex_digit(byte >> 4));
-            text.push(hex_digit(byte & 0x0f));
+        let mut text = format!("{SERVICE_RECORD_FORMAT}\n");
+        if let Some(channel) = &self.channel {
+            text.push_str(&format!("channel {}\nbundle ", channel.address));
+            for byte in &channel.bundle {
+                text.push(hex_digit(byte >> 4));
+                text.push(hex_digit(byte & 0x0f));
+            }
+            text.push('\n');
         }
-        text.push('\n');
+        if let Some(view) = self.view {
+            text.push_str(&format!("view {view}\n"));
+        }
         text.into_bytes()
     }
 
     /// Read a record. `None` for anything that is not one: another format or
-    /// version, a missing or malformed line, an empty bundle, or anything
-    /// after the bundle.
+    /// version, a line out of order or malformed, a channel without its
+    /// bundle, an empty bundle, a view address that is not loopback, or
+    /// anything after the last line.
     #[must_use]
     pub fn parse(bytes: &[u8]) -> Option<Self> {
         let text = std::str::from_utf8(bytes).ok()?;
-        let mut lines = text.lines();
+        let mut lines = text.lines().peekable();
         if lines.next()? != SERVICE_RECORD_FORMAT {
             return None;
         }
-        let channel = lines.next()?.strip_prefix("channel ")?.parse().ok()?;
-        let hex = lines.next()?.strip_prefix("bundle ")?.as_bytes();
-        if lines.next().is_some() || hex.is_empty() || hex.len() % 2 != 0 {
+        let channel = match lines.peek().and_then(|l| l.strip_prefix("channel ")) {
+            Some(address) => {
+                let address = address.parse().ok()?;
+                lines.next();
+                let hex = lines.next()?.strip_prefix("bundle ")?.as_bytes();
+                if hex.is_empty() || hex.len() % 2 != 0 {
+                    return None;
+                }
+                let bundle = hex
+                    .chunks_exact(2)
+                    .map(|pair| Some(hex_value(pair[0])? << 4 | hex_value(pair[1])?))
+                    .collect::<Option<Vec<u8>>>()?;
+                Some(ServiceChannel { address, bundle })
+            }
+            None => None,
+        };
+        let view = match lines.next() {
+            Some(line) => {
+                let view: SocketAddr = line.strip_prefix("view ")?.parse().ok()?;
+                if !view.ip().is_loopback() {
+                    return None;
+                }
+                Some(view)
+            }
+            None => None,
+        };
+        if lines.next().is_some() {
             return None;
         }
-        let bundle = hex
-            .chunks_exact(2)
-            .map(|pair| Some(hex_value(pair[0])? << 4 | hex_value(pair[1])?))
-            .collect::<Option<Vec<u8>>>()?;
-        Some(Self { channel, bundle })
+        Some(Self { channel, view })
     }
 }
 
@@ -265,41 +311,71 @@ mod tests {
         assert_eq!(Record::parse(&[0xff, 0xfe]), None);
     }
 
+    fn channel() -> ServiceChannel {
+        ServiceChannel {
+            address: "127.0.0.1:28100".parse().unwrap(),
+            bundle: vec![0xab, 0x01, 0xf0],
+        }
+    }
+
     /// A service's record has a fixed form: the bytes below are the ones a
-    /// client of RT-W12 reads.
+    /// client reads, with each part present only when its listener is on.
     #[test]
     fn a_service_record_reads_back_as_written() {
-        let r = ServiceRecord {
-            channel: "127.0.0.1:28100".parse().unwrap(),
-            bundle: vec![0xab, 0x01, 0xf0],
-        };
-        assert_eq!(
-            r.bytes(),
-            b"shekyl-service-rendezvous 1\nchannel 127.0.0.1:28100\nbundle ab01f0\n"
-        );
-        assert_eq!(ServiceRecord::parse(&r.bytes()), Some(r));
-        let v6 = ServiceRecord {
-            channel: "[::1]:9".parse().unwrap(),
-            bundle: vec![0],
-        };
-        assert_eq!(ServiceRecord::parse(&v6.bytes()), Some(v6));
+        for (record, bytes) in [
+            (
+                ServiceRecord {
+                    channel: Some(channel()),
+                    view: Some("127.0.0.1:11030".parse().unwrap()),
+                },
+                &b"shekyl-service-rendezvous 2\nchannel 127.0.0.1:28100\nbundle ab01f0\nview 127.0.0.1:11030\n"[..],
+            ),
+            (
+                ServiceRecord {
+                    channel: Some(channel()),
+                    view: None,
+                },
+                &b"shekyl-service-rendezvous 2\nchannel 127.0.0.1:28100\nbundle ab01f0\n"[..],
+            ),
+            (
+                ServiceRecord {
+                    channel: None,
+                    view: Some("[::1]:11030".parse().unwrap()),
+                },
+                &b"shekyl-service-rendezvous 2\nview [::1]:11030\n"[..],
+            ),
+            (
+                ServiceRecord {
+                    channel: None,
+                    view: None,
+                },
+                &b"shekyl-service-rendezvous 2\n"[..],
+            ),
+        ] {
+            assert_eq!(record.bytes(), bytes);
+            assert_eq!(ServiceRecord::parse(bytes), Some(record));
+        }
     }
 
     /// Red edit: let `parse` accept a trailing line, and the record with
     /// one more line is read.
     #[test]
     fn anything_but_a_service_record_is_none() {
-        let good = "shekyl-service-rendezvous 1\nchannel 127.0.0.1:28100\nbundle ab01\n";
+        let good = "shekyl-service-rendezvous 2\nchannel 127.0.0.1:28100\nbundle ab01\nview 127.0.0.1:11030\n";
+        assert!(ServiceRecord::parse(good.as_bytes()).is_some());
         for bad in [
-            good.replace("rendezvous 1", "rendezvous 2"),
+            good.replace("rendezvous 2", "rendezvous 1"),
             good.replace("channel ", "chanel "),
             good.replace("127.0.0.1:28100", "localhost:28100"),
             good.replace("bundle ab01", "bundle ab0"),
             good.replace("bundle ab01", "bundle AB01"),
             good.replace("bundle ab01", "bundle zz01"),
             good.replace("bundle ab01", "bundle "),
+            good.replace("view 127.0.0.1:11030", "view 192.0.2.1:11030"),
+            good.replace("view ", "veiw "),
+            "shekyl-service-rendezvous 2\nview 127.0.0.1:11030\nchannel 127.0.0.1:28100\nbundle ab01\n".to_owned(),
+            "shekyl-service-rendezvous 2\nchannel 127.0.0.1:28100\n".to_owned(),
             format!("{good}extra\n"),
-            good.lines().take(2).collect::<Vec<_>>().join("\n"),
             String::new(),
         ] {
             assert_eq!(ServiceRecord::parse(bad.as_bytes()), None, "{bad:?}");
