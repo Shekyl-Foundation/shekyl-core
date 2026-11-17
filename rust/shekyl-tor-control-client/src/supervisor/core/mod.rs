@@ -174,18 +174,32 @@ pub const PROBE_AFTER_MAX: Duration = Duration::from_secs(60);
 /// The probe's bound, and one directory fetch's answer window (`TSR-M2`).
 pub const PROBE_WITHIN: Duration = Duration::from_secs(60);
 
+/// One probe at its longest delay and its bound. The delay runs, then the
+/// bound. No round holds the launch.
+pub const PROBE_LONGEST: Duration = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
+
+/// One probe whose launch a young round can hold. The delay is armed, and
+/// it runs. A round still young when the delay ends holds the launch until
+/// the round is [`ROUND_WAIT`] old: up to [`ROUND_WAIT`] beyond the delay,
+/// then the bound. A round already open while the delay runs overlaps that
+/// hold, and the probe is shorter.
+pub const HELD_PROBE_LONGEST: Duration = PROBE_AFTER_MAX
+    .saturating_add(ROUND_WAIT)
+    .saturating_add(PROBE_WITHIN);
+
 /// The reply bound the daemon uses ([`Policy::reply_bound`]).
 pub const REPLY_BOUND: Duration = Duration::from_secs(30);
 
-/// [`Policy::republish_after`] (`TSR-M14`): the round's wait, then a probe
-/// and the refetch's probe, each at its longest delay and its bound. A wait
-/// shorter than one judgment republishes inside the previous check.
-pub const REPUBLISH_AFTER: Duration = {
-    let one_probe = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
-    ROUND_WAIT
-        .saturating_add(one_probe)
-        .saturating_add(one_probe)
-};
+/// [`Policy::republish_after`] (`TSR-M14`): one judgment from the round
+/// about to be judged. The round ages ([`ROUND_WAIT`]), then two probes at
+/// [`PROBE_LONGEST`]. A wait shorter than one judgment republishes inside
+/// the previous check.
+///
+/// Not the onion-path check span. That one is measured from the schedule
+/// and is a [`HELD_PROBE_LONGEST`] followed by a [`PROBE_LONGEST`].
+pub const REPUBLISH_AFTER: Duration = ROUND_WAIT
+    .saturating_add(PROBE_LONGEST)
+    .saturating_add(PROBE_LONGEST);
 
 /// The directory authorities' distribution delay, `V3AuthDistDelay`'s
 /// default in tor 0.4.9.14 (`src/app/config/config.c:713`, 5 minutes):

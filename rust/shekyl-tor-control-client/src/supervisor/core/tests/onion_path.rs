@@ -10,13 +10,17 @@
 //! fail.
 //!
 //! A check begins when its probe is scheduled, and nothing goes out then:
-//! the probe and its directory check wait for the probe's delay and for
-//! every open upload round to be `round_wait` old (§4.5). So a test reads a
-//! check's start from the core ([`began`], [`ran`]), never from an action.
+//! the probe's delay is armed at the schedule, and the directory list is
+//! drawn when the probe goes out, once every open round is `round_wait`
+//! old (§4.5). So a test reads a check's start from the core ([`began`],
+//! [`ran`]), never from an action.
 
 use super::super::super::posture::Cause;
 use super::super::{duration_ns, Action, Core, Input, OnionPath, PathReading, Step};
-use super::super::{CHECK_LONGEST, CHECK_SPACING, ROUND_WAIT};
+use super::super::{
+    CHECK_LONGEST, CHECK_SPACING, HELD_PROBE_LONGEST, PROBE_AFTER_MAX, PROBE_LONGEST, PROBE_WITHIN,
+    ROUND_WAIT,
+};
 use super::probe::{published, run_to, secs};
 
 /// Fold `input` at `at`: the step, and whether a check began in it.
@@ -116,7 +120,8 @@ fn while_tor_says_it_cannot_reach_its_network_no_check_runs() {
 /// verdict, a want every 30 s starts nothing until the spacing has passed
 /// from the check's start, and then exactly one check starts. The edits
 /// that make this red: spacing from the verdict instead of the start, a
-/// want starting a check inside the spacing, or no check at the spacing.
+/// want starting a check inside the spacing, judging that start by the
+/// step's horizon, or no check at the spacing.
 #[test]
 fn checks_never_run_closer_together_than_the_spacing() {
     let mut core = published();
@@ -139,11 +144,16 @@ fn checks_never_run_closer_together_than_the_spacing() {
             && began(&mut core, Input::DescriptorRefetched { draw: 0 }, at).1;
         let (_, asked) = began(&mut core, want(at - secs(1)), at);
         if deadline_began || refetch_began || asked {
+            // `at` is this step's horizon. `run_to` fires a deadline at its
+            // own due time, which can be up to one step earlier.
+            let began_at = core
+                .last_check_began()
+                .expect("a check's start is recorded when one begins");
             assert!(
-                at >= start + spacing,
-                "a check began inside the spacing at {at}"
+                began_at >= start + spacing,
+                "a check began inside the spacing at {began_at}"
             );
-            started.push(at);
+            started.push(began_at);
         }
     }
     assert_eq!(
@@ -155,17 +165,23 @@ fn checks_never_run_closer_together_than_the_spacing() {
 }
 
 /// **The Tor connector's declared wait is the spacing plus one check**
-/// (Rick, 2026-11-15): 15 minutes, then one check, 300 s: the round wait
-/// its probe can be held for (§4.5), then the two-miss rule's two probes at
-/// their longest delay and bound. So 20 minutes. A failure just after a
+/// (Rick, 2026-11-15): 15 minutes, then one check, 300 s. The check is one
+/// held probe, the longest delay, then the round's hold, then the bound,
+/// and the second probe unheld. So 20 minutes. A failure just after a
 /// check began waits out the spacing, then a check. The edits that make
 /// this red: a wait shorter than a spaced check can answer, or a check
-/// span without the round wait.
+/// span that drops the in-check hold. The hold's place in the sum is the
+/// const. `REPUBLISH_AFTER` is the round's age and then two unheld probes.
 #[test]
 fn the_tor_wait_is_the_spacing_plus_one_check() {
     use std::time::Duration;
     assert_eq!(CHECK_SPACING, Duration::from_secs(15 * 60));
-    assert_eq!(ROUND_WAIT, Duration::from_secs(60));
+    assert_eq!(PROBE_LONGEST, PROBE_AFTER_MAX + PROBE_WITHIN);
+    assert_eq!(
+        HELD_PROBE_LONGEST,
+        PROBE_AFTER_MAX + ROUND_WAIT + PROBE_WITHIN
+    );
+    assert_eq!(CHECK_LONGEST, HELD_PROBE_LONGEST + PROBE_LONGEST);
     assert_eq!(CHECK_LONGEST, Duration::from_secs(300));
     assert_eq!(super::super::READING_WAIT, CHECK_SPACING + CHECK_LONGEST);
     assert_eq!(super::super::READING_WAIT, Duration::from_secs(20 * 60));
