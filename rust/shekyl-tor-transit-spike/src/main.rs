@@ -2,8 +2,6 @@
 //
 // All rights reserved.
 // BSD-3-Clause
-//
-// Scratch line for #1415 (closed unmerged): a Rust change with no dependents.
 
 //! DISPOSABLE measurement spike: **§94 Tor transit**.
 //!

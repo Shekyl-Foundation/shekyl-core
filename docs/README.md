@@ -1,6 +1,6 @@
 # Shekyl documentation
 
-This is the front door. Read it before grepping `docs/design/`.
+This is the front door. Read it before grepping `docs/design/`. (Scratch edit for #1415, closed unmerged: a docs-only change.)
 
 ## Who wins
 
