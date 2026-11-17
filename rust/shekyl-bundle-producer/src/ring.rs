@@ -225,6 +225,32 @@ impl WitnessRing {
         }
     }
 
+    /// The witness for `connecting`: the caller's draws when this ring has
+    /// them, the OS's otherwise. One choice, so `draw` does not grow a
+    /// second path.
+    fn material(&self, connecting: BlockHeight) -> Result<WitnessMaterial, DrawFailed> {
+        #[cfg(feature = "seeded-rng")]
+        if let Some(draws) = &self.draws {
+            return WitnessMaterial::keyed(draws.as_ref(), connecting);
+        }
+        WitnessMaterial::drawn()
+    }
+
+    /// The witness signature over `commitment`: the caller's when this ring
+    /// has draws, [`sign_bundle_commitment`]'s otherwise.
+    fn sign_commitment(
+        &self,
+        h: BlockHeight,
+        secret: &FnDsaHybridSecretKey,
+        commitment: &shekyl_network::envelope::Framed64,
+    ) -> Result<[u8; shekyl_archival_retention::BUNDLE_SIGNATURE_LEN], CryptoError> {
+        #[cfg(feature = "seeded-rng")]
+        if let Some(draws) = &self.draws {
+            return draws.sign_bundle(h, secret, commitment);
+        }
+        sign_bundle_commitment(secret, commitment)
+    }
+
     /// A poisoned lock is recovered: every mutation below leaves the state
     /// whole before it can panic, and a ring that refused to open would
     /// stop the template, not protect a secret.
@@ -241,14 +267,7 @@ impl WitnessRing {
     /// [`DrawFailed`] when the OS random source or key generation fails.
     /// There is no fallback commitment.
     pub fn draw(&self, connecting: BlockHeight) -> Result<DrawCommitment, DrawFailed> {
-        // The caller's draws when the ring has them, the OS's otherwise.
-        #[cfg(feature = "seeded-rng")]
-        let secrets = match &self.draws {
-            Some(draws) => WitnessMaterial::keyed(draws.as_ref(), connecting)?,
-            None => WitnessMaterial::drawn()?,
-        };
-        #[cfg(not(feature = "seeded-rng"))]
-        let secrets = WitnessMaterial::drawn()?;
+        let secrets = self.material(connecting)?;
         let commitment = secrets.commitment();
         let mut state = self.lock();
         while state.candidates.len() >= self.bound {
@@ -329,13 +348,7 @@ impl WitnessRing {
             &kept,
             records,
             &material.public,
-            |commitment| {
-                #[cfg(feature = "seeded-rng")]
-                if let Some(draws) = &self.draws {
-                    return draws.sign_bundle(h, &material.secret.key, commitment);
-                }
-                sign_bundle_commitment(&material.secret.key, commitment)
-            },
+            |commitment| self.sign_commitment(h, &material.secret.key, commitment),
         ))
     }
 
