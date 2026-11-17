@@ -70,6 +70,9 @@ struct Slot {
 pub struct Runner {
     slots: [Option<Arc<Slot>>; 3],
     handle: tokio::runtime::Handle,
+    /// The publication [`drive_blocks`] has borrowed. `None` until the
+    /// value found at start has been marked.
+    borrowed: watch::Sender<Option<u64>>,
 }
 
 impl Runner {
@@ -85,6 +88,7 @@ impl Runner {
                 })
             })
         };
+        let (borrowed, _) = watch::channel(None);
         Self {
             slots: [
                 slot(&notify.block),
@@ -92,6 +96,7 @@ impl Runner {
                 slot(&notify.block_rate),
             ],
             handle,
+            borrowed,
         }
     }
 
@@ -144,6 +149,23 @@ impl Runner {
             state(&self.slots[1]),
             state(&self.slots[2]),
         ]
+    }
+
+    /// The tip publication [`drive_blocks`] has borrowed.
+    ///
+    /// `None` until the driver has marked the value found at start. Each
+    /// later publication is `Some(seq)` once that publication has been
+    /// borrowed and, when it carries a tip, `notify-block` has been pushed
+    /// or dropped. A reader waits for the sequence it just published
+    /// before publishing the next one: the watch keeps only the latest
+    /// value, so an unborrowed publication is replaced.
+    #[must_use]
+    pub fn borrowed_seq(&self) -> watch::Receiver<Option<u64>> {
+        self.borrowed.subscribe()
+    }
+
+    fn record_borrowed(&self, seq: u64) {
+        self.borrowed.send_replace(Some(seq));
     }
 
     fn push(&self, kind: Kind, fills: &[(&str, String)]) {
@@ -245,16 +267,26 @@ fn hex(bytes: &[u8; 32]) -> String {
 /// sender, the node's ingest, is gone. The publication at start, and a
 /// publication with no tip (an empty store before genesis connects), push
 /// nothing: the operator asked to hear of blocks, not of the daemon
-/// starting.
+/// starting. Each publication is recorded ([`Runner::borrowed_seq`]) once
+/// the driver has borrowed it, including those two.
 pub async fn drive_blocks(runner: Arc<Runner>, mut tips: watch::Receiver<TipChanged>) {
     // The value present at start is the chain as found, not an arrival.
+    // Record that sequence before waiting for the next publication.
     tips.mark_unchanged();
+    let found = tips.borrow().seq;
+    runner.record_borrowed(found);
     while tips.changed().await.is_ok() {
-        let Some(tip) = tips.borrow_and_update().tip else {
-            continue;
+        let (seq, event) = {
+            let published = tips.borrow_and_update();
+            let event = published
+                .tip
+                .map(|tip| (tip.count.to_raw().saturating_sub(1), *tip.top_id.as_bytes()));
+            (published.seq, event)
         };
-        let height = tip.count.to_raw().saturating_sub(1);
-        runner.block(height, tip.top_id.as_bytes());
+        if let Some((height, hash)) = event {
+            runner.block(height, &hash);
+        }
+        runner.record_borrowed(seq);
     }
 }
 
@@ -499,10 +531,55 @@ mod tests {
         );
     }
 
+    /// How many lines `path` holds. Absence is zero lines. Any other
+    /// read error is the test's failure, not a count of zero.
+    #[cfg(unix)]
+    fn notify_lines(path: &std::path::Path) -> usize {
+        match std::fs::read_to_string(path) {
+            Ok(text) => text.lines().count(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => panic!("the notify output could not be read: {error}"),
+        }
+    }
+
+    /// Wait until the driver has borrowed `seq`, the file holds exactly
+    /// `events` lines, and no block command is running.
+    #[cfg(unix)]
+    fn wait_for_publication(
+        runner: &Runner,
+        borrowed: &mut watch::Receiver<Option<u64>>,
+        out: &std::path::Path,
+        seq: u64,
+        events: usize,
+    ) {
+        let started = std::time::Instant::now();
+        let deadline = std::time::Duration::from_secs(60);
+        let pause = std::time::Duration::from_millis(10);
+        loop {
+            let written = notify_lines(out);
+            let seen = *borrowed.borrow_and_update();
+            assert!(
+                written <= events,
+                "publication {seq} wrote {written} lines, wanted {events}"
+            );
+            if seen.is_some_and(|seen| seen >= seq) && written == events && !runner.in_flight()[0] {
+                break;
+            }
+            assert!(
+                started.elapsed() < deadline,
+                "publication {seq}: driver at {seen:?}, {written} of {events} lines"
+            );
+            std::thread::sleep(pause);
+        }
+    }
+
     /// **`notify-block` is pushed from the tip watch**: the tip found at
     /// start is not an event, a publication with no tip is not one, and
     /// each later tip runs the command once with the tip's height and
-    /// hash. The driver ends when the publisher is gone.
+    /// hash. The next publication is sent only once [`Runner::borrowed_seq`]
+    /// says the driver has borrowed this one. The driver ends when the
+    /// publisher is gone. Red edit: drop `mark_unchanged`, or push a
+    /// publication that has no tip.
     #[cfg(unix)]
     #[test]
     fn the_tip_watch_pushes_a_block_event_per_published_tip_and_not_the_start() {
@@ -527,6 +604,7 @@ mod tests {
             block_rate: None,
         };
         let runner = Arc::new(Runner::new(&notify, rt.handle().clone()));
+        let mut borrowed = runner.borrowed_seq();
         let tip = |count: u64, byte: u8| {
             Some(ChainTip {
                 count: shekyl_types::ChainCount::from_raw(count),
@@ -539,31 +617,19 @@ mod tests {
             tip: tip(9, 0x09),
         });
         let driver = rt.spawn(drive_blocks(Arc::clone(&runner), rx));
-        let settle = |runner: &Runner| {
-            for _ in 0..200 {
-                if !runner.in_flight()[0] {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        };
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert!(!out.exists(), "the tip found at start is not an event");
+        wait_for_publication(&runner, &mut borrowed, &out, 0, 0);
         tx.send_replace(TipChanged {
             seq: 1,
             tip: tip(10, 0xaa),
         });
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        settle(&runner);
+        wait_for_publication(&runner, &mut borrowed, &out, 1, 1);
         tx.send_replace(TipChanged { seq: 2, tip: None });
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        settle(&runner);
+        wait_for_publication(&runner, &mut borrowed, &out, 2, 1);
         tx.send_replace(TipChanged {
             seq: 3,
             tip: tip(11, 0xbb),
         });
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        settle(&runner);
+        wait_for_publication(&runner, &mut borrowed, &out, 3, 2);
         let text = std::fs::read_to_string(&out).unwrap();
         assert_eq!(
             text,

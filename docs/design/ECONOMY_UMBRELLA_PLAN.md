@@ -442,9 +442,25 @@ larger zone creates. On today's signal the inherited arm is pinned at the
 `M_r` floor by capacity and the re-derived arm at its cap by stuffing
 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
 §5.32.1): more capacity removes the first pin and opens the second, and a
-median removes the second but not the first. The grid crosses the four
-signal arms with the zone, both `w_ref` levels, the stuffers and two start
-years, from one build (§5.33 there).
+median removes the second but not the first. The grid crosses the signal
+arms with the zone, both `w_ref` levels, the stuffers and two start years,
+from one build (§5.33 there). The review of its first run (2026-11-15)
+found the median's resistance rested on honest traffic that never varies,
+and arm 5 decoupled in `M_r` alone. So the grid also crosses honest
+traffic, steady or variable block to block as production's is, at three
+seeds, and arm 5 reads the baseline in place of volume in release, the
+burn and `C` (§5.34 there). J is ruled on §5.34's numbers.
+
+**Rick's, 2026-11-15: variable traffic is the sim's standard.** "We want
+this sim to be as accurate as possible. We can test edge scenarios, but
+we should have a 'standard' scenario as well." Variable honest traffic
+becomes every scenario's standard. Each scenario's demand path sets the
+mean, and the per-block counts are drawn around it at a declared set of
+at least three seeds. Each figure reports its median and its spread. The
+narration pins carry the canonical seed, and the spread runs on demand.
+The constant count stays as a named control arm. That flip is its own
+PR, after §5.34's and before EUP-4 runs, and it regenerates every
+narration under one decision, with predictions first.
 
 **Where it stands.** The zone is 300,000 B, inherited (§3, item G). A
 2-in/2-out spend weighs 19,939 B at genesis depth and the genesis
@@ -464,6 +480,11 @@ Everything below that Rick has not ruled is **PROPOSED**, for the reason
 
 1. **The basis.** The zone is N reference transactions, the 2-in/2-out
    spend, times its weight at genesis depth, plus `COINBASE_RESERVE`.
+   The spend grows with the tree, so a zone fixed in bytes at genesis
+   depth carries 90 spends at genesis and about 69 at the consensus
+   maximum. Two forms are open for G: N spends at the chain's current
+   depth (consensus knows the leaf count), so capacity in spends holds as
+   the tree grows; or a byte zone fixed at the horizon's depth.
    `w_ref` is run at two levels each held fixed across N, the shipped
    3 000 and `w_ref′`, because the fee goes as zone/`w_ref`: tying `w_ref`
    to N would fix the fill cost and hide the trade the grid measures

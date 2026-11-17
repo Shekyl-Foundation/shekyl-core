@@ -147,6 +147,9 @@ pub struct SimParams {
     /// What the fold's blocks read from the volume window: production's
     /// sum, or one of J's arms (§5.33). The sim's own input.
     pub volume_signal: crate::volume_window::VolumeSignal,
+    /// Whether each block is offered its scenario's demand or a count drawn
+    /// around it (§5.34). The sim's own input.
+    pub traffic: crate::chain_cursor::Traffic,
 }
 
 impl Default for SimParams {
@@ -156,6 +159,7 @@ impl Default for SimParams {
             overrides: Vec::new(),
             fee: FeeModel::PRODUCTION_DEFAULT,
             volume_signal: crate::volume_window::VolumeSignal::Sum,
+            traffic: crate::chain_cursor::Traffic::Steady,
         }
     }
 }
@@ -174,6 +178,7 @@ impl SimParams {
             overrides,
             fee: FeeModel::PRODUCTION_DEFAULT,
             volume_signal: crate::volume_window::VolumeSignal::Sum,
+            traffic: crate::chain_cursor::Traffic::Steady,
         })
     }
 
@@ -183,7 +188,7 @@ impl SimParams {
     /// two economic fields set to the candidate's values
     /// ([`crate::escalation::EscalationCurve::on`]), whatever the run set
     /// them to. A path given twice within `more` is still refused. The fee
-    /// arm is kept.
+    /// arm, the volume signal and the traffic are kept.
     ///
     /// # Errors
     ///
@@ -203,6 +208,7 @@ impl SimParams {
             overrides,
             fee: self.fee,
             volume_signal: self.volume_signal,
+            traffic: self.traffic,
         })
     }
 
