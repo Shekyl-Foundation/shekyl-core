@@ -87,7 +87,7 @@ mod reads;
 mod run_fault;
 #[path = "switch.rs"]
 mod switch;
-#[cfg(test)]
+#[cfg(any(test, feature = "forge"))]
 pub(crate) use bundles::ApplyAdmitting;
 pub use bundles::{
     file_bundle, BundleOffered, FiledBundle, LearnDraws, Learned, OfferBundle, OfferFault,

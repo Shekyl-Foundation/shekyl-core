@@ -47,6 +47,13 @@
         reason = "pipeline-only fixtures are unused when the pipeline tests are not built"
     )
 )]
+#![cfg_attr(
+    all(not(test), feature = "forge"),
+    expect(
+        dead_code,
+        reason = "fixture builders serve this crate's tests; the forge feature compiles the module for the store helpers the driver opens with"
+    )
+)]
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -77,8 +84,10 @@ mod quiet;
 mod tree;
 
 pub use growing::Growing;
+#[cfg(test)]
+pub use quiet::quiet_seeds;
 #[cfg(feature = "pipeline")]
-pub use quiet::{held_seeds, named_seeds, quiet_resident, quiet_seeds};
+pub use quiet::{held_seeds, named_seeds, quiet_resident};
 pub use tree::GrownTree;
 
 /// A settlement epoch for test stores.
@@ -719,7 +728,7 @@ impl Source for Scripted {
 }
 
 /// The keys every scenario block's coinbase pays: the harness wallet's.
-pub(crate) fn harness_keys() -> shekyl_block_template::MinerKeys {
+pub fn harness_keys() -> shekyl_block_template::MinerKeys {
     let recipient = MinerWallet::harness().recipient();
     shekyl_block_template::MinerKeys {
         spend_public: recipient.spend_public,
@@ -732,7 +741,7 @@ pub(crate) fn harness_keys() -> shekyl_block_template::MinerKeys {
 /// reads; with the miner's sender, which a test keeps alive or drops, and
 /// the follower's posting.
 #[cfg(feature = "pipeline")]
-pub(crate) fn job_seat(
+pub fn job_seat(
     board: &std::sync::Arc<shekyl_miner::JobBoard>,
     keys: Option<shekyl_block_template::MinerKeys>,
     sync: tokio::sync::watch::Receiver<shekyl_chain_sync::SyncState>,

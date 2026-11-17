@@ -19,15 +19,32 @@
 //! that attempt. A store that cannot be written — empty, a hole, a refused
 //! read — leaves the previous trace in place, and a failed publish removes
 //! only the sibling it created.
+//!
+//! [`baseline`] is the whole of `shekyl-chain-replay baseline`: a corpus
+//! connected against a fresh store under the production proof-of-work, with
+//! nothing to compare, and the store's chain written as the trace. The
+//! binary and the chain forge (`CHAIN_FORGE.md` §11.3: a forged chain's
+//! trace is the production pipeline's verdict on the bytes it wrote) both
+//! call it, so there is one baseline, not a copy per caller.
 
-use std::io::Write;
+use std::fs::File;
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use shekyl_chain_rules::AtHeight;
-use shekyl_chain_store::store::{ReadSnapshot, StoreError};
+use shekyl_chain_rules::{AtHeight, InvalidBlock};
+use shekyl_chain_store::apply_policy::ApplyPolicy;
+use shekyl_chain_store::store::{ChainStore, Horizons, ReadSnapshot, StoreError};
+use shekyl_network::Network;
 use shekyl_types::BlockHeight;
 
-use crate::trace::{Facts, TraceFault, TraceWriter};
+use crate::corpus::{CorpusFault, CorpusReader};
+use crate::metrics::Metrics;
+use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
+use crate::schedule::ChainRules;
+use crate::substrate::SubstrateFault;
+use crate::trace::{Facts, Trace, TraceFault, TraceWriter};
+use crate::ProductionPow;
 
 /// Why a store could not be written out as a trace.
 #[derive(Debug, thiserror::Error)]
@@ -115,6 +132,122 @@ pub fn write_trace_file(snap: &ReadSnapshot<'_>, path: &Path) -> Result<(), Reba
     let bytes = trace_of(snap, Vec::<u8>::new())?;
     publish_bytes(path, &bytes)?;
     Ok(())
+}
+
+/// Why a corpus could not be replayed against a store, or baselined.
+#[derive(Debug, thiserror::Error)]
+pub enum ReplayFault {
+    /// The corpus file could not be opened.
+    #[error("corpus file: {0}")]
+    Io(#[from] std::io::Error),
+    /// The corpus refused to open.
+    #[error("corpus: {0}")]
+    Corpus(#[from] CorpusFault),
+    /// The corpus is another network's chain.
+    #[error("the corpus is tagged {corpus:?} but the run's chain is {rules:?}")]
+    WrongNetwork {
+        /// The corpus header's tag.
+        corpus: Network,
+        /// The network the rules judge.
+        rules: Network,
+    },
+    /// The store refused to open or to be read.
+    #[error("store: {0}")]
+    Store(#[from] StoreError),
+    /// The run ended in an error.
+    #[error("pipeline: {0}")]
+    Pipeline(#[from] PipelineFault<CorpusFault, SubstrateFault>),
+    /// A baseline is written from a fresh store, and this one exists.
+    #[error("{0} exists; a baseline is written from a fresh store")]
+    StoreExists(PathBuf),
+    /// The rules refused a block: a chain refused anywhere is no baseline.
+    #[error("the corpus does not replay: refused at {height}: {verdict:?}")]
+    Refused {
+        /// The refused block's height.
+        height: BlockHeight,
+        /// The verdict.
+        verdict: InvalidBlock,
+    },
+    /// The trace could not be written.
+    #[error("trace: {0}")]
+    Rebaseline(#[from] RebaselineFault),
+}
+
+/// Connect the corpus at `corpus` against the store at `store` under
+/// `rules` and the production proof-of-work `pow`, held to `trace`.
+///
+/// The store runs the `(SEB, cap)` pair of the rule set that judges the
+/// chain, read off that set (`Horizons::under`); a store file sealed under
+/// another epoch is refused at open. The corpus must carry the rules'
+/// network's tag.
+///
+/// # Errors
+///
+/// [`ReplayFault`]. A refusal of a block is not an error: it is the report's
+/// [`RunReport::refused`].
+pub async fn replay_corpus(
+    corpus: &Path,
+    store: &Path,
+    rules: ChainRules,
+    cfg: PipelineConfig,
+    pow: Arc<ProductionPow>,
+    metrics: Arc<Metrics>,
+    trace: Arc<Trace>,
+) -> Result<RunReport, ReplayFault> {
+    let mut source = CorpusReader::open(BufReader::new(File::open(corpus)?))?;
+    if source.net() != rules.network() {
+        return Err(ReplayFault::WrongNetwork {
+            corpus: source.net(),
+            rules: rules.network(),
+        });
+    }
+    let horizons = horizons(&rules)?;
+    let store = ChainStore::with_horizons(store, ApplyPolicy::default(), horizons)?;
+    Ok(run(&mut source, pow, metrics, rules, store, trace, cfg).await?)
+}
+
+/// `shekyl-chain-replay baseline`: connect the corpus at `corpus` against a
+/// fresh store at `store` with nothing to compare, then write the store's
+/// chain as the trace at `out` ([`write_trace_file`]).
+///
+/// # Errors
+///
+/// [`ReplayFault::StoreExists`] before anything is read;
+/// [`ReplayFault::Refused`] when the rules refuse a block, before `out` is
+/// opened; any other [`ReplayFault`].
+pub async fn baseline(
+    corpus: &Path,
+    store: &Path,
+    rules: ChainRules,
+    cfg: PipelineConfig,
+    pow: Arc<ProductionPow>,
+    metrics: Arc<Metrics>,
+    out: &Path,
+) -> Result<RunReport, ReplayFault> {
+    if store.exists() {
+        return Err(ReplayFault::StoreExists(store.to_path_buf()));
+    }
+    let mut report = replay_corpus(
+        corpus,
+        store,
+        rules,
+        cfg,
+        pow,
+        metrics,
+        Arc::new(Trace::empty()),
+    )
+    .await?;
+    if let Some((height, verdict)) = report.refused.take() {
+        return Err(ReplayFault::Refused { height, verdict });
+    }
+    let read = ChainStore::open_read_only(store, horizons(&rules)?)?;
+    write_trace_file(&read.begin_read()?, out)?;
+    Ok(report)
+}
+
+/// The store's horizons under `rules`' schedule at genesis.
+fn horizons(rules: &ChainRules) -> Result<Horizons, StoreError> {
+    Ok(Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?)
 }
 
 /// A sibling [`publish_bytes`] creates for one attempt, then renames onto

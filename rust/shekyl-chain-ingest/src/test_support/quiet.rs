@@ -155,7 +155,9 @@ pub fn named_seeds(list: Option<&shekyl_hasher::Ranked>) -> BTreeSet<[u8; 32]> {
 
 /// The quiet wait, over a watch channel. No hasher is started: the
 /// subject is the bound and the two ways it can end, and a [`Resident`]
-/// is a value.
+/// is a value. Test-only: `test_support` also compiles under the
+/// `forge` feature, where these tests are not built.
+#[cfg(test)]
 mod quiet_wait {
     use std::time::Duration;
 

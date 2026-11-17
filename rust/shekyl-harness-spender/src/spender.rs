@@ -509,7 +509,7 @@ impl Spender {
         let spend_auths = match seeds {
             #[cfg(feature = "seeded-rng")]
             Some(seeds) => shekyl_tx_builder::sign_pqc_auths_seeded(
-                &seeds.sign,
+                &seeds.slots,
                 &hashes[..n_spend],
                 &spend_inputs,
             ),
@@ -1151,7 +1151,7 @@ impl SpendShape<'_> {
         let mut signed = match &seeds {
             #[cfg(feature = "seeded-rng")]
             Some(seeds) => shekyl_tx_builder::sign_transaction_with_terms_seeded(
-                &seeds.sign,
+                &seeds.proofs,
                 &network,
                 tx_prefix_hash,
                 &spend_inputs,
@@ -1220,7 +1220,7 @@ impl SpendShape<'_> {
         let open = match &seeds {
             #[cfg(feature = "seeded-rng")]
             Some(seeds) => shekyl_tx_builder::open_spend_seeded(
-                &seeds.open,
+                &seeds.slots,
                 signed,
                 &spend_inputs,
                 layout,
@@ -1292,7 +1292,6 @@ mod spend_tx_key_pin {
     use super::{spend_tx_key, spend_tx_key_bytes, CANONICAL_SCALAR_TOP_MASK, TX_KEY_LEN};
     use shekyl_crypto_pq::TxKey;
     use shekyl_types::{BlockHeight, KeyImage};
-    use zeroize::Zeroizing;
 
     use crate::draw::SpendSeeds;
 
@@ -1301,10 +1300,7 @@ mod spend_tx_key_pin {
     }
 
     fn plan() -> SpendSeeds {
-        SpendSeeds {
-            sign: Zeroizing::new([1; 32]),
-            open: Zeroizing::new([2; 32]),
-        }
+        SpendSeeds::from_parts([1; 32], [2; 32], [3; 32], [4; 32])
     }
 
     #[test]

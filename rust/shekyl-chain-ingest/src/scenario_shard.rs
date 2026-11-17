@@ -43,7 +43,7 @@ use shekyl_wire::Transaction;
 use crate::archival_driver::{first_spending_height, FEE};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::schedule::ChainRules;
-use shekyl_harness_spender::Spender;
+use shekyl_harness_spender::{SpendSeeds, Spender};
 
 /// The levered settlement epoch, in blocks. The production epoch (10,000
 /// blocks) never prices a shard inside what a test mines; under this one
@@ -402,6 +402,27 @@ pub async fn close_shards(
     first_coinbase: u64,
     want: u64,
 ) -> Filled {
+    close_shards_drawing(scenario, chain, first_coinbase, want, || None).await
+}
+
+/// [`close_shards`] with each fill spend's randomness from `draw`: `None`
+/// is the OS's, as [`close_shards`] draws it; `Some` is that one spend's
+/// seeds (`CHAIN_FORGE.md` §5.2, S9). `draw` is called once per listed
+/// spend on this thread, in the order the block lists them, before the
+/// spend's thread starts, so which spend gets which seeds is the fill's
+/// order and never the threads' (§5.3, seam T4). The sizing spend, which
+/// is measured and never listed, draws from the OS.
+///
+/// # Panics
+///
+/// As [`close_shards`].
+pub async fn close_shards_drawing(
+    scenario: &mut Scenario<FreeHash>,
+    chain: &mut Vec<Mined>,
+    first_coinbase: u64,
+    want: u64,
+    mut draw: impl FnMut() -> Option<SpendSeeds>,
+) -> Filled {
     let have = closed_shards(scenario).await;
     assert!(
         have < want,
@@ -476,15 +497,24 @@ pub async fn close_shards(
         }
         let coinbases: Vec<u64> = (next_coinbase..next_coinbase + batch as u64).collect();
         next_coinbase += batch as u64;
+        // Every spend's seeds, in listing order, before any thread starts.
+        let seeds: Vec<Option<SpendSeeds>> = coinbases.iter().map(|_| draw()).collect();
         // The proofs are the cost; build the batch across the cores.
         let built: Vec<Transaction> = std::thread::scope(|s| {
             let handles: Vec<_> = coinbases
                 .iter()
-                .map(|&c| {
+                .zip(seeds)
+                .map(|(&c, seeds)| {
                     let spender = &spender;
                     let wallet = scenario.wallet();
                     s.spawn(move || {
-                        spender.spend_coinbase(wallet, BlockHeight::from_raw(c), connecting, FEE)
+                        let height = BlockHeight::from_raw(c);
+                        match seeds {
+                            Some(seeds) => spender
+                                .drawing(seeds)
+                                .spend_coinbase(wallet, height, connecting, FEE),
+                            None => spender.spend_coinbase(wallet, height, connecting, FEE),
+                        }
                     })
                 })
                 .collect();
@@ -503,6 +533,53 @@ pub async fn close_shards(
         chain.push(block);
     }
     Filled { closed }
+}
+
+/// Shard `shard`'s body as its holder serves it: the closed shard's
+/// transactions, in chain order, as one `shard_frame` over their two
+/// archival segments. What a persona serving the shard on the production
+/// serve loop sends (the producer's gate test, the chain forge's producer
+/// plan).
+///
+/// # Panics
+///
+/// If the shard is not closed, or a transaction of it is not on `chain`.
+#[cfg(feature = "producer")]
+pub fn shard_body(
+    scenario: &Scenario<FreeHash>,
+    chain: &[Mined],
+    shard: ShardId,
+) -> std::sync::Arc<[u8]> {
+    use shekyl_archival_fetch_sched::{ShardFacts as _, ShardStanding};
+    use shekyl_wire::shard_frame::{encode_frame, FrameTx};
+    let facts = crate::shard_facts::StoreShardFacts::new(scenario.store());
+    let ShardStanding::Closed(closed) = facts.shard(shard).expect("the facts read") else {
+        panic!("shard {shard:?} is closed");
+    };
+    let mut segments = Vec::new();
+    for row in closed.expected.txs() {
+        let tx = chain
+            .iter()
+            .flat_map(|mined| mined.template.transactions.iter())
+            .find(|tx| tx.txid_parts().hash == row.hash)
+            .expect("every transaction of the shard was mined here");
+        let shekyl_wire::Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
+            panic!("a fill transaction is an FCMP++ spend");
+        };
+        segments.push((
+            u64::try_from(pqc_auths.len()).expect("fits"),
+            tx.write_segments().expect("segments"),
+        ));
+    }
+    let frame: Vec<FrameTx<'_>> = segments
+        .iter()
+        .map(|(count, segments)| FrameTx {
+            pqc_auth_count: *count,
+            pqc_auths: &segments.pqc_auths,
+            prunable: &segments.prunable,
+        })
+        .collect();
+    std::sync::Arc::from(encode_frame(&frame))
 }
 
 /// The first height at or after `from` such that it and the `following`
