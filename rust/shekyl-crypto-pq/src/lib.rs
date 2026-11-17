@@ -80,6 +80,7 @@ pub mod rng;
 pub mod schnorr;
 pub mod seeded_rng;
 pub mod signature;
+pub mod tx_key;
 pub mod wallet_envelope;
 
 #[doc(hidden)]
@@ -87,3 +88,4 @@ pub mod test_support;
 
 pub use error::CryptoError;
 pub use shekyl_address as address;
+pub use tx_key::TxKey;

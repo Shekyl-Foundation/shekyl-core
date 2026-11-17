@@ -407,11 +407,13 @@ pub enum SignerFault {
     BulletproofParse,
     /// Encoding the signed transaction failed.
     WireEncode,
+    /// The OS random source failed while drawing the transaction key.
+    Randomness,
 }
 
 impl SignerFault {
     /// Every wallet-side fault, in declaration order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Primitive,
         Self::HandleMismatch,
         Self::MissingKeyImage,
@@ -420,6 +422,7 @@ impl SignerFault {
         Self::Proof,
         Self::BulletproofParse,
         Self::WireEncode,
+        Self::Randomness,
     ];
 
     /// The fault's wire keyword (`data.fault` on `-29119`).
@@ -434,6 +437,7 @@ impl SignerFault {
             Self::Proof => "proof",
             Self::BulletproofParse => "bulletproof-parse",
             Self::WireEncode => "wire-encode",
+            Self::Randomness => "randomness",
         }
     }
 }
@@ -502,6 +506,9 @@ impl From<KeyEngineError> for SignerError {
             // Unreachable on the signing path (proofs never route through
             // `Signer`), but the conversion must stay total.
             KeyEngineError::Proof(_) => SignerFault::Proof,
+            // The OS random source failed drawing the transaction key;
+            // nothing was built.
+            KeyEngineError::Randomness(_) => SignerFault::Randomness,
         };
         Self::Internal { fault }
     }

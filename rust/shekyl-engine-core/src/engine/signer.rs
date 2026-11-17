@@ -231,8 +231,8 @@ pub struct SignedTransfer {
     /// OUTBOUND PREREQUISITE pin 1). Zeroize-on-drop; non-`Clone` —
     /// which also makes `SignedTransfer` itself non-`Clone`, keeping
     /// the secret single-copy through the pipeline. `Debug` is safe:
-    /// [`shekyl_engine_state::TxSecretKey`]'s impl is redacted.
-    pub(crate) tx_key_secret: shekyl_engine_state::TxSecretKey,
+    /// [`shekyl_crypto_pq::TxKey`]'s impl is redacted.
+    pub(crate) tx_key: shekyl_crypto_pq::TxKey,
 }
 
 impl SignedTransfer {
@@ -450,7 +450,7 @@ impl Signer for LocalSigner {
 
         Ok(SignedTransfer {
             tx_bytes,
-            tx_key_secret: signatures.tx_key_secret,
+            tx_key: signatures.tx_key,
         })
     }
 }

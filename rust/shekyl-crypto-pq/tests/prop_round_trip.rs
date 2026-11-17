@@ -25,6 +25,7 @@ use shekyl_crypto_pq::{
     derivation::derive_output_secrets,
     kem::{HybridKemPublicKey, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation},
     output::{compute_output_key_image, construct_output, scan_output_recover},
+    TxKey,
 };
 use shekyl_curve_generators::hash_to_point;
 
@@ -44,8 +45,7 @@ fn run_round_trip(
     amount: u64,
     output_index: u64,
 ) -> RoundTripResult {
-    let tx_key_scalar = Scalar::from_bytes_mod_order([42u8; 32]);
-    let tx_key = tx_key_scalar.to_bytes();
+    let tx_key = TxKey::seeded([42u8; 32]);
 
     let spend_point = G * spend_scalar;
     let spend_key = spend_point.compress().to_bytes();

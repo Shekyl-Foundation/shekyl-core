@@ -170,7 +170,9 @@ membership proof. Deriving it publicly therefore discloses nothing this
 document does not already state, and buys full reproducibility of the
 founding block.
 
-Derivation (implemented in `rust/shekyl-genesis-tool/src/txkey.rs`):
+Derivation (`R` written by `rust/shekyl-genesis-tool/src/txkey.rs`; the
+frame and the reduction are `shekyl_crypto_pq::TxKey::from_genesis_seed`,
+`rust/shekyl-crypto-pq/src/tx_key.rs`):
 
 ```text
 R = varint(n_recipients)

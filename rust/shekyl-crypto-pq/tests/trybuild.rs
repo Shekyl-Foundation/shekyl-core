@@ -58,3 +58,18 @@ fn an_unencrypted_output_field_cannot_be_constructed_downstream() {
     t.compile_fail("tests/trybuild/enc_fields_cannot_be_literal_constructed.rs");
     t.compile_fail("tests/trybuild/encrypted_field_has_no_byte_constructor.rs");
 }
+
+/// The transaction key (R-21): no downstream crate makes one from chosen
+/// bytes — not by an associated function, not by a literal, not by a
+/// literal of its stored form. The stored form deserializes (the wallet's
+/// sealed record holds it) and `TxKey::open` opens what was stored: that is
+/// the one door, named in `shekyl_crypto_pq::tx_key`'s docs, and a
+/// fixture cannot close it.
+#[test]
+#[ignore = "checks its fixtures over the crate's whole dependency tree, ~19 min cold; run nightly by trybuild-ignored"]
+fn a_transaction_key_cannot_be_made_from_bytes_downstream() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/trybuild/tx_key_has_no_byte_constructor.rs");
+    t.compile_fail("tests/trybuild/tx_key_cannot_be_literal_constructed.rs");
+    t.compile_fail("tests/trybuild/stored_tx_key_cannot_be_literal_constructed.rs");
+}

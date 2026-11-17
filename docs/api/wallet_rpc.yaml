@@ -1099,12 +1099,14 @@ components:
                                           invalid-combined-ss-length,
                                           bulletproof, fcmp-prove, pqc-sign,
                                           wire, balance-self-check — or the
-                                          wallet state signing reads —
+                                          wallet's random source and the
+                                          state signing reads —
                                           primitive, handle-mismatch,
                                           missing-key-image,
                                           source-decapsulation,
                                           rid-not-encodable, proof,
-                                          bulletproof-parse, wire-encode).
+                                          bulletproof-parse, wire-encode,
+                                          randomness).
                                           Report it; the wallet log has the
                                           detail (A16)
           -29120 SEND_NOT_SAVED           submit: the send's record (its
