@@ -1,15 +1,19 @@
 # Multistage docker build, requires docker 17.05
 #
-# Running the image. shekyld serves RPC on loopback only — a wildcard or
-# network bind is refused at start (docs/design/RPC_TRANSPORT_POSTURE.md
-# RT-1/RT-2) — so the container shares the host's network namespace:
+# Running the image. shekyld's plaintext listeners are loopback only — a
+# wildcard or network bind is refused at start (docs/design/RPC_TRANSPORT_
+# POSTURE.md RT-1/RT-2) — so the container shares the host's network
+# namespace:
 #
 #   docker run --network host shekyl-core
 #
-# 127.0.0.1 inside the container is then host loopback, P2P is reachable,
-# and nothing in the daemon changes. The image exposes no RPC port on
-# purpose; a daemon UDS listener for the no-host-networking case is filed in
-# docs/FOLLOWUPS.md with its trigger, not built speculatively.
+# 127.0.0.1 inside the container is then host loopback, and P2P is
+# reachable. The image serves the view listener alone, at the network's view
+# port (11030 on mainnet), with no plaintext admin listener; the account
+# that runs the daemon administers it on its owner's socket, in
+# /home/shekyl/rendezvous (`docker exec -u shekyl … shekyl-cli`). The image
+# exposes no RPC port on purpose; another machine reaches the node over the
+# authenticated channel (rpc-listen), which an operator adds.
 
 # builder stage
 FROM ubuntu:20.04 as builder
@@ -55,7 +59,8 @@ COPY --from=builder /src/build/x86_64-linux-gnu/release/bin /usr/local/bin/
 
 RUN adduser --system --group --disabled-password shekyl && \
 	mkdir -p /wallet /home/shekyl/.shekyl && \
-	chown -R shekyl:shekyl /home/shekyl/.shekyl && \
+	mkdir -m 0700 /home/shekyl/rendezvous && \
+	chown -R shekyl:shekyl /home/shekyl/.shekyl /home/shekyl/rendezvous && \
 	chown -R shekyl:shekyl /wallet
 
 VOLUME /home/shekyl/.shekyl
@@ -63,9 +68,12 @@ VOLUME /home/shekyl/.shekyl
 VOLUME /wallet
 
 EXPOSE 11021
-# No RPC port: RPC is loopback only; run with --network host (see the header).
+# No RPC port: the plaintext listeners are loopback only; run with
+# --network host (see the header).
 
 USER shekyl
 
 ENTRYPOINT ["shekyld"]
-CMD ["--p2p-bind-ip=0.0.0.0", "--p2p-bind-port=11021", "--rpc-bind-port=11029", "--non-interactive", "--restricted-rpc"]
+# P2P listens on the default (every address, the network's P2P port). The
+# container has no session directory, so the owner's socket is named.
+CMD ["--rpc-admin-listen", "none", "--rpc-view-listen", "127.0.0.1", "--rpc-socket-dir", "/home/shekyl/rendezvous"]
