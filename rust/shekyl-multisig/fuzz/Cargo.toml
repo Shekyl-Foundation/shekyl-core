@@ -1,15 +1,29 @@
 # `seeds/<target>/` is committed and read by every run of that target
-# (the nightly workflow's `fuzz` job; locally,
+# (`fuzz-nightly.yml`; locally,
 #   cargo +nightly fuzz run <target> corpus/<target> seeds/<target>).
-# `fuzz_body_hybrid_sig_decode/kat_one_signature` is a one-input body
-# (`0x01 || sig`) and `fuzz_body_commitment_decode/kat_one_round` a
-# one-input round (`0x01 || preprocess || key`), from the
-# `hybrid_signature_hex` and `hybrid_public_key_hex` of
-# `docs/test_vectors/PQC_HYBRID_V2_KAT.json`. The 64-byte preprocess is
-# zeros and comes from no vector: the body travels it as raw bytes and
-# does not parse it. Unseeded, both decoders never got past the input
-# count and the first field's length. A crash's input joins its
-# target's directory with the fix.
+# Each seed is one whole body the decoder accepts, built from
+# `docs/test_vectors/PQC_HYBRID_V2_KAT.json` (`key`: its
+# `hybrid_public_key_hex`; `sig`: its first `hybrid_signature_hex`) and
+# `MULTISIG_INTENT_V2.json` (its first vector). Lengths are 4-byte
+# little-endian; counts are one byte.
+#   fuzz_body_hybrid_sig_decode/kat_one_signature        0x01 || sig
+#   fuzz_body_commitment_decode/kat_one_round            0x01 || preprocess || key
+#   fuzz_body_responder_share_decode/kat_one_responder_round
+#                                     0x01 || preprocess || share || key
+#   fuzz_body_signature_share_decode/kat_one_share       0x01 || share
+#   fuzz_body_final_tx_decode/kat_one_input_two_signers
+#     len 0 (no proposal file) || 0x01 inputs || 0x02 signers || key || key
+#     || len 0 (fcmp proof) || len 0 (range proof)
+#   fuzz_envelope_v2_decode/kat_signature_share_envelope
+#     the intent's address_fingerprint || intent_hash || responder_index
+#     || 0x03 (SignatureShare) || len || kat_one_share || len || sig
+# The 64-byte preprocess and the 32-byte share are zeros and come from no
+# vector: the bodies travel them as raw bytes and do not parse them.
+# Unseeded, cold five-minute runs of the envelope, the final transaction
+# and the signature share reached coverage 31, 77 and 87; the hybrid
+# signature and the commitment never got past the input count and the
+# first field's length. A crash's input joins its target's directory
+# with the fix.
 
 [package]
 name = "shekyl-multisig-fuzz"
