@@ -20,8 +20,9 @@ use shekyl_archival_retention::MAX_CLAIM_AGE_W;
 use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
+use shekyl_crypto_pq::TxKey;
 use shekyl_engine_state::pscan_cursor::PScanCursor;
-use shekyl_scanner::bench_fixtures::scannable_block_for_recipient;
+use shekyl_scanner::bench_fixtures::{fresh_tx_key, scannable_block_for_recipient};
 use shekyl_scanner::ScannableBlock;
 use shekyl_units::AtomicUnits;
 
@@ -41,13 +42,20 @@ fn canonical_id(p: &ArchivalPKeys) -> PCanonicalId {
     p_canonical_id_from_hybrid_pubkey(&p.hybrid_bond_id().to_canonical_bytes().expect("id"))
 }
 
-/// A block addressed to `recipient` (one funding output).
+/// A block addressed to `recipient` (one funding output), under a fresh key.
 fn funding_block(recipient: &ArchivalPKeys) -> ScannableBlock {
+    funding_block_with_key(recipient, &fresh_tx_key())
+}
+
+/// [`funding_block`] under `tx_key`. The same recipient and key rebuild the
+/// same block, which is how a grown chain keeps the block a sweep already
+/// counted.
+fn funding_block_with_key(recipient: &ArchivalPKeys, tx_key: &TxKey) -> ScannableBlock {
     let kem = HybridKemPublicKey {
         x25519: recipient.x25519_pk,
         ml_kem: recipient.ml_kem_ek.to_vec(),
     };
-    scannable_block_for_recipient(1, &kem, recipient.spend_pk.as_canonical_bytes())
+    scannable_block_for_recipient(1, &kem, recipient.spend_pk.as_canonical_bytes(), tx_key)
 }
 
 /// A chain of `len` blocks: `recipient_at[i]` (if present) is addressed to the
@@ -182,11 +190,18 @@ async fn sweep_accumulates_funding_and_advances_the_cursor() {
 #[tokio::test]
 async fn resume_from_the_store_does_not_double_count() {
     let p = persona(0);
+    // Canonical fills, below the group order, so `TxKey::seeded` stores
+    // them unchanged. Block 0 is rebuilt from the same key when the chain
+    // grows; `chain`'s linking then reproduces the sealed frontier. Block 1
+    // is a different key, so the two funding outputs are not one output.
+    const TX_KEY_BLOCK_0: [u8; 32] = [0x0A; 32];
+    const TX_KEY_BLOCK_1: [u8; 32] = [0x0B; 32];
+    let key_at_0 = TxKey::seeded(TX_KEY_BLOCK_0);
     // First sweep: tip = 5, horizon = 1 → scan [0, 1). Funding in block 0.
     let store = MemStore::default();
     let stake = spawn_stake(&[0]);
     {
-        let src = source(chain(5, &[(0, funding_block(&p))]));
+        let src = source(chain(5, &[(0, funding_block_with_key(&p, &key_at_0))]));
         let mut accrual = PScanAccrual::genesis();
         let mut retired = BTreeSet::new();
         pscan_sweep(
@@ -212,7 +227,16 @@ async fn resume_from_the_store_does_not_double_count() {
     // "Crash + restart": reload the accrual from the store, grow the chain.
     let mut accrual = PScanAccrual::from_state(&store.load().await.unwrap().unwrap());
     assert_eq!(accrual.next_height(), BlockHeight::from_raw(1));
-    let src = source(chain(6, &[(0, funding_block(&p)), (1, funding_block(&p))]));
+    let src = source(chain(
+        6,
+        &[
+            (0, funding_block_with_key(&p, &key_at_0)),
+            (
+                1,
+                funding_block_with_key(&p, &TxKey::seeded(TX_KEY_BLOCK_1)),
+            ),
+        ],
+    ));
     let mut retired = BTreeSet::new();
     // tip = 6, horizon = 2 → scan [1, 2) only (block 0 already counted).
     pscan_sweep(

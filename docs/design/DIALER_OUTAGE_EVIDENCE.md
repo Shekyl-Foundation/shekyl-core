@@ -1,6 +1,6 @@
 # One judge of failed dials; each connector declares how its failures are judged
 
-**Status: RULED (Round 0 closed 2026-10-31; `OE-D10` ruled 2026-11-01; its launch stamp, §6.1, ruled 2026-11-05).** Every decision is ruled (§0) and nothing in the mapping is open. The code is #1235 (§8), all seven steps built there as of 2026-11-02, not yet on dev. The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md). This record states the design as ruled; the rounds that reached it are in git (revision 1 `4a570f834`, revision 2 `2f85829ef`, revision 3 `12737f3fbe`).
+**Status: RULED (Round 0 closed 2026-10-31; `OE-D10` ruled 2026-11-01; its launch stamp, §6.1, ruled 2026-11-05). AMENDED 2026-11-15 (Rick): the judge is decoupled from every connector; one path reading taken after the failure decides, from the dialing connector, and the Tor connector's readings are the Tor Manager's (§3.3, [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a); the quiet line reads the manager's own reading (§6).** Every decision is ruled (§0) and nothing in the mapping is open. The code is #1235 (§8), all seven steps built there as of 2026-11-02, not yet on dev. The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md). This record states the design as ruled; the rounds that reached it are in git (revision 1 `4a570f834`, revision 2 `2f85829ef`, revision 3 `12737f3fbe`).
 
 **Read at:** `dev` `f608d01604`; every anchor in §1 holds there.
 **Reviews:** the Tor lane reviewed Tor's mapping (§3.2) against tor 0.4.9.14 and derived `OE-D10` (§6); Rick's reviewer covered clearnet's mapping (§3.1).
@@ -16,12 +16,12 @@ The intent (Rick, 2026-10-31): each connector declares how its connections are t
 | `OE-D2` | The judge takes its own type, `DialFailure { evidence, retry, reached }`; the D12 `CloseCause` travels beside it for the log, out of the judge's reach (§2.2) | Three independent facts get three typed fields, and misbehaviour can be built only where the connector authenticates the destination |
 | `OE-D3` | Clearnet's mapping (§3.1); Local only for failures independent of the destination | A destination-dependent failure as Local is never counted: a node with no IPv6 route would excuse every IPv6 address forever |
 | `OE-D4` | Tor's mapping (§3.2); nothing a gossiped address can cause is Local | Local is retried every 10–15 s and never climbs, so a planted onion able to produce one would be redialed forever |
-| `OE-D5` | Corroboration is bracketed: the link is shown working within δ before and within δ after the failure (§3.3) | Counting traffic during the attempt counts the tests an outage's onset made fail |
-| `OE-D6` | Hold the rung: an excused failure neither climbs nor descends; only an address with no counted failure takes `outage_retry`, and the judge's next sign of life clears those (§3.4) | No uncorroborated failure ever counts, and excusal never undoes the ladder |
+| `OE-D5` | One path reading taken after the failure decides, asked of the dialing connector, which supplies its own source and its own wait (§3.3). *Amended 2026-11-15: the bracket's before side is dropped, and the evidence list moves to each connector* | The connector, not the judge, knows whether its path works; the judge names no connector |
+| `OE-D6` | Hold the rung: an excused failure neither climbs nor descends; only an address with no counted failure takes `outage_retry`, and the next working reading clears those (§3.4) | No failure without a working reading ever counts, and excusal never undoes the ladder |
 | `OE-D7` | Values per connector, each an `Assumption` with its own basis in `DAEMON_RELAY_PRIVACY.md` §97 (§3.5) | Equal numbers on two connectors are two derivations, each re-derived when its own basis moves |
 | `OE-D8` | One function in the dialer, `judge`, returns a verdict; `Peerlist::apply` keeps only seat mechanics; a deferred verdict holds no target place and no in-flight slot (§4.1) | One point of judgment, and a pending verdict never idles a slot |
 | `OE-D9` | The K/S quiet guard, its thresholds, the `Ladder` parameter and the close-cause marks are deleted (§5) | Rule 15: the judge replaces each |
-| `OE-D10` | The Tor posture line reports the judge's last sign of life (§6) | The operator and the judge see one definition of "the link worked" |
+| `OE-D10` | The quiet line stands only when the Tor Manager's reading is impaired, peers are known, and a Tor dial has failed since (§6). *Amended 2026-11-15* | The operator is told what the manager reads, the one owner of whether the onion path works |
 | — | Retry follows each row's meaning: `Final` only for a definitive answer (another network's prefix, a message that does not verify, proven misbehaviour); Tor keeps its reply finality (§3) | A retry decided by what the failure says, not by where it was observed; Tor does Tor (`TSR-Q14`) |
 | — | A banned address is never eligible to be drawn; bans and lifts arrive at the peer list as events (§3.1, §8) | A ban is this node's verdict, not a failure to judge |
 
@@ -48,7 +48,7 @@ The intent (Rick, 2026-10-31): each connector declares how its connections are t
 | --- | --- | --- |
 | **Destination** | The far end answered, or is shown absent | Counts: the ladder steps and a white address is demoted. A Destination failure that also proves misbehaviour drops the address, on a connector that authenticates the destination |
 | **Local** | This node's side failed, independent of the destination: the operator's proxy unavailable, this node's own request, engine or close | **Excused.** Never counts: no ladder step, no white demotion, the failure count untouched. An address with no counted failure cools for the connector's `outage_retry` (§3.5); an address with counted failures cools at its current rung (§3.4) |
-| **Uncertain** | The link or the destination: a timeout, an unreachable reply from the path, a failure that depends on the destination's address family or route | Counts only when the connector's corroboration holds (§3.3). Otherwise excused, as Local |
+| **Uncertain** | The link or the destination: a timeout, an unreachable reply from the path, a failure that depends on the destination's address family or route | Counts only on a working reading of the connector's path taken after it (§3.3). Otherwise excused, as Local |
 
 The vocabulary belongs to the dialer. A connector that needs a meaning outside it is a design round, not a new local rule.
 
@@ -79,9 +79,9 @@ enum StreamEnd { PeerClosed, IoError, SendQueueFull }
 
 As data, in a `FailureJudging` declaration on each connector's `DialProfile` row in `shekyl-transport-layer/src/profile.rs`, one `const fn` row per connector (rule 71: data, never control flow):
 1. **The mapping:** carried by the connector's own stamping into `DialFailure` (§2.2, §3.1, §3.2); the declaration holds nothing extra, so there is one source.
-2. **Its corroboration:** from the closed list in §3.3.
+2. **Its source of path readings** and the longest the judge waits for one (§3.3).
 3. **Its `destination_authenticated` flag:** whether the destination is authenticated, which is the only thing that lets misbehaviour be built (§2.2).
-4. **Its values:** δ and `outage_retry` (§3.5), beside the ladder, retries, waits and window the profile already holds.
+4. **Its values:** the reading wait and `outage_retry` (§3.5), beside the ladder, retries, waits and window the profile already holds.
 
 **Retry follows each row's meaning.** `Final` only for a definitive answer: another network's prefix, a message that does not verify, proven misbehaviour. A timeout or an uncertain answer within the window is `AgainInsideWindow`; the rest is `Again`. Tor keeps its own reply finality: Tor does Tor (`TSR-Q14`, ruled 2026-10-25), and the full-window rule (Rick, 2026-10-26) makes a reply Tor does not retry `Final`.
 
@@ -134,29 +134,47 @@ A reset or a bad record can be forged by an on-path party. On clearnet that part
 
 **The rule for Tor (the Tor lane, 2026-10-31):** nothing a gossiped address can cause may be Local. Local is retried every 10–15 s and never climbs, so a planted onion that could produce a Local reply would be redialed forever.
 
-### 3.3 Corroboration (`OE-D5` — RULED)
+### 3.3 The path reading (`OE-D5` — RULED; amended 2026-11-15)
 
-**Corroboration is bracketed.** At the instant `t_f` a test's final attempt fails with Uncertain evidence, the verdict waits δ. The failure counts only if the link was shown working both:
-- within δ **before** `t_f`, by an event other than the failing attempt itself; **and**
-- within δ **after** `t_f`.
+**One reading taken after the failure decides.** For an Uncertain failure
+the judge asks the dialing connector for a reading of its path taken after
+the failure (`PathSource::reading_after`, `rust/shekyl-transport-layer/src/path.rs`):
+- **Working:** the failure counts against the address.
+- **Impaired, or no reading within the connector's declared wait:** the
+  failure is excused.
+- While it waits, the address is not drawn again, and the verdict holds no
+  in-flight slot (§4.1).
 
-What each side closes:
-- **The onset** of an outage leaves nothing after `t_f`, so the failure is excused. With five Tor dials in flight (the bound) when the link goes silent, each began before the onset and saw traffic from before it; none sees anything after its failure, so all five are excused and white keeps its entries.
-- **The end** of an outage leaves nothing before `t_f`, so the failures made during it are excused.
-- **What stays (a stated residual):** the bracket counts failures made inside any outage shorter than about 2δ, on both connectors: the link is shown working within δ before and within δ after `t_f`, so an outage that fits between those two signs of life is invisible to it. With δ 15 s that is outages under about 30 s. On Tor an attempt whose window spans a longer outage is also counted if the outage ends more than δ before its deadline, up to the in-flight bound (5) per outage. The Pi's 10, 20 and 30 s blackholes and the pulsed-loss run (brief §7) measure it.
+The judge knows nothing about bytes, stream opens, probes or checks, and
+names no connector (`rust/shekyl-dialer/src/judge.rs`); a new connector
+supplies its own source, with no judge change. `shekyl-dialer` depends on no
+Tor crate, held by `scripts/ci/check_dialer_no_tor.sh`. A short outage the
+judge misses is not a defect: the dialer keeps peer slots filled, and an
+outage matters only when it stops the node finding peers.
 
-**What shows the link worked (the closed list):**
-- **`StreamOpened`:** an attempt on this connector reached an open stream (`Reached::StreamOpened`, or a session).
-- **`SessionReceived { outbound_only }`:** a held session on this connector received a byte (the activity stamp, §1).
-- **Never:** a session merely held (the Pi's idle sessions sat open 2 min 10 s into the blackhole), or anything from Tor's own network judgment (`TSR-Q14`).
-- **The probe of the node's own onion** never counts as link evidence. Its outbound dial never reaches the dialer (`TOR_SUPERVISOR.md` §4.5), but its arrival is an inbound connection, and Tor's corroboration counts inbound sessions; #1235 checks the arrival against the activity stamp, and the brief's test 7 decides it.
-
-**The declarations:**
-- **Tor:** `StreamOpened` or `SessionReceived` on any session, inbound included. Every Tor byte crosses the one guard link, and an observer on it cannot tell streams apart, so it passes all of them or none.
-- **Clearnet:** `SessionReceived` on **outbound sessions only**.
-  - **Inbound excluded:** a censor can block this node's outbound connects while established inbound flows continue, and inbound peers choose this node, not the reverse. An inbound session would then corroborate failures the censor caused.
-  - **Idle excluded** by construction: a byte must arrive.
-  - The clearnet on-path party who passes only its own session still corroborates. Inbound exclusion makes it be a peer this node chose (it must win a draw), and the byte rule makes it keep that session talking around each failure. That is a small cost, honestly stated: §7.
+**Each connector's source** (`rust/shekyl-p2p/src/path.rs`):
+- **Tor: the Tor Manager** ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a).
+  Working, from a check in which the probe came back and the directory
+  check passed, an outbound onion dial that completed, or a new inbound Tor
+  session. Impaired, from Tor's own statements that it cannot reach its
+  network or that no directory answers, or a failed check (the two-miss
+  verdict). Never from a failed peer dial, a byte on a held session, or a
+  session merely held. A failure with no reading after it is posted to the
+  manager once; the manager answers from a later fact or runs its check, at
+  most one per 15 minutes. Declared wait: the spacing plus one check, 19
+  minutes. Under an operator's Tor there is no check, and readings come only
+  from completed dials and new inbound sessions.
+- **Clearnet: its own outbound sessions.** A byte received on an outbound
+  clearnet session after the failure is a working reading. The byte's stamp
+  is `monotonic_ms`, which is not the process clock: on Windows `Instant`
+  counts through S3 sleep and the process clock does not. The source marks
+  `monotonic_ms` at the first ask and counts a byte strictly after that
+  mark, never by subtracting the two clocks. Inbound sessions do not count:
+  a censor can block this node's outbound connects while established inbound
+  flows continue, and inbound peers choose this node, not the reverse.
+  Declared wait: 15 s (§3.5). An on-path party who passes only its own
+  session still counts: it must be a peer this node chose, and must keep
+  that session talking after each failure (§7).
 
 ### 3.4 The excusal and the clearing rule (`OE-D6` — RULED: hold the rung; clearing is the judge's)
 
@@ -164,9 +182,9 @@ What each side closes:
 - An excused failure neither climbs nor descends the ladder.
 - An address already on the ladder (it has counted failures) cools at its current rung.
 - Only an address with no counted failure, which includes every live white address, takes the connector's short `outage_retry`.
-- **Clearing is the judge's behaviour:** the first sign of life on a connector lifts the excused cooldowns of addresses with no counted failure. Nothing on the ladder is touched.
+- **Clearing is the judge's behaviour:** the first working reading on a connector lifts the excused cooldowns of addresses with no counted failure. Nothing on the ladder is touched.
 
-No uncorroborated failure ever counts, so invariants 1, 2 and 7 hold exactly. What is left is the first failure of each new dead address while sessions are scarce, which can be excused and retried more than once before it counts: a stated residual, bounded by `outage_retry`.
+No failure without a working reading ever counts, so invariants 1, 2 and 7 hold exactly. What is left is the first failure of each new dead address while sessions are scarce, which can be excused and retried more than once before it counts: a stated residual, bounded by `outage_retry`.
 
 **The model** (shekyl-dev `data/dialer-outage/2026-10-31-oe-d6-fill-model/`, `fill_model.py`; every input is stated there, none measured):
 - **Clearnet as the profile has it:** bound 1, target 12, deadline 1.415 s, wake 0.5 s + U(1 s), the ladder 120 s doubling to 1 h with U(50 %) jitter. The gray list starts full and white starts empty, as after a restart.
@@ -215,32 +233,34 @@ Each value is the connector's own, an `Assumption` with its basis in `DAEMON_REL
 
 | Value | Tor | Clearnet |
 | --- | --- | --- |
-| δ (the bracket) | 15 s | 15 s |
+| The reading wait | 19 minutes: the on-demand check spacing (15 min) plus one check (240 s), `READING_WAIT` ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a) | 15 s, `CLEARNET_READING_WAIT_NANOS` |
 | `outage_retry` | 10 s + U(5 s) | 10 s + U(5 s) |
 | **Basis of `outage_retry`** | Stays under the slot turnover, `window / bound` (105 s / 5 = 21 s): an excused address is drawable again before a slot comes free, so the outage cooldown never holds a slot idle | Caps redials of an unproven address: with bound 1 and a 1.415 s deadline, at most one redial of such an address per 10–15 s |
-| **Basis of δ** | Depends on the 60 s mean timed-sync interval (`TIMED_SYNC_MIN` plus half `TIMED_SYNC_JITTER`, `shekyl-p2p-session` `timing.rs`) and on stream opens through the one guard link: with `n` sessions, `exp(−n · δ / 30 s)` is the chance a healthy link shows nothing in δ | Depends on the 60 s timed-sync interval and on outbound sessions only (inbound is excluded from clearnet's corroboration, §3.3) |
+| **Basis of the wait** | A failure just after a check began waits out the spacing, then one check; with no reading by then the manager could not answer | The 60 s mean timed-sync interval (`TIMED_SYNC_MIN` plus half `TIMED_SYNC_JITTER`, `shekyl-p2p-session` `timing.rs`), on outbound sessions only (inbound is excluded from clearnet's source) |
 | Ladder, retries, waits, window, target, in-flight bound | unchanged | unchanged |
 
-Equal numbers on the two rows are two derivations landing on one value, not one value shared: each row's basis is its own, and each re-derives when its basis moves (the timed-sync interval for both δ; Tor's window or bound for Tor's `outage_retry`; clearnet's deadline or bound for clearnet's).
+Equal numbers on the two rows are two derivations landing on one value, not one value shared: each row's basis is its own, and each re-derives when its basis moves (the check's spacing and bounds for Tor's wait; the timed-sync interval for clearnet's; Tor's window or bound for Tor's `outage_retry`; clearnet's deadline or bound for clearnet's).
 
-**Why δ is 15 s.** A session receives about two messages a minute (§1). **Arrival model (an assumption, not a measurement):** bytes arrive on each corroborating session as an independent Poisson process at that rate, so with `n` sessions the chance that one δ-interval shows nothing is `p = exp(−n · δ / 30 s)`. The bracket needs a sign of life in the δ before **and** the δ after the failure, two disjoint intervals, so a healthy link's Uncertain failure is excused when either is empty: `1 − (1 − p)²`.
+**Why clearnet's wait is 15 s.** An outbound session receives about two messages a minute (§1). **Arrival model (an assumption, not a measurement):** bytes arrive on each outbound session as an independent Poisson process at that rate, so with `n` outbound sessions the chance that the 15 s after a failure shows nothing is `p = exp(−n · 15 s / 30 s)`.
 
-| Sessions that corroborate | 1 | 2 | 3 | 6 | 12 (target) |
+| Outbound sessions | 1 | 2 | 3 | 6 | 12 (target) |
 | --- | --- | --- | --- | --- | --- |
-| A healthy link's Uncertain failure excused anyway (two-sided) | 85 % | 60 % | 40 % | 9.7 % | 0.50 % |
+| A healthy link's Uncertain failure excused anyway | 61 % | 37 % | 22 % | 5.0 % | 0.25 % |
 
-At target nothing changes, except that the verdict on an Uncertain failure waits δ. During fill, or at boot with no session, an Uncertain failure on a dead address is often excused; each excusal of an address with no counted failure costs a redial after `outage_retry`, and §3.4 allows an address to be excused more than once before a failure counts (its stated residual), so the cost is redials, not a lost address. A Destination failure always counts.
+At target nothing changes, except that the verdict on an Uncertain failure waits for its reading. During fill, or at boot with no session, an Uncertain failure on a dead address is often excused; each excusal of an address with no counted failure costs a redial after `outage_retry`, so the cost is redials, not a lost address. A Destination failure always counts.
+
+**Registered before the Pi run (Rick, 2026-11-15).** With half of a 100-address gray list dead, a settled node that loses one Tor slot refills it in a median of 4.2 s; the registered band is 0.6 s to 55.6 s, the model's 5th to 95th percentile, and a floor-device refill outside it is a finding. At most one check runs during a refill: the completed dial is itself a working fact. The model and every input it states are shekyl-dev `data/dialer-outage/2026-11-15-onion-path-refill/`.
 
 **Recovery (invariant 3).**
 - **At the pin:** the first rung is 120–180 s. The Pi recovered 2 min 44 s after the unblock, against 6 s in the refuse block.
-- **Clearnet:** `outage_retry` bounds the cooldown that starts at an excused verdict, not the time from the unblock. A failure just before the unblock holds its seat outstanding for its deferred verdict, up to δ (15 s, §4.1), and only then cools for up to 15 s; and the redial needs that address to be the one drawn, or another eligible candidate to exist. So the first redial of a given excused address is at most about δ + 15 s (≈ 30 s) after the unblock, plus one dial, and its success clears every excused cooldown of an address with no counted failure; addresses with counted failures keep their rung (§3.4). This is the design's bound; the Pi measures it (brief §7).
+- **Clearnet:** `outage_retry` bounds the cooldown that starts at an excused verdict, not the time from the unblock. A failure just before the unblock holds its seat outstanding for its waiting verdict, up to the wait (15 s, §4.1), and only then cools for up to 15 s; and the redial needs that address to be the one drawn, or another eligible candidate to exist. So the first redial of a given excused address is at most about δ + 15 s (≈ 30 s) after the unblock, plus one dial, and its success clears every excused cooldown of an address with no counted failure; addresses with counted failures keep their rung (§3.4). This is the design's bound; the Pi measures it (brief §7).
 - **Tor:** the first redial after an unblock waits for a slot, and in-flight attempts are left to run (`TSR-Q14`: Tor retries inside its own window), so the bound above does not hold there. The time from unblock to the first stream open is a Pi measurement (brief §7).
 
 ## 4. The judge (`OE-D8` — RULED)
 
 ### 4.1 One function, and the peer list keeps seat mechanics
 
-- **The judge.** `judge(failure, declaration, observations) -> Verdict` in `shekyl-dialer` takes the place of `Dialer::ladder` in `record`. It reads the failure's evidence, the connector's declaration, and the dialer's own observations (stream opens; the activity stamps of held sessions).
+- **The judge.** `judge(failure) -> Judgement` and `settle(reading, waited_out)` in `shekyl-dialer` (`judge.rs`) take the place of `Dialer::ladder` in `record`. They read the failure's evidence and, for an Uncertain one, the dialing connector's path reading after it (§3.3), nothing else.
 - **The verdict.** `Verdict` is `Counted`, `Excused` or `Drop`. `Peerlist::apply` takes a verdict and performs it: `fail_test` for `Counted`, a new `excuse` for `Excused`, `drop_tested` for `Drop`. It makes no decision of its own. That replaces the `Ladder` parameter, so the 58 `Ladder::Climb` call sites change mechanically.
 - **Seat changes in the peer list:**
   - A gray seat's cooling phase records whether it was excused.
@@ -249,22 +269,21 @@ At target nothing changes, except that the verdict on an Uncertain failure waits
   - The attempt's in-flight slot frees when the attempt completes.
   - The pending verdict is not a kept session or a pending `Keep`, so the fill's count toward the target never includes it. The dialer draws and dials while verdicts wait.
   - The address is not drawn again meanwhile. A gray address's seat stays `Outstanding` until the verdict. A white address has no outstanding state (a re-contact is not a draw), so the dialer's eligibility excludes every address whose verdict waits; the onset test fails without it (#1235).
-  - One timing-engine owner per connector carries the earliest pending deadline, the shape of the accept linger in #1226. Tor's five slots are never held idle for δ.
-  - The before side is the latest stamp only when it falls in `[t_f − δ, t_f]`. A stamp after `t_f` is not that side. The dialer keeps only the latest stamp, so one that arrives before a queued verdict is applied hides any earlier one, and the failure is excused (#1235).
-  - The after side is bounded: a sign of life counts the failure only if it falls after `t_f` and no later than the deadline `t_f + δ`, and it does so when the dialer sees it, so the verdict does not depend on when the owner gets to it. At the deadline a failure nothing counted is excused; a verdict performed late can err only toward excusing (#1235, review F1). A stream is dated when it opened, the instant its channel reached the dialer, never when its attempt ended, and never later than its own attempt's failure (#1235, review R2).
+  - The connector's owner loop arms its wake for the earliest pending deadline, and a reading rings its bell. Tor's five slots are never held idle for the wait.
+  - The reading must be taken after the failure's own instant, the attempt's end on the process clock; the wait in the completion queue is not part of it. With none by the wait the failure is excused, so a verdict performed late can err only toward excusing.
   - A Destination failure needs no wait and is applied at once.
-- **The judge's last sign of life** on the Tor connector is published on `TorLinkTally` as a tick on the process clock, for the posture line (§6).
+- **Each connector's tally** (`LinkTally`: its census, and the latest launch among its failed dials) is published per connector under connector-neutral names; the daemon wires the Tor connector's copy to the Tor Manager, for the quiet line (§6).
 
 ### 4.2 What the judge guarantees, for every connector
 
 Each is tested against every connector's declaration, over a simulated timeline, not promised per connector:
-1. **An outage never empties white:** an uncorroborated failure never demotes white.
+1. **An outage never empties white:** a failure no working reading backs never demotes white.
 2. **An outage never climbs the ladder.**
-3. **Recovery doesn't wait on outage cooldowns:** the first corroborating event clears the excused cooldowns of addresses with no counted failure (§3.5's arithmetic).
+3. **Recovery doesn't wait on outage cooldowns:** the first working reading clears the excused cooldowns of addresses with no counted failure (§3.5's arithmetic).
 4. **Proven misbehaviour still drops,** on a destination-authenticated connector.
-5. **The probe never counts as link evidence.**
-6. **Nothing is inferred about Tor's network:** the judge reads only the dialer's own observations (`TSR-Q14`), and the posture line reads only the judge's (§6).
-7. **An outage's onset demotes nothing:** five tests in flight when the link goes silent are all excused.
+5. **The probe alone is no reading:** a check needs its directory check to pass as well, and the probe's own arrival is never a new inbound session.
+6. **The judge names no connector:** it reads only the dialing connector's reading. The Tor connector's is the Tor Manager's, which reads Tor's own statements and its check and infers nothing from this node's traffic (`TSR-Q14`, restated 2026-11-15); the quiet line reads the manager's own reading (§6).
+7. **An impaired path demotes nothing:** tests whose reading after them is impaired, or that get none within the wait, are all excused.
 
 ## 5. Deletions (`OE-D9` — RULED, rule 15)
 
@@ -284,17 +303,14 @@ From the census at the pin, each in the #1235 commit that removes it (§8). Hist
 - **The measurement ledger:** editing `profile.rs` needs new acknowledgements on the clearnet and Tor span path sets. No constant's needle points at `profile.rs`.
 - **No CI gate** names the guard, K, S or `quiet_after`.
 
-## 6. The supervisor's quiet span (`OE-D10` — RULED: the judge's last sign of life)
+## 6. The quiet line (`OE-D10` — RULED; amended 2026-11-15: the manager's reading)
 
-`quiet_after` governs one neutral posture sentence of the Tor supervisor (`shekyl-tor-control-client/src/supervisor/core/dials.rs:158`, `posture.rs:865`). It is display only, never a cause. At the pin the daemon passes Tor's S, 364.5 s (`shekyl-daemon/src/tor/mod.rs:60-71`).
+The quiet line is one neutral posture sentence of the Tor supervisor (`shekyl-tor-control-client/src/supervisor/core/dials.rs`). It is display only, never a cause (`TSR-Q14`).
 
-The posture line reports the dialer judge's last sign that the Tor link worked, and says what the judge observed: the Tor manager reports the dialer's observation rather than redoing the dialer's arithmetic, so the judge and the operator see one definition of "the link worked" (the Tor lane's derivation of 2026-11-01, ratified by Rick).
-- **The line:** "Peers are known; none has answered through Tor for X." Neutral: never a cause, never a respawn, no fix offered (`TSR-Q14`). When the dialer's census is empty it says "No peers are known yet." instead: there is nothing to dial, so no dial fails (Rick, 2026-11-10). A pending census says nothing. Each fact is said once when it begins, and again when it changes to the other. A longer duration of the same fact is not said again.
-- **Its input:** the judge's last corroborating instant on the Tor connector (§3.3: a stream opened, or a byte on any Tor session, inbound included; never a session merely held, the probe, or Tor's own network judgment), published by the dialer on `TorLinkTally` as a `Stamp` on the process clock (§6.1). The supervisor's clock runs from that instant or from Tor last reaching Running, whichever is later; a resume restarts it from the wake. The tally also carries `TorCensus`: pending until the first Tor wake, empty when that wake's seats are zero, or the seat count and the `Stamp` of the census that opened the non-empty run. Every wake that plans publishes it, including one that only resumes a retry. A connector that cannot dial returns before the census. White and gray seats count, cooling included.
-- **When it stands:** the quiet stretch since that clock started is at least `SocksTimeout + δ` (105 s + 15 s = 120 s). An empty census then says "No peers are known yet." A non-empty run says "Peers are known; none has answered through Tor for X." when a Tor dial launched at or after the later of the stretch's start and the run's start has failed, and X, that same span, has reached `quiet_after`. X does not include time before the dialer held a Tor address. A pending census does not stand the line. The failure is read by its launch (§6.1), not by when the supervisor receives the tally: the cell keeps only the latest value, so a later sign of life can arrive in the same one. By then a dial started at the last sign of life has used Tor's own retries and its bracket has closed empty, so the judge has excused it as the link's: the operator is told the fact the dialer acted on, when it acted. The span has no value of its own; it moves with Tor's window and with δ.
-- **What follows:** a live session keeps the line off (the 60 s timed sync always shows life inside 120 s); a dead held session no longer suppresses it (on the floor-device blackhole it would have spoken about 2 minutes in).
-- **`Policy::quiet_after`** becomes `SocksTimeout + δ`, from the Tor connector's own two declarations; the `tor_quiet` status field is `Option<TorQuiet>`, the line's two facts (2026-11-10), which GS-C2 carries. The duration on `Unanswered` is the held span above, not a second clock.
-- **Where it is built: all in #1235** (Rick, 2026-11-01). Commit 5 publishes the judge's last sign of life on `TorLinkTally`; commit 5b builds the supervisor side on it (`Dials::evaluate` without the held condition, `Policy::quiet_after`, the sentence, its six tests, `TOR_SUPERVISOR.md` §4.2), which the Tor lane reviews on #1235; commit 7 deletes Tor's span S with the rest of the guard (§5).
+- **When it stands:** only when the Tor Manager's own onion-path reading is impaired ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a), peers are known (the census holds a non-empty run), and a Tor dial launched at or after the later of that reading and the run's start has failed (§6.1). A reading from before this Tor reached Running, or before a wake, does not stand it. It is said once when it begins, and only while no cause is named: Tor's own statements name their cause instead (Rick, 2026-11-15).
+- **The line:** "Peers are known, but Tor has not been able to reach them for X.", X the time since the impaired reading, taken at the ask. No fix is offered. No line stands while no peer is known: there is nothing to dial, so no dial fails.
+- **Its inputs:** the manager's reading, which it holds itself; and, from the dialer, the Tor connector's copy of its per-connector tally (`LinkTally`): the census (`LinkCensus`: pending until the first Tor wake, empty when no address is held, or the seat count and the time the run began; every wake that plans publishes it, a retry's included) and `failed_attempt_began`. The dialer's last sign of life is deleted (rule 15): the dialer no longer works out whether the path works.
+- **The status field** is `tor_quiet`: `null`, or `{"unreached": {"age": s}}`. The keys `empty` and `failing` are gone; `impaired` already names Tor's own degraded state, so the line takes `unreached` ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-Q99, amended).
 
 ### 6.1 The launch stamp, `attempt_began`: one field both rules read (Rick, 2026-11-05)
 
@@ -302,8 +318,8 @@ A Tor dial launched before the quiet stretch began can fail inside it: a respawn
 - **The rule:** only failures are filtered, never successes. A failure counts toward the line only if its attempt began at or after the stretch started. A stream that opens counts whenever it arrives, however old its dial.
 - **No incarnation.** Leaving the link's incarnation out of the rule is rule 21: the launch time already separates a dial sent to the old Tor from one sent to the new, and adding the incarnation would provision for a case the launch time covers.
 - **The field:** `attempt_began`, the instant the dialer launched the attempt (today the `started` stamp in `timed`, `shekyl-dialer/src/owner/flight.rs`). It is named once, here, for both rules:
-  - the supervisor's line asks whether a failed dial began inside the stretch;
-  - the judge asks whether a stream opened after an attempt began.
+  - the supervisor's line asks whether a failed dial began at or after the impaired reading;
+  - the judge dates a failure at its attempt's end, and asks the connector for a reading after it (§3.3).
 - **The tally carries** the latest `attempt_began` among failed Tor dials. The line stands only if that is at or after the stretch's start. It replaces `last_unopened_at`, which is deleted (rule 15).
 - **One clock, enforced by type.** The dialer's stamp and the supervisor's stretch start both come from the process timing engine. They are a type only that engine's clock can mint, so the compiler checks that two instants are comparable, not a convention. The type lives in `shekyl-timing-engine`, and every `MonotonicClock` in the process reads one origin (a process-wide `OnceLock` of the platform reading), so a stamp from any production clock compares with one from any other, however each owner came by its clock. The type is minted only by those clocks, and the shared origin makes any two of them one timeline (`a_stamp_from_a_later_clock_is_never_earlier_than_one_taken_before_it`). The process clock leaves a suspend out where that clock does (`P2P_TIMING_ENGINE.md` §8), and a wake restarts the stretch either way.
 - **Tests,** each naming the edit that makes it fail:
@@ -314,26 +330,23 @@ A Tor dial launched before the quiet stretch began can fail inside it: a respawn
 - **Where it is built:** the Tor lane's PR after #1272 (`feat/tor-doorbell-wait`), with `TorLinkTally::held` deleted and the supervisor's wait restructured.
   - **The type** is `shekyl_timing_engine::Stamp`, minted only by `Clock::stamp`. `Clock` is sealed to the engine's two clocks, so no number converts into one. The type ends at the supervisor's core, which is sans-IO and reads every instant as nanoseconds from the one clock its driver is given: the daemon converts the tally's stamps there, in one function (`dial_tally`).
   - **The stamp** is taken once, where the dialer times the attempt (`AttemptTimes::began`, `shekyl-dialer/src/owner/flight.rs` `timed`), and every failed Tor attempt carries it to the tally, a retried one included. A local failure before any I/O began and ended at once.
-  - **The tally** carries `failed_attempt_began` (the latest launch among failed Tor dials) and `last_sign_of_life`, both stamps. `last_unopened_at` is deleted.
+  - **The tally** carries `failed_attempt_began` (the latest launch among failed dials), a stamp. `last_unopened_at` is deleted, and so, on 2026-11-15, is `last_sign_of_life` (§6).
   - **The supervisor's line** reads it (`Dials::evaluate`); the four tests above are `shekyl-tor-control-client/src/supervisor/core/tests/quiet.rs`.
   - **The judge's reading** ("did a stream open after an attempt began") is the dialer lane's; it has no rule text or test list here yet. The field is in place for it.
 
 ## 7. Wargame (§5 of the brief)
 
-- **A total blackhole of the access link, both connectors.** Nothing is received and nothing opens, so nothing corroborates. White stays and nothing climbs. An excused address with no counted failure becomes eligible again after 10–15 s; one with counted failures holds its rung. Eligible only means drawable when a slot is free: the in-flight bound, and on Tor the attempts still running (left to run, `TSR-Q14`), decide when it is dialed. At the unblock the first success clears the excused cooldowns of addresses with no counted failure.
-- **The same blackhole, with five Tor tests in flight at its onset.** Each fails with nothing after `t_f`, so all five are excused.
-- **A short blackhole** (§3.3's residual). On both connectors, a failure made inside an outage shorter than about 2δ (≈ 30 s) is bracketed by signs of life on both sides and counts. On Tor an attempt whose window spans a longer outage also counts if the outage ends more than δ before its deadline, up to the in-flight bound per outage. The Pi's 10, 20 and 30 s blackholes and the pulsed-loss run measure it.
-- **Clearnet, an on-path party who passes only its own session.** Its session is outbound and talks, so it corroborates, and honest addresses that time out are judged and demoted.
+- **A total blackhole of the access link, both connectors.** No reading is working: on clearnet no byte arrives; on Tor, Tor says it cannot reach its network, or the manager's check fails, or no answer comes within the wait. White stays and nothing climbs. An excused address with no counted failure becomes eligible again after 10–15 s; one with counted failures holds its rung. Eligible only means drawable when a slot is free: the in-flight bound, and on Tor the attempts still running (left to run, `TSR-Q14`), decide when it is dialed. At the unblock the first working reading clears the excused cooldowns of addresses with no counted failure.
+- **The same blackhole, with five Tor tests in flight at its onset.** Each gets an impaired reading, or none within the wait, so all five are excused.
+- **Clearnet, an on-path party who passes only its own session.** Its session is outbound and talks, so it is a working reading, and honest addresses that time out are judged and demoted.
   - That party already decides which peers this node reaches. Demoting them records what it enforces: the permanent clearnet residual.
   - Excluding inbound makes it be a peer this node drew. Requiring bytes makes it keep that session talking around each failure, which is cheap for it. The design does not claim more than that.
-- **Tor, an attacker who keeps one session open during a block.**
-  - An idle session corroborates nothing: a byte must arrive.
-  - A talking session cannot exist through a silent guard link, and an observer on that link cannot pass one stream and drop the rest.
-  - So both `StreamOpened` and `SessionReceived` hold on Tor. A session merely held would not: it is what the Pi's idle sessions were.
+- **Tor, an attacker who keeps one session open, or dials in.** A held session's bytes are no reading on Tor. A peer that dials in makes a new inbound Tor session, a working fact, at the cost of a full onion connection and handshake for each; that counts this node's failed dials during an outage of the onion path a peer can still dial through. It is narrower than before 2026-11-15, when any byte on any held Tor session counted ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a).
+- **Many dead onion addresses gossiped to a settled node.** Each failure posts one want to the Tor Manager. The check runs at most once per 15 minutes however many dials fail. Judged when it ends, its working verdict is after every failure already waiting and answers each of them, so a dead onion is counted on its first verdict and climbs the ladder. A fact dated between two failures answers only the earlier, and the later one keeps its want. Between checks, a completed dial or a new inbound session answers the failures before it.
 - **Clearnet fill from zero sessions, 50 % and 90 % planted dead (§3.4's numbers).** The fill takes as long as the guard's or less: 41 s and 241–259 s against 42 s and 269–277 s (medians). Decay does not matter at these sizes, since each dead address is dialed about once. Where it does matter (two live addresses, so two sessions, for hours), holding the rung keeps excusal from undoing the ladder: 256 dials an hour, against 102 under the guard.
-- **A dead-onion flood while the node is isolated.** Every failure is excused, so dead addresses cool for 10–15 s and never climb. The draw stays uniform over drawable seats, so honest addresses keep their turn. The first success clears the excusals. From then on dead onions fail with corroboration and climb, at the cost of a redial each.
-- **A slow link (the 40 kbit case).** Streams open late but do open, and sessions receive slowly but do receive. Both corroborate, so a slow link is never taken for an outage. A live onion that misses the 105 s window on a slow link, while another stream opens, is counted.
-- **A healthy clearnet link.** At target (12 outbound sessions) an Uncertain failure is excused in about 0.50 % of cases under §3.5's arrival model (two-sided), and judged otherwise, δ later. During fill the excusal rate follows §3.5's table; an excused dead address costs a redial per excusal, and may be excused more than once before a failure counts (§3.4's residual). Destination failures, the refusals, count at once.
+- **A dead-onion flood while the node is isolated.** Every failure is excused, so dead addresses cool for 10–15 s and never climb. The draw stays uniform over drawable seats, so honest addresses keep their turn. The first working reading clears the excusals. From then on dead onions fail with a working reading after them and climb.
+- **A slow link (the 40 kbit case).** Streams open late but do open, and outbound sessions receive slowly but do receive: on Tor a completed dial is a working fact, and on clearnet a received byte is, so a slow link is never taken for an outage. A live onion that misses the 105 s window on a slow link, while another stream opens, is counted.
+- **A healthy clearnet link.** At target (12 outbound sessions) an Uncertain failure is excused in about 0.25 % of cases under §3.5's arrival model, and judged otherwise, within the 15 s wait. During fill the excusal rate follows §3.5's table; an excused dead address costs a redial per excusal. Destination failures, the refusals, count at once.
 
 ## 8. The code (#1235)
 
@@ -357,7 +370,7 @@ One PR off `dev`, by the dialer lane, [#1235](https://github.com/Shekyl-Foundati
 - **The marks encoding** (`OE-D2` as first ruled: an `Evidence` enum encoded as bits on the close cause's marks): it folds three independent facts (evidence, retry, how far the attempt got) into one byte read by name-checking helpers, and forced accept-only kinds to carry an evidence value nothing reads.
 - **Every excused failure takes `outage_retry`:** excusal undoes the ladder; with two sessions it dials 346 times an hour against hold the rung's 256 (§3.4's model).
 - **"One excusal per address per sign of life":** an address excused in one outage has its failures in the next counted after any sign of life between them, so white is emptied (13 demoted at 600 s, against 12 for the guard).
-- **A per-connector clearing rule:** each connector's input to clearing is already its corroboration declaration. *Reopen when* a connector shows signs of life while its dials still cannot succeed, so the first event must not clear.
+- **A per-connector clearing rule:** each connector's input to clearing is already its own path reading (§3.3). The reopening condition, a connector showing signs of life while its dials still cannot succeed, was met on Tor, where a held session talks through an onion-directory outage; the ruling of 2026-11-15 answered it by moving the reading to the Tor Manager, not by a clearing rule of the connector's own.
 - **Option (a) for the quiet span** (the supervisor's own copy of S's arithmetic): its formula silently swapped K for the target and reached 364.5 s only because both round to three, and it would redo the dialer's arithmetic beside the dialer.
 - **`0x02` as Local while no destination-port policy is configured:** the condition sits where nothing can check it, and an operator's own Tor with `RejectPlaintextPorts` lets a gossiped port produce `0x02`, so the address would be redialed every 10–15 s forever.
 - **Tor's own statement per dial** (the STREAM event's `REASON` / `REMOTE_REASON`, matched to SOCKS dials): in steady state Tor's corroboration is almost always present, so Uncertain already counts; the gain is limited to fill and isolation, at the cost of a new path matching control-port events to SOCKS dials. *Reopen when* the Pi runs show that excused Tor failures carry a material dial cost during fill.

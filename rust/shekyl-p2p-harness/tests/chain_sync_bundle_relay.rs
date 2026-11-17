@@ -41,7 +41,6 @@ use shekyl_miner::Job;
 use shekyl_p2p_harness::sync::{Node, PeerDial, SyncPeer};
 use shekyl_transport_layer::SocketId;
 use shekyl_types::{BlockHeight, SectionRoot, Timestamp};
-use zeroize::Zeroizing;
 
 // The shared support serves every chain-sync binary. This one links two
 // nodes at the same tip and uses none of its sync claims or sources.
@@ -233,7 +232,7 @@ async fn committed_block(node: &Node, rules: ChainRules, witness: &Witness) -> V
         },
         params: shekyl_economics::economic_params(),
         miner: &miner,
-        tx_key_secret: Zeroizing::new([0x42; 32]),
+        tx_key: &shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
         extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
         draw_commitment: shekyl_wire::tx_extra::DrawCommitment::from_bytes(commitment),
         listed: &[],

@@ -35,6 +35,7 @@
 //! ```
 //!
 //! ```compile_fail,E0451
+//! use shekyl_crypto_pq::multisig_intent::RerandomizationSeed;
 //! use shekyl_crypto_pq::multisig_output::GroupSpendSecrets;
 //! use shekyl_multisig::ceremony::{GroupOutput, InputContext};
 //! use zeroize::Zeroizing;
@@ -43,13 +44,13 @@
 //!     output: GroupOutput,
 //!     secrets: GroupSpendSecrets,
 //!     blind: [u8; 32],
-//!     seed: [u8; 32],
+//!     rerandomization_seed: RerandomizationSeed,
 //! ) -> InputContext {
 //!     InputContext {
 //!         output,
 //!         secrets,
 //!         pseudo_out_blind: Zeroizing::new(blind),
-//!         rerandomization_seed: Zeroizing::new(seed),
+//!         rerandomization_seed,
 //!     }
 //! }
 //! ```
@@ -57,16 +58,15 @@
 use shekyl_crypto_pq::kem::X25519_KEM_CT_LEN;
 use shekyl_crypto_pq::leaf_commitment::PQC_LEAF_POINT_LEN;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
+use shekyl_crypto_pq::multisig_intent::RerandomizationSeed;
 use shekyl_crypto_pq::multisig_output::{
     recover_group_spend, GroupOutputSource, GroupSpendError, GroupSpendSecrets,
     MemberOwnCiphertext, MultisigGroupKey,
 };
-use shekyl_crypto_pq::CryptoError;
+use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_curve_primitives::Commitment;
 use shekyl_curve_tree::{AssembledPath, TreeContext};
-use shekyl_fcmp::frost_sal::{
-    FrostSalError, SalSigningParams, SpentOutput, RERANDOMIZATION_SEED_LEN,
-};
+use shekyl_fcmp::frost_sal::{FrostSalError, SalSigningParams, SpentOutput};
 use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::PqcLeafScalar;
 use shekyl_network::NetworkId;
@@ -147,7 +147,7 @@ pub struct InputContext {
     output: GroupOutput,
     secrets: GroupSpendSecrets,
     pseudo_out_blind: Zeroizing<[u8; 32]>,
-    rerandomization_seed: Zeroizing<[u8; RERANDOMIZATION_SEED_LEN]>,
+    rerandomization_seed: RerandomizationSeed,
 }
 
 impl InputContext {
@@ -343,14 +343,14 @@ impl DerivedSpend {
             .collect::<Result<Vec<_>, _>>()?;
         let tree = one_tree(&intent, &records)?;
         let seed = &intent.intent().kem_randomness_seed;
-        let tx_key = seed.tx_key();
+        let tx_key = TxKey::from_intent_seed(seed);
         let built = intent
             .recipients()
             .iter()
             .zip(0u64..)
             .enumerate()
             .map(|(index, (recipient, output_index))| {
-                build_recipient_output(&tx_key.secret, recipient, output_index, &network_id)
+                build_recipient_output(&tx_key, recipient, output_index, &network_id)
                     .map_err(|source| DeriveError::Output { index, source })
             })
             .collect::<Result<Vec<BuiltOutput>, _>>()?;
@@ -391,7 +391,7 @@ impl DerivedSpend {
             return Err(DeriveError::DuplicateKeyImage);
         }
         let unsigned = UnsignedSpend {
-            outputs: SpendOutputs::of(&tx_key.public, &built).map_err(DeriveError::Extra)?,
+            outputs: SpendOutputs::of(&tx_key, &built).map_err(DeriveError::Extra)?,
         };
         Ok(Self {
             network_id,
@@ -477,9 +477,9 @@ fn one_tree(
     Ok(tree.expect("a validated intent spends at least one input"))
 }
 
-/// The output paying `recipient` at `output_index`, under `tx_key_secret`.
+/// The output paying `recipient` at `output_index`, under `tx_key`.
 fn build_recipient_output(
-    tx_key_secret: &[u8; 32],
+    tx_key: &TxKey,
     recipient: &ResolvedRecipient,
     output_index: u64,
     network_id: &NetworkId,
@@ -491,15 +491,10 @@ fn build_recipient_output(
             label_plaintext,
         } => {
             let keys = RecipientKeys::of_address(address.as_address())?;
-            build_output(
-                tx_key_secret,
-                keys.payee(label_plaintext),
-                amount,
-                output_index,
-            )
+            build_output(tx_key, keys.payee(label_plaintext), amount, output_index)
         }
         ResolvedPayee::Group(address) => build_output(
-            tx_key_secret,
+            tx_key,
             Payee::Group {
                 address,
                 network: network_id,
@@ -694,7 +689,7 @@ mod tests {
             .iter()
             .map(|&(global_index, amount)| {
                 let output = construct_multisig_output(
-                    &bytes32(),
+                    &TxKey::random().expect("the OS draws a key"),
                     &g.payload,
                     amount,
                     PAID_OUTPUT_INDEX,
@@ -833,7 +828,7 @@ mod tests {
             for (x, y) in a.inputs.iter().zip(&b.inputs) {
                 assert_eq!(x.key_image(), y.key_image());
                 assert!(*x.pseudo_out_blind == *y.pseudo_out_blind);
-                assert!(*x.rerandomization_seed == *y.rerandomization_seed);
+                assert_eq!(rerandomized(x), rerandomized(y));
                 assert_ne!(x.output.own_x25519_ct, y.output.own_x25519_ct);
             }
             assert!(a
@@ -853,7 +848,56 @@ mod tests {
                 .inputs
                 .iter()
                 .zip(&a.inputs)
-                .all(|(x, y)| *x.rerandomization_seed != *y.rerandomization_seed));
+                .all(|(x, y)| rerandomized(x).R() != rerandomized(y).R()));
+        }
+    }
+
+    /// The message the tests' signing parameters sign; an input's
+    /// rerandomization does not read it.
+    const SIGNABLE: TxSignableHash = TxSignableHash::from_bytes([0xC3; 32]);
+
+    /// Input `input`'s rerandomization, as its signing parameters build it.
+    fn rerandomized(input: &InputContext) -> shekyl_fcmp::Input {
+        input
+            .params(SIGNABLE)
+            .expect("a derived input's parameters decode")
+            .rerandomized()
+            .input()
+    }
+
+    /// Two inputs of one intent never share rerandomization blinds: inputs
+    /// that did would link to each other. `R` is drawn from the blinds
+    /// alone and `Õ − O = r_o·T`, so each differs between any two inputs.
+    #[test]
+    fn two_inputs_of_one_intent_never_share_blinds() {
+        for _ in 0..CASES {
+            let g = group();
+            let derived = DerivedSpend::derive(
+                validated(&g, bytes32()),
+                &ledger(&pay(&g), 0),
+                &g.key(),
+                NET_ID,
+            )
+            .unwrap();
+            assert_eq!(derived.inputs.len(), INPUTS.len());
+            let blinds: Vec<_> = derived
+                .inputs
+                .iter()
+                .map(|input| {
+                    let params = input.params(SIGNABLE).unwrap();
+                    let rerandomized = params.rerandomized().input();
+                    (
+                        rerandomized.R(),
+                        rerandomized.O_tilde() - params.output().O(),
+                    )
+                })
+                .collect();
+            for (i, a) in blinds.iter().enumerate() {
+                for b in &blinds[i + 1..] {
+                    assert_ne!(a.0, b.0, "two inputs share r_i and r_r_i");
+                    assert_ne!(a.1, b.1, "two inputs share r_o");
+                }
+            }
         }
     }
 

@@ -289,7 +289,7 @@ compares the 64 bytes with the published entry (constant-time). A mismatch,
 or a missing entry, is classified **received-but-unspendable** on the
 persisted row (`TransferDetails::unspendable`): the output is retained in the
 ledger with the sender's transaction named, excluded from coin selection and
-from `unlocked`, totalled separately (`get_balance.unspendable`) and shown
+from `spendable`, totalled separately (`get_balance.unspendable`) and shown
 as the wallet-RPC state `UNSPENDABLE` with an `unspendable_reason`
 (`FCMP_SPEND_LINKABILITY.md` §6.2, rule 82). The signer keeps a second
 check as defence in depth — the derived `CM.x` against the chain's leaf
@@ -852,6 +852,32 @@ Each segment is independently Bech32m-encoded with its own checksum,
 keeping every segment under Bech32m's 1023-character proven detection
 limit.
 
+### One string per address
+
+An address has exactly one string: the lowercase one its encoder writes.
+Bech32m as specified also admits the all-uppercase spelling, and a
+general Bech32 decoder also admits the older Bech32 checksum and
+non-zero padding bits; Shekyl accepts none of them. Every segment, and
+every other Shekyl Bech32m string (multisig fingerprints, the transaction
+and reserve proofs), is read by `shekyl-encoding::decode_blob`. The
+codec lowercases the input, decodes that spelling as Bech32m, re-encodes
+the bytes, and compares. The refusal names the step that failed:
+
+- `EncodingError::Malformed` — not a Bech32m string in any case.
+- `EncodingError::Checksum` — the checksum is not Bech32m's, the older
+  Bech32 checksum included. This fails inside the Bech32m decode, before
+  any re-encode.
+- `EncodingError::NotCanonical` — the string decodes, and the re-encode
+  differs. Non-zero padding bits do this, and so does one more zero
+  character when the extra bits still fit in the same bytes.
+- `EncodingError::NotLowercase` — the lowercased string is the canonical
+  one, and the original is not. A string that is not Bech32m in any case
+  is named for that (`Malformed` or `Checksum`), not for its capitals.
+
+One address therefore has one string to compare, store, hash or put in
+a payment URI. HRP lookup compares the decoded HRP exactly, because a
+string that decoded has already been reduced to that lowercase spelling.
+
 ### Display
 
 For human-readable display (QR codes, clipboard), only the classical
@@ -876,17 +902,18 @@ Network discrimination is handled via the Human-Readable Part (HRP):
 Address encoding lives in two standalone crates:
 
 - `rust/shekyl-encoding/` — generic Bech32m blob encode/decode with
-  arbitrary HRPs. Also defines HRP constants for wallet proofs
-  (`shekylspendproof`, `shekyltxproof`, `shekylreserveproof`, `shekylsig`,
-  `shekylmultisig`, `shekylsigner`).
+  arbitrary HRPs, and the HRPs of the two wallet proofs (`shekyltxproof`,
+  `shekylreserveproof`).
 - `rust/shekyl-address/` — network-aware segmented Bech32m address
   encoding. Depends on `shekyl-encoding`. Defines the `Network` enum,
   HRP lookup tables, and the `ShekylAddress` struct with `encode()` /
   `decode()` / `decode_for_network()`.
 
 `shekyl-crypto-pq` re-exports `shekyl-address` as its `address` module.
-Wallet proofs, message signatures and signer keys are `shekyl-encoding`
-blobs with purpose-specific HRPs. There is no Base58 code path.
+The transaction and reserve proofs are `shekyl-encoding` blobs under
+their own HRPs; a message signature is its own armored string
+(`shekylmsgsig1.`, [`WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md)). There is no Base58 code
+path.
 
 ---
 
@@ -1139,7 +1166,7 @@ Ten `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and st
 | `fuzz_claim_reward` | `shekyl-staking` | Random accrual records; reward overflow, monotonicity, and bound invariants |
 | `fuzz_tx_deserialize_fcmp_type7` | `shekyl-fcmp` | Transaction-structured FCMP++ deserialization: pseudoOuts, proof blobs, PQC leaf entries, corrupted types |
 
-CI runs a smoke gate that ensures this required fuzz harness inventory exists (`.github/workflows/build.yml`, `verify fuzz harness inventory (smoke gate)`).
+CI compiles every fuzz harness on the pinned stable toolchain (`.github/workflows/fuzz-harness.yml`, one job per fuzz crate, scoped to the change), and `scripts/ci/check_fuzz_inventory.py` derives the inventory from the tree: every `[[bin]]` a file, every file a `[[bin]]`, every fuzz lockfile at the workspace's versions.
 
 For the full pre-release fuzz campaign (10M runs per harness), run:
 

@@ -354,10 +354,11 @@ pub(super) async fn assemble_drain_tx(
 
     // Both outputs built by the transfer path's `build_output` primitive, so a
     // drain vout is bit-for-bit an ordinary transfer vout.
-    let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
+    let tx_key = shekyl_crypto_pq::TxKey::random()
+        .map_err(|e| DrainAssemblyError::build("drain transaction key", e))?;
 
     let vout0 = build_output(
-        &tx_key_secret,
+        &tx_key,
         Payee::Single {
             spend_key: spec0.spend_pk,
             view_x25519: spec0.x25519_pk,
@@ -369,7 +370,7 @@ pub(super) async fn assemble_drain_tx(
     )
     .map_err(|e| DrainAssemblyError::build("drain vout0 construction", e))?;
     let vout1 = build_output(
-        &tx_key_secret,
+        &tx_key,
         Payee::Single {
             spend_key: spec1.spend_pk,
             view_x25519: spec1.x25519_pk,
@@ -387,7 +388,7 @@ pub(super) async fn assemble_drain_tx(
     let view_tags: Vec<Option<u8>> = built_outputs.iter().map(|b| Some(b.view_tag)).collect();
 
     // ── Step 3: tx_extra, through the transfer path's builder. ──
-    let tx_extra = build_tx_extra(&tx_pubkey.compress().to_bytes(), &built_outputs)
+    let tx_extra = build_tx_extra(&tx_key, &built_outputs)
         .map_err(|e| DrainAssemblyError::build("drain tx_extra", e))?;
 
     // ── Step 4: persona-keyed spend inputs — the shared bond/claim fee-sweep

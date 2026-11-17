@@ -48,7 +48,11 @@ impl Growing {
         Self {
             hashes: Vec::new(),
             tree: GrownTree::new(),
-            spender: Spender::over::<Linked<'_>>(&[]),
+            // The fixture chain is judged under `Trust::UNPINNED`: its id.
+            spender: Spender::on::<Linked<'_>>(
+                shekyl_chain_rules::Trust::UNPINNED.network_id(),
+                &[],
+            ),
             built: Vec::new(),
         }
     }

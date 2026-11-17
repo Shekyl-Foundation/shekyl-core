@@ -610,6 +610,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | hash, address, text; amount, text | | K; views (IG-Q34) |
 | `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; views (IG-Q34) |
 | `sign <message...>`, `verify <address> <signature> <message...>` | same | text; address, text | | K |
+| `freeze`, `thaw`, `frozen` | — | | | X (Rick, 2026-11-15): the wallet has no user-set hold on outputs. FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection. The refusal states this and names the decision log entry; the wallet RPC's method registry rejects the same three names |
 | the `RETIRED` table (`transfer`, `transfers`, `show_transfer`, `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`, `drain`, `drain_balance`, `unstake`, `stake exit`, `collect_unstaked`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`, `start_mining`, `stop_mining`, `mining_status`, `chain_health`, …) | — | | | – (IG-Q30) |
 
 ### 12.4 `shekyl-wallet-rpc` — options
@@ -762,6 +763,25 @@ The wallet RPC (`docs/api/wallet_rpc.yaml`) predates Part C's rename and keeps i
 | `tx_resend` | `tx resend` (§12.3) | `id` (hash) | `submit_pending_tx`'s reply | a state change ending in its verb; refusals are `submit_pending_tx`'s (`-29106`, `-29107`), and `-29121 TX_NOT_HELD`, `-29122 TX_BYTES_MISSING` |
 
 `submit_pending_tx`'s reply, and so `tx_resend`'s, gains `verdict_saved` (switch): `false` when the send went out and stands but saving its verdict failed. `submit_pending_tx` gains the refusal `-29120 SEND_NOT_SAVED`: the send's record could not be saved, so nothing was sent.
+
+### 16.2 The wallet RPC's names changed for A16–A18
+
+The wallet lane's PR 2 (Rick, 2026-11-12; the balance legs and the fee tiers, 2026-11-15) changes these names on the wallet RPC, under the same rules as §16.1:
+
+| Method | Field or parameter | Change | Notes |
+|---|---|---|---|
+| `get_balance` | `balance` | new | an amount: `spendable + incoming`; the reply's only sum |
+| `get_balance` | `spendable` | new; replaces `liquid` and `unlocked` (both deleted) | an amount: what a send could use at the synced tip |
+| `get_balance` | `incoming` | new | an amount: received, not yet spendable, plus in-flight sends' change |
+| `get_balance` | `incoming_wait` | new | a count of blocks until the soonest on-chain incoming output is spendable; absent, not 0, when none is on chain |
+| `get_balance` | `outgoing` | new; replaces `pending` (deleted) | an amount beside the balance: recipients plus fee of the in-flight sends |
+| `build_pending_tx` | `priority` | values renamed | one-of `economy`, `standard`, `high` (§11), lowercase; `ECONOMY`, `STANDARD`, `PRIORITY` and the `{custom}` form are deleted |
+| `get_default_fee_priority` | `default_priority` | deleted | no front end read it; a send that names no tier takes `standard`, the tier set's default |
+| `get_default_fee_priority` | `economy`, `standard`, `high` | renamed from `economy_fee`, `standard_fee`, `priority_fee` | amounts: the converged fee at each rung, the names of the daemon's `fee` reply (§18) |
+
+The refusals added are `-29123 TOO_MANY_INPUTS` and `-29124 TOO_MANY_OUTPUTS` (`data`: `count`, `limit`), and `-29125 INPUT_NOT_IN_TREE` and `-29126 INPUT_UNSPENDABLE` (`data`: `input`, a position). `-29127` is retired and never reused (the user freeze is removed; Rick, 2026-11-15). `-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set: `no-inputs`, `no-outputs`, `zero-input-amount`, `zero-output-amount`, `input-amount-overflow`, `output-amount-overflow`, `insufficient-funds`, `empty-leaf-chunk`, `pqc-leaf-derivation`, `leaf-chunk-too-large`, `zero-tree-depth`, `tree-too-shallow`, `tree-depth-too-large`, `branch-layer-mismatch`, `invalid-combined-ss-length`, `bulletproof`, `fcmp-prove`, `pqc-sign`, `wire`, `balance-self-check` (the builder's invariants), and `primitive`, `handle-mismatch`, `missing-key-image`, `source-decapsulation`, `rid-not-encodable`, `proof`, `bulletproof-parse`, `wire-encode`, `randomness` (the wallet state signing reads, and its random source). A fee variant the build should have made unreachable is the builder's `insufficient-funds`, not a second keyword.
+
+The balance's terms (§19 rows): `spendable`, `incoming` and `outgoing` are new. The wallet has no user-set hold on outputs (Rick, 2026-11-15), so the balance has no third leg and no name for the part a send cannot use now: that part is `incoming`. `held` keeps its one meaning, the shards a wallet holds (`shard list held`). The method registry rejects `freeze`, `thaw` and `frozen`, and so does the CLI's table (§12.3).
 
 ## 17. The method census
 
@@ -947,6 +967,9 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | generate | block | *verb* — mine blocks; only under `dev` | block:verb |
 | pop | chain | *verb* — remove blocks from the tip; only under `dev` | chain:verb |
 | id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's | |
+| spendable | balance | what a send could use at the wallet's synced tip, an amount | |
+| incoming | balance | money received and not yet spendable, plus in-flight sends' change, an amount; with `wait`, the blocks until the soonest on-chain part is spendable | |
+| outgoing | balance | the recipients and fee of this wallet's in-flight sends, beside the balance, an amount | |
 | key | spent, console | a key: under `spent`, only in `key image`; under `console`, the console key (IG-Q88) | |
 | image | key | a key image (a hash) | |
 | tip | block, curve | the chain's last block, as a selector; its value is `null` (IG-Q94) | |
@@ -1280,7 +1303,7 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 | `tor.onion` | status | null when no onion is offered, else `{state, age, cause}`: `state` one-of `publishing`, `reachable`, `unreachable`; `age` the awake time the state has stood (for `reachable`, since the last probe arrived); `cause` null unless `unreachable`, then one key: `probe-missed`, `uploads-refused`, `descriptor-missing` (each null), or `clock-behind` (a duration, a lower bound) (IG-Q96) | `Inbound` |
 | `tor.bootstrap` | status | null before the first window, else `{pace, unchanged, download, window}`: `pace` one-of `advancing`, `slow`, `stalled`, `held`; `unchanged` how long the percent has not moved, a duration; `download` the bytes that arrived in the window, or null when they cannot be read; `window` a duration (IG-Q98) | `BootstrapLine` |
 | `tor.carriage` | status | one-of `carries`, `open-only`, `gone`: what the link still carries (IG-Q100) | `Carriage` |
-| `tor_quiet` (`daemon_status`) | status | null when no quiet line stands, `{"empty": null}` when the dialer's census holds no Tor peer, `{"failing": {"age": s}}` when peers are known and none has answered through Tor for `s` seconds of awake time. Under every `tor` setting (IG-Q99) | `TorQuiet` |
+| `tor_quiet` (`daemon_status`) | status | null when no quiet line stands; `{"unreached": {"age": s}}` when peers are known, the Tor Manager's onion-path reading has been impaired for `s` seconds of awake time, and a Tor dial launched since failed. Under every `tor` setting (IG-Q99, amended 2026-11-15) | `TorQuiet` |
 
 **Cause variants.** One key, so a clock skew cannot carry a path. §5's "Rendered from the cause: none" rows are not variants. The value is the payload.
 
@@ -1317,7 +1340,7 @@ These fields are in the generated schema from `CORE_RPC_VERSION` 4.2, and the wa
 
 `offline` is already the term "P2P is off" (IG-Q3). The origination keyword uses it with that meaning: Tor off and clearnet off.
 
-Value keywords: `restarting`, `waiting`, `bootstrapping`, `usable`, `impaired` (state); the cause keys in the table above; `measured`, `minimum` (`clock-skew`'s payload); `unwritable`, `exhausted` (`unusable`'s payload); `publishing`, `reachable`, `unreachable`, `probe-missed`, `uploads-refused`, `descriptor-missing`, `clock-behind` (the onion); `advancing`, `slow`, `stalled`, `held` (the bootstrap's pace); `carries`, `open-only`, `gone` (carriage); `empty`, `failing` (the quiet line); `address-hiding`, `connecting`, `rebuilding`, `clearnet-only`, `offline` (origination); `restore-managed`, `clearnet-on` (fix). `operator` and `clearnet-only` are the settings those fixes name, with the same meaning as in `posture` and `origination`.
+Value keywords: `restarting`, `waiting`, `bootstrapping`, `usable`, `impaired` (state); the cause keys in the table above; `measured`, `minimum` (`clock-skew`'s payload); `unwritable`, `exhausted` (`unusable`'s payload); `publishing`, `reachable`, `unreachable`, `probe-missed`, `uploads-refused`, `descriptor-missing`, `clock-behind` (the onion); `advancing`, `slow`, `stalled`, `held` (the bootstrap's pace); `carries`, `open-only`, `gone` (carriage); `unreached` (the quiet line); `address-hiding`, `connecting`, `rebuilding`, `clearnet-only`, `offline` (origination); `restore-managed`, `clearnet-on` (fix). `operator` and `clearnet-only` are the settings those fixes name, with the same meaning as in `posture` and `origination`.
 
 ## 24. Questions for Part E
 
@@ -1574,6 +1597,8 @@ Each is ruled (Rick, 2026-11-11). Each states the problem, then the question, th
 **IG-Q98 — how a bootstrap is going — RULED 2026-11-11, as recommended.** The supervisor classifies a bootstrap (`BootstrapLine`, `BootstrapPace`, `P/posture.rs:302`, `:335`) against `Policy::alive_every`, a daemon-side span the client cannot see (`BootstrapReading::classify`, `P/posture.rs:663-690`). So the reading cannot be derived on the client, and Rick ruled the word a client shows (2026-10-24). It has a fourth reading the current `pace` field omits: the percent held and the bytes cannot be called. *Question:* the field. *Recommended:* `tor.bootstrap`, `null` before the first window, else `{pace, unchanged, download, window}`: `pace` one-of `advancing`, `slow`, `stalled`, `held`; `unchanged`, how long the percent has not moved, a duration; `download`, the bytes that arrived in the window, or `null` when they cannot be read; `window`, the window, a duration. `tor.progress` stays as ruled. The renderer reads all four (`P/posture.rs:704-733`). Names: the supervisor lane's `held` for the duration would give §11's view `held` a second meaning, which IG-2 refuses, so the duration is `unchanged`; its `received` is §3's `download`, "bytes we receive". New terms: `bootstrap` under `tor`; `unchanged` under `bootstrap`; `pace`, `download` and `window` gain the parent `bootstrap` (Part F, IG-Q80, removes the sync span's `pace`, so the term keeps one meaning once both land).
 
 **IG-Q99 — the quiet line — RULED 2026-11-11, as recommended.** The dialer's Tor census can hold no address at all, so nothing can be dialled; or it holds peers and none has answered through Tor for a span in which a Tor dial failed (`TorQuiet`, `P/posture.rs:504`; quiet after 120 s). Its facts, the dialer's census and its last sign of life through Tor, exist under every `tor` setting, an operator's included; today only the managed projection computes the line (`core/mod.rs:1012`). Rick's ruling of 2026-11-10 runs the status actor under every `tor` setting, so the line is computed under every setting; and a fact of the connector belongs beside the connector's other facts, not inside an object that is `null` unless the posture is `managed`. `no-peers` is refused by IG-4, and is not `unpeered` (IG-Q80), which is about handshakes. *Question:* the field and its states. *Recommended:* `tor_quiet` on `daemon_status`, beside `sync_connector`: `null` when no quiet line stands, `{"empty": null}` when the census holds no Tor peer, `{"failing": {"age": s}}` when peers are known and none has answered for `s` seconds. It walks by reference, `tor` then a new term `quiet`, "no peer has answered through Tor". The alternative is the supervisor lane's `unknown-peers` and `{"unanswered": s}`; `unanswered` is already §23's control-reply cause, and a keyword keeps one meaning.
+
+**IG-Q99 amended 2026-11-15 (Rick).** The line stands only when the Tor Manager's onion-path reading is impaired, peers are known, and a Tor dial has failed since ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a; [`DIALER_OUTAGE_EVIDENCE.md`](DIALER_OUTAGE_EVIDENCE.md) §6). No line stands while no peer is known, so `empty` is gone; `failing`'s age meant time since a peer last answered, which no longer fits, and it is gone too. The one state is `unreached`, carrying the age of the impaired reading. `impaired` is not taken: it is already `tor.state`'s Degraded, a named cause, and a keyword keeps one meaning. The field decodes strictly: a client that knows only `empty` and `failing` reads `unreached` as an unknown key.
 
 **IG-Q100 — what the link still carries — RULED 2026-11-11, as recommended.** The renderer reads whether the link carries traffic (`Carriage`, `P/posture.rs:794`, from the phase and the outbound facet, `core/mod.rs:1495-1510`): it carries; only connections already open still carry; or nothing does. It cannot be derived from `state`: an outbound cause during bootstrap and the same cause on a running Tor are both `impaired`, and only one still carries. The sentence under `origination` reads it (`P/posture.rs:764-772`, `:854-866`). *Question:* the field. *Recommended:* `tor.carriage`, one-of `carries`, `open-only`, `gone`; a new term `carriage` under `tor`, "what the link still carries". One caution for the ruling: §3 gives `carrier` one meaning, the serve-credit witness carrier, and `carriage` sits close to it. The alternative is `tor.reach`, with the same values.
 

@@ -589,11 +589,10 @@ impl<'de> Deserialize<'de> for OnionCause {
 /// The quiet line (IG-Q99), under every `tor` setting.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TorQuiet {
-    /// The dialer's census holds no Tor peer.
-    Empty,
-    /// Peers are known, and none has answered through Tor for this many
-    /// seconds of awake time.
-    Failing {
+    /// Peers are known, but Tor has not been able to reach them for this
+    /// many seconds of awake time: the Tor Manager's onion-path reading is
+    /// impaired, and a Tor dial launched since failed.
+    Unreached {
         /// How long, in seconds.
         age: u64,
     },
@@ -605,15 +604,14 @@ pub enum TorQuiet {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Failing {
+struct Unreached {
     age: u64,
 }
 
 impl Serialize for TorQuiet {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Self::Empty => one_key(serializer, "empty", &()),
-            Self::Failing { age } => one_key(serializer, "failing", &Failing { age: *age }),
+            Self::Unreached { age } => one_key(serializer, "unreached", &Unreached { age: *age }),
             Self::Unknown { tag } => one_key(serializer, tag, &()),
         }
     }
@@ -625,13 +623,9 @@ one_key_visitor!(
     "a quiet line",
     |key, map| {
         Ok(Some(match key {
-            "empty" => {
-                map.next_value::<()>()?;
-                TorQuiet::Empty
-            }
-            "failing" => {
-                let Failing { age } = map.next_value()?;
-                TorQuiet::Failing { age }
+            "unreached" => {
+                let Unreached { age } = map.next_value()?;
+                TorQuiet::Unreached { age }
             }
             _ => return Ok(None),
         }))

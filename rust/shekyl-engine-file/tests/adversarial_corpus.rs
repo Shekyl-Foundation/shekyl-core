@@ -81,7 +81,6 @@ use shekyl_engine_state::{
     WALLET_LEDGER_FORMAT_VERSION,
 };
 use std::collections::BTreeMap;
-use zeroize::Zeroizing;
 
 // ---------------------------------------------------------------------------
 // On-disk byte offsets referenced by the surgery helpers. Pinned here rather
@@ -585,7 +584,7 @@ fn ledger_invariant_orphan_tx_key_is_refused() {
     tx_keys.insert(
         orphan_hash,
         TxSecretKeys {
-            primary: TxSecretKey::new(Zeroizing::new([0xCD; 32])),
+            primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0xCD; 32]).store()),
         },
     );
     let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());

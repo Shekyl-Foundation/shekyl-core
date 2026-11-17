@@ -6,8 +6,11 @@
 """A red push run on `dev` reaches the dev-red reporter from every job.
 
 `dev` has no merge queue, so the push runs of `build.yml`,
-`rust-audit-test.yml`, and `benchmarks.yml` on `dev` are the first to
-test what the merges made (06-branching.mdc). Each ends in a job that
+`rust-audit-test.yml`, `benchmarks.yml` and `fuzz-harness.yml` on `dev`
+are the first to test what the merges made (06-branching.mdc). A pull
+request whose last run predates a workflow merges untested by it: #1399
+merged with no fuzz-harness run, and the push run on `dev` that went red
+after it reported to no one. Each ends in a job that
 calls `report-dev-red.yml`, which opens or threads an issue. That job
 reads only the results of the jobs it `needs`: a job added to the
 workflow and left out of that list could go red on `dev` with no issue.
@@ -23,6 +26,11 @@ What passes, in each of these workflows:
   `failure()` does not see it; a run superseded by a newer merge is
   cancelled as a whole and reports nothing. An exact match, because a
   check for the parts would pass the same parts joined by `||`.
+
+`gui-drift.yml` is the one scheduled subject: its nightly holds the GUI
+wallet's pinned shekyl-core edges to the wallet's manifest (CHAIN_FORGE.md
+CF-R26), so its reporter's `if` is exactly `SCHEDULE_CONDITION`, the same
+shape on a scheduled run.
 
 Rule 47: the workflows are named here, so a renamed or deleted one,
 or a reporter removed from one of them, fails by name rather than
@@ -41,14 +49,27 @@ from check_workflows_parse import StrictLoader
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 REPORTER = "./.github/workflows/report-dev-red.yml"
-SUBJECTS = ("build.yml", "rust-audit-test.yml", "benchmarks.yml")
 CONDITION = (
     "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && "
     "(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}"
 )
+# gui-drift.yml's nightly holds the GUI wallet's pin to its manifest
+# (CHAIN_FORGE.md CF-R26); its red reaches the reporter from the schedule.
+SCHEDULE_CONDITION = (
+    "${{ !cancelled() && github.event_name == 'schedule' && "
+    "(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}"
+)
+# Each subject workflow, and the exact condition its reporter runs under.
+SUBJECTS = {
+    "build.yml": CONDITION,
+    "rust-audit-test.yml": CONDITION,
+    "benchmarks.yml": CONDITION,
+    "fuzz-harness.yml": CONDITION,
+    "gui-drift.yml": SCHEDULE_CONDITION,
+}
 
 
-def problems_in(filename: str, doc: object) -> list[str]:
+def problems_in(filename: str, doc: object, condition: str = CONDITION) -> list[str]:
     if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
         return [f"{filename}: no jobs mapping"]
     jobs = doc["jobs"]
@@ -68,10 +89,10 @@ def problems_in(filename: str, doc: object) -> list[str]:
         )
     if extra := sorted(needs - others):
         problems.append(f"{filename}: {name} needs {', '.join(extra)}, which is not a job here")
-    if job.get("if") != CONDITION:
+    if job.get("if") != condition:
         problems.append(
             f"{filename}: {name}'s `if` is {job.get('if')!r}, not the "
-            f"reporting condition {CONDITION!r}"
+            f"reporting condition {condition!r}"
         )
     return problems
 
@@ -109,6 +130,16 @@ def selftest() -> int:
         ("no condition", variant(lambda j: j["r"].pop("if")), 1),
     ]
     bad = []
+    scheduled = variant(lambda j: j["r"].__setitem__("if", SCHEDULE_CONDITION))
+    for label, doc, condition, want in (
+        ("a scheduled subject's reporter on the schedule condition", scheduled,
+         SCHEDULE_CONDITION, 0),
+        ("a scheduled subject's reporter on the push condition", good, SCHEDULE_CONDITION, 1),
+        ("a push subject's reporter on the schedule condition", scheduled, CONDITION, 1),
+    ):
+        got = len(problems_in("fixture.yml", doc, condition))
+        if got != want:
+            bad.append(f"{label}: {got} problem(s), expected {want}")
     for label, doc, want in cases:
         got = len(problems_in("fixture.yml", doc))
         if got != want:
@@ -120,7 +151,8 @@ def selftest() -> int:
     print(
         "SELFTEST PASS: a reporter needing every job passes; a missing or extra "
         "need, no reporter, two reporters, and any condition but the reporting "
-        "one (PR runs, blind to a timeout, joined by ||, absent) each fail"
+        "one (PR runs, blind to a timeout, joined by ||, absent) each fail; a "
+        "scheduled subject takes the schedule condition and no other"
     )
     return 0
 
@@ -132,7 +164,7 @@ def main(argv: list[str]) -> int:
         print("usage: check_dev_red_reporter.py [--selftest]", file=sys.stderr)
         return 2
     problems = []
-    for filename in SUBJECTS:
+    for filename, condition in SUBJECTS.items():
         path = os.path.join(WORKFLOWS, filename)
         try:
             with open(path, encoding="utf-8") as f:
@@ -140,7 +172,7 @@ def main(argv: list[str]) -> int:
         except (OSError, yaml.YAMLError) as e:
             problems.append(f"{filename}: cannot read it: {e}")
             continue
-        problems += problems_in(filename, doc)
+        problems += problems_in(filename, doc, condition)
     if problems:
         for p in problems:
             print(f"FAIL: {p}")
@@ -148,7 +180,7 @@ def main(argv: list[str]) -> int:
     print(
         f"dev-red reporter: {', '.join(SUBJECTS)} each end in one reporter "
         "that needs every other job and reports a failed or timed-out job of a "
-        "push run on dev"
+        "push run on dev (gui-drift.yml: of its scheduled run)"
     )
     return 0
 

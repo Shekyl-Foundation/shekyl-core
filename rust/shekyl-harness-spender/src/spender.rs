@@ -14,6 +14,9 @@ use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, scan_output, OutputData,
 };
+#[cfg(feature = "seeded-rng")]
+use shekyl_crypto_pq::tx_key::TX_KEY_LEN;
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_tree::{
     AssembleInput, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock, TargetKind,
     TxLeafInputs,
@@ -33,6 +36,7 @@ use shekyl_wire::tx_extra::{
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::bond::PostedBond;
+use crate::draw::SpendSeeds;
 use crate::{MinedBlock, MinerWallet, Owner, Recipient};
 
 /// An output sourced for spending: the signer's input, its key image, and
@@ -101,17 +105,6 @@ pub struct Spender {
 }
 
 impl Spender {
-    /// The tree after every block of `mined`, in order, from genesis, for a
-    /// chain that mines its own genesis: its spends sign under the harness
-    /// id, the id `Trust::UNPINNED` validates them under
-    /// (`NETWORK_IDENTITY.md` NI-Q4). Goes with the harness id: `CF-1b`
-    /// moves its callers to [`Self::on`] with their chain's own id, and
-    /// `CF-5` deletes the id (`CHAIN_FORGE.md` `CF-R15`).
-    #[must_use]
-    pub fn over<B: MinedBlock>(mined: &[B]) -> Self {
-        Self::on(shekyl_network::HARNESS_NETWORK_ID, mined)
-    }
-
     /// The tree after every block of `mined`, in order, from genesis, for a
     /// chain that carries `network`'s identity — its block 0 that network's
     /// table genesis, `network` the id derived from it (`NI-R10`): its
@@ -282,7 +275,15 @@ impl Spender {
         connecting: BlockHeight,
         fee: u64,
     ) -> Transaction {
-        self.spend_coinbase_posting(wallet, height, connecting, fee, None)
+        self.spend_coinbase_to_drawn(
+            None,
+            wallet,
+            height,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+        )
     }
 
     /// [`Self::spend_coinbase`] with its range proof one bit off what the
@@ -301,19 +302,31 @@ impl Spender {
         connecting: BlockHeight,
         fee: u64,
     ) -> Transaction {
+        self.spend_coinbase_breaking_range_proof_drawn(None, wallet, height, connecting, fee)
+    }
+
+    pub(crate) fn spend_coinbase_breaking_range_proof_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(
-            sourced,
+        SpendShape {
+            seeds,
             connecting,
             fee,
-            None,
-            wallet.recipient(),
-            2,
-            Twist {
+            bond: None,
+            recipient: wallet.recipient(),
+            outputs: 2,
+            twist: Twist {
                 break_range_proof: true,
                 ..Twist::default()
             },
-        )
+        }
+        .spend(sourced)
     }
 
     /// [`Self::spend_coinbase`] naming `reference` as its `reference_block`
@@ -332,19 +345,32 @@ impl Spender {
         fee: u64,
         reference: BlockHash,
     ) -> Transaction {
+        self.spend_coinbase_referencing_drawn(None, wallet, height, connecting, fee, reference)
+    }
+
+    pub(crate) fn spend_coinbase_referencing_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        reference: BlockHash,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(
-            sourced,
+        SpendShape {
+            seeds,
             connecting,
             fee,
-            None,
-            wallet.recipient(),
-            2,
-            Twist {
+            bond: None,
+            recipient: wallet.recipient(),
+            outputs: 2,
+            twist: Twist {
                 reference: Some(reference),
                 ..Twist::default()
             },
-        )
+        }
+        .spend(sourced)
     }
 
     /// [`Self::spend_coinbase_posting`] with its membership proof one bit
@@ -362,19 +388,34 @@ impl Spender {
         fee: u64,
         bond: Option<&PostedBond<'_>>,
     ) -> Transaction {
+        self.spend_coinbase_posting_breaking_membership_proof_drawn(
+            None, wallet, height, connecting, fee, bond,
+        )
+    }
+
+    pub(crate) fn spend_coinbase_posting_breaking_membership_proof_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        bond: Option<&PostedBond<'_>>,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(
-            sourced,
+        SpendShape {
+            seeds,
             connecting,
             fee,
             bond,
-            wallet.recipient(),
-            2,
-            Twist {
+            recipient: wallet.recipient(),
+            outputs: 2,
+            twist: Twist {
                 break_membership_proof: true,
                 ..Twist::default()
             },
-        )
+        }
+        .spend(sourced)
     }
 
     /// [`Self::spend_coinbase`] with an archival bond post riding it
@@ -395,7 +436,15 @@ impl Spender {
         fee: u64,
         bond: Option<&PostedBond<'_>>,
     ) -> Transaction {
-        self.spend_coinbase_to(wallet, height, connecting, fee, bond, wallet.recipient())
+        self.spend_coinbase_to_drawn(
+            None,
+            wallet,
+            height,
+            connecting,
+            fee,
+            bond,
+            wallet.recipient(),
+        )
     }
 
     /// `spent` with its authorizations replaced by ones that verify under
@@ -425,6 +474,28 @@ impl Spender {
         bond: Option<&PostedBond<'_>>,
         network: &shekyl_network::NetworkId,
     ) -> Transaction {
+        self.signed_under_drawn(None, spent, wallet, height, connecting, bond, network)
+    }
+
+    /// [`Self::signed_under`] with the spend slots' ML-DSA randomness taken
+    /// from `seeds` when present. A re-sign is a different statement from the
+    /// spend that made the proof, so it takes its own seeds, drawn for this
+    /// call. The bond slot, when `bond` is set, signs with the persona's own
+    /// draw. `None` draws the spend slots from the OS.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "signed_under's arguments, plus the one re-sign's seeds"
+    )]
+    pub(crate) fn signed_under_drawn(
+        &self,
+        seeds: Option<&SpendSeeds>,
+        spent: &Transaction,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        bond: Option<&PostedBond<'_>>,
+        network: &shekyl_network::NetworkId,
+    ) -> Transaction {
         let spend = self.source_coinbase(wallet, height, connecting);
         let spend_inputs = [spend.input];
         let hashes = spent.pqc_signing_payload_hashes(network);
@@ -434,8 +505,17 @@ impl Spender {
             spend_inputs.len() + extra,
             "the body has one auth per spend input and one per bond slot"
         );
-        let spend_auths = sign_pqc_auths(&hashes[..spend_inputs.len()], &spend_inputs)
-            .expect("the coinbase's key signs under the named network");
+        let n_spend = spend_inputs.len();
+        let spend_auths = match seeds {
+            #[cfg(feature = "seeded-rng")]
+            Some(seeds) => shekyl_tx_builder::sign_pqc_auths_seeded(
+                &seeds.sign,
+                &hashes[..n_spend],
+                &spend_inputs,
+            ),
+            _ => sign_pqc_auths(&hashes[..n_spend], &spend_inputs),
+        }
+        .expect("the coinbase's key signs under the named network");
         let mut body = spent.clone();
         let Ct::Fcmp { pqc_auths, .. } = &mut body.ct else {
             panic!("a spend carries FCMP authorizations");
@@ -612,16 +692,35 @@ impl Spender {
         bond: Option<&PostedBond<'_>>,
         recipient: &Recipient,
     ) -> Transaction {
+        self.spend_coinbase_to_drawn(None, wallet, height, connecting, fee, bond, recipient)
+    }
+
+    /// [`Self::spend_coinbase_to`] from `seeds` when present, else the OS.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "spend_coinbase_to's arguments, plus the one spend's seeds"
+    )]
+    pub(crate) fn spend_coinbase_to_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        bond: Option<&PostedBond<'_>>,
+        recipient: &Recipient,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(
-            sourced,
+        SpendShape {
+            seeds,
             connecting,
             fee,
             bond,
             recipient,
-            2,
-            Twist::default(),
-        )
+            outputs: 2,
+            twist: Twist::default(),
+        }
+        .spend(sourced)
     }
 
     /// A spend of watched outputs ([`Self::own`], sourced by
@@ -630,23 +729,43 @@ impl Spender {
     /// to `recipient` in two outputs. The fan-out a fixture chain grows its
     /// spendable outputs by: each spend of one output leaves two, which the
     /// caller watches before the block that lists them is pushed.
+    ///
+    /// The inputs were sourced from this spender. The body does not read it
+    /// again; the method stays on [`Spender`] so the call reads as the
+    /// spender's.
     #[must_use]
+    #[allow(
+        clippy::unused_self,
+        reason = "the inputs were sourced from this spender; the call stays a method"
+    )]
     pub fn spend_owned(
+        &self,
+        sourced: Vec<Sourced>,
+        connecting: BlockHeight,
+        fee: u64,
+        recipient: &Recipient,
+    ) -> Transaction {
+        Self::spend_owned_drawn(None, sourced, connecting, fee, recipient)
+    }
+
+    pub(crate) fn spend_owned_drawn(
+        seeds: Option<SpendSeeds>,
         sourced: Vec<Sourced>,
         connecting: BlockHeight,
         fee: u64,
         recipient: &Recipient,
     ) -> Transaction {
         assert!(!sourced.is_empty(), "a spend has an input");
-        Self::spend_sourced(
-            sourced,
+        SpendShape {
+            seeds,
             connecting,
             fee,
-            None,
+            bond: None,
             recipient,
-            2,
-            Twist::default(),
-        )
+            outputs: 2,
+            twist: Twist::default(),
+        }
+        .spend(sourced)
     }
 
     /// A spend of several blocks' coinbases in **one** transaction, listed
@@ -670,6 +789,17 @@ impl Spender {
         connecting: BlockHeight,
         fee: u64,
     ) -> (Transaction, Vec<BlockHeight>) {
+        self.spend_coinbases_drawn(None, wallet, heights, connecting, fee)
+    }
+
+    pub(crate) fn spend_coinbases_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        heights: &[BlockHeight],
+        connecting: BlockHeight,
+        fee: u64,
+    ) -> (Transaction, Vec<BlockHeight>) {
         assert!(!heights.is_empty(), "a spend has an input");
         let pairs: Vec<(BlockHeight, Sourced)> = heights
             .iter()
@@ -688,15 +818,16 @@ impl Spender {
             "each spent coinbase has its own key image"
         );
         let inputs: Vec<Sourced> = pairs.into_iter().map(|(_, source)| source).collect();
-        let tx = Self::spend_sourced(
-            inputs,
+        let tx = SpendShape {
+            seeds,
             connecting,
             fee,
-            None,
-            wallet.recipient(),
-            2,
-            Twist::default(),
-        );
+            bond: None,
+            recipient: wallet.recipient(),
+            outputs: 2,
+            twist: Twist::default(),
+        }
+        .spend(inputs);
         let spent_heights: Vec<BlockHeight> = tx
             .prefix
             .inputs
@@ -734,16 +865,29 @@ impl Spender {
         fee: u64,
         outputs: usize,
     ) -> Transaction {
+        self.spend_coinbase_paying_drawn(None, wallet, height, connecting, fee, outputs)
+    }
+
+    pub(crate) fn spend_coinbase_paying_drawn(
+        &self,
+        seeds: Option<SpendSeeds>,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        outputs: usize,
+    ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(
-            sourced,
+        SpendShape {
+            seeds,
             connecting,
             fee,
-            None,
-            wallet.recipient(),
+            bond: None,
+            recipient: wallet.recipient(),
             outputs,
-            Twist::default(),
-        )
+            twist: Twist::default(),
+        }
+        .spend(sourced)
     }
 
     /// Block `height`'s coinbase sourced for the miner, for a spend
@@ -758,20 +902,118 @@ impl Spender {
         let gindex = self.first_gid[usize::try_from(height.to_raw()).expect("small")];
         self.source(&Owner::miner(wallet), coinbase, 0, gindex, connecting)
     }
+}
 
-    /// The spend of `sourced` — one or more inputs, every path assembled
+/// One spend's shape: everything a [`Spender`] builder hands the body the
+/// builders share, besides the inputs. A value, so the body takes the
+/// spend's seeds by move and nothing else is threaded through by hand.
+struct SpendShape<'a> {
+    /// The seeds the caller drew for this one spend. `None` draws from the
+    /// OS, as the production signers do.
+    seeds: Option<SpendSeeds>,
+    /// The height the block listing this spend connects at. The seeded
+    /// transaction-key pin reads it; an unseeded build draws from the OS.
+    #[cfg_attr(
+        not(feature = "seeded-rng"),
+        allow(
+            dead_code,
+            reason = "the seeded transaction-key pin is the only reader of the connecting height"
+        )
+    )]
+    connecting: BlockHeight,
+    /// The fee paid to the chain.
+    fee: u64,
+    /// A bond post riding the spend.
+    bond: Option<&'a PostedBond<'a>>,
+    /// Who the outputs pay.
+    recipient: &'a Recipient,
+    /// How many outputs.
+    outputs: usize,
+    /// A negative fixture's departure ([`Twist`]).
+    twist: Twist,
+}
+
+/// Mixed into the low eight bytes of a seeded spend's pin. A small height
+/// stays non-zero, and the tag is not the coinbase harness's `0x0A` fill.
+#[cfg(feature = "seeded-rng")]
+const SPEND_TX_KEY_HEIGHT_TAG: u64 = 0x5e00_0000_0000_0000;
+
+/// The group order is `2^252 + …`. Clearing the top four bits of a scalar
+/// encoding keeps it below `2^252`, so the bytes are already canonical and
+/// [`TxKey::seeded`] stores them unchanged.
+#[cfg(feature = "seeded-rng")]
+const CANONICAL_SCALAR_TOP_MASK: u8 = 0x0F;
+
+/// The transaction key of one spend.
+///
+/// A seeded plan pins the key from the connecting height and the spend's
+/// first key image, so a chain built twice is the same chain and two spends
+/// in one block are not built from one key. The plan's own bytes stay the
+/// proof nonces ([`SpendSeeds`]); they are not this key. Its presence is
+/// what selects the pin. An absent plan draws from the OS, as a build
+/// without `seeded-rng` does for every spend.
+///
+/// The first key image is the spend's identity after the CEN-I5 sort — the
+/// largest, and no two spends share one. Height alone is not enough: two
+/// spends in one block to one recipient would derive the same output keys.
+///
+/// # Panics
+///
+/// When the OS's random source fails on the unpinned path. A harness with
+/// no randomness builds nothing.
+#[cfg(feature = "seeded-rng")]
+fn spend_tx_key(
+    seeds: Option<&SpendSeeds>,
+    connecting: BlockHeight,
+    first_key_image: &KeyImage,
+) -> TxKey {
+    if seeds.is_some() {
+        TxKey::seeded(spend_tx_key_bytes(connecting, first_key_image))
+    } else {
+        TxKey::random().expect("the OS draws a key")
+    }
+}
+
+/// Height in the low eight bytes, the first key image in the rest, the top
+/// four bits clear ([`CANONICAL_SCALAR_TOP_MASK`]).
+#[cfg(feature = "seeded-rng")]
+fn spend_tx_key_bytes(connecting: BlockHeight, first_key_image: &KeyImage) -> [u8; TX_KEY_LEN] {
+    let mut pinned = [0u8; TX_KEY_LEN];
+    pinned[..8].copy_from_slice(&(SPEND_TX_KEY_HEIGHT_TAG ^ connecting.to_raw()).to_le_bytes());
+    pinned[8..].copy_from_slice(&first_key_image.as_bytes()[8..]);
+    pinned[TX_KEY_LEN - 1] &= CANONICAL_SCALAR_TOP_MASK;
+    pinned
+}
+
+/// Every spend draws from the OS. The seeded pin does not exist in this build.
+///
+/// # Panics
+///
+/// When the OS's random source fails. A harness with no randomness builds
+/// nothing.
+#[cfg(not(feature = "seeded-rng"))]
+fn spend_tx_key() -> TxKey {
+    TxKey::random().expect("the OS draws a key")
+}
+
+impl SpendShape<'_> {
+    /// The spend of `sourced` in this shape — one or more inputs, every path assembled
     /// against the same reference — paying `fee` to the chain and the rest
     /// to `recipient` in two outputs, with `bond` riding it if given. The
     /// body every `spend_*` builder hands out.
-    fn spend_sourced(
-        mut sourced: Vec<Sourced>,
-        connecting: BlockHeight,
-        fee: u64,
-        bond: Option<&PostedBond<'_>>,
-        recipient: &Recipient,
-        outputs: usize,
-        twist: Twist,
-    ) -> Transaction {
+    fn spend(self, mut sourced: Vec<Sourced>) -> Transaction {
+        let SpendShape {
+            seeds,
+            fee,
+            bond,
+            recipient,
+            outputs,
+            twist,
+            #[cfg(feature = "seeded-rng")]
+            connecting,
+            #[cfg(not(feature = "seeded-rng"))]
+                connecting: _,
+        } = self;
         assert!(
             (2..=shekyl_wire::transaction::MAX_OUTPUTS).contains(&outputs),
             "a spend pays two outputs at least and the output cap at most"
@@ -837,24 +1079,13 @@ impl Spender {
                 }
             })
             .collect();
-        // The transaction key is a seed (`derive_kem_seed` hashes it), so
-        // any 32 bytes serve; what matters is that two spends are never
-        // built from one. Keyed on the connecting height alone, two spends
-        // in one block to one recipient derived identical output keys —
-        // the same seed, the same keys, the same indices — and a block
-        // listing both carried a duplicate output, not two bodies. The
-        // spent outputs' key images are the spend's own identity, so the
-        // first (the largest, after the CEN-I5 sort — no two spends share
-        // one) is mixed in.
-        let tx_secret = {
-            let mut s = [0u8; 32];
-            s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting.to_raw()).to_le_bytes());
-            s[8..].copy_from_slice(&key_images[0].as_bytes()[8..]);
-            s
-        };
+        #[cfg(feature = "seeded-rng")]
+        let tx_key = spend_tx_key(seeds.as_ref(), connecting, &key_images[0]);
+        #[cfg(not(feature = "seeded-rng"))]
+        let tx_key = spend_tx_key();
         let pay = |amount: u64, index: u64| -> OutputData {
             construct_output(
-                &tx_secret,
+                &tx_key,
                 &recipient.x25519_pk,
                 &recipient.ml_kem_ek,
                 &recipient.spend_public,
@@ -917,16 +1148,30 @@ impl Spender {
             &extra,
         )
         .expect("the prefix hashes");
-        let mut signed = sign_transaction_with_terms(
-            &network,
-            tx_prefix_hash,
-            &spend_inputs,
-            &output_infos,
-            AtomicUnits::from_raw(fee),
-            &extra_input_terms,
-            &extra_output_terms,
-            &tree,
-        )
+        let mut signed = match &seeds {
+            #[cfg(feature = "seeded-rng")]
+            Some(seeds) => shekyl_tx_builder::sign_transaction_with_terms_seeded(
+                &seeds.sign,
+                &network,
+                tx_prefix_hash,
+                &spend_inputs,
+                &output_infos,
+                AtomicUnits::from_raw(fee),
+                &extra_input_terms,
+                &extra_output_terms,
+                &tree,
+            ),
+            _ => sign_transaction_with_terms(
+                &network,
+                tx_prefix_hash,
+                &spend_inputs,
+                &output_infos,
+                AtomicUnits::from_raw(fee),
+                &extra_input_terms,
+                &extra_output_terms,
+                &tree,
+            ),
+        }
         .expect("sign the spend");
         // The message the proof was made over: the transaction's
         // network-bound tx_signable (the signing envelope §2.2).
@@ -959,24 +1204,30 @@ impl Spender {
             })
             .collect();
         let n_spend = spend_inputs.len();
-        let open = open_spend(
-            signed,
-            &spend_inputs,
-            SpendLayout {
-                key_images: key_image_bytes,
-                extra_inputs,
-                output_amounts: vec![0; output_keys.len()],
-                output_keys,
-                view_tags,
-                tx_extra: extra,
-                fee,
-                slots: AuthSlots {
-                    spend: revealed_pks.clone(),
-                    extra: bond.map(|b| vec![b.slot_pk.clone()]).unwrap_or_default(),
-                },
+        let layout = SpendLayout {
+            key_images: key_image_bytes,
+            extra_inputs,
+            output_amounts: vec![0; output_keys.len()],
+            output_keys,
+            view_tags,
+            tx_extra: extra,
+            fee,
+            slots: AuthSlots {
+                spend: revealed_pks.clone(),
+                extra: bond.map(|b| vec![b.slot_pk.clone()]).unwrap_or_default(),
             },
-            &network,
-        )
+        };
+        let open = match &seeds {
+            #[cfg(feature = "seeded-rng")]
+            Some(seeds) => shekyl_tx_builder::open_spend_seeded(
+                &seeds.open,
+                signed,
+                &spend_inputs,
+                layout,
+                &network,
+            ),
+            _ => open_spend(signed, &spend_inputs, layout, &network),
+        }
         .expect("the spend opens");
 
         // Self-check through the consensus verifier against the wallet-side
@@ -1031,5 +1282,59 @@ impl Spender {
             .encode(extra_signatures)
             .expect("the production encoder emits the spend");
         Transaction::from_bytes(&bytes).expect("the encoder's bytes parse as a transaction")
+    }
+}
+
+/// The seeded pin stays the bytes it was built from, including when the key
+/// image's top bits sit above the group order.
+#[cfg(all(test, feature = "seeded-rng"))]
+mod spend_tx_key_pin {
+    use super::{spend_tx_key, spend_tx_key_bytes, CANONICAL_SCALAR_TOP_MASK, TX_KEY_LEN};
+    use shekyl_crypto_pq::TxKey;
+    use shekyl_types::{BlockHeight, KeyImage};
+    use zeroize::Zeroizing;
+
+    use crate::draw::SpendSeeds;
+
+    fn image(byte: u8) -> KeyImage {
+        KeyImage::from_bytes([byte; 32])
+    }
+
+    fn plan() -> SpendSeeds {
+        SpendSeeds {
+            sign: Zeroizing::new([1; 32]),
+            open: Zeroizing::new([2; 32]),
+        }
+    }
+
+    #[test]
+    fn a_high_key_image_stays_canonical_and_rebuilds() {
+        let height = BlockHeight::from_raw(7);
+        let first = image(0xFF);
+        let bytes = spend_tx_key_bytes(height, &first);
+        assert_eq!(bytes[TX_KEY_LEN - 1] & !CANONICAL_SCALAR_TOP_MASK, 0);
+        assert_eq!(
+            bytes[TX_KEY_LEN - 1],
+            CANONICAL_SCALAR_TOP_MASK,
+            "a 0xFF key image keeps its low nibble"
+        );
+        let seeds = plan();
+        let key = spend_tx_key(Some(&seeds), height, &first);
+        assert_eq!(key.public_bytes(), TxKey::seeded(bytes).public_bytes());
+        assert_eq!(
+            spend_tx_key(Some(&seeds), height, &first).public_bytes(),
+            key.public_bytes()
+        );
+    }
+
+    #[test]
+    fn height_and_key_image_each_change_the_pin() {
+        let seeds = plan();
+        let first = image(0x11);
+        let at_one = spend_tx_key(Some(&seeds), BlockHeight::from_raw(1), &first);
+        let at_two = spend_tx_key(Some(&seeds), BlockHeight::from_raw(2), &first);
+        let other_image = spend_tx_key(Some(&seeds), BlockHeight::from_raw(1), &image(0x22));
+        assert_ne!(at_one.public_bytes(), at_two.public_bytes());
+        assert_ne!(at_one.public_bytes(), other_image.public_bytes());
     }
 }

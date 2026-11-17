@@ -37,7 +37,7 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
     let arc = Arc::new(RwLock::new(wallet));
     mine_until_spendable(origin, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 
-    let amount = AtomicUnits::from_raw(unlocked_balance(&arc).await.to_raw() / 4);
+    let amount = AtomicUnits::from_raw(spendable_balance(&arc).await.to_raw() / 4);
     let txid = submit_transfer(
         origin,
         &arc,
@@ -153,7 +153,7 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     let (wallet, _tmp, address) = mainnet_wallet(origin.rpc_port(), 0x5c).await;
     let arc = Arc::new(RwLock::new(wallet));
     mine_until_spendable(&origin, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
-    let amount = AtomicUnits::from_raw(unlocked_balance(&arc).await.to_raw() / 4);
+    let amount = AtomicUnits::from_raw(spendable_balance(&arc).await.to_raw() / 4);
     let txid = submit_transfer(
         &origin,
         &arc,

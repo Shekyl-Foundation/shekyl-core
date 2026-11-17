@@ -39,10 +39,10 @@ use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::codec::{PropertyCell, TotalBurnedCell, UndoLogFloorCell};
 use shekyl_chain_store::store::RawRows;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::TxKey;
 use shekyl_harness_spender::{Owner, Spender};
 use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::Transaction;
-use zeroize::Zeroizing;
 
 use crate::archival_driver::FEE;
 use crate::connector::{ArchivalState, Rewound};
@@ -183,7 +183,7 @@ pub(crate) async fn priced_emission_claim(
             .owned_input(parts.owner, parts.fee_key, parts.connecting);
         let claim = assemble_emission_claim(
             parts.keys,
-            &Zeroizing::new(parts.tx_key),
+            &TxKey::seeded(parts.tx_key),
             vec![fee_input.input],
             backing.input,
             parts.terms.clone(),
@@ -202,16 +202,18 @@ pub(crate) async fn priced_emission_claim(
     panic!("the claim's floor price did not settle");
 }
 
-/// A spender that owns `keys` before the block at `join_height` is scanned,
-/// then every later block. The outputs those keys name are paid in that
-/// block; scanning it first and owning them after misses them.
+/// A spender over `network`'s chain `chain` that owns `keys` before the
+/// block at `join_height` is scanned, then every later block. The outputs
+/// those keys name are paid in that block; scanning it first and owning
+/// them after misses them.
 pub(crate) fn spender_owning_before(
+    network: shekyl_network::NetworkId,
     chain: &[Mined],
     join_height: BlockHeight,
     keys: &[[u8; 32]],
 ) -> Spender {
     let split = usize::try_from(join_height.to_raw()).expect("a join height fits");
-    let mut spender = Spender::over(&chain[..split]);
+    let mut spender = Spender::on(network, &chain[..split]);
     for key in keys {
         spender.own(*key);
     }

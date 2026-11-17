@@ -29,6 +29,9 @@ shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-types = { path = "../shekyl-types" }
 
 [dev-dependencies]
+# `seeded-rng` (TEST_ONLY): the fixtures' stored transaction keys are made
+# from pinned keys (`TxKey::seeded`, R-21); a dev edge only.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 tempfile = "3"
 # `tests/save_state_timing.rs` (A19): a synthetic ledger's transfers carry a
 # point, a scalar and a commitment. Both crates are already in the workspace.

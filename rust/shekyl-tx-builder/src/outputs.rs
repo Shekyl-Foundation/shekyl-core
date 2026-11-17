@@ -27,7 +27,7 @@ use shekyl_address::ShekylAddress;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
 use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
-use shekyl_crypto_pq::CryptoError;
+use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_network::NetworkId;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{self, KemCiphertext, MultisigEntry, TxExtraField};
@@ -209,7 +209,7 @@ fn multisig_entry(
 }
 
 /// Build the output at `output_index` paying `amount` to `payee`, under the
-/// transaction key `tx_key_secret`.
+/// transaction key `tx_key`.
 ///
 /// # Errors
 ///
@@ -217,7 +217,7 @@ fn multisig_entry(
 /// output index a group entry cannot name, or a member entry that does not
 /// assemble.
 pub fn build_output(
-    tx_key_secret: &[u8; 32],
+    tx_key: &TxKey,
     payee: Payee<'_>,
     amount: u64,
     output_index: u64,
@@ -229,7 +229,7 @@ pub fn build_output(
             ml_kem_ek,
             label_plaintext,
         } => construct_output_with_label_plaintext(
-            tx_key_secret,
+            tx_key,
             view_x25519,
             ml_kem_ek,
             spend_key,
@@ -240,7 +240,7 @@ pub fn build_output(
         .map(|constructed| built_output!(&constructed, amount, None)),
         Payee::Group { address, network } => {
             let constructed =
-                construct_multisig_output(tx_key_secret, address, amount, output_index, network)?;
+                construct_multisig_output(tx_key, address, amount, output_index, network)?;
             let out_idx = u8::try_from(output_index).map_err(|_| {
                 CryptoError::InvalidInput("a group output's index is one byte".into())
             })?;
@@ -251,18 +251,15 @@ pub fn build_output(
 }
 
 /// `tx_extra` for a spend whose outputs are `outputs`, in output order,
-/// under the transaction public key `tx_pubkey`: the key, one `0x06` field
+/// built under `tx_key`: its public key `R`, one `0x06` field
 /// of every output's KEM ciphertext, the `0x07` leaf entries, and the
 /// `0x0D` entries of the outputs that pay a group, if any.
 ///
 /// # Errors
 ///
 /// [`TxBuilderError::WireError`] if the wire codec refuses the fields.
-pub fn build_tx_extra(
-    tx_pubkey: &[u8; 32],
-    outputs: &[BuiltOutput],
-) -> Result<Vec<u8>, TxBuilderError> {
-    let mut fields = vec![TxExtraField::PubKey(*tx_pubkey)];
+pub fn build_tx_extra(tx_key: &TxKey, outputs: &[BuiltOutput]) -> Result<Vec<u8>, TxBuilderError> {
+    let mut fields = vec![TxExtraField::PubKey(tx_key.public_bytes())];
     if !outputs.is_empty() {
         fields.push(TxExtraField::PqcKemCiphertext(
             outputs
@@ -300,13 +297,12 @@ pub struct SpendOutputs {
 }
 
 impl SpendOutputs {
-    /// The outputs `built`, in output order, under the transaction public
-    /// key `tx_pubkey`.
+    /// The outputs `built`, in output order, built under `tx_key`.
     ///
     /// # Errors
     ///
     /// As [`build_tx_extra`].
-    pub fn of(tx_pubkey: &[u8; 32], built: &[BuiltOutput]) -> Result<Self, TxBuilderError> {
+    pub fn of(tx_key: &TxKey, built: &[BuiltOutput]) -> Result<Self, TxBuilderError> {
         let enc_amounts: Vec<_> = built.iter().map(|b| b.info.enc_amount).collect();
         let enc_labels: Vec<_> = built.iter().map(|b| b.info.enc_label).collect();
         Ok(Self {
@@ -314,7 +310,7 @@ impl SpendOutputs {
                 .iter()
                 .map(|b| Output::confidential(b.output_key, b.view_tag))
                 .collect(),
-            extra: build_tx_extra(tx_pubkey, built)?,
+            extra: build_tx_extra(tx_key, built)?,
             base: committed_base(
                 &enc_amounts,
                 &enc_labels,
@@ -365,7 +361,7 @@ mod tests {
     /// builder writes is the shape consensus admits (CEN-I19).
     #[test]
     fn a_spend_paying_a_group_carries_its_member_entries() {
-        let tx_key = Scalar::random(&mut OsRng);
+        let tx_key = TxKey::random().unwrap();
         let (single_pk, _) = HybridX25519MlKem.keypair_generate().unwrap();
         let label = sentinel_plaintext();
         let spend_key = ED25519_BASEPOINT_POINT.compress().to_bytes();
@@ -377,9 +373,9 @@ mod tests {
         };
         let address = group(3, 2);
         let outputs = [
-            build_output(&tx_key.to_bytes(), payee, 500, 0).unwrap(),
+            build_output(&tx_key, payee, 500, 0).unwrap(),
             build_output(
-                &tx_key.to_bytes(),
+                &tx_key,
                 Payee::Group {
                     address: &address,
                     network: &NET,
@@ -392,8 +388,7 @@ mod tests {
         assert!(outputs[0].multisig_entry.is_none());
         assert_eq!(outputs[1].multisig_entry.as_ref().unwrap().out_idx(), 1);
 
-        let pubkey = (ED25519_BASEPOINT_POINT * tx_key).compress().to_bytes();
-        let extra = build_tx_extra(&pubkey, &outputs).unwrap();
+        let extra = build_tx_extra(&tx_key, &outputs).unwrap();
         let fields = parse(&extra).unwrap();
         check_tx_extra_shape(&fields, outputs.len(), ExtraSubject::General).unwrap();
         assert!(fields
@@ -407,8 +402,7 @@ mod tests {
     /// `tx_extra` is the builder's.
     #[test]
     fn a_spends_outputs_are_its_built_outputs_in_order() {
-        let tx_key = Scalar::random(&mut OsRng);
-        let pubkey = (ED25519_BASEPOINT_POINT * tx_key).compress().to_bytes();
+        let tx_key = TxKey::random().unwrap();
         let address = group(3, 2);
         let payee = Payee::Group {
             address: &address,
@@ -417,9 +411,9 @@ mod tests {
         let built: Vec<BuiltOutput> = [400, 600]
             .into_iter()
             .zip(0u64..)
-            .map(|(amount, index)| build_output(&tx_key.to_bytes(), payee, amount, index).unwrap())
+            .map(|(amount, index)| build_output(&tx_key, payee, amount, index).unwrap())
             .collect();
-        let spend = SpendOutputs::of(&pubkey, &built).unwrap();
+        let spend = SpendOutputs::of(&tx_key, &built).unwrap();
         for ((output, built), i) in spend.outputs.iter().zip(&built).zip(0..) {
             assert_eq!(
                 output,
@@ -430,7 +424,7 @@ mod tests {
             assert_eq!(spend.base.enc_labels[i], built.info.enc_label.to_bytes());
         }
         assert_eq!(spend.outputs.len(), built.len());
-        assert_eq!(spend.extra, build_tx_extra(&pubkey, &built).unwrap());
+        assert_eq!(spend.extra, build_tx_extra(&tx_key, &built).unwrap());
     }
 
     /// The same transaction key, payee and index build the same output:
@@ -438,7 +432,7 @@ mod tests {
     /// transaction apart.
     #[test]
     fn an_output_is_a_function_of_its_transaction_key() {
-        let tx_key = Scalar::random(&mut OsRng).to_bytes();
+        let tx_key = TxKey::random().unwrap();
         let address = group(3, 2);
         let payee = Payee::Group {
             address: &address,

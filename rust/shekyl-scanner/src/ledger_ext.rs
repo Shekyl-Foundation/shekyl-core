@@ -105,7 +105,6 @@ impl TransferDetailsExt for TransferDetails {
             // pscan funding path as `spendable_height` (GF4b-6,
             // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6).
             eligible_height: eligible_height(block_height, output.additional_timelock()),
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),
@@ -189,23 +188,24 @@ impl LedgerIndexesExt for LedgerIndexes {
 /// see the dispatch-authored lock facts (C7), so every caller had to
 /// hand-thread a lock map it had no way to obtain honestly. Anything
 /// that genuinely needs a transfer-slice balance calls
-/// [`BalanceSummary::compute`] and passes a derived
-/// [`InFlightSpendLocks`](shekyl_engine_state::InFlightSpendLocks) explicitly.
+/// [`BalanceSummary::compute`] and passes the send journal explicitly.
 pub trait WalletLedgerExt {
-    /// Balance at the wallet's current synced height.
+    /// The balance at the wallet's synced tip.
     fn balance(&self) -> BalanceSummary;
 
-    /// Balance at an explicit chain height (tests / historical views).
-    fn balance_at(&self, current_height: shekyl_types::BlockHeight) -> BalanceSummary;
+    /// The balance at an explicit horizon (tests / historical views).
+    fn balance_at(&self, horizon: shekyl_engine_state::SpendHorizon) -> BalanceSummary;
 }
 
 impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
     fn balance(&self) -> BalanceSummary {
-        self.balance_at(self.ledger.height())
+        self.balance_at(shekyl_engine_state::SpendHorizon::at_tip(
+            self.ledger.height(),
+        ))
     }
 
-    fn balance_at(&self, current_height: shekyl_types::BlockHeight) -> BalanceSummary {
-        BalanceSummary::compute(self.ledger.transfers(), current_height, &self.spend_locks())
+    fn balance_at(&self, horizon: shekyl_engine_state::SpendHorizon) -> BalanceSummary {
+        BalanceSummary::compute(self.ledger.transfers(), horizon, &self.send_journal)
     }
 }
 

@@ -1,0 +1,29 @@
+schema_version = 5
+seed_language = "english"
+
+[cosmetic]
+default_decimal_point = 12
+show_wallet_name_when_locked = false
+setup_background_mining = "prompt"
+confirm_backlog = true
+confirm_backlog_threshold = 4096
+confirm_export_overwrite = true
+always_confirm_transfers = true
+export_format = "binary"
+
+[operational]
+refresh_type = "optimized"
+auto_refresh = true
+auto_low_priority = false
+track_uses = false
+store_tx_info = true
+min_output_count = 0
+min_output_value = 0
+ignore_outputs_below = 0
+merge_destinations = false
+inactivity_lock_timeout = 0
+
+[device]
+device_name = ""
+device_derivation_path = ""
+tor_binary_path = ""

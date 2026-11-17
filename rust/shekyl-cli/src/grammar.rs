@@ -562,14 +562,15 @@ fn parse_send(args: &[&str]) -> ResolvedCommand {
         Err(command) => return command,
     };
     let priority = match split.value("--priority") {
-        None | Some("standard") => FeePriority::Standard,
-        Some("economy") => FeePriority::Economy,
-        Some("high") => FeePriority::High,
-        Some(word) => {
-            return diag(format!(
-                "send: --priority expects economy, standard, or high, got {word:?}"
-            ));
-        }
+        None => FeePriority::default(),
+        Some(word) => match FeePriority::from_name(word) {
+            Some(tier) => tier,
+            None => {
+                return diag(format!(
+                    "send: --priority expects economy, standard, or high, got {word:?}"
+                ));
+            }
+        },
     };
     match split.positional.as_slice() {
         [amount, dest] => match crate::commands::parse_amount(amount) {
@@ -1004,6 +1005,27 @@ mod tests {
             parse("send 1 addr --priority 2"),
             ResolvedCommand::Diagnostic { .. }
         ));
+        // One spelling per tier (IG-1): the uppercase names and the retired
+        // `priority` are no tier.
+        for word in ["HIGH", "Standard", "priority", "PRIORITY"] {
+            assert!(
+                matches!(
+                    parse(&format!("send 1 addr --priority {word}")),
+                    ResolvedCommand::Diagnostic { .. }
+                ),
+                "{word}"
+            );
+        }
+        for (word, tier) in [
+            ("economy", FeePriority::Economy),
+            ("standard", FeePriority::Standard),
+            ("high", FeePriority::High),
+        ] {
+            match parse(&format!("send 1 addr --priority {word}")) {
+                ResolvedCommand::Transfer { priority, .. } => assert_eq!(priority, tier),
+                other => panic!("{word}: {other:?}"),
+            }
+        }
         assert!(matches!(
             parse("send 1 addr typo"),
             ResolvedCommand::Diagnostic { .. }
@@ -1194,6 +1216,22 @@ mod tests {
                 matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
                 "{line}"
             );
+        }
+    }
+
+    /// The user-freeze commands a Monero user would type are REJECTED: each
+    /// is refused with its reason and the decision (2026-11-15), never sent
+    /// to the server or read as an unknown command.
+    #[test]
+    fn the_user_freeze_commands_are_refused_with_their_reason() {
+        for line in ["freeze", "thaw 0", "frozen"] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("no user-set hold"), "{line}: {message}");
+                    assert!(message.contains("2026-11-15"), "{line}: {message}");
+                }
+                other => panic!("{line}: {other:?}"),
+            }
         }
     }
 

@@ -56,6 +56,7 @@ use crate::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
 };
+use crate::tx_key::TxKey;
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_types::SigningPayloadHash;
 
@@ -184,7 +185,7 @@ impl MultisigOutputData {
 }
 
 /// Build an output paying `amount` to the multisig group `address`, at
-/// `output_index` in a transaction keyed by `tx_key_secret`, on the chain
+/// `output_index` in a transaction keyed by `tx_key`, on the chain
 /// whose id is `network`.
 ///
 /// # Errors
@@ -196,7 +197,7 @@ impl MultisigOutputData {
 /// [`CryptoError::InvalidInput`] for an output index above 255 (the `0x0D`
 /// entry names its output in one byte); the solo core's own errors.
 pub fn construct_multisig_output(
-    tx_key_secret: &[u8; 32],
+    tx_key: &TxKey,
     address: &MultisigAddressPayload,
     amount: u64,
     output_index: u64,
@@ -209,7 +210,7 @@ pub fn construct_multisig_output(
     let (group_x25519, group_ml_kem) = split_kem_pubkey(address.group_kem_pubkey())?;
 
     let core = construct_output_core(
-        tx_key_secret,
+        tx_key,
         &group_x25519,
         group_ml_kem,
         &spend_key,
@@ -222,7 +223,7 @@ pub fn construct_multisig_output(
     let mut key_hashes = Vec::with_capacity(address.hybrid_kem_pubkeys().len());
     for member_kem in address.hybrid_kem_pubkeys() {
         let (x25519, ml_kem) = split_kem_pubkey(member_kem)?;
-        let member = encapsulate_deterministic(tx_key_secret, &x25519, ml_kem, output_index)?;
+        let member = encapsulate_deterministic(tx_key, &x25519, ml_kem, output_index)?;
         let (member_pk, _member_sk) = derive_multisig_member_keypair(&member.combined_ss.0)?;
         key_hashes.push(multisig_key_hash(network, &member_pk));
         let mut ct = Vec::with_capacity(X25519_KEM_CT_LEN + member.ml_kem_ct.len());

@@ -94,7 +94,8 @@ fn enc_field() -> EncryptedOutputField {
     let spend = curve25519_dalek::constants::ED25519_BASEPOINT_POINT
         .compress()
         .to_bytes();
-    shekyl_crypto_pq::output::construct_output(&[9u8; 32], &pk.x25519, &pk.ml_kem, &spend, 1, 0)
+    let tx_key = shekyl_crypto_pq::TxKey::random().expect("the OS draws a key");
+    shekyl_crypto_pq::output::construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend, 1, 0)
         .expect("an output constructs")
         .enc_amount_wire()
 }

@@ -270,6 +270,10 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper"] 
 # Test doubles answer with the daemon's own wire types (RK-D1), so a double
 # cannot drift from the contract the way a hand-written JSON literal can.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The RT-P5 instrument (`engine::regtest_e2e_rt_p5`) splits a message at the
+# channel's record payload, `MAX_RECORD_PLAINTEXT` less `OCCUPANCY_LEN`,
+# read from the crate that owns them rather than restated.
+shekyl-noise = { path = "../shekyl-noise" }
 # The regtest walks' simulated Levin peer (`regtest_e2e_peer.rs`): the
 # adversary lives in the test, speaking the daemon's own codec and its
 # network id derivation. Both are workspace crates already in the graph.
@@ -290,6 +294,13 @@ shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 # `TestReceiptKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
 # production graph.
 shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
+# `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests`, the undecodable
+# receipt key the serving tests refuse (`receipt_test_fixtures`,
+# `receipt_round_trip_tests`). Named here because the tests call it: it no
+# longer rides in on `shekyl-p-serve`'s `test-signer`, which forwarded
+# `test-utils` over a normal edge it never needed (F-7; CHAIN_FORGE.md CF-1b).
+# `seeded-rng`: `TxKey::seeded`, the transaction key a fixture pins (R-21).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils", "seeded-rng"] }
 # SH-2's proving test (`serving::receipt_round_trip_tests`): the persona's
 # resident receipt key behind a real `PServeEndpoint`, fetched by the
 # daemon's real `PFetchClient`, and the receipt verified against the

@@ -14,7 +14,7 @@
 //! [`SyncStateBlock`], and [`StakingBlock`], plus the `P`-isolated
 //! [`PScanCursor`], [`PScanState`], and [`PendingPostBlock`] (separate sealed
 //! records, not wallet-ledger sub-blocks) —
-//! derives [`postcard_schema::Schema`](postcard_schema::Schema), producing a
+//! derives [`postcard_schema::Schema`], producing a
 //! compile-time [`NamedType`] tree that captures every field's wire shape.
 //! The snapshot tests in this module serialize that tree to pretty JSON and
 //! compare it against a committed `.snap` file under

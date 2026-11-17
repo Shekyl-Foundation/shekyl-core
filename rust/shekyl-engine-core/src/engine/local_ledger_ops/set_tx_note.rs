@@ -146,7 +146,6 @@ mod tests {
     use shekyl_engine_state::{SetNoteError, TxSecretKey, TX_NOTE_MAX_BYTES};
     use shekyl_rpc_transport::HttpRpc;
     use shekyl_types::TxHash;
-    use zeroize::Zeroizing;
 
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::{Credentials, DaemonClient, Engine, SoloSigner};
@@ -160,7 +159,7 @@ mod tests {
     fn mark_known(engine: &Engine<SoloSigner>, txid: TxHash) {
         engine.ledger.write().ledger.record_retained_tx_key(
             txid.to_bytes(),
-            TxSecretKey::new(Zeroizing::new([0xAB; 32])),
+            TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0xAB; 32]).store()),
         );
     }
 

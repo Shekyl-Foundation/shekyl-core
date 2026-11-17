@@ -77,7 +77,7 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
     let mut y = Scenario::open("pool-returns-y");
     y.mine(AT).await;
     let paid = paying_the_floor(&mut x, &prefix, 0).await;
-    let cheap = Spender::over(&prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
+    let cheap = Spender::on(x.network_id(), &prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
     let _a = x
         .mine_listing(vec![paid.clone(), cheap.clone()])
         .await
@@ -244,7 +244,7 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
     y.mine(AT).await;
     let shared = paying_the_floor(&mut x, &prefix, 0).await;
     let stem = paying_the_floor(&mut x, &prefix, 2).await;
-    let cheap = Spender::over(&prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
+    let cheap = Spender::on(x.network_id(), &prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
     let _a = x
         .mine_listing(vec![shared.clone()])
         .await
@@ -349,7 +349,7 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
     y.mine(AT).await;
     let mut z = Scenario::open("pool-switch-back-z");
     z.mine(AT).await;
-    let cheap = Spender::over(&prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
+    let cheap = Spender::on(x.network_id(), &prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
     let a = x
         .mine_listing(vec![cheap.clone()])
         .await

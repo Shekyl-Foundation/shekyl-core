@@ -125,6 +125,42 @@ pub fn open_spend(
     layout: SpendLayout,
     network: &NetworkId,
 ) -> Result<OpenSpend, TxBuilderError> {
+    open_spend_with(signed, spend_inputs, layout, network, sign_pqc_auths)
+}
+
+/// [`open_spend`] with the spend slots' ML-DSA randomness drawn from `seed`
+/// ([`crate::sign_pqc_auths_seeded`]), so one seed gives the same signed
+/// spend byte for byte (`CHAIN_FORGE.md` §5.3, seam T2). Only under the
+/// TEST_ONLY `seeded-rng` feature.
+///
+/// # Errors
+///
+/// As [`open_spend`].
+#[cfg(feature = "seeded-rng")]
+pub fn open_spend_seeded(
+    seed: &[u8; 32],
+    signed: SignedProofs,
+    spend_inputs: &[SpendInput],
+    layout: SpendLayout,
+    network: &NetworkId,
+) -> Result<OpenSpend, TxBuilderError> {
+    open_spend_with(signed, spend_inputs, layout, network, |hashes, inputs| {
+        crate::sign::sign_pqc_auths_seeded(seed, hashes, inputs)
+    })
+}
+
+/// [`open_spend`]'s body, over `sign_auths` (production's
+/// [`sign_pqc_auths`], or the seeded one).
+fn open_spend_with(
+    signed: SignedProofs,
+    spend_inputs: &[SpendInput],
+    layout: SpendLayout,
+    network: &NetworkId,
+    sign_auths: impl FnOnce(
+        &[shekyl_types::SigningPayloadHash],
+        &[SpendInput],
+    ) -> Result<Vec<PqcAuth>, TxBuilderError>,
+) -> Result<OpenSpend, TxBuilderError> {
     let spend_slots = spend_inputs.len();
     if spend_slots == 0 {
         return Err(TxBuilderError::NoInputs);
@@ -196,7 +232,7 @@ pub fn open_spend(
         )));
     }
 
-    let spend_auths = sign_pqc_auths(&payload_hashes[..spend_slots], spend_inputs)?;
+    let spend_auths = sign_auths(&payload_hashes[..spend_slots], spend_inputs)?;
     for (index, (auth, slot)) in spend_auths.iter().zip(wire.pqc_auths.iter()).enumerate() {
         if auth.public_key != slot.public_key {
             return Err(TxBuilderError::PqcSignError {

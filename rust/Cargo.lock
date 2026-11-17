@@ -3756,7 +3756,6 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "thiserror",
- "zeroize",
 ]
 
 [[package]]
@@ -4421,6 +4420,7 @@ dependencies = [
  "shekyl-levin",
  "shekyl-multisig",
  "shekyl-network",
+ "shekyl-noise",
  "shekyl-onion-key",
  "shekyl-operator-alarm",
  "shekyl-p-host",
@@ -4511,6 +4511,7 @@ dependencies = [
  "shekyl-consensus",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
+ "shekyl-curve-tree",
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",
@@ -4577,7 +4578,6 @@ name = "shekyl-genesis-tool"
 version = "3.1.0"
 dependencies = [
  "clap",
- "curve25519-dalek",
  "hex",
  "rand 0.8.6",
  "serde",
@@ -4591,6 +4591,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-types",
  "shekyl-wire",
+ "tempfile",
  "thiserror",
  "zeroize",
 ]
@@ -4599,6 +4600,7 @@ dependencies = [
 name = "shekyl-harness-spender"
 version = "3.1.0"
 dependencies = [
+ "rand_chacha 0.3.1",
  "shekyl-archival-bond-builder",
  "shekyl-archival-retention",
  "shekyl-chain-rules",
@@ -4606,12 +4608,14 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-harness-spender",
  "shekyl-harness-wallet",
  "shekyl-network",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "zeroize",
 ]
 
 [[package]]
@@ -4623,6 +4627,7 @@ dependencies = [
  "sha2",
  "shekyl-address",
  "shekyl-crypto-pq",
+ "shekyl-harness-wallet",
  "shekyl-wire",
  "zeroize",
 ]
@@ -5028,7 +5033,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "zeroize",
 ]
 
 [[package]]
@@ -5587,6 +5591,7 @@ dependencies = [
  "fips204",
  "gungraun",
  "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "shekyl-address",
  "shekyl-bulletproofs",
@@ -5598,6 +5603,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-fcmp",
  "shekyl-network",
+ "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
@@ -5672,6 +5678,7 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-pow-randomx",
  "shekyl-types",
+ "shekyl-verify-cost",
  "shekyl-wire",
 ]
 

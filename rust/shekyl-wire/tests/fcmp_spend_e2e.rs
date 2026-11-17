@@ -69,6 +69,7 @@ use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
@@ -183,7 +184,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // Construct the spent output to our own wallet (a self-spend), then recover
     // the per-output secrets the prover needs as the recipient would.
-    let tx_secret = Scalar::random(&mut rng).to_bytes();
+    let tx_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let spent = construct_output(
         &tx_secret,
         &wallet.x25519_pk,
@@ -349,7 +350,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // spender (output 1). Both derive from one tx key with distinct output
     // indices, the canonical one-tx-key-per-transaction derivation.
     let recipient = random_wallet(&mut rng);
-    let dest_secret = Scalar::random(&mut rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let payment_amount = output_amount / 2;
     let change_amount = output_amount - payment_amount;
     let payment = construct_output(

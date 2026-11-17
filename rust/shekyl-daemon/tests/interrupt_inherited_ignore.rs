@@ -96,7 +96,7 @@ fn run_child_if_requested() {
         args.push("--rpc-socket-dir".into());
         args.push(socket_dir.into_os_string());
     }
-    let status = shekyl_daemon::run::main(
+    let status = shekyl_daemon::run::main_loading(
         &args,
         &Platform {
             home: Some(dir),
@@ -104,6 +104,7 @@ fn run_child_if_requested() {
             session_dir: None,
             service_rendezvous: None,
         },
+        shekyl_daemon_config::load_default_file_unread,
     );
     std::process::exit(status);
 }

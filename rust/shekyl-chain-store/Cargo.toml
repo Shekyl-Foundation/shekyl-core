@@ -83,7 +83,7 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # leave a coinbase no scan recovers). Test-only: the store derives nothing
 # consensus-visible from either.
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
-shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet", features = ["seeded-rng"] }
 # The decision-citation guard (`test_support::regen_decision_or_refuse`)
 # the shard-fill capture is written under (`store/shard_fill.rs`), the one
 # every armed regenerator in the workspace calls. Already a normal

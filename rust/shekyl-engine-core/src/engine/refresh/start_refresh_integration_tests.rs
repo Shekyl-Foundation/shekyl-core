@@ -1681,18 +1681,15 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
 /// KEM ciphertext and the `0x07` leaf entry in `extra`, the encrypted amount
 /// and label in the committed base — everything the scanner recovers from.
 fn transaction_paying_the_hybrid_wallet(amount: u64) -> shekyl_wire::Transaction {
-    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-    use curve25519_dalek::scalar::Scalar;
     use shekyl_crypto_pq::output::construct_output;
     use shekyl_scanner::Extra;
     use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
     let (_master, blob) = account_from_seed(&HYBRID_WALLET_SEED, Network::Stagenet)
         .expect("account_from_seed for the hybrid wallet seed (stagenet)");
-    let tx_key_secret = [0x2du8; 32];
-    let tx_pubkey = &Scalar::from_bytes_mod_order(tx_key_secret) * ED25519_BASEPOINT_TABLE;
+    let tx_key = shekyl_crypto_pq::TxKey::seeded([0x2du8; 32]);
     let constructed = construct_output(
-        &tx_key_secret,
+        &tx_key,
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         blob.spend_pk.as_canonical_bytes(),
@@ -1704,7 +1701,7 @@ fn transaction_paying_the_hybrid_wallet(amount: u64) -> shekyl_wire::Transaction
     let mut kem = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
     kem.extend_from_slice(&constructed.kem_ciphertext_x25519);
     kem.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, [kem]);
+    let mut extra = Extra::for_hybrid_transfer(tx_key.public(), [kem]);
     extra.push_pqc_leaf_entries(constructed.pqc_leaf.entry_bytes().to_vec());
 
     Transaction {

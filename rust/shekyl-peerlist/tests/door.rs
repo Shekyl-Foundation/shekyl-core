@@ -577,9 +577,7 @@ fn a_failed_white_test_moves_it_to_gray_unless_it_is_excused() {
     let (mut list, mut rng) = white_one(9, &peer);
     list.apply(&failed, at_hours(1), Verdict::Excused, &mut rng);
     assert!(list.is_white(&peer), "an excused failure does not demote");
-    let retry = shekyl_peerlist::dial_profile(connector)
-        .judging
-        .outage_retry;
+    let retry = shekyl_peerlist::dial_profile(connector).outage_retry;
     assert_eq!(
         list.draw_white(connector, at_hours(1), &mut NoSessions, &mut rng),
         None,

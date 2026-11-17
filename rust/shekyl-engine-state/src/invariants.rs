@@ -382,7 +382,6 @@ mod tests {
     };
     use shekyl_types::{BlockHash, BlockHeight};
     use std::collections::BTreeMap;
-    use zeroize::Zeroizing;
 
     /// Minimum-viable transfer at a chosen `block_height`. Returns a
     /// not-yet-spent output with no key image; individual tests
@@ -404,7 +403,6 @@ mod tests {
             source_ciphertext: None,
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(block_height) + SPENDABLE_AGE,
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),
@@ -485,7 +483,7 @@ mod tests {
         tx_keys.insert(
             [0x77; 32],
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0; 32]).store()),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
@@ -506,7 +504,7 @@ mod tests {
         tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0; 32]).store()),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
@@ -535,7 +533,7 @@ mod tests {
         tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0; 32]).store()),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
@@ -573,7 +571,7 @@ mod tests {
         tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0; 32]).store()),
             },
         );
         let mut pool = BTreeMap::new();
@@ -600,7 +598,7 @@ mod tests {
         tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0; 32]).store()),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
@@ -641,7 +639,7 @@ mod tests {
         tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0; 32]).store()),
             },
         );
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());

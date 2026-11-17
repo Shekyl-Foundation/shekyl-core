@@ -10,7 +10,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use shekyl_daemon_config::{load, Network, Platform, TABLE};
+use shekyl_daemon_config::{after_file, Network, Platform, TABLE};
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_difficulty::Difficulty;
 use shekyl_miner::Job;
@@ -249,7 +249,14 @@ fn config_with(dir: &Path, network: &str, connectors: &[&str], extra: &[&str]) -
     ]);
     args.extend(extra);
     let cli = read_cli(&TABLE, args.into_iter().map(OsString::from)).expect("cli");
-    load(
+    // Everything `load` does after its file step, with no file opened.
+    // `load` would read the network's default file,
+    // `/etc/shekyl/shekyld-<network>.toml`, where a fleet host's daemon
+    // keeps its configuration: a test that took it read that host's peers
+    // and refused them against its own connectors
+    // (`config.value.conflict`). These tests are about the node, not
+    // about reading a file.
+    after_file(
         cli,
         &Platform {
             home: Some(dir.to_path_buf()),
@@ -257,6 +264,7 @@ fn config_with(dir: &Path, network: &str, connectors: &[&str], extra: &[&str]) -
             session_dir: None,
             service_rendezvous: None,
         },
+        None,
     )
     .expect("config")
     .config

@@ -55,7 +55,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
 
     // `bonded` joins.
     {
-        let spender = Spender::over(&chain);
+        let spender = Spender::on(scenario.network_id(), &chain);
         let height = next(&chain);
         let joining = spender.spend_coinbase_posting(
             scenario.wallet(),
@@ -76,7 +76,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
 
     // J11: signer's join under stranger's id.
     {
-        let spender = Spender::over(&chain);
+        let spender = Spender::on(scenario.network_id(), &chain);
         let height = next(&chain);
         let mut post = signer.join_post(complete_tree(), ENDPOINT);
         assert_eq!(
@@ -113,7 +113,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
 
     // J13: signer releases bonded's bond.
     {
-        let spender = Spender::over(&chain);
+        let spender = Spender::on(scenario.network_id(), &chain);
         let height = next(&chain);
         let post = bonded.release_post(total);
         assert_eq!(post.p_canonical_id, bonded.id());

@@ -7,6 +7,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::EdwardsPoint;
@@ -16,15 +17,17 @@ use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::label::sentinel_plaintext;
+use shekyl_crypto_pq::TxKey;
 use shekyl_tx_builder::outputs::{build_output, build_tx_extra, BuiltOutput, Payee, RecipientKeys};
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
-    tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput,
-    WireEncodeInput,
+    tx_prefix_hash_from_parts, InternalSignFault, LeafEntry, OutputInfo, PqcAuth, SignFault,
+    SignedProofs, SpendInput, WireEncodeInput,
 };
 use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
+use super::fee_variant::{fee_and_change, FeeVariantFault};
 use super::local_keys::LocalKeys;
 use super::pending::TxDestination;
 use super::traits::key::{
@@ -238,6 +241,24 @@ fn payment_outputs_of(
     Ok((total, payments))
 }
 
+impl From<FeeVariantFault> for KeyEngineError {
+    fn from(fault: FeeVariantFault) -> Self {
+        match fault {
+            // The build's selection covers the with-change fee and the least
+            // change, so a short leftover is a bug. It keeps the builder's
+            // insufficient-funds fault: the amounts do not balance at a
+            // ladder fee. The shortfall stays in the local log.
+            FeeVariantFault::Short { shortfall } => {
+                tracing::debug!(shortfall, "a leftover no ladder fee balances");
+                Self::Sign(SignFault::Internal(InternalSignFault::InsufficientFunds))
+            }
+            FeeVariantFault::TooManyOutputs { count } => {
+                Self::Sign(SignFault::TooManyOutputs { count })
+            }
+        }
+    }
+}
+
 pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, KeyEngineError> {
     let keys = &local.keys;
     if tx.inputs.is_empty() {
@@ -267,23 +288,12 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                 shortfall: payment_total.saturating_sub(input_amounts),
             })?;
 
-    let (fee, include_change) = if leftover
-        >= fee_directive
-            .fee_with_change
-            .saturating_add(fee_directive.dust_threshold)
-    {
-        (fee_directive.fee_with_change, true)
-    } else if leftover >= fee_directive.fee_no_change {
-        (fee_directive.fee_no_change, false)
-    } else {
-        return Err(KeyEngineError::InsufficientFunds {
-            shortfall: fee_directive.fee_no_change.saturating_sub(leftover),
-        });
-    };
+    let priced = fee_and_change(leftover, &fee_directive)?;
+    let fee = priced.fee;
+    let change = priced.change;
 
-    // `r` is minted canonical by the crypto crate: it is retained for the
-    // OUTBOUND proof, which signs with it as a scalar (A19).
-    let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
+    // The transaction key: retained for the OUTBOUND proof (WI-RPC-3).
+    let tx_key = TxKey::random()?;
 
     let mut built_outputs: Vec<BuiltOutput> = Vec::new();
     let mut output_index: u64 = 0;
@@ -297,7 +307,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         // The recipient's view key is mapped to X25519 by `RecipientKeys`.
         let recipient = recipient_keys(&destination, network)?;
         built_outputs.push(build_output(
-            &tx_key_secret,
+            &tx_key,
             recipient.payee(&label_plaintext),
             amount,
             output_index,
@@ -305,24 +315,21 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         output_index += 1;
     }
 
-    if include_change {
-        let change_amount = leftover
-            .checked_sub(fee)
-            .ok_or(KeyEngineError::InsufficientFunds { shortfall: 1 })?;
-        if change_amount > 0 {
-            let change_pk = derived.change_spend_pk();
-            built_outputs.push(build_output(
-                &tx_key_secret,
-                Payee::Single {
-                    spend_key: &change_pk,
-                    view_x25519: &keys.x25519_pk,
-                    ml_kem_ek: &keys.ml_kem_ek,
-                    label_plaintext: &sentinel_plaintext(),
-                },
-                change_amount,
-                output_index,
-            )?);
-        }
+    // A change is at least one unit (`fee_variant::fee_and_change`): when the
+    // fee is the with-change fee, the change output is always built.
+    if let Some(change_amount) = change.map(NonZeroU64::get) {
+        let change_pk = derived.change_spend_pk();
+        built_outputs.push(build_output(
+            &tx_key,
+            Payee::Single {
+                spend_key: &change_pk,
+                view_x25519: &keys.x25519_pk,
+                ml_kem_ek: &keys.ml_kem_ek,
+                label_plaintext: &sentinel_plaintext(),
+            },
+            change_amount,
+            output_index,
+        )?);
     }
 
     if built_outputs.is_empty() {
@@ -334,10 +341,8 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     // tx_extra through the one builder every spend path uses: the tx pubkey,
     // every output's KEM ciphertext, and the `0x07` leaf entries (CEN-I19).
     let tx_extra =
-        build_tx_extra(&tx_pubkey.compress().to_bytes(), &built_outputs).map_err(|_| {
-            KeyEngineError::Primitive {
-                detail: "tx_extra does not encode",
-            }
+        build_tx_extra(&tx_key, &built_outputs).map_err(|_| KeyEngineError::Primitive {
+            detail: "tx_extra does not encode",
         })?;
 
     let mut bundles = HashMap::new();
@@ -431,13 +436,11 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         AtomicUnits::from_raw(fee),
         &tree,
     )
-    .map_err(|e| KeyEngineError::Primitive {
-        detail: match e {
-            shekyl_tx_builder::TxBuilderError::InsufficientFunds { .. } => {
-                "tx-builder insufficient funds"
-            }
-            _ => "tx-builder sign_transaction failed",
-        },
+    .map_err(|e| {
+        // The inner text (a prover's or encoder's message) stays in the
+        // local log; the fault that leaves is the variant, bounded.
+        tracing::debug!(error = %e, "the transaction builder refused the signing pass");
+        KeyEngineError::Sign(e.fault())
     })?;
 
     // The wire shape is assembled by the single shared constructor both this
@@ -495,11 +498,10 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         output_keys,
         view_tags,
         tx_extra,
-        // WI-RPC-3 retention: the minted scalar leaves the signing
-        // frame inside a zeroize-on-drop wrapper instead of dying at
-        // function exit; the submit path persists it at
-        // submit-ACCEPTED.
-        tx_key_secret: shekyl_engine_state::TxSecretKey::new(tx_key_secret),
+        // WI-RPC-3 retention: the key leaves the signing frame instead of
+        // dying at function exit; the submit path persists its stored form
+        // at dispatch.
+        tx_key,
     })
 }
 
@@ -576,9 +578,8 @@ mod tests {
     #[test]
     fn a_transfers_outputs_and_extra_are_pinned_for_a_fixed_tx_key() {
         const SEED: [u8; 32] = [21u8; 32];
-        let tx_key = Scalar::from(23u64);
-        let tx_key_secret = tx_key.to_bytes();
-        let tx_pubkey = &tx_key * ED25519_BASEPOINT_TABLE;
+        // A canonical scalar, so `seeded`'s reduction leaves it as it is.
+        let tx_key = TxKey::seeded(Scalar::from(23u64).to_bytes());
 
         let recipient_keys = LocalKeys::from_test_seed(SEED);
         let address = recipient_keys
@@ -592,7 +593,7 @@ mod tests {
             .into_iter()
             .map(|(amount, index)| {
                 build_output(
-                    &tx_key_secret,
+                    &tx_key,
                     recipient.payee(&sentinel_plaintext()),
                     amount,
                     index,
@@ -600,8 +601,7 @@ mod tests {
                 .expect("build output")
             })
             .collect();
-        let mut transcript =
-            build_tx_extra(&tx_pubkey.compress().to_bytes(), &outputs).expect("tx_extra encodes");
+        let mut transcript = build_tx_extra(&tx_key, &outputs).expect("tx_extra encodes");
         for out in &outputs {
             transcript.extend_from_slice(&out.output_key);
             transcript.push(out.view_tag);
@@ -670,8 +670,13 @@ mod tests {
             ),
         ] {
             let label = label_plaintext_for_recipient(rid).expect("an encodable rid");
-            let built = build_output(&TX_KEY, recipient.payee(&label), AMOUNT, OUT_IDX)
-                .expect("construct payment output");
+            let built = build_output(
+                &TxKey::seeded(TX_KEY),
+                recipient.payee(&label),
+                AMOUNT,
+                OUT_IDX,
+            )
+            .expect("construct payment output");
             assert_eq!(
                 classify_label_plaintext(&recover(&built).label_plaintext),
                 expected,
@@ -704,7 +709,7 @@ mod tests {
         assert_eq!(resolved.ml_kem_ek(), &persona.ml_kem_ek[..]);
 
         let built = build_output(
-            &TX_KEY,
+            &TxKey::seeded(TX_KEY),
             resolved.payee(&sentinel_plaintext()),
             AMOUNT,
             OUT_IDX,
@@ -770,7 +775,7 @@ mod tests {
 
         // Build the change output exactly as `sign_tx` does.
         let constructed = construct_output(
-            &TX_KEY,
+            &TxKey::seeded(TX_KEY),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             &change_pk,
@@ -866,7 +871,7 @@ mod tests {
         // by the recipient's view-derived Montgomery secret (the production
         // scanner's derivation).
         let constructed = construct_output(
-            &TX_KEY,
+            &TxKey::seeded(TX_KEY),
             &recipient_x25519,
             &decoded.ml_kem_encap_key,
             &decoded.spend_key,
@@ -898,7 +903,7 @@ mod tests {
         // the RAW Edwards view-key bytes (interpreted as a Montgomery
         // u-coordinate) produces an output the recipient CANNOT recover.
         let wrong = construct_output(
-            &TX_KEY,
+            &TxKey::seeded(TX_KEY),
             &decoded.view_key,
             &decoded.ml_kem_encap_key,
             &decoded.spend_key,
@@ -924,5 +929,24 @@ mod tests {
             .is_err(),
             "an output encapsulated to the raw Edwards bytes must NOT be recoverable"
         );
+    }
+
+    /// A leftover the ladder does not balance keeps the builder's
+    /// insufficient-funds fault. The shortfall stays in the log; the variant
+    /// that leaves is the closed one.
+    #[test]
+    fn a_short_leftover_keeps_the_insufficient_funds_fault() {
+        use super::super::traits::key::FeeDirective;
+        use shekyl_tx_builder::InternalSignFault;
+
+        let directive = FeeDirective {
+            fee_no_change: 700,
+            fee_with_change: Some(900),
+        };
+        let err = KeyEngineError::from(fee_and_change(900, &directive).expect_err("short"));
+        assert!(matches!(
+            err,
+            KeyEngineError::Sign(SignFault::Internal(InternalSignFault::InsufficientFunds))
+        ));
     }
 }

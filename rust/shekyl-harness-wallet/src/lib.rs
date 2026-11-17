@@ -24,7 +24,7 @@
 //!
 //! # The second-oracle property
 //!
-//! [`coinbase::paying`] composes a coinbase from the same two owners
+//! `coinbase::paying` composes a coinbase from the same two owners
 //! `shekyl-block-template` composes its own from —
 //! [`shekyl_crypto_pq::output::construct_output`] for the output and
 //! [`shekyl_wire::tx_extra::build_coinbase_extra`] for the `extra` — and
@@ -40,7 +40,7 @@
 //!
 //! Every value here is a function of a seed and a height. The miner is
 //! derived from [`HARNESS_SEED`] through this crate's own fixed fixture
-//! derivation ([`fixture_expand`]) and the stack's ML-KEM keygen
+//! derivation (`fixture_expand`) and the stack's ML-KEM keygen
 //! (`ml_kem_keypair_from_d_z`), so the same coinbase bytes come out of every
 //! test run and every crate — a fixture pinned in one place is the fixture
 //! every other place builds. The fixture derivation is not a wallet's: a
@@ -56,6 +56,11 @@
 
 #![forbid(unsafe_code)]
 
+/// The fixture coinbase pins its transaction key per height
+/// (`shekyl_crypto_pq::TxKey::seeded`), so it exists only under this
+/// crate's TEST_ONLY `seeded-rng` feature, which the rules crate's
+/// `harness` feature and the test crates' dev edges enable.
+#[cfg(feature = "seeded-rng")]
 pub mod coinbase;
 
 use std::sync::LazyLock;
@@ -176,7 +181,7 @@ pub struct MinerWallet {
 
 impl MinerWallet {
     /// The fixture wallet `seed` derives: the spend secret is the
-    /// [`fixture_expand`] of `shekyl-ed25519-spend`, the X25519 scalar that
+    /// `fixture_expand` of `shekyl-ed25519-spend`, the X25519 scalar that
     /// of `shekyl-ed25519-view` (its public key the raw scalar times the
     /// basepoint, as `HybridX25519MlKem::keypair_generate` forms it), and
     /// the ML-KEM-768 pair is `ml_kem_keypair_from_d_z` over the 64-byte
@@ -215,7 +220,7 @@ impl MinerWallet {
 
     /// The harness miner — [`from_seed`](Self::from_seed) over
     /// [`HARNESS_SEED`], derived once per process. Every
-    /// [`coinbase::paying`] call the rules harness makes pays this wallet.
+    /// `coinbase::paying` call the rules harness makes pays this wallet.
     #[must_use]
     pub fn harness() -> &'static MinerWallet {
         static HARNESS: LazyLock<MinerWallet> =

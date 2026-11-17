@@ -172,14 +172,17 @@ jobs:
           run_one "No per-connector arms in the dialer or the peer list" \
             python3 scripts/ci/check_connector_profile_arms.py
 
-          # A job-level `if:` is evaluated before the matrix expands, so a
-          # skipped matrix job cannot emit its per-leg check names. When those
-          # names are required contexts, that is a required check that CANNOT
-          # PASS — the deadlock #653 fixed. Rides here for the same reason the
-          # workflow-validity check does: no path filter, so it sees every
-          # workflow edit.
-          run_one "Matrix jobs are not gated at the job level" \
-            python3 scripts/ci/check_matrix_job_gating.py
+          # build.yml and rust-audit-test.yml each end in a pass job, the one
+          # check protection requires of each (`cli-pass`, `rust-pass`). It
+          # must need every job, run whatever they did, and change its name on
+          # a draft, or a skipped job satisfies the requirement. Rides here
+          # for the same reason the workflow-validity check does: no path
+          # filter, so it sees every workflow edit. `--selftest` first: each
+          # verdict, and each planted defect refused (rule 47).
+          run_one "Each pass job stands for every job (selftest)" \
+            python3 scripts/ci/workflow_pass.py --selftest
+          run_one "Each pass job stands for every job" \
+            python3 scripts/ci/workflow_pass.py --check
 
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh
@@ -263,6 +266,23 @@ jobs:
           # CHAIN_FORGE.md CF-R17: the shard-fill chain is frozen until
           # CF-4a (its bytes do not regenerate; a re-capture is 11.5 MB of
           # history for good), and nothing new consumes it. Selftest first.
+          # CHAIN_FORGE.md §5.5 (CF-R9, CF-R12, CF-R26): a seedable generator
+          # built in production code, the crates the shipped binaries build
+          # (shipped_graph.py: this repository's release and the GUI
+          # wallet's pinned edges), is red unless its site is listed with its
+          # group (G0..G3). Crates headed for production are read too, and a
+          # provisional listing is red once its increment has landed.
+          # CHAIN_FORGE.md §11.1 item 2: no shipped build's resolved graph
+          # activates a harness or forge crate or turns a TEST_ONLY feature
+          # on. Both read the same set; the selftests hold the set itself.
+          run_one "No harness crate or test-only feature in a shipped graph (selftest)" \
+            python3 scripts/ci/check_production_graph.py --selftest
+          run_one "No harness crate or test-only feature in a shipped graph" \
+            python3 scripts/ci/check_production_graph.py
+          run_one "No unlisted seedable generator in production code (selftest)" \
+            python3 scripts/ci/check_seedable_rng.py --selftest
+          run_one "No unlisted seedable generator in production code" \
+            python3 scripts/ci/check_seedable_rng.py
           run_one "The shard-fill chain is frozen, with no new consumer (selftest)" \
             python3 scripts/ci/check_shard_fill_frozen.py --selftest
           run_one "The shard-fill chain is frozen, with no new consumer" \

@@ -58,15 +58,14 @@ pub(crate) struct ConstructedVouts {
 }
 
 /// Construct `amounts` as vouts to `P`'s base address, under the
-/// transaction key `tx_key_secret` whose public key is `tx_pubkey`, through
-/// the builder every spend path uses (`shekyl_tx_builder::outputs`).
+/// transaction key `tx_key`, through the builder every spend path uses
+/// (`shekyl_tx_builder::outputs`).
 /// `capture` sees each built output `(index, &BuiltOutput)`, so the
 /// emission path lifts its reward commit without a second loop or a
 /// parallel construction site.
 pub(crate) fn construct_vouts_to_base(
     keys: &ArchivalPKeys,
-    tx_key_secret: &Zeroizing<[u8; 32]>,
-    tx_pubkey: &[u8; 32],
+    tx_key: &shekyl_crypto_pq::TxKey,
     amounts: &[u64],
     error_site: &'static str,
     mut capture: impl FnMut(usize, &BuiltOutput),
@@ -77,7 +76,7 @@ pub(crate) fn construct_vouts_to_base(
         .zip(0u64..)
         .map(|(&amount, index)| {
             build_output(
-                tx_key_secret,
+                tx_key,
                 Payee::Single {
                     spend_key: keys.spend_pk.as_canonical_bytes(),
                     view_x25519: &keys.x25519_pk,
@@ -97,7 +96,7 @@ pub(crate) fn construct_vouts_to_base(
         output_infos: built.iter().map(|b| b.info.clone()).collect(),
         output_keys: built.iter().map(|b| b.output_key).collect(),
         view_tags: built.iter().map(|b| Some(b.view_tag)).collect(),
-        tx_extra: build_tx_extra(tx_pubkey, &built)
+        tx_extra: build_tx_extra(tx_key, &built)
             .map_err(|e| BondAssemblyError::build(error_site, e))?,
     })
 }

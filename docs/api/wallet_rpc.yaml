@@ -305,6 +305,17 @@
 #     claim_rewards                                (alias-shape of `claim`;
 #       rejected with it 2026-09-07 so the same surface cannot return
 #       under a synonym. Same rationale and reopening clause as `claim`.)
+#     freeze, thaw, frozen                         (the user freeze, Rick
+#       2026-11-15, decision log. A user-set hold on outputs has no
+#       privacy job under FCMP++, which already hides which outputs a
+#       spend uses; any human choice on a visible parameter (input count,
+#       consolidation timing) becomes a pattern, while deterministic
+#       selection gives every wallet the same shapes. The wallet's own
+#       reservations already keep built and staking-held outputs out of
+#       selection. These are the names a Monero client would try. The
+#       server refuses each -32601 with this reason. Reopen when: a named
+#       user job that those reservations do not cover; the re-evaluation
+#       shape is a fresh contract sub-PR citing this note.)
 #   SPECIFIED (PR-SM-2 — message-signing projection; formerly the
 #   "sign, verify" RESERVED entry, which sat ambiguously below the
 #   REJECTED block — it was reserved, never rejected):
@@ -497,7 +508,22 @@ info:
   # the user's decision; tx_resend resends one's saved bytes (-29121
   # TX_NOT_HELD, -29122 TX_BYTES_MISSING; refusals as submit's).
   # api_version stays 1.
-  version: 0.18.0
+  # 0.19.0: the wallet lane's PR 2 (Rick, 2026-11-12 and 2026-11-15). This
+  # tranche REMOVES fields, so a client of 0.18.0 must move with it; the
+  # wire-compat integer stays 1 pre-genesis (rule 16). get_balance carries
+  # balance = spendable + incoming and each leg once (incoming_wait
+  # absent when no incoming output is on chain), with outgoing and
+  # unspendable beside it; liquid, unlocked and pending are deleted (A17).
+  # The wallet has no user-set hold on outputs: no parked leg, and the
+  # names freeze, thaw and frozen are REJECTED (Rick, 2026-11-15). The fee
+  # tier is economy / standard / high, lowercase; the {custom} form and the
+  # Feerate schema are deleted, get_default_fee_priority's fields are
+  # economy, standard, high, and its default_priority is deleted (no front
+  # end read it) (A18). The signer's faults keep their
+  # identity: -29123 TOO_MANY_INPUTS, -29124 TOO_MANY_OUTPUTS (refused at
+  # the request), -29125 INPUT_NOT_IN_TREE, -29126 INPUT_UNSPENDABLE, and
+  # -29119 SIGNER_FAILED names its fault in data.fault (A16).
+  version: 0.19.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -528,6 +554,10 @@ servers:
 # arm. JsonRpcRequest.method.enum must equal the SPECIFIED set exactly.
 # Rationale for each non-SPECIFIED status lives in the header comment block
 # at the top of this file; this table is the status, the header is the why.
+# A REJECTED row also carries `reason`: the sentence the server states when
+# the name is called (-32601), held equal to the server's table by
+# shekyl-wallet-contract's rejected.rs test. The header keeps the full
+# rationale and the reopening clause.
 x-shekyl-method-registry:
   create_wallet: { status: SPECIFIED }
   restore_wallet: { status: SPECIFIED }
@@ -574,16 +604,19 @@ x-shekyl-method-registry:
   sign_message: { status: SPECIFIED }
   verify_message: { status: SPECIFIED }
   get_shard_view: { status: SPECIFIED }
-  match_transfer_to_request: { status: REJECTED }
-  claim: { status: REJECTED }
-  claim_rewards: { status: REJECTED }
-  get_stakes: { status: REJECTED }
-  get_tx_key: { status: REJECTED }
-  check_tx_key: { status: REJECTED }
-  get_spend_proof: { status: REJECTED }
-  check_spend_proof: { status: REJECTED }
-  export_unsigned: { status: REJECTED }
-  submit_signed: { status: REJECTED }
+  match_transfer_to_request: { status: REJECTED, reason: "attribution is automatic: get_transfers carries it (wallet_rpc.yaml, REJECTED 2026-09-07)" }
+  claim: { status: REJECTED, reason: "emission claims run inside the wallet's staking; there is no manual claim (wallet_rpc.yaml, REJECTED 2026-08-26)" }
+  claim_rewards: { status: REJECTED, reason: "emission claims run inside the wallet's staking; there is no manual claim (wallet_rpc.yaml, REJECTED 2026-09-07)" }
+  get_stakes: { status: REJECTED, reason: "a per-stake listing would link stakes to their personas; get_staked_balance, get_staked_outputs and staking_info are the aggregate reads (wallet_rpc.yaml, REJECTED 2026-08-26)" }
+  get_tx_key: { status: REJECTED, reason: "the transaction key is a bearer credential; use get_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-23)" }
+  check_tx_key: { status: REJECTED, reason: "the transaction key is a bearer credential; use check_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-23)" }
+  get_spend_proof: { status: REJECTED, reason: "a spend proof only links key images to an identity, which FCMP++ hides; use get_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-24)" }
+  check_spend_proof: { status: REJECTED, reason: "a spend proof only links key images to an identity, which FCMP++ hides; use check_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-24)" }
+  export_unsigned: { status: REJECTED, reason: "cold signing is not offered: an FCMP++ spend needs the live curve tree; cold storage is your seed (V3_WALLET_DECISION_LOG.md, 2026-09-07)" }
+  submit_signed: { status: REJECTED, reason: "cold signing is not offered: an FCMP++ spend needs the live curve tree; cold storage is your seed (V3_WALLET_DECISION_LOG.md, 2026-09-07)" }
+  freeze: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
+  thaw: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
+  frozen: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
 
 # ── Error-code ranges (STATUS OF RECORD — rule 23) ────────────────────────
 # SPECIFIED ranges carry allocated codes (enumerated in WalletRpcErrorCode);
@@ -807,6 +840,14 @@ components:
         - -29120   # SEND_NOT_SAVED
         - -29121   # TX_NOT_HELD
         - -29122   # TX_BYTES_MISSING
+        - -29123   # TOO_MANY_INPUTS
+        - -29124   # TOO_MANY_OUTPUTS
+        - -29125   # INPUT_NOT_IN_TREE
+        - -29126   # INPUT_UNSPENDABLE
+        # -29127 OUTPUTS_PARKED is RETIRED (never reuse): the wallet has
+        # no user-set hold on outputs (decision log 2026-11-15). The
+        # number stays out of the enum and stays recorded here so it is
+        # never reallocated with a new meaning.
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -913,7 +954,13 @@ components:
                                           password and a damaged file are
                                           different remedies
           -29012 WALLET_FILE_VERSION_UNSUPPORTED wallet files: written by a version,
-                                          or in a shape, this build cannot read
+                                          or in a shape, this build cannot read.
+                                          The message names the remedy: open
+                                          them with the build that wrote them,
+                                          or restore the wallet from its seed,
+                                          which does not bring back the send
+                                          history, proofs for earlier sends,
+                                          notes or payment requests
           -29013 WALLET_FILE_IO_FAILED    wallet files: a read or write failed
                                           underneath (disk full, filesystem
                                           error, a failed atomic rename, a
@@ -988,8 +1035,7 @@ components:
                                           trusting this daemon. The
                                           intra-snapshot 10×-economy lock is
                                           withdrawn (honest 2021-scaling
-                                          Fh/Fl exceeds 10×), as is the
-                                          custom-only 100×-economy ceiling.
+                                          Fh/Fl exceeds 10×).
                                           The historical median-multiple
                                           ceiling lands with the V3.x
                                           wallet-side estimator.
@@ -1034,10 +1080,35 @@ components:
                                           wallet could not read. Distinct from
                                           -29102 (no answer) and -29109 (an
                                           answer refused as unreasonable)
-          -29119 SIGNER_FAILED            build: the signer tried and a
-                                          downstream failure stopped it
-                                          (a device error, a remote actor
-                                          disconnecting)
+          -29119 SIGNER_FAILED            build: the wallet's own signer hit
+                                          an internal fault — a bug, never
+                                          the request's doing (data:
+                                          {"fault"}, one keyword: a builder
+                                          invariant — no-inputs, no-outputs,
+                                          zero-input-amount,
+                                          zero-output-amount,
+                                          input-amount-overflow,
+                                          output-amount-overflow,
+                                          insufficient-funds,
+                                          empty-leaf-chunk,
+                                          pqc-leaf-derivation,
+                                          leaf-chunk-too-large,
+                                          zero-tree-depth, tree-too-shallow,
+                                          tree-depth-too-large,
+                                          branch-layer-mismatch,
+                                          invalid-combined-ss-length,
+                                          bulletproof, fcmp-prove, pqc-sign,
+                                          wire, balance-self-check — or the
+                                          wallet's random source and the
+                                          state signing reads —
+                                          primitive, handle-mismatch,
+                                          missing-key-image,
+                                          source-decapsulation,
+                                          rid-not-encodable, proof,
+                                          bulletproof-parse, wire-encode,
+                                          randomness).
+                                          Report it; the wallet log has the
+                                          detail (A16)
           -29120 SEND_NOT_SAVED           submit: the send's record (its
                                           signed bytes, tx secret and input
                                           locks) is not confirmed on disk,
@@ -1057,6 +1128,36 @@ components:
                                           holds no bytes to resend; abandon
                                           it, or wait for refresh to settle
                                           it
+          -29123 TOO_MANY_INPUTS          build: the amount needs more
+                                          inputs than one transaction spends
+                                          (data: {"count", "limit"}; limit
+                                          is 8) — send less, or first send
+                                          part of the balance to yourself
+                                          to merge small amounts
+          -29124 TOO_MANY_OUTPUTS         build: the request has more
+                                          outputs, its change included,
+                                          than one transaction carries
+                                          (data: {"count", "limit"}; limit
+                                          is 16, so at most 15 recipients)
+                                          — split the recipients across
+                                          sends. Refused at the request,
+                                          before selection
+          -29125 INPUT_NOT_IN_TREE        build: the wallet's membership data
+                                          does not hold an output the send
+                                          spends (data: {"input"}, its
+                                          position) — refresh and build
+                                          again
+          -29126 INPUT_UNSPENDABLE        build: an output the send would
+                                          spend was received but its leaf
+                                          does not open to this wallet's
+                                          keys, so it can never be spent
+                                          (data: {"input"}). The scan
+                                          should have counted it as
+                                          unspendable already — report it
+          -29127 (RETIRED — never reuse)  was OUTPUTS_PARKED. The wallet
+                                          has no user-set hold on outputs
+                                          (decision log 2026-11-15); the
+                                          number is retired, not freed
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: the
                                           daemon did not answer — check it
@@ -1613,18 +1714,6 @@ components:
         u64 amount in atomic units, decimal string. Mirrors
         `shekyl_units::AtomicUnits`.
 
-    Feerate:
-      type: string
-      pattern: "^[1-9][0-9]*$"
-      description: >
-        Nonzero feerate in atomic units per **weight** unit, decimal string.
-        Per weight, NOT per byte: the two diverge by the Bulletproofs+
-        clawback once a transaction has more than two outputs, so sizing a
-        rate against the serialized length pins the wrong number. Mirrors the
-        `NonZeroU64` inside `shekyl_engine_core::FeePriority::Custom` — a rate,
-        NOT an amount, so it is distinct from `AtomicUnits` and forbids "0"
-        (the pattern excludes zero and leading zeros).
-
     Hex32:
       type: string
       pattern: "^[0-9a-f]{64}$"
@@ -1645,28 +1734,20 @@ components:
         formality.
 
     FeePriority:
+      type: string
+      enum: [economy, standard, high]
       description: >
-        Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
-        feerate via the daemon fee estimate at build time — never hardcoded
-        multipliers — and the snapshot must be well-formed (monotonic
-        tiers, no named tier above the era-maximum absolute cap;
-        -29109 otherwise).
-        `custom` pins atomic units per weight unit (see `Feerate` — per
-        weight, not per byte), bypassing the named tiers
-        but not the policy they obey: it must sit at or above the
-        snapshot's economy floor and at or below the same absolute cap
-        (-32602 otherwise — a `custom` rate is the caller's parameter,
-        not a daemon defect). There is no `custom`-only relative
-        ceiling, so `custom` can always express the snapshot's own
-        `PRIORITY` rate, or a little more.
-      oneOf:
-        - type: string
-          enum: [ECONOMY, STANDARD, PRIORITY]
-        - type: object
-          required: [custom]
-          properties:
-            custom:
-              $ref: "#/components/schemas/Feerate"
+        The fee tier: one of the ladder's three rungs, lowercase (IG-Q52;
+        `shekyl_economics::FeePriority`, the one definition). Each resolves
+        to a feerate from the daemon's fee snapshot at build time — never a
+        hardcoded multiplier — and the snapshot must be well-formed
+        (monotonic tiers, no tier above the era-maximum absolute cap;
+        -29109 otherwise). Anything else is refused -32602, naming the
+        set: an uppercase name, and a rate of the caller's own. There is no
+        per-wallet rate: the fee is cleartext on chain, and a wallet paying
+        a rate of its own choosing marks itself, where one paying a tier
+        hides in that tier's cohort (`FEE_LADDER_DERIVATION.md` W3; Rick,
+        2026-11-15).
 
     HybridSignature:
       type: object
@@ -1924,22 +2005,61 @@ components:
 
     GetBalanceResult:
       type: object
-      required: [liquid, unlocked, pending, unspendable]
+      required: [balance, spendable, incoming, outgoing, unspendable]
       description: >
-        Staking is first-class (locked JSON shape). As of WI-RPC-5 the
-        staking fields carry live values projected from the same
-        authoritative staking view `get_staked_balance` reads — never the
-        StakingBlock hint. For a non-staker wallet all staking fields are
-        genuinely "0" (there is nothing staked), which is a true zero, not
-        a placeholder. `staked` and `claimable_rewards` are ABSENT
-        (never "0") when the wallet's sealed staking state cannot be
-        read: the liquid fields stay authoritative while the staking
-        projection degrades, and absence is structurally distinct from a
-        zero — a client must render "staking unavailable", not
-        "nothing staked".
+        The balance and each of its legs once (A17; Rick, 2026-11-15).
+        balance = spendable + incoming; no other field is a sum
+        of others. outgoing and unspendable are beside the balance, never
+        in it, and so are the staking fields. An in-flight send's inputs
+        are in no leg: their value is that send's outgoing plus its
+        change. The tree rebuild is the wallet's state, not the money's:
+        money spendable by the rule stays in spendable while the wallet's
+        membership data catches up, and a send in that window is refused
+        -29111. Staking is first-class: `staked` and `claimable_rewards`
+        carry live values projected from the same staking view
+        `get_staked_balance` reads, genuinely "0" for a non-staker, and
+        ABSENT (never "0") when the wallet's sealed staking state cannot
+        be read — the ledger's legs stay authoritative while the staking
+        projection degrades, and a client must render "staking
+        unavailable", not "nothing staked".
       properties:
-        liquid:
+        balance:
           $ref: "#/components/schemas/AtomicUnits"
+          description: spendable + incoming.
+        spendable:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            What a send could use at the wallet's synced tip: outputs not
+            spent, not unspendable, not under an in-flight
+            send, and in the tree of the reference block the wallet
+            anchors to. The balance says spendable exactly when a build
+            can select the money.
+        incoming:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Received outputs not yet spendable by that rule, plus the
+            change of each in-flight send of this wallet, from dispatch
+            until the change output is scanned (from then it is a received
+            output, counted by the rule).
+        incoming_wait:
+          type: integer
+          minimum: 0
+          description: >
+            Blocks until the soonest on-chain incoming output becomes
+            spendable. ABSENT, not 0, when no incoming output is on chain
+            (only change in flight, or nothing incoming).
+        outgoing:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Σ (recipients + fee) of this wallet's in-flight sends. Beside
+            the balance.
+        unspendable:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Money in received-but-unspendable outputs (`get_transfers`
+            state UNSPENDABLE; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`):
+            on chain and retained, never spendable by this wallet. Beside
+            the balance. Always present; `"0"` is a true zero.
         staked:
           $ref: "#/components/schemas/AtomicUnits"
           description: >
@@ -1948,9 +2068,8 @@ components:
             `get_staked_balance`'s two bonded legs. The legs stay separate
             on that method; this scalar exists for the one-glance balance
             surface. Absent when the staking seal is unreadable (see the
-            schema description).
-        unlocked:
-          $ref: "#/components/schemas/AtomicUnits"
+            schema description). Beside the balance: staked money is spent
+            from this wallet.
         claimable_rewards:
           $ref: "#/components/schemas/AtomicUnits"
           description: >
@@ -1961,15 +2080,6 @@ components:
             quantity exists in the archival design (claims are engine-side
             automation). Absent exactly when `staked` is (unreadable
             staking seal — degrade, never a fabricated zero).
-        pending:
-          $ref: "#/components/schemas/AtomicUnits"
-        unspendable:
-          $ref: "#/components/schemas/AtomicUnits"
-          description: >
-            Money in received-but-unspendable outputs (`get_transfers`
-            state UNSPENDABLE; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`):
-            on chain and retained, never spendable by this wallet. Counted
-            in no other field. Always present; `"0"` is a true zero.
 
     GetPrimaryAddressParams:
       type: object
@@ -2901,8 +3011,7 @@ components:
 
     GetDefaultFeePriorityResult:
       type: object
-      required:
-        [default_priority, economy_fee, standard_fee, priority_fee, tree_depth]
+      required: [economy, standard, high, tree_depth]
       description: >
         One daemon fee snapshot + the same converge fixpoint the build path
         runs, per named tier. The quote is gated by the same snapshot
@@ -2911,15 +3020,15 @@ components:
         -29102, and a snapshot that answered but was *refused* is
         -29109 (both the same codes the build path uses).
       properties:
-        default_priority:
-          type: string
-          enum: [STANDARD]
-        economy_fee:
+        economy:
           $ref: "#/components/schemas/AtomicUnits"
-        standard_fee:
+          description: The converged fee at the economy rung for this shape.
+        standard:
           $ref: "#/components/schemas/AtomicUnits"
-        priority_fee:
+          description: The converged fee at the standard rung.
+        high:
           $ref: "#/components/schemas/AtomicUnits"
+          description: The converged fee at the high rung.
         tree_depth:
           type: integer
 

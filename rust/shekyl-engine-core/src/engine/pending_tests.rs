@@ -11,8 +11,6 @@
 //! test harness is not a re-forming god-object; the split keeps that
 //! distinction structural instead of a judgement call in the conf.
 
-use std::num::NonZeroU64;
-
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
 use shekyl_address::Network;
 use shekyl_curve_primitives::Commitment;
@@ -322,9 +320,9 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     let mut reservations = std::collections::BTreeMap::new();
     let mut next_id = 0u64;
 
-    // Drive the build at height 5 (well past the spendable_age
-    // cutoff so the output qualifies).
-    for h in 6..=15 {
+    // Drive the build at height 20: the output (eligible at 11) is in the
+    // tree of the reference block a wallet at 20 anchors to.
+    for h in 6..=20 {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             &mut ledger,
@@ -342,14 +340,14 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     .expect("build");
     assert_eq!(
         pending.built_at_height,
-        shekyl_types::BlockHeight::from_raw(15)
+        shekyl_types::BlockHeight::from_raw(20)
     );
 
-    // Reorg: rewind to fork height 15, replay 15..=20 with new
-    // hashes. After rewind, `block_hash_at(15)` differs from
+    // Reorg: rewind to fork height 20, replay 20..=25 with new
+    // hashes. After rewind, `block_hash_at(20)` differs from
     // `pending.built_at_tip_hash`.
-    indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(15));
-    for h in 15..=20 {
+    indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(20));
+    for h in 20..=25 {
         let hash = [u8::try_from(0xA0 ^ (h & 0xFF)).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
             &mut ledger,
@@ -362,7 +360,7 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     let err = submit_pending_tx_in_state(&mut ledger, &mut reservations, pending.id).unwrap_err();
     match err {
         PendingTxError::ChainStateChanged { height } => {
-            assert_eq!(height, shekyl_types::BlockHeight::from_raw(15));
+            assert_eq!(height, shekyl_types::BlockHeight::from_raw(20));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -452,33 +450,6 @@ fn discard_is_idempotent_on_unknown_handle() {
     assert!(reservations.is_empty());
 }
 
-#[test]
-fn priority_custom_is_accepted_and_preserved() {
-    let mut ledger = LedgerBlock::empty();
-    let mut indexes = LedgerIndexes::empty();
-    populate(
-        &mut ledger,
-        &mut indexes,
-        1,
-        vec![make_recovered_output(1, 100, 10_000)],
-        20,
-    );
-    let mut reservations = std::collections::BTreeMap::new();
-    let mut next_id = 0u64;
-    let req = TxRequest {
-        recipients: vec![TxRecipient {
-            destination: TxDestination::Address(test_address()),
-            amount_atomic_units: AtomicUnits::from_raw(1_000),
-            rid: None,
-        }],
-        priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
-    };
-    let pending =
-        build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap();
-    let r = reservations.get(&pending.id).unwrap();
-    assert!(matches!(r.priority, FeePriority::Custom(_)));
-}
-
 /// An empty list and a rid the label cannot echo are refused on the
 /// request itself. Production `LocalPendingTx::build` calls
 /// `check_recipients` before selection; that call is pinned in the
@@ -511,6 +482,25 @@ fn a_rid_the_label_cannot_echo_is_refused_at_the_request() {
     ));
 }
 
+/// More recipients than a transaction carries beside its change are
+/// refused at the request with the signer's own fault, naming the outputs
+/// the send needs (A16: a 20-output build on the TRC-1 seed failed in the
+/// signer as an unnamed fault). Fifteen recipients and their change fill
+/// the limit and pass.
+#[test]
+fn too_many_recipients_are_refused_at_the_request() {
+    let one = standard_request(1_000).recipients[0].clone();
+    let mut req = standard_request(1_000);
+    req.recipients = vec![one.clone(); shekyl_tx_builder::MAX_OUTPUTS - 1];
+    assert!(req.check_recipients(Network::Mainnet).is_ok());
+    req.recipients.push(one);
+    assert!(matches!(
+        req.check_recipients(Network::Mainnet),
+        Err(SendError::Sign(shekyl_tx_builder::SignFault::TooManyOutputs { count }))
+            if count == shekyl_tx_builder::MAX_OUTPUTS + 1
+    ));
+}
+
 /// `check_recipients` names why an address cannot be paid. The sentences
 /// for a version this wallet does not pay and for a damaged address are
 /// pinned on `recipient_reason`: public `encode` cannot emit the first,
@@ -535,6 +525,15 @@ fn check_recipients_names_why_an_address_cannot_be_paid() {
         mainnet.check_recipients(Network::Testnet),
         Err(SendError::InvalidRecipient {
             reason: "recipient address is for another network"
+        })
+    ));
+
+    let mut upper = standard_request(1_000);
+    upper.recipients[0].destination = TxDestination::Address(test_address().to_uppercase());
+    assert!(matches!(
+        upper.check_recipients(Network::Mainnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient address must be written in lowercase"
         })
     ));
 

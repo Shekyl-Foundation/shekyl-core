@@ -62,8 +62,8 @@ fn group(n: u8, m: u8) -> Group {
     }
 }
 
-fn tx_key() -> [u8; 32] {
-    Scalar::random(&mut rand::rngs::OsRng).to_bytes()
+fn tx_key() -> TxKey {
+    TxKey::random().expect("the OS draws a key")
 }
 
 fn group_ss(g: &Group, out: &MultisigOutputData) -> [u8; 64] {

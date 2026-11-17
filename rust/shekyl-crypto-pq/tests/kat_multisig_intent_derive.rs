@@ -14,8 +14,13 @@
 //! crate (RFC 5869 and RFC 8032 by hand, anchored). The docs gates run the
 //! oracle; this test holds the Rust to the same file.
 
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+use curve25519_dalek::Scalar;
+use rand::RngCore as _;
 use serde_json::Value;
 use shekyl_crypto_pq::multisig_intent::{IntentSeed, INTENT_SEED_LEN};
+use shekyl_crypto_pq::seeded_rng::SeededRng;
+use shekyl_crypto_pq::TxKey;
 
 const VECTORS: &str = include_str!("../../../docs/test_vectors/MULTISIG_INTENT_DERIVE_V1.json");
 
@@ -42,15 +47,23 @@ fn the_intent_derivations_match_the_oracle() {
         let masks = hex_list(&v["output_masks_hex"]);
         let expected = &v["expected"];
 
-        let tx_key = seed.tx_key();
+        // The key hands out no bytes, so `r` is held through its point:
+        // the vector's `r` is canonical and its `r·G` is the vector's `R`,
+        // and the derived key's `R` is that point. `r ↦ r·G` is one-to-one
+        // on canonical scalars, so this pins `r` byte for byte.
+        let r = Option::<Scalar>::from(Scalar::from_canonical_bytes(bytes32(
+            &expected["tx_key_secret_hex"],
+        )))
+        .unwrap_or_else(|| panic!("vector {n}: r is not a canonical scalar"));
+        let public = bytes32(&expected["tx_key_public_hex"]);
         assert_eq!(
-            *tx_key.secret,
-            bytes32(&expected["tx_key_secret_hex"]),
-            "vector {n}: r"
+            (&r * ED25519_BASEPOINT_TABLE).compress().to_bytes(),
+            public,
+            "vector {n}: the vector's R is its r·G"
         );
         assert_eq!(
-            tx_key.public,
-            bytes32(&expected["tx_key_public_hex"]),
+            TxKey::from_intent_seed(&seed).public_bytes(),
+            public,
             "vector {n}: R"
         );
 
@@ -66,13 +79,21 @@ fn the_intent_derivations_match_the_oracle() {
             "vector {n}: blinds"
         );
 
-        let rerandomizations: Vec<[u8; 32]> =
-            (0..inputs).map(|j| *seed.rerandomization_seed(j)).collect();
+        // A rerandomization seed hands out no bytes either; it is held
+        // through its stream, ChaCha20 keyed by the seed, against the same
+        // stream keyed by the vector's bytes.
+        let expected_seeds = hex_list(&expected["rerandomization_seeds_hex"]);
         assert_eq!(
-            rerandomizations,
-            hex_list(&expected["rerandomization_seeds_hex"]),
-            "vector {n}: rerandomization seeds"
+            expected_seeds.len(),
+            inputs,
+            "vector {n}: one seed per input"
         );
+        for (j, expected_seed) in expected_seeds.iter().enumerate() {
+            let [mut got, mut want] = [[0u8; 64]; 2];
+            seed.rerandomization_seed(j).rng().fill_bytes(&mut got);
+            SeededRng::from_seed(expected_seed).fill_bytes(&mut want);
+            assert_eq!(got, want, "vector {n}: input {j}'s rerandomization seed");
+        }
 
         assert_eq!(
             seed.fingerprint().as_bytes(),

@@ -75,9 +75,9 @@
 //!    payment requests for merchant attribution (FA-8). No subaddress surface.
 //! 7. **`RefreshHandle`** — cancel-on-drop RAII, single-flight via
 //!    `&mut self`. Lands with `Engine::refresh`.
-//! 8. **Fee priority** — `FeePriority { Economy | Standard | Priority |
-//!    Custom(NonZeroU64) }` over daemon `get_fee_estimates`. Lands with
-//!    `build_pending_tx`.
+//! 8. **Fee priority** — `FeePriority { Economy | Standard | High }`
+//!    (`shekyl-economics`, one definition) over daemon
+//!    `get_fee_estimates`. Lands with `build_pending_tx`.
 //! 9. **Logging** — `tracing` spans throughout, two-layer secret
 //!    redaction via [`shekyl_engine_state::LocalLabel`] (type layer) and
 //!    a redacting subscriber field formatter (subscriber layer). Lands
@@ -318,6 +318,8 @@ pub(crate) mod fee_policy;
 // WI-RPC-1: read-only fee/weight query projection for the wallet-RPC surface.
 pub mod fee_query;
 pub(crate) mod fee_snapshot;
+/// The ladder fee a leftover pays, and the change that fee leaves.
+pub(crate) mod fee_variant;
 /// GF-7 leg-(b) sealing re-run harness (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`
 /// §19.8): drives the **production** P-scan task + dispatch driver
 /// (`start_pscan_sealing_run`, production config/cadence, real sleeps)
@@ -450,7 +452,7 @@ pub use diagnostics::{
 };
 pub use error::{
     ChangePasswordError, CurveTreeIngestFault, IoError, KeyError, OpenError, PendingTxError,
-    PersistenceError, RefreshError, SendError, SubmitError, TxError,
+    PersistenceError, RefreshError, SendError, SignerFault, SubmitError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 // `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public

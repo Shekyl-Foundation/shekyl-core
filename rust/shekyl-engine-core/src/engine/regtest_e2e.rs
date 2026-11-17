@@ -2339,8 +2339,10 @@ async fn e2e_refresh_scans_coinbase_balance() {
             let ledger = g.ledger();
             total_height = ledger.ledger.height().to_raw();
             unlocked = ledger
-                .balance_at(shekyl_types::BlockHeight::from_raw(total_height))
-                .unlocked;
+                .balance_at(shekyl_engine_state::SpendHorizon::at_tip(
+                    shekyl_types::BlockHeight::from_raw(total_height),
+                ))
+                .spendable;
         }
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -2428,7 +2430,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         unlocked = {
             let g = arc.read().await;
             let ledger = g.ledger();
-            ledger.balance().unlocked
+            ledger.balance().spendable
         };
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -2591,7 +2593,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
         unlocked = {
             let g = arc.read().await;
             let ledger = g.ledger();
-            ledger.balance().unlocked
+            ledger.balance().spendable
         };
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -2872,7 +2874,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let unlocked = {
         let g = arc.read().await;
         let ledger = g.ledger();
-        ledger.balance().unlocked
+        ledger.balance().spendable
     };
     assert!(
         unlocked > AtomicUnits::ZERO,
@@ -3136,7 +3138,6 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_economics::{ClosedShardCount, EconomicParams, EmissionError, TxVolume};
     use shekyl_types::{BlockCount, BlockHeight, SectionRoot, Timestamp};
     use shekyl_wire::{Block, Transaction};
-    use zeroize::Zeroizing;
 
     let daemon =
         RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
@@ -3263,7 +3264,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             },
             params: &params,
             miner: &miner,
-            tx_key_secret: Zeroizing::new([0x42; 32]),
+            tx_key: &shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
             extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
             draw_commitment,
             listed,
@@ -3735,7 +3736,7 @@ async fn mine_until_unlocked_at_least(
     for _ in 0..max_batches {
         daemon.generate_blocks(batch).await;
         refresh(arc).await;
-        if unlocked_balance(arc).await >= target {
+        if spendable_balance(arc).await >= target {
             return;
         }
     }
@@ -3764,7 +3765,7 @@ async fn submit_tier_b_spend(
     max_batches: usize,
 ) {
     use shekyl_units::AtomicUnits;
-    let amount = AtomicUnits::from_raw(unlocked_balance(arc).await.to_raw() / 4);
+    let amount = AtomicUnits::from_raw(spendable_balance(arc).await.to_raw() / 4);
     transfer_to(
         daemon,
         arc,
@@ -3896,13 +3897,13 @@ async fn refresh(arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>) {
         .expect("refresh joins");
 }
 
-async fn unlocked_balance(
+async fn spendable_balance(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
 ) -> shekyl_units::AtomicUnits {
     use shekyl_scanner::WalletLedgerExt;
     let g = arc.read().await;
     let ledger = g.ledger();
-    ledger.balance().unlocked
+    ledger.balance().spendable
 }
 
 // ---------------------------------------------------------------------------
@@ -7186,6 +7187,12 @@ mod rt_p5;
 
 #[path = "regtest_e2e_send_durable.rs"]
 mod send_durable;
+
+#[path = "regtest_e2e_wallet_server.rs"]
+mod wallet_server;
+
+#[path = "regtest_e2e_balance.rs"]
+mod balance;
 
 #[path = "regtest_e2e_shard.rs"]
 mod shard;

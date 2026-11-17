@@ -1,14 +1,14 @@
 # Anonymity Networks with Shekyl
 
-> **UPDATE 2026-09-12.** Tor-zone wire-observer cover is operator non-exit
-> relay posture, not a protocol carrier. Mixing requires the daemon's Tor
-> client (SOCKS and overlay inbound) to be **that same relay process** —
-> a sidecar client Tor is uncovered. See [`TOR_RELAY.md`](TOR_RELAY.md)
-> and [`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md). This
+> **No wire-observer cover on Tor today, with a relay or without one
+> (2026-11-15).** An observer of a node's entry-guard connections can tell
+> when the node sends its own transaction. That was measured on a node
+> using its own relay's Tor; without a relay, a client's guard connections
+> carry only its own traffic, so the same holds. A relay is Tor payback, not cover
+> ([`TOR_RELAY.md`](TOR_RELAY.md)). Cover traffic is being redesigned
+> ([`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md)). This
 > file's remaining body is the Tor P2P usage matrix. I2P is not a network
-> this daemon dials. This file is not the cover-posture source of truth: for
-> cover, point `tor-socks` at the relay process as `TOR_RELAY.md` shows. A
-> second client Tor is uncovered.
+> this daemon dials.
 
 Tor is the anonymity network this daemon dials. I2P is not. The usage of
 Tor is still considered experimental - there are a few pessimistic
@@ -31,12 +31,18 @@ PQC note:
 transaction input (`pqc_auth_weight()`; see `docs/V3_ROLLOUT.md`).
 Practical consequences for anonymity relay:
 
-- A typical 2-in/2-out FCMP++ transaction grows from ~2–3 KB to ~7–8 KB.
-- On Tor, a single cell is 512 bytes; a v3 transaction spans ~14–16 cells
-  vs ~4–6 cells pre-PQC. The burst pattern is more distinctive.
-- Fragmented Levin messages (white noise feature) help pad smaller payloads
-  but cannot conceal large-burst events unless dummy traffic volume is
-  proportionally increased.
+- A one-input, two-output transaction is 13,240 bytes at the genesis curve
+  tree depth (2) and 17,080 bytes at the deepest (24), with the fee varint at
+  its widest. Two inputs and two outputs is 21,224 bytes at depth 2 and
+  26,088 at depth 24, and the largest admissible transaction (8 inputs,
+  16 outputs, depth 24) is 97,585 bytes (`shekyl-tx-weight`
+  `predict_size_and_weight`).
+- On Tor a relay cell carries 498 bytes, so a one-input, two-output
+  transaction is a burst of about 27 to 35 cells, and the largest about 196.
+  In TRC-1's guard-connection reading (#1388) every send was 13,619 bytes,
+  at least 28 cells.
+- Nothing pads or hides that burst on mainnet today. The cover carrier runs
+  only under a testnet development flag and is being redesigned.
 
 ### Known Leak Vectors vs Mitigations Matrix
 
@@ -46,8 +52,8 @@ Practical consequences for anonymity relay:
 | ISP link timing (intermittent sync) | Medium | Keep `shekyld` running continuously | Users who sync-send-quit are linkable |
 | Active bandwidth shaping | High | No second anonymity network is integrated | Tor circuits remain vulnerable |
 | Stream reuse (2+ tx same circuit) | Medium | Outgoing-only selection, 5-min rotation, 20-min change lock time | Small fixed outgoing pool → non-trivial reuse probability |
-| v3 tx size burst (new) | Medium | Fragmentation + dummy messages | Burst pattern still larger than pre-PQC; requires tuning dummy volume |
-| Levin 8-byte signature (DPI) | Low | SSL/BIP-151/Noise proposals | Not yet implemented; clearnet traffic is identifiable |
+| v3 tx size burst (new) | High | None on mainnet: the cover carrier is a testnet development flag, being redesigned | A guard-connection observer picks out the node's own sends (`TOR_COVER_POSTURE.md` banner) |
+| Levin 8-byte signature (DPI) | Low | Noise (`Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`) behind `dev-clearnet-encrypt`: testnet, stagenet and regtest only, off by default | Clearnet is plaintext Levin until the flag becomes the default; with it on, each connection still opens with a fixed eight-byte prefix per network, so clearnet traffic stays identifiable |
 
 ### Recommended Pre-Mainnet Testing
 
@@ -106,6 +112,13 @@ configuration file ([`USER_GUIDE.md`](USER_GUIDE.md), "Configuration file").
 through it, and publishes a per-boot onion for inbound. There is nothing to
 configure.
 
+The daemon checks that its own onion can be reached through the Tor
+network: once each time Tor republishes the onion, and, when a dial fails
+and the daemon needs to know whether the onion network is working, at most
+once every 15 minutes. Your Tor's entry guard can see the shape of these
+checks and learn that this computer runs an onion service, which the
+service's own traffic already shows it.
+
 ### Your own Tor: outbound
 
 `tor = operator` dials through a Tor you run, named by its SOCKS endpoint:
@@ -117,6 +130,13 @@ configure.
 Without `tor-onion` this is dial-only over Tor. If that SOCKS port asks for a
 username and password, set `tor-socks-username` and `tor-socks-password` in the
 configuration file; they are not accepted on the command line.
+
+With your own Tor the daemon cannot check whether the onion network is
+working, because it has no control of that Tor. It learns that only from dials
+that succeed and from peers that connect to it. So an onion address that has
+gone dead leaves the daemon's peer list more slowly than it does with the
+managed Tor: each failed dial to it is set aside, not held against it, until
+the daemon sees the network working again.
 
 Peers can be named. Repeat the option for more than one:
 

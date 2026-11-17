@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shekyl_dialer::TallySink;
+
+use crate::path::PathFactsSink;
 use shekyl_p2p_session::{ProbeSink, SessionsSink};
 use shekyl_relay::owner::VerdictSink;
 use shekyl_socks::{Proxy, SocksUsername};
@@ -43,9 +45,16 @@ pub const TOR_SOCKS_TIMEOUT: SocksTimeout = SocksTimeout::Below {
 /// What the managed-Tor supervisor hears from the network. Each is called
 /// by its producer and must not block (`TOR_SUPERVISOR.md` §5).
 pub struct SupervisorFeeds {
-    /// The dialer's tally of this node's Tor dials (§4.2): the value at
+    /// The Tor connector's copy of the dialer's tally (§4.2): the value at
     /// start, then each change. Display only (`TSR-Q14`).
     pub tally: TallySink,
+    /// The Tor connector's facts about the onion path, and the dialer's
+    /// wants for a reading (§4.5a).
+    pub path: PathFactsSink,
+    /// How long the judge waits for the Tor Manager's reading after a
+    /// failure (§4.5a, `READING_WAIT`): the manager's own value, which the
+    /// Tor connector's source declares and this crate only carries.
+    pub reading_wait: Duration,
     /// Each probe of this node's onion that arrived (§4.5).
     pub probes: Arc<dyn ProbeSink>,
     /// The relay's hop-0 verdict for a local origin (`GS-Q3`): the value at

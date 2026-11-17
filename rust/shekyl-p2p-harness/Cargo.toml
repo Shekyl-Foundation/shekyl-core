@@ -70,7 +70,6 @@ shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-economics = { path = "../shekyl-economics" }
-zeroize = { workspace = true }
 # The loopback tests' logs: the owner's closes and faults, under RUST_LOG.
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 

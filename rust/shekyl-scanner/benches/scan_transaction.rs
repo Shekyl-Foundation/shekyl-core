@@ -94,8 +94,8 @@ use zeroize::Zeroizing;
 
 use shekyl_scanner::{
     bench_fixtures::{
-        build_typical_case_scannable_block, build_worst_case_scannable_block, make_bench_wallet,
-        BenchWalletKeys,
+        build_typical_case_scannable_block, build_worst_case_scannable_block, fresh_tx_key,
+        make_bench_wallet, BenchWalletKeys,
     },
     Scanner,
 };
@@ -149,7 +149,8 @@ fn bench_worst_case_all_view_tags_match(c: &mut Criterion) {
         //    setup closure. ──
         {
             let mut scanner = fresh_scanner(&wallet);
-            let block = build_worst_case_scannable_block(n, &wallet);
+            let tx_key = fresh_tx_key();
+            let block = build_worst_case_scannable_block(n, &wallet, &tx_key);
             group.bench_with_input(BenchmarkId::new("warm", n), &n, |b, &_n| {
                 b.iter_batched(
                     || block.clone(),
@@ -177,7 +178,7 @@ fn bench_worst_case_all_view_tags_match(c: &mut Criterion) {
                 || {
                     (
                         fresh_scanner(&wallet),
-                        build_worst_case_scannable_block(n, &wallet),
+                        build_worst_case_scannable_block(n, &wallet, &fresh_tx_key()),
                     )
                 },
                 |(mut scanner, block)| {
@@ -218,7 +219,8 @@ fn bench_typical_case_view_tag_filtered(c: &mut Criterion) {
         //    setup closure to isolate `Scanner::scan` cost. ──
         {
             let mut scanner = fresh_scanner(&wallet);
-            let block = build_typical_case_scannable_block(n);
+            let tx_key = fresh_tx_key();
+            let block = build_typical_case_scannable_block(n, &tx_key);
             group.bench_with_input(BenchmarkId::new("warm", n), &n, |b, &_n| {
                 b.iter_batched(
                     || block.clone(),
@@ -239,7 +241,7 @@ fn bench_typical_case_view_tag_filtered(c: &mut Criterion) {
                 || {
                     (
                         fresh_scanner(&wallet),
-                        build_typical_case_scannable_block(n),
+                        build_typical_case_scannable_block(n, &fresh_tx_key()),
                     )
                 },
                 |(mut scanner, block)| {

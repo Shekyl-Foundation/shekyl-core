@@ -39,6 +39,7 @@ use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_tree::{
     AssembleInput, BlockHash as TreeHash, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient,
     Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
@@ -260,7 +261,7 @@ fn build_funding_setup() -> FundingSetup {
     let wallet = random_wallet(&mut rng);
     let spent_index: u64 = 0;
 
-    let tx_secret = Scalar::random(&mut rng).to_bytes();
+    let tx_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let spent = construct_output(
         &tx_secret,
         &wallet.x25519_pk,
@@ -445,7 +446,7 @@ fn build_fixture() -> SpendFixture {
 
     // ── Two destinations (payment + change; §12 requires ≥ 2 outputs) ───
     let recipient = random_wallet(&mut rng);
-    let dest_secret = Scalar::random(&mut rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let output_amount = INPUT_AMOUNT - FEE;
     let payment_amount = output_amount / 2;
     let change_amount = output_amount - payment_amount;
@@ -629,7 +630,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
 
     // ── Two change outputs (≥ 2 outputs is prunable-coupled for the
     // bond-post shape too); funding = change + fee + credit ──────────────
-    let dest_secret = Scalar::random(&mut rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let change_total = INPUT_AMOUNT - FEE - floor;
     let change_a_amount = change_total / 2;
     let change_b_amount = change_total - change_a_amount;
@@ -1529,7 +1530,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     // Debit funding rule: funding + debit == outputs + fee. The released
     // collateral is a SOURCE, so it enlarges the output side.
     let out_total = INPUT_AMOUNT + record_bonded_total - FEE;
-    let dest_secret = Scalar::random(&mut rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let change_a_amount = out_total / 2;
     let change_b_amount = out_total - change_a_amount;
     let change_a = construct_output(

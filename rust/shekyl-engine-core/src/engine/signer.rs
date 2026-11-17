@@ -58,7 +58,7 @@
 //! pending-tx engine over the secret-holding signer instance. They
 //! share a name family but are layered, not overlapping.
 
-use super::error::SignerError;
+use super::error::{SignerError, SignerFault};
 use super::key_actor::KeyEngineHandle;
 use super::traits::key::KeyEngine;
 
@@ -231,8 +231,8 @@ pub struct SignedTransfer {
     /// OUTBOUND PREREQUISITE pin 1). Zeroize-on-drop; non-`Clone` —
     /// which also makes `SignedTransfer` itself non-`Clone`, keeping
     /// the secret single-copy through the pipeline. `Debug` is safe:
-    /// [`shekyl_engine_state::TxSecretKey`]'s impl is redacted.
-    pub(crate) tx_key_secret: shekyl_engine_state::TxSecretKey,
+    /// [`shekyl_crypto_pq::TxKey`]'s impl is redacted.
+    pub(crate) tx_key: shekyl_crypto_pq::TxKey,
 }
 
 impl SignedTransfer {
@@ -410,8 +410,8 @@ impl Signer for LocalSigner {
         let bulletproof = shekyl_bulletproofs::Bulletproof::read_plus(
             &mut signatures.bulletproof_plus.as_slice(),
         )
-        .map_err(|_| SignerError::RemoteFailure {
-            reason: "bulletproof parse failed during wire encode",
+        .map_err(|_| SignerError::Internal {
+            fault: SignerFault::BulletproofParse,
         })?;
 
         let wire_input = shekyl_tx_builder::WireEncodeInput {
@@ -443,15 +443,14 @@ impl Signer for LocalSigner {
             fcmp_layers: signatures.tree_depth,
         };
 
-        let tx_bytes = shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| {
-            SignerError::RemoteFailure {
-                reason: "final wire encode failed",
-            }
-        })?;
+        let tx_bytes =
+            shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| SignerError::Internal {
+                fault: SignerFault::WireEncode,
+            })?;
 
         Ok(SignedTransfer {
             tx_bytes,
-            tx_key_secret: signatures.tx_key_secret,
+            tx_key: signatures.tx_key,
         })
     }
 }
@@ -520,8 +519,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
-                dust_threshold: 0,
+                fee_with_change: Some(0),
             },
         }
     }
@@ -557,6 +555,11 @@ mod tests {
             .sign_transfer(context)
             .await
             .expect_err("empty TxToSign cannot be signed");
-        assert!(matches!(err, SignerError::RemoteFailure { .. }));
+        assert!(matches!(
+            err,
+            SignerError::Internal {
+                fault: SignerFault::Primitive
+            }
+        ));
     }
 }

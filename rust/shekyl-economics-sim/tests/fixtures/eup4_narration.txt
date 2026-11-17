@@ -351,8 +351,8 @@ it gains), at the 20 % share.
   window-edge stuffer    y30  unenforced  58185216 archival bytes: -23.836 floors/B
   window-edge stuffer    y30  enforced    58185216 archival bytes: -23.270 floors/B
 
-EI-6 — PRIORITY ELASTICITY. The 15/80/5 mix with Priority's share at 5, 2.5, 1 and 0 %, the
-share it gives up moved to Standard, and an elastic arm (a declared behaviour): Priority keeps
+EI-6 — HIGH ELASTICITY. The 15/80/5 mix with High's share at 5, 2.5, 1 and 0 %, the
+share it gives up moved to Standard, and an elastic arm (a declared behaviour): High keeps
 5 % x min(1, P0/P), P its fee and P0 its fee at the fold's first block, unit elasticity.
 Per cell: A1's onset (flat-25, best), its fee leg at the flat-25 onset, and miner income
 per block at the sampled years (SKL).

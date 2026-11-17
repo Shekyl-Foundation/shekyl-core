@@ -154,7 +154,6 @@ mod tests {
     use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
     use tokio::sync::RwLock;
-    use zeroize::Zeroizing;
 
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::traits::LedgerEngine;
@@ -184,7 +183,6 @@ mod tests {
             source_ciphertext: None,
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(10),
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: shekyl_engine_state::ReceiveAttribution::Unattributed,
@@ -217,7 +215,7 @@ mod tests {
         wallet.tx_meta.tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0x5A; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0x5A; 32]).store()),
             },
         );
         wallet.sync_state.pending_tx_hashes.push(txid);
@@ -438,8 +436,12 @@ mod tests {
             shekyl_types::BlockHeight::from_raw(25)
         );
         assert!(
-            !wallet.ledger.transfers[0]
-                .is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &locks),
+            !wallet.ledger.transfers[0].is_spendable(
+                shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                    u64::MAX
+                )),
+                &locks
+            ),
             "the replayed funding row is excluded from selection"
         );
         assert_eq!(

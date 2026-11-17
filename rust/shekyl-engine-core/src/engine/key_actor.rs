@@ -637,7 +637,7 @@ mod tests {
         tx_hash: [u8; 32],
     ) -> OutputDetectionInput {
         let constructed = construct_output(
-            &TEST_TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
             &recipient.x25519_pk,
             &recipient.ml_kem_ek,
             recipient.spend_pk.as_canonical_bytes(),
@@ -818,8 +818,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
-                dust_threshold: 0,
+                fee_with_change: Some(0),
             },
         }
     }
