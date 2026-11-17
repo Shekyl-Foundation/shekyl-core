@@ -30,7 +30,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 mod render;
 
 pub use render::{
-    held_at_start_sentence, install_sentence, names_data_dir, render, UNKNOWN_SENTENCE,
+    fix_sentence, held_at_start_sentence, install_sentence, names_data_dir, render,
+    UNKNOWN_SENTENCE,
 };
 
 /// A closed set of keywords, with an arm for a keyword this build does not

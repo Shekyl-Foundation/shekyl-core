@@ -369,21 +369,30 @@ fn bootstrap_sentence(tor: &ManagedTor, progress: u8, unknown: &mut bool) -> Str
     }
 }
 
+/// The words for one fix: what the operator may do, and what follows from
+/// it. `None` for a fix this build does not know. The status line joins
+/// these in the reply's order; a client that offers the fixes one by one
+/// says each in the same words.
+#[must_use]
+pub fn fix_sentence(fix: &Fix) -> Option<&'static str> {
+    match fix {
+        Fix::RestoreManaged => Some("Restore the bundled Tor, or name one that passes its check."),
+        Fix::Operator => Some("Or use a Tor you run yourself."),
+        Fix::ClearnetOn => Some("Or turn clearnet on and keep Tor managed."),
+        Fix::ClearnetOnly => Some(
+            "Or turn Tor off and send over the open network. Until the encrypted link is in place, that network is unencrypted.",
+        ),
+        Fix::Unknown { .. } => None,
+    }
+}
+
 fn fixes_sentence(fixes: &[Fix], unknown: &mut bool) -> String {
     let mut parts = Vec::new();
     for fix in fixes {
-        parts.push(match fix {
-            Fix::RestoreManaged => "Restore the bundled Tor, or name one that passes its check.",
-            Fix::Operator => "Or use a Tor you run yourself.",
-            Fix::ClearnetOn => "Or turn clearnet on and keep Tor managed.",
-            Fix::ClearnetOnly => {
-                "Or turn Tor off and send over the open network. Until the encrypted link is in place, that network is unencrypted."
-            }
-            Fix::Unknown { .. } => {
-                *unknown = true;
-                continue;
-            }
-        });
+        match fix_sentence(fix) {
+            Some(sentence) => parts.push(sentence),
+            None => *unknown = true,
+        }
     }
     parts.join(" ")
 }

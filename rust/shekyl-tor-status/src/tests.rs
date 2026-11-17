@@ -565,3 +565,47 @@ fn the_data_directory_is_named_only_when_given() {
     assert!(names_data_dir(&status));
     assert!(!names_data_dir(&managed()));
 }
+
+/// **Each fix has its own words, and the status line is those words
+/// joined** (Rick, 2026-11-17). A client that offers the fixes one by one
+/// (the GUI's Settings) says each as the line does. Every fix this build
+/// knows has a sentence; one it does not know has none, and the line says
+/// the update sentence in its place. Fails if the line's fixes are written
+/// anywhere but `fix_sentence`.
+#[test]
+fn the_fixes_sentence_is_each_fix_s_own_words_joined() {
+    let fixes = Fix::known();
+    let each: Vec<&str> = fixes
+        .iter()
+        .map(|fix| fix_sentence(fix).expect("a known fix has its words"))
+        .collect();
+    assert_eq!(
+        each.iter().collect::<HashSet<_>>().len(),
+        fixes.len(),
+        "each fix says something of its own"
+    );
+    let status = with_tor(|tor| {
+        tor.state = TorState::Waiting;
+        tor.cause = Some(TorCause::Missing);
+        tor.progress = None;
+        tor.fix = fixes.clone();
+    });
+    let line = render(&status, None);
+    assert!(line.ends_with(&each.join(" ")), "{line}");
+
+    let later: Fix =
+        serde_json::from_value(serde_json::json!("a-fix-from-later")).expect("decodes");
+    assert_eq!(fix_sentence(&later), None);
+    let status = with_tor(|tor| {
+        tor.state = TorState::Waiting;
+        tor.cause = Some(TorCause::Missing);
+        tor.progress = None;
+        tor.fix = vec![Fix::RestoreManaged, later];
+    });
+    let line = render(&status, None);
+    assert!(
+        line.contains(fix_sentence(&Fix::RestoreManaged).expect("known"))
+            && line.ends_with(UNKNOWN_SENTENCE),
+        "{line}"
+    );
+}
