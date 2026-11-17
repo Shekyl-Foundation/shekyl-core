@@ -3,8 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The account walk's next entry by `getpwent_r` (glibc, FreeBSD, DragonFly,
-//! NetBSD), into a buffer the walk keeps.
+//! The account walk's next entry by `getpwent_r` (glibc, FreeBSD and
+//! DragonFly), into a buffer the walk keeps.
 //!
 //! glibc re-reads an entry that did not fit, so it starts small and grows.
 //! The BSDs move past it, so they start at the largest buffer. A `Grow` on
@@ -28,7 +28,7 @@ const POLICY: Policy = Policy {
     start: super::LOOKUP_BUFFER_START,
 };
 
-#[cfg(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd"))]
+#[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
 const POLICY: Policy = Policy {
     convention: ReentrantConvention::Bsd,
     // The ceiling. A short buffer is not retried: the library has already
@@ -39,8 +39,7 @@ const POLICY: Policy = Policy {
 #[cfg(not(any(
     all(target_os = "linux", target_env = "gnu"),
     target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "netbsd"
+    target_os = "dragonfly"
 )))]
 compile_error!("group: name this target's getpwent_r convention and starting buffer");
 

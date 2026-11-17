@@ -25,7 +25,11 @@ The project README documents build/run guidance for:
 - Linux and macOS
 - Windows (MSYS2/MinGW)
 - Raspberry Pi
-- FreeBSD, OpenBSD, NetBSD, Solaris
+- FreeBSD, OpenBSD, Solaris
+
+NetBSD is not a supported target (Rick, 2026-11-17). No CI job builds it, and
+the daemon names no NetBSD arm: a NetBSD build stops at the account walk's
+`compile_error!` in `shekyl-daemon-config`.
 
 ### Practical baseline
 

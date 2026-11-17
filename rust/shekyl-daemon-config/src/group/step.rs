@@ -19,7 +19,7 @@
 //!   account. Any other code refuses. An unavailable service is `ENOENT` too
 //!   (`nss/getnssent_r.c`, `__nss_getent_r`), which is the end of the list,
 //!   not a failed read.
-//! - FreeBSD, DragonFly and NetBSD (`getpwent_r`): `0` with no result is the
+//! - FreeBSD and DragonFly (`getpwent_r`): `0` with no result is the
 //!   end (`lib/libc/gen/getpwent.c` in each). `ERANGE` refuses. Their files
 //!   and compat backends move past an entry before checking that it fits, so
 //!   a retry would skip that account and the check would fail open.
@@ -51,7 +51,7 @@ use super::{Account, AccountName};
 pub(super) enum ReentrantConvention {
     /// glibc: `ENOENT` ends the list; `ERANGE` is retried.
     Glibc,
-    /// FreeBSD, DragonFly, NetBSD: `0` with no result ends the list;
+    /// FreeBSD, DragonFly: `0` with no result ends the list;
     /// `ERANGE` refuses, because the cursor has already passed the entry.
     Bsd,
 }

@@ -219,12 +219,11 @@ impl Drop for WalkCursor {
     }
 }
 
-/// glibc, FreeBSD, DragonFly, NetBSD.
+/// glibc, FreeBSD, DragonFly.
 #[cfg(any(
     all(target_os = "linux", target_env = "gnu"),
     target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "netbsd"
+    target_os = "dragonfly"
 ))]
 #[path = "reader/reentrant.rs"]
 mod reader;
@@ -246,7 +245,6 @@ mod reader;
     all(target_os = "linux", target_env = "musl"),
     target_os = "freebsd",
     target_os = "dragonfly",
-    target_os = "netbsd",
     target_os = "macos",
     target_os = "ios",
     target_os = "openbsd",
