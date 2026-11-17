@@ -9,7 +9,7 @@
 # The primitives live in docs/formal/proverif/lib/noise.pvl and the break
 # constants in lib/broken.pvl. run.py loads those two, in that order, with
 # `proverif -lib`. This file declares the protocol: the two roles, the
-# enrolment table, the events, and the queries. EncryptAndHash stays in
+# enrollment table, the events, and the queries. EncryptAndHash stays in
 # lib/encrypt_and_hash.pvl, which only NNhfs loads: this pattern writes
 # `aead` and `mixh` itself.
 #
@@ -232,7 +232,7 @@ free ms_dh: scalar.
 free ms_kem: kemsk.
 free other_reply: bitstring.
 
-(* The daemon's enrolment list: a static key pair and what that client is
+(* The daemon's enrollment list: a static key pair and what that client is
    served. One daemon process admits whoever is on it. *)
 table enrolled(point, kempk, bitstring).
 
@@ -423,7 +423,7 @@ let Daemon() =
   let kpk2b(skpub) = adec(k4, n2, h7, cs2) in
   let h8 = mixh(h7, cs2) in{daemon_se}
   let h9 = mixh(h8, c3) in
-  (* enrolment: only statics on the list are admitted, both halves of one
+  (* enrollment: only statics on the list are admitted, both halves of one
      entry *)
   get enrolled(=spub, =skpub, reply_for_it) in
   event DaemonAcceptsClassical(spub, skpub, h9);

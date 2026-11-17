@@ -1,0 +1,66 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Each fuzz target's coverage floor (ruled 2026-11-15/16). The nightly leg
+# (`scripts/ci/fuzz_run.py`) is red when its final `cov:` is under
+# `tolerance` percent of `cov`; `check_fuzz_inventory.py --floors` (the
+# per-PR fuzz-harness workflow) holds one row per target and the tolerance
+# to the two runs that measured it.
+#
+# Columns, tab-separated:
+#   target      <crate>/<target>
+#   cov         the floor: the final `cov:` of a COLD seeded nightly leg
+#               (`restored` 0 in its stats), run five minutes on a runner
+#   run         that leg's workflow run id
+#   commit      the full commit that run built and ran
+#   second_cov  the final `cov:` of a second leg of the same target, same
+#               commit and seeds; it may have started from a cached corpus
+#   second_run  that leg's workflow run id
+#   tolerance   90, or for a target whose two runs differ by more than 5%,
+#               100 less twice the spread rounded up (`tolerance()`)
+#
+# A floor moves only in a reviewed commit that changes its run and commit
+# with it: dispatch the nightly `fuzz` job on the branch (with
+# `fuzz_target` for one target), delete the target's cached corpus first so
+# the leg starts cold, and record the run's figures here.
+#
+# target	cov	run	commit	second_cov	second_run	tolerance
+shekyl-crypto-pq/fuzz_bech32m_address_decode	243	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	243	44010502027	90
+shekyl-crypto-pq/fuzz_construct_output	3768	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	3768	44010502027	90
+shekyl-crypto-pq/fuzz_construct_output_malformed_kem	3332	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	3332	44010502027	90
+shekyl-crypto-pq/fuzz_derive_output_key	1051	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	1051	44010502027	90
+shekyl-crypto-pq/fuzz_derive_output_secrets	534	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	534	44010502027	90
+shekyl-crypto-pq/fuzz_kem_decapsulate	1014	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	1014	44010502027	90
+shekyl-crypto-pq/fuzz_multisig_blob_roundtrip	978	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	978	44010502027	90
+shekyl-crypto-pq/fuzz_multisig_key_blob	230	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	231	44010502027	90
+shekyl-crypto-pq/fuzz_multisig_sig_blob	102	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	102	44010502027	90
+shekyl-crypto-pq/fuzz_multisig_verify	116	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	116	44010502027	90
+shekyl-crypto-pq/fuzz_scan_malformed_ct	3958	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	3952	44010502027	90
+shekyl-daemon-rpc/fuzz_submit_phase_a	1257	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	1287	44010502027	90
+shekyl-engine-state/region2_parser	2597	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	2577	44010502027	90
+shekyl-fcmp/fuzz_block_header_tree_root	3891	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	3999	44010502027	90
+shekyl-fcmp/fuzz_curve_tree_leaf_hash	871	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	863	44010502027	90
+shekyl-fcmp/fuzz_fcmp_proof_deserialize	902	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	902	44010502027	90
+shekyl-fcmp/fuzz_tx_deserialize_fcmp_type7	522	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	522	44010502027	90
+shekyl-multisig/fuzz_body_commitment_decode	184	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	184	44010502027	90
+shekyl-multisig/fuzz_body_final_tx_decode	77	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	77	44010502027	90
+shekyl-multisig/fuzz_body_hybrid_sig_decode	151	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	151	44010502027	90
+shekyl-multisig/fuzz_body_proposal_decode	304	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	351	44010502027	72
+shekyl-multisig/fuzz_body_responder_share_decode	199	44021034033	57f4d6b71ad6fc7422f48e58f7d01df83436363f	199	44023078202	90
+shekyl-multisig/fuzz_body_signature_share_decode	87	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	87	44010502027	90
+shekyl-multisig/fuzz_body_signing_set_decode	110	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	110	44010502027	90
+shekyl-multisig/fuzz_envelope_v2_decode	31	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	31	44010502027	90
+shekyl-multisig/fuzz_intent_validation	191	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	191	44010502027	90
+shekyl-noise/fuzz_classed_opener	1201	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	1201	44010502027	90
+shekyl-p2p-transport/fuzz_open_one	1729	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	1729	44010502027	90
+shekyl-p2p-transport/fuzz_read_message1	182	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	182	44010502027	90
+shekyl-p2p-transport/fuzz_read_message2	1766	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	1766	44010502027	90
+shekyl-proofs/fuzz_verify_reserve_proof	674	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	674	44010502027	90
+shekyl-proofs/fuzz_verify_tx_proof_inbound	687	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	687	44010502027	90
+shekyl-proofs/fuzz_verify_tx_proof_outbound	683	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	675	44010502027	90
+shekyl-tx-builder/fuzz_bp_plus_masks	4709	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	4709	44010502027	90
+shekyl-wire/fuzz_block_parse	941	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	941	44010502027	90
+shekyl-wire/fuzz_tx_extra_parse	556	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	578	44010502027	90
+shekyl-wire/fuzz_tx_parse	1530	44010428882	298205388b5baf413b15e5cc056f67ef5de48ce4	1563	44010502027	90

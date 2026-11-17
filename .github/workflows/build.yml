@@ -19,13 +19,14 @@ on:
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
-# Every push to `dev` shares one ref, so a merge cancels the run of the
-# merge before it and a burst is tested once, at its newest commit. The
-# `changes` job measures a push from the last green run, not from the
-# previous push, so a cancelled run's commits are still in scope.
+# Only a pull request's run is cancelled: every push to `dev` shares one
+# ref, so a merge queues behind the running `dev` run, which finishes, and
+# a newer merge replaces the queued one. The `changes` job measures a push
+# from the last green run, not from the previous push, so a replaced
+# run's commits are still in scope (`scripts/ci/check_dev_push_runs_finish.py`).
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
 
 permissions:
   contents: read
@@ -243,7 +244,7 @@ jobs:
           staged=$(find build -type f -name shekyld -path '*/release/bin/*' -print -quit)
           if [ -z "$staged" ]; then echo "no staged shekyld under build/" >&2; exit 1; fi
           bindir=$(dirname "$staged")
-          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc"
+          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc" "$bindir/shekyl-rpc-tunnel"
 
   # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
   # PR Windows coverage is the MSVC daemon job below (the only runner that
@@ -336,7 +337,7 @@ jobs:
       # reaches them, so the result is what is asserted. readelf is binutils.
       - name: binary hardening on the staged binaries (readelf)
         shell: bash
-        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
+        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc build/bin/shekyl-rpc-tunnel
       # The C++ removal's end state (Rick, 2026-11-06), on what this job
       # built: the staged shekyld needs no C++ runtime and holds no C++
       # symbol. The tree half (no first-party C or C++ tracked, no CMake
@@ -752,7 +753,7 @@ jobs:
       # developer shell. `/GS` leaves no header mark and is not read here.
       - name: binary hardening on the linked daemon (PE headers)
         shell: bash
-        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe
+        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe build/bin/Release/shekyl-rpc-tunnel.exe
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe

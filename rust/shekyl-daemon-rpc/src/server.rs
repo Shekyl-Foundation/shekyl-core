@@ -29,7 +29,7 @@
 //! Axum HTTP server replacing epee's http_server_impl_base for daemon RPC.
 
 use crate::bind::BoundListener;
-use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
+use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener, Reserve};
 use crate::handlers::rpc;
 use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
@@ -74,7 +74,7 @@ pub struct AppState {
     /// on disk; the permit is taken before the blocking-pool task.
     pub coinbase_reads: Arc<Semaphore>,
     /// The RPC channel's state: its key, the enrolled set and the live
-    /// sessions (`crate::channel`). `None` serves the enrolment methods as
+    /// sessions (`crate::channel`). `None` serves the enrollment methods as
     /// not ready.
     pub channel: Option<Arc<crate::channel::Channel>>,
 }
@@ -227,12 +227,16 @@ where
 pub async fn serve_listeners(
     config: ServerConfig,
     submit_engine: Arc<DaemonSubmitEngine>,
-    admin: Vec<BoundListener>,
-    view: Vec<BoundListener>,
-    owner: Option<crate::owner::ServedListener>,
-    channel_listen: Vec<BoundListener>,
+    listeners: Listeners,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Listeners {
+        admin,
+        view,
+        owner,
+        channel_listen,
+        console,
+    } = listeners;
     let conn_tracker = ConnTracker::new(config.conn_limits);
     let hash_budget = Arc::new(HashBudget::new(Instant::now()));
     let coinbase_reads = Arc::new(Semaphore::new(1));
@@ -296,16 +300,18 @@ pub async fn serve_listeners(
         ));
         (router, listener)
     });
-    let channel = match (&config.channel, channel_listen.is_empty()) {
-        (Some(channel), false) => Some((
-            channel_router(state_for(), &config.cors_origins),
-            Arc::clone(channel),
-            channel_listen,
-        )),
-        (None, false) => {
+    let listens = !channel_listen.is_empty() || console.is_some();
+    let channel = match (&config.channel, listens) {
+        (Some(channel), true) => Some(ChannelServed {
+            router: channel_router(state_for(), &config.cors_origins),
+            channel: Arc::clone(channel),
+            network: channel_listen,
+            console,
+        }),
+        (None, true) => {
             return Err("the RPC channel's listeners were bound with no channel state".into());
         }
-        (_, true) => None,
+        (_, false) => None,
     };
     serve_bound(
         vec![
@@ -324,9 +330,33 @@ pub async fn serve_listeners(
     .await
 }
 
-/// Which listener a bound socket is. An enrolment preset
+/// Every listener a start bound, as [`serve_listeners`] takes them.
+pub struct Listeners {
+    /// The plaintext admin listener's sockets.
+    pub admin: Vec<BoundListener>,
+    /// The plaintext view listener's sockets.
+    pub view: Vec<BoundListener>,
+    /// The owner's socket or pipe (RT-15).
+    pub owner: Option<crate::owner::ServedListener>,
+    /// The channel's `rpc-listen` sockets.
+    pub channel_listen: Vec<BoundListener>,
+    /// A service's console leg (RT-O37).
+    pub console: Option<crate::channel::console_leg::ConsoleListener>,
+}
+
+/// The channel's listeners as [`serve_bound`] serves them: the one router,
+/// the channel's state, the `rpc-listen` sockets and a service's console
+/// leg.
+pub(crate) struct ChannelServed {
+    pub(crate) router: Router,
+    pub(crate) channel: Arc<crate::channel::Channel>,
+    pub(crate) network: Vec<BoundListener>,
+    pub(crate) console: Option<crate::channel::console_leg::ConsoleListener>,
+}
+
+/// Which listener a bound socket is. An enrollment preset
 /// (`shekyl_rpc_grants::Preset`) is a different thing: the view listener
-/// also serves submit and mining work until RT-W12, which the enrolment
+/// also serves submit and mining work until RT-W12, which the enrollment
 /// preset `View` does not.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Listener {
@@ -356,7 +386,7 @@ impl Listener {
 pub(crate) async fn serve_bound(
     sets: Vec<(Listener, Router, Vec<BoundListener>)>,
     owner: Option<(Router, crate::owner::ServedListener)>,
-    channel: Option<(Router, Arc<crate::channel::Channel>, Vec<BoundListener>)>,
+    channel: Option<ChannelServed>,
     conn_tracker: Arc<ConnTracker>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -373,14 +403,34 @@ pub(crate) async fn serve_bound(
         }
     };
     if let Some((app, listener)) = owner {
+        // The owner's reserve (RT-O37): a full shared pool does not lock
+        // the owner out of its own node.
         serves.spawn(crate::listener_http::serve_plaintext(
-            LimitedListener::new(listener, conn_tracker.clone()),
+            LimitedListener::reserved(listener, conn_tracker.clone(), Reserve::Owner),
             app,
             stop_on(shutdown.clone(), fail_rx.clone()),
         ));
     }
-    if let Some((app, channel, bound)) = channel {
-        for bound in bound {
+    if let Some(ChannelServed {
+        router: app,
+        channel,
+        network,
+        console,
+    }) = channel
+    {
+        if let Some(console) = console {
+            info!(target: "global", "shekyl-daemon-rpc listening on the console's leg");
+            // The console's reserve (RT-O37): a full shared pool does not
+            // lock the administrator out of revoking a key.
+            serves.spawn(crate::channel::listener::serve(
+                LimitedListener::reserved(console, conn_tracker.clone(), Reserve::Console),
+                crate::channel::listener::Leg::Console,
+                Arc::clone(&channel),
+                app.clone(),
+                stop_on(shutdown.clone(), fail_rx.clone()),
+            ));
+        }
+        for bound in network {
             info!(
                 target: "global",
                 "shekyl-daemon-rpc listening on {} (channel listener)",
@@ -389,6 +439,7 @@ pub(crate) async fn serve_bound(
             let (_, listener) = bound.into_parts();
             serves.spawn(crate::channel::listener::serve(
                 LimitedListener::new(listener, conn_tracker.clone()),
+                crate::channel::listener::Leg::Network,
                 Arc::clone(&channel),
                 app.clone(),
                 stop_on(shutdown.clone(), fail_rx.clone()),

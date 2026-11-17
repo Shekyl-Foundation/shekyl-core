@@ -154,7 +154,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     // The console key's reset (IG-Q88): under the lock just taken, held
     // through the whole replacement, so it cannot run beside a daemon and a
     // start waits on it (`RPC_CHANNEL.md` §5). It touches no other
-    // enrolment, and exits without starting the node.
+    // enrollment, and exits without starting the node.
     if config.session.console_key_reset {
         return match shekyl_daemon_rpc::channel::reset_console_key(&config.data_dir) {
             Ok(path) => {
@@ -219,11 +219,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
             service_rendezvous_line(
                 network.name(),
                 config.rpc.instance.label(),
-                &shekyl_daemon_rpc::channel::rendezvous::record_path(
-                    dir,
-                    &network_id,
-                    &config.rpc.instance,
-                ),
+                &shekyl_rpc_rendezvous::service_record_path(dir, &network_id, &config.rpc.instance),
                 !config.rpc.channel_listen.is_empty(),
             )
         }));

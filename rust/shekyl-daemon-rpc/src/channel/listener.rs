@@ -47,6 +47,10 @@ use shekyl_rpc_stream::{class_table, RecordStream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 
+use shekyl_rpc_channel::SESSIONS_PER_CLIENT;
+use shekyl_rpc_types::errors::RpcError;
+
+use super::sessions::Registration;
 use super::{Admitted, Channel, ChannelCall};
 use crate::authority::Authority;
 
@@ -58,17 +62,55 @@ struct Handshaken {
     request: GrantSet,
 }
 
-/// Serve the channel on `listener` until `signal` completes, then wait for
-/// every connection to end. `router` is the one router, not yet stamped:
-/// each connection stamps its own authority.
+/// Which of the channel's legs a listener is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Leg {
+    /// `rpc-listen`: every enrolled key and the console key.
+    Network,
+    /// A service's console leg (RT-O37): the console key alone, at a socket
+    /// or pipe only the service account and an administrator can open. Any
+    /// other claim is closed at message 3.
+    Console,
+}
+
+/// How a connection's peer is named in the node's log.
+pub(crate) trait PeerLabel {
+    fn label(&self) -> String;
+}
+
+impl PeerLabel for SocketAddr {
+    fn label(&self) -> String {
+        self.to_string()
+    }
+}
+
+#[cfg(unix)]
+impl PeerLabel for tokio::net::unix::SocketAddr {
+    fn label(&self) -> String {
+        "the console's socket".to_owned()
+    }
+}
+
+#[cfg(windows)]
+impl PeerLabel for () {
+    fn label(&self) -> String {
+        "the console's pipe".to_owned()
+    }
+}
+
+/// Serve the channel's `leg` on `listener` until `signal` completes, then
+/// wait for every connection to end. `router` is the one router, not yet
+/// stamped: each connection stamps its own authority.
 pub(crate) async fn serve<L>(
     mut listener: crate::conn_limit::LimitedListener<L>,
+    leg: Leg,
     channel: Arc<Channel>,
     router: Router,
     signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()>
 where
-    L: crate::conn_limit::AdmitAs<Addr = SocketAddr>,
+    L: crate::conn_limit::AdmitAs,
+    L::Addr: PeerLabel + std::fmt::Debug,
     L::Io: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -82,7 +124,8 @@ where
         tokio::spawn(connection(
             stop_rx.clone(),
             io,
-            peer,
+            peer.label(),
+            leg,
             accepted_at,
             Arc::clone(&channel),
             router.clone(),
@@ -102,7 +145,8 @@ where
 async fn connection<S>(
     mut stop: watch::Receiver<bool>,
     mut io: S,
-    peer: SocketAddr,
+    peer: String,
+    leg: Leg,
     accepted_at: Instant,
     channel: Arc<Channel>,
     router: Router,
@@ -113,7 +157,7 @@ async fn connection<S>(
     let handshaken = tokio::select! {
         result = tokio::time::timeout_at(
             deadline,
-            handshake(&mut io, &channel, accepted_at, peer),
+            handshake(&mut io, &channel, accepted_at, &peer, leg),
         ) => result,
         _stopped = stop.wait_for(|&stopped| stopped) => return,
     };
@@ -132,14 +176,24 @@ async fn connection<S>(
     // as it would have been (§5). A raised ceiling keeps it: the grant it
     // holds still lies within.
     let registering = Arc::clone(&channel);
-    let Some(mut registered) = channel.sessions.register(fingerprint, move || {
+    let mut registered = match channel.sessions.register(fingerprint, move || {
         registering
             .admitted(&fingerprint)
             .ok()
             .flatten()
             .is_some_and(|now| still_admitted(admitted, now))
-    }) else {
-        return;
+    }) {
+        Registration::Registered(registered) => registered,
+        Registration::NotAdmitted => return,
+        Registration::AtCap => {
+            tracing::info!(
+                target: "global",
+                "refused client {} from {peer}: it already holds {SESSIONS_PER_CLIENT} sessions",
+                hex::encode(fingerprint)
+            );
+            refuse_at_cap(io, session, first).await;
+            return;
+        }
     };
     let console = admitted == Admitted::Console;
     let authority = Authority::channel(request.intersection(admitted.ceiling()), console);
@@ -167,20 +221,62 @@ async fn connection<S>(
             .serve_connection(TokioIo::new(stream), TowerToHyperService::new(app)));
     let mut shutting_down = false;
     loop {
+        // The removal is read first: a session whose key was removed or
+        // lowered serves no request that reaches it afterwards (§5). Polled
+        // in random order, hyper could read and answer that request in the
+        // same wake that also saw the close.
         tokio::select! {
+            biased;
+            () = registered.closed() => return,
+            _stopped = stop.wait_for(|&stopped| stopped), if !shutting_down => {
+                shutting_down = true;
+                served.as_mut().graceful_shutdown();
+            }
             result = served.as_mut() => {
                 if let Err(error) = result {
                     tracing::trace!("channel connection ended: {error:#}");
                 }
                 return;
             }
-            () = registered.closed() => return,
-            _stopped = stop.wait_for(|&stopped| stopped), if !shutting_down => {
-                shutting_down = true;
-                served.as_mut().graceful_shutdown();
-            }
         }
     }
+}
+
+/// A session past its key's cap (RT-O37): its first request is answered
+/// with `bound.sessions` and the connection closes. The client is
+/// authenticated by now, so it is told why rather than closed in silence.
+/// The answer is bounded by the handshake deadline, so a refused connection
+/// cannot keep its slot.
+async fn refuse_at_cap<S>(io: S, session: AuthenticatedSession, first: shekyl_noise::Opened)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let Ok(stream) =
+        RecordStream::after_first_opened(io, session.send, session.recv, first, Vec::new())
+    else {
+        return;
+    };
+    let app = Router::new().fallback(|body: axum::body::Bytes| async move {
+        let id = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|request| request.get("id").cloned())
+            .unwrap_or(serde_json::Value::Null);
+        axum::Json(crate::authority::refusal(id, &at_cap()))
+    });
+    let served = http1::Builder::new()
+        .keep_alive(false)
+        .serve_connection(TokioIo::new(stream), TowerToHyperService::new(app));
+    drop(tokio::time::timeout(HANDSHAKE_DEADLINE, served).await);
+}
+
+/// The refusal a session past its key's cap is answered with.
+fn at_cap() -> RpcError {
+    crate::methods::over_bound(
+        crate::methods::codes::BOUND_SESSIONS,
+        "sessions held by one client key",
+        u64::try_from(SESSIONS_PER_CLIENT).unwrap_or(u64::MAX),
+        u64::try_from(SESSIONS_PER_CLIENT + 1).unwrap_or(u64::MAX),
+    )
 }
 
 /// Whether a session admitted as `then` is still admitted as `now`: the
@@ -200,7 +296,8 @@ async fn handshake<S>(
     io: &mut S,
     channel: &Channel,
     accepted_at: Instant,
-    peer: SocketAddr,
+    peer: &str,
+    leg: Leg,
 ) -> Option<Handshaken>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -247,6 +344,16 @@ where
             return None;
         }
     };
+    if leg == Leg::Console && admitted != Admitted::Console {
+        // The console's leg serves the console key alone (RT-O37): another
+        // claim there gets no message 4, as an unenrolled one does not.
+        tracing::info!(
+            target: "global",
+            "refused client {} on {peer}: only the console key is served there",
+            hex::encode(claim)
+        );
+        return None;
+    }
     let (pending, message4) = daemon
         .write_message4(&admitted.ceiling().to_payload())
         .ok()?;

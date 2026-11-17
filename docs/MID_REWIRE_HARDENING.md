@@ -1260,7 +1260,9 @@ freeze CI. Lands with the freeze commit, not in this pass.
 
 Graduates §3.8's cargo-fuzz harness from "local-only" to "nightly
 sidecar CI job." Triggered pre-freeze once the payload framing is
-KAT-locked.
+KAT-locked. **Done 2026-11-15:** the nightly workflow's `fuzz` job runs
+`region2_parser` with every other fuzz target in the tree (the CI lane's
+fuzz brief, Part B).
 
 ## 7. Reference implementation pointers
 

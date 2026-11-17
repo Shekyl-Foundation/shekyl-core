@@ -5,7 +5,7 @@
 
 //! The enrolled set (RT-O34; `RPC_CHANNEL.md` §5): a redb store of its own
 //! in the network's data directory, owned by the RPC channel, changed only
-//! through the enrolment methods and the console key's reset. There is no
+//! through the enrollment methods and the console key's reset. There is no
 //! file to edit behind the daemon's back.
 //!
 //! The file is the account's alone, as the channel's key files are
@@ -14,8 +14,8 @@
 //!
 //! One record per client fingerprint: its ceiling as expanded grants (never
 //! a preset's name, IG-Q87), when it was enrolled, and by whom. The console
-//! key, a service's, is not an enrolment: it sits in a cell of its own and
-//! is never listed, set or removed through the enrolment methods.
+//! key, a service's, is not an enrollment: it sits in a cell of its own and
+//! is never listed, set or removed through the enrollment methods.
 
 use std::path::Path;
 
@@ -23,10 +23,10 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use shekyl_rpc_grants::GrantSet;
 
 /// The store's file in the data directory.
-pub const STORE_FILE: &str = "rpc-enrolments.redb";
+pub const STORE_FILE: &str = "rpc-enrollments.redb";
 
-/// Fingerprint → [`Enrolment::to_bytes`].
-const ENROLMENTS: TableDefinition<'static, &[u8; 32], &[u8]> = TableDefinition::new("enrolments");
+/// Fingerprint → [`Enrollment::to_bytes`].
+const ENROLLMENTS: TableDefinition<'static, &[u8; 32], &[u8]> = TableDefinition::new("enrollments");
 
 /// The width of a cell in [`SINGLES`]. The console fingerprint fills it;
 /// the reset note uses the first [`RESET_NOTE_LEN`] bytes.
@@ -56,9 +56,9 @@ pub enum Enroller {
     Client([u8; 32]),
 }
 
-/// One enrolment.
+/// One enrollment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Enrolment {
+pub struct Enrollment {
     /// The ceiling, expanded.
     pub ceiling: GrantSet,
     /// When, in seconds since the Unix epoch.
@@ -67,7 +67,7 @@ pub struct Enrolment {
     pub by: Enroller,
 }
 
-impl Enrolment {
+impl Enrollment {
     const LEN: usize = 1 + 2 + 8 + 1 + 32;
 
     fn to_bytes(self) -> [u8; Self::LEN] {
@@ -122,10 +122,10 @@ pub enum StoreError {
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::File(e) => write!(f, "the enrolment store: {e}"),
-            Self::Db(e) => write!(f, "the enrolment store: {e}"),
+            Self::File(e) => write!(f, "the enrollment store: {e}"),
+            Self::Db(e) => write!(f, "the enrollment store: {e}"),
             Self::Corrupt => {
-                f.write_str("the enrolment store holds a record this build does not read")
+                f.write_str("the enrollment store holds a record this build does not read")
             }
         }
     }
@@ -155,60 +155,60 @@ impl Store {
         super::files::private_store(&path).map_err(StoreError::File)?;
         let db = Database::create(&path).map_err(db_err)?;
         let txn = db.begin_write().map_err(db_err)?;
-        txn.open_table(ENROLMENTS).map_err(db_err)?;
+        txn.open_table(ENROLLMENTS).map_err(db_err)?;
         txn.open_table(SINGLES).map_err(db_err)?;
         txn.commit().map_err(db_err)?;
         Ok(Self { db })
     }
 
-    /// The enrolment of `fingerprint`, if there is one.
+    /// The enrollment of `fingerprint`, if there is one.
     ///
     /// # Errors
     ///
     /// [`StoreError`].
-    pub fn get(&self, fingerprint: &[u8; 32]) -> Result<Option<Enrolment>, StoreError> {
+    pub fn get(&self, fingerprint: &[u8; 32]) -> Result<Option<Enrollment>, StoreError> {
         let txn = self.db.begin_read().map_err(db_err)?;
-        let table = txn.open_table(ENROLMENTS).map_err(db_err)?;
+        let table = txn.open_table(ENROLLMENTS).map_err(db_err)?;
         table
             .get(fingerprint)
             .map_err(db_err)?
-            .map(|value| Enrolment::from_bytes(value.value()))
+            .map(|value| Enrollment::from_bytes(value.value()))
             .transpose()
     }
 
-    /// Every enrolment, by fingerprint.
+    /// Every enrollment, by fingerprint.
     ///
     /// # Errors
     ///
     /// [`StoreError`].
-    pub fn list(&self) -> Result<Vec<([u8; 32], Enrolment)>, StoreError> {
+    pub fn list(&self) -> Result<Vec<([u8; 32], Enrollment)>, StoreError> {
         let txn = self.db.begin_read().map_err(db_err)?;
-        let table = txn.open_table(ENROLMENTS).map_err(db_err)?;
+        let table = txn.open_table(ENROLLMENTS).map_err(db_err)?;
         let mut out = Vec::new();
         for entry in table.iter().map_err(db_err)? {
             let (key, value) = entry.map_err(db_err)?;
-            out.push((*key.value(), Enrolment::from_bytes(value.value())?));
+            out.push((*key.value(), Enrollment::from_bytes(value.value())?));
         }
         Ok(out)
     }
 
-    /// Write `enrolment` for `fingerprint`, replacing any.
+    /// Write `enrollment` for `fingerprint`, replacing any.
     ///
     /// # Errors
     ///
     /// [`StoreError`].
-    pub fn put(&self, fingerprint: &[u8; 32], enrolment: Enrolment) -> Result<(), StoreError> {
+    pub fn put(&self, fingerprint: &[u8; 32], enrollment: Enrollment) -> Result<(), StoreError> {
         let txn = self.db.begin_write().map_err(db_err)?;
         {
-            let mut table = txn.open_table(ENROLMENTS).map_err(db_err)?;
+            let mut table = txn.open_table(ENROLLMENTS).map_err(db_err)?;
             table
-                .insert(fingerprint, enrolment.to_bytes().as_slice())
+                .insert(fingerprint, enrollment.to_bytes().as_slice())
                 .map_err(db_err)?;
         }
         txn.commit().map_err(db_err)
     }
 
-    /// Remove `fingerprint`'s enrolment; whether there was one.
+    /// Remove `fingerprint`'s enrollment; whether there was one.
     ///
     /// # Errors
     ///
@@ -216,7 +216,7 @@ impl Store {
     pub fn remove(&self, fingerprint: &[u8; 32]) -> Result<bool, StoreError> {
         let txn = self.db.begin_write().map_err(db_err)?;
         let removed = {
-            let mut table = txn.open_table(ENROLMENTS).map_err(db_err)?;
+            let mut table = txn.open_table(ENROLLMENTS).map_err(db_err)?;
             let removed = table.remove(fingerprint).map_err(db_err)?.is_some();
             removed
         };
@@ -337,27 +337,27 @@ mod tests {
         drop(Store::open(dir.path()).unwrap());
     }
 
-    /// An enrolment is stored as its expanded grants and reads back whole,
-    /// across a reopen; the console cell is separate from the enrolments.
+    /// An enrollment is stored as its expanded grants and reads back whole,
+    /// across a reopen; the console cell is separate from the enrollments.
     /// Red edit: write the ceiling's bits big-endian, and a reopened
     /// `wallet` ceiling reads as another set.
     #[test]
-    fn an_enrolment_survives_a_reopen_as_expanded_grants() {
+    fn an_enrollment_survives_a_reopen_as_expanded_grants() {
         let dir = tempfile::tempdir().unwrap();
         let fp = [7u8; 32];
-        let enrolment = Enrolment {
+        let enrollment = Enrollment {
             ceiling: Preset::Wallet.grants(),
             enrolled_at: 1_789_000_000,
             by: Enroller::Client([9u8; 32]),
         };
         {
             let store = Store::open(dir.path()).unwrap();
-            store.put(&fp, enrolment).unwrap();
+            store.put(&fp, enrollment).unwrap();
             store.commit_console(&[1u8; 32], None).unwrap();
         }
         let store = Store::open(dir.path()).unwrap();
-        assert_eq!(store.get(&fp).unwrap(), Some(enrolment));
-        assert_eq!(store.list().unwrap(), vec![(fp, enrolment)]);
+        assert_eq!(store.get(&fp).unwrap(), Some(enrollment));
+        assert_eq!(store.list().unwrap(), vec![(fp, enrollment)]);
         assert_eq!(store.console().unwrap(), Some([1u8; 32]));
         assert!(store.remove(&fp).unwrap());
         assert!(!store.remove(&fp).unwrap());
@@ -368,7 +368,7 @@ mod tests {
     /// A record of another version is refused, never read as this one.
     #[test]
     fn a_record_of_another_version_is_refused() {
-        let mut bytes = Enrolment {
+        let mut bytes = Enrollment {
             ceiling: GrantSet::ALL,
             enrolled_at: 0,
             by: Enroller::Host,
@@ -376,7 +376,7 @@ mod tests {
         .to_bytes();
         bytes[0] = 2;
         assert!(matches!(
-            Enrolment::from_bytes(&bytes),
+            Enrollment::from_bytes(&bytes),
             Err(StoreError::Corrupt)
         ));
     }

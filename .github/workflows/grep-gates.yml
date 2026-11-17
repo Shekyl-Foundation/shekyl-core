@@ -139,6 +139,13 @@ jobs:
             python3 scripts/ci/check_job_timeouts.py --selftest
           run_one "Every step job carries its own timeout" \
             python3 scripts/ci/check_job_timeouts.py
+          # A merge to dev must not cancel the dev run before it in the
+          # workflows whose runs outlast the gap between merges; only a
+          # pull request's newer push cancels its older run.
+          run_one "A started dev run finishes (selftest)" \
+            python3 scripts/ci/check_dev_push_runs_finish.py --selftest
+          run_one "A started dev run finishes" \
+            python3 scripts/ci/check_dev_push_runs_finish.py
           # A red push run on dev reaches report-dev-red.yml only from the
           # jobs its caller `needs`; a job added and left out of that list
           # could go red on dev with no issue.

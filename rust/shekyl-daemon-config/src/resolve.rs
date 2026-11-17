@@ -42,34 +42,43 @@ impl Resolved {
     }
 }
 
+/// The network the command line chose, read before the file is located
+/// (DC-Q18). The file cannot change it. Absent, it is mainnet.
+#[must_use]
+pub fn chosen_network(cli: &Cli) -> Network {
+    cli.given
+        .iter()
+        .find(|g| g.row.name == "network")
+        .and_then(|g| match &g.value {
+            Value::Word(word) => Network::from_name(word),
+            _ => None,
+        })
+        .unwrap_or(Network::Mainnet)
+}
+
 /// The two command-line-only choosers the file cannot change: the network
 /// and the run mode (DC-Q18). Read before the file is located.
 #[must_use]
 pub(crate) fn choosers(cli: &Cli) -> (Network, RunMode) {
-    let network = cli
-        .given
-        .iter()
-        .find(|g| g.row.name == "network")
-        .and_then(|g| match &g.value {
-            Value::Word(w) => Network::from_name(w),
-            _ => None,
-        })
-        .unwrap_or(Network::Mainnet);
     let mode = if cli.given.iter().any(|g| g.row.name == "service") {
         RunMode::Service
     } else {
         RunMode::User
     };
-    (network, mode)
+    (chosen_network(cli), mode)
 }
 
-/// Applies precedence and the network gate.
+/// Applies precedence and the network gate for `table`.
+///
+/// This is the one precedence. A binary with its own table — the tunnel —
+/// resolves here and reads the map itself. The daemon's sections are built
+/// only by [`crate::load`]: [`crate::sections`] keeps that build.
 ///
 /// # Errors
 /// Every development lever given on a network its row does not name
 /// (`config.dev.network`), and every default the table cannot build, which
 /// `Table::defects` already refuses.
-pub(crate) fn resolve(
+pub fn resolve(
     table: &Table,
     network: Network,
     cli: Cli,

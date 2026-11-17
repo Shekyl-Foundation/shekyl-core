@@ -1151,7 +1151,7 @@ lives. Identifier-level status (rulings, census rows, open items) is
 
 ### Fuzz Targets
 
-Ten `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and staking boundaries:
+These `cargo-fuzz` targets exercise the FCMP++, post-quantum and multisig boundaries (the tree has 37 targets in all; `python3 scripts/ci/check_fuzz_inventory.py --targets nightly` lists them):
 
 | Target | Crate | What it tests |
 |--------|-------|---------------|
@@ -1163,10 +1163,11 @@ Ten `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and st
 | `fuzz_multisig_verify` | `shekyl-crypto-pq` | Multisig verify path with malformed key blobs, signatures, and payloads |
 | `fuzz_multisig_key_blob` | `shekyl-crypto-pq` | Randomized multisig key-blob decode and bounds checks |
 | `fuzz_multisig_sig_blob` | `shekyl-crypto-pq` | Randomized multisig signature-blob decode and validation |
-| `fuzz_claim_reward` | `shekyl-staking` | Random accrual records; reward overflow, monotonicity, and bound invariants |
 | `fuzz_tx_deserialize_fcmp_type7` | `shekyl-fcmp` | Transaction-structured FCMP++ deserialization: pseudoOuts, proof blobs, PQC leaf entries, corrupted types |
 
-CI compiles every fuzz harness on the pinned stable toolchain (`.github/workflows/fuzz-harness.yml`, one job per fuzz crate, scoped to the change), and `scripts/ci/check_fuzz_inventory.py` derives the inventory from the tree: every `[[bin]]` a file, every file a `[[bin]]`, every fuzz lockfile at the workspace's versions.
+CI compiles every fuzz harness on the pinned stable toolchain (`.github/workflows/fuzz-harness.yml`, one job over the fuzz crates the change reaches, with one shared target directory), and `scripts/ci/check_fuzz_inventory.py` derives the inventory from the tree: every `[[bin]]` a file, every file a `[[bin]]`, every fuzz lockfile at the workspace's versions, and one coverage floor per target (`scripts/ci/fuzz_coverage_floors.tsv`). A pre-push hook (`scripts/hooks/pre-push`) checks that every fuzz lockfile still resolves with `--locked` when a push changes a manifest or lockfile under `rust/`.
+
+Every target is also run every night (`.github/workflows/fuzz-nightly.yml`, on its own 15:17 UTC schedule, clear of the other nightly jobs): each fuzz crate is built once with the address sanitizer on the pinned nightly toolchain (the `fuzz-build` job), and each target runs its built binary for five minutes (the `fuzz` job), from a corpus cached per target and the target's committed `fuzz/seeds/<target>/` where it has one. A leg is red on a crash, with the crashing input attached to the run as an artifact, and red when it did not prove it fuzzed: fewer than 1,000 executions, no final line, an empty corpus, or a final coverage under 90% of the target's floor (`scripts/ci/fuzz_run.py`). A floor is the coverage one cold, seeded run of the target reached; a target whose two floor runs differ by more than 5% has a wider tolerance (100% less twice the spread), and a floor moves only in a commit that names the run that measured it. Each red target opens or threads its own nightly-red issue, which links the crash input. On Sundays the weekly job (19:17 UTC) runs the Noise handshake's reader, transaction decode, block decode, KEM decapsulation and the Bulletproofs+ round trip for thirty minutes each. The fix for a crash lands with its input added to the target's `fuzz/seeds/<target>/`.
 
 For the full pre-release fuzz campaign (10M runs per harness), run:
 
@@ -1180,7 +1181,6 @@ cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_kem_decapsulate --
 cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_verify -- -runs=10000000
 cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_key_blob -- -runs=10000000
 cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_sig_blob -- -runs=10000000
-cd rust/shekyl-staking/fuzz && cargo +nightly fuzz run fuzz_claim_reward -- -runs=10000000
 ```
 
 ### Rust Unit Tests

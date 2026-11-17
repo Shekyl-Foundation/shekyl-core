@@ -756,7 +756,7 @@ mod tests {
                 .expect("uds:// must be rejected on Windows");
             assert!(err.contains("Windows"), "{err}");
             assert!(
-                err.contains("omit"),
+                err.contains("Omit --rpc-url"),
                 "the rejection must say what works: {err}"
             );
         }

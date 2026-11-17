@@ -41,6 +41,13 @@ shekyl-options = { path = "../shekyl-options" }
 # The process hardening, the first statement of `main` (rule 35, DC-Q21):
 # no core and no same-account tracer before an argument is read.
 shekyl-process = { path = "../shekyl-process" }
+# The enrollment words (`enroll`, RT-W11): the channel's client key and the
+# daemon's bundle (`shekyl-rpc-channel`), the grant a word asks for, the
+# owner-only key file, and the names of a service's channel files.
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
+shekyl-os-account = { path = "../shekyl-os-account" }
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }

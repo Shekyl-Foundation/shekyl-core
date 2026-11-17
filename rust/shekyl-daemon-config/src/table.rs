@@ -45,7 +45,8 @@ pub fn runtime_owner(name: &str) -> Option<RuntimeOwner> {
     }
 }
 
-const LEVEL: Kind = Kind::OneOf(LEVELS);
+/// The kind of `log-level`, which every binary's logging rows share.
+pub const LEVEL: Kind = Kind::OneOf(LEVELS);
 const ENDPOINT: Kind = Kind::Endpoint(EndpointRule::Any);
 const LOOPBACK: Kind = Kind::Endpoint(EndpointRule::Loopback);
 const GLOBAL: Kind = Kind::Endpoint(EndpointRule::GlobalUnicast);
@@ -66,10 +67,22 @@ const RATE: Kind = Kind::Quantity {
     min: 1,
     keywords: &["unlimited"],
 };
-const BYTES: Kind = Kind::Quantity {
+/// The kind of a byte budget (`log-size-max`), which every binary's logging
+/// rows share.
+pub const BYTES: Kind = Kind::Quantity {
     dimension: Dimension::Bytes,
     min: 1,
     keywords: &[],
+};
+
+/// The kind of `log-category`, which every binary's logging rows share: a
+/// level for each log subsystem.
+pub const LOG_CATEGORY: Kind = Kind::Map {
+    keys: KeyRule {
+        describe: "a log subsystem: daemon, p2p, sync, chain, store, txpool, relay, rpc, tor, miner, notify or archival",
+        check: shekyl_logging::subsystem::is_subsystem,
+    },
+    value: &LEVEL,
 };
 const COUNT: Kind = Kind::Integer {
     min: 1,
@@ -158,7 +171,7 @@ const ROWS: &[Row] = &[
     // Network, paths, logging
     public("help", Kind::Switch, Default::Unset, Surface::Cli, "Print the options and exit."),
     public("version", Kind::Switch, Default::Unset, Surface::Cli, "Print the version and the operating system, and exit."),
-    public("rpc-console-key-reset", Kind::Switch, Default::Unset, Surface::Cli, "Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrolment. Service mode only; refused while the daemon runs."),
+    public("rpc-console-key-reset", Kind::Switch, Default::Unset, Surface::Cli, "Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrollment. Service mode only; refused while the daemon runs."),
     public("config-verify", Kind::Switch, Default::Unset, Surface::Cli, "Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own."),
     public("network", Kind::OneOf(NETWORKS), Default::Value("mainnet"), Surface::Cli, "The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file."),
     Row {
@@ -185,13 +198,7 @@ const ROWS: &[Row] = &[
     runtime("log-level", LEVEL, "warn", "The log level: error, warn, info, debug or trace."),
     runtime(
         "log-category",
-        Kind::Map {
-            keys: KeyRule {
-                describe: "a log subsystem: daemon, p2p, sync, chain, store, txpool, relay, rpc, tor, miner, notify or archival",
-                check: shekyl_logging::subsystem::is_subsystem,
-            },
-            value: &LEVEL,
-        },
+        LOG_CATEGORY,
         "none",
         "A log level for one subsystem, as subsystem=level; `none` is no overrides.",
     ),

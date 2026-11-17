@@ -323,7 +323,7 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | shekyl/p2p-wire-prefix-v1 | `rust/shekyl-network/src/lib.rs` | clearnet framing prefix | A | X = network_id |
 | shekyl/p2p-network-id-v1 | `rust/shekyl-network/src/lib.rs` | the network id | A | X = genesis hash |
 | shekyl/rpc-rendezvous-name-v1 | `rust/shekyl-rpc-rendezvous/src/lib.rs` | local rendezvous name | A | input starts with network_id |
-| shekyl/rpc-static-fingerprint-v1 | `rust/shekyl-rpc-channel/src/lib.rs` | enrolment id of a client key bundle | B | not a credential; the handshake prologue binds the id |
+| shekyl/rpc-static-fingerprint-v1 | `rust/shekyl-rpc-channel/src/lib.rs` | enrollment id of a client key bundle | B | not a credential; the handshake prologue binds the id |
 | shekyl/bp-plus-batch-weights-v1 | `rust/shekyl-bulletproofs/src/derived.rs` | verifier's batch-weight seed | B | randomness inside the verifier; never shown to anyone |
 | shekyl/fcmp-pp-batch-weights-v1 | `rust/shekyl-fcmp/src/batch_weights.rs` | FCMP++ batch-weight seed | A | includes `tree_root` |
 | shekyl/fcmp-membership-only-batch-weights-v1 | `rust/shekyl-fcmp/src/batch_weights.rs` | membership-only batch-weight seed | A | includes `tree_root` |

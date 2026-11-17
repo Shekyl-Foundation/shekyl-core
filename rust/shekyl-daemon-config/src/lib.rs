@@ -46,7 +46,7 @@ pub use owner_socket::OwnerSocketPlan;
 pub use platform::{Platform, RunMode};
 pub use resolve::Resolved;
 pub use sections::{
-    apply_logging, link_limits, log_location_creatable, log_location_writable, Clearnet,
-    DaemonConfig, Tor,
+    apply_logging, link_limits, log_location_creatable, log_location_writable, logging, Clearnet,
+    DaemonConfig, Logging, Tor,
 };
-pub use table::{runtime_owner, RuntimeOwner, LEVELS, NETWORKS, TABLE};
+pub use table::{runtime_owner, RuntimeOwner, BYTES, LEVEL, LEVELS, LOG_CATEGORY, NETWORKS, TABLE};

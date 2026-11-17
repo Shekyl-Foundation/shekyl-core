@@ -37,6 +37,12 @@ pub const RECORD_FORMAT: &str = "shekyl-rendezvous 1";
 /// random on each start.
 pub const PIPE_PREFIX: &str = r"\\.\pipe\shekyl-owner-";
 
+/// A service's console pipe's namespace prefix (`RPC_CHANNEL.md` RT-O37);
+/// the rest of the name is drawn at random on each start and written in the
+/// data directory, where only the service account and an administrator
+/// read it.
+pub const CONSOLE_PIPE_PREFIX: &str = r"\\.\pipe\shekyl-console-";
+
 /// A service's record's first line: its format and version.
 pub const SERVICE_RECORD_FORMAT: &str = "shekyl-service-rendezvous 1";
 
@@ -61,6 +67,51 @@ pub fn file_name(name: &RendezvousName) -> String {
 #[must_use]
 pub fn service_file_name(name: &RendezvousName) -> String {
     format!("shekyl-{name}")
+}
+
+/// The daemon's static key, in the network's data directory (RT-O34).
+pub const CHANNEL_KEY_FILE: &str = "rpc-channel.key";
+
+/// The daemon's public bundle, in the network's data directory: the X25519
+/// key then the ML-KEM-768 encapsulation key, what `rpc_bundle_show` replies.
+pub const CHANNEL_BUNDLE_FILE: &str = "rpc-channel.bundle";
+
+/// A service's console key, in the network's data directory (§5).
+pub const CONSOLE_KEY_FILE: &str = "rpc-console.key";
+
+/// A service's console leg on Unix: a socket in the network's data
+/// directory (RT-O37).
+pub const CONSOLE_SOCKET_FILE: &str = "rpc-console.sock";
+
+/// The file naming a service's console pipe on Windows, in the network's
+/// data directory (RT-O37).
+pub const CONSOLE_PIPE_FILE: &str = "rpc-console.pipe";
+
+/// Where a service's console leg is named for its data directory `dir`:
+/// the socket on Unix, the pipe's file on Windows. The service binds there
+/// and the CLI dials there, through this one function.
+#[must_use]
+pub fn console_leg_place(dir: &Path) -> PathBuf {
+    dir.join(if cfg!(windows) {
+        CONSOLE_PIPE_FILE
+    } else {
+        CONSOLE_SOCKET_FILE
+    })
+}
+
+/// Where a service's record is: [`service_file_name`] in the service's
+/// rendezvous directory `dir`, under the RT-O10 name of `network_id` and
+/// `instance`. The daemon publishes there and a client on the same
+/// machine reads there, through this one function.
+#[must_use]
+pub fn service_record_path(
+    dir: &Path,
+    network_id: &[u8; crate::NETWORK_ID_LEN],
+    instance: &crate::Instance,
+) -> PathBuf {
+    dir.join(service_file_name(&crate::rendezvous_name(
+        network_id, instance,
+    )))
 }
 
 /// Windows: the account's data home, `Shekyl` under the local application
