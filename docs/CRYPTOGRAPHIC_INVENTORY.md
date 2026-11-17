@@ -141,10 +141,10 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-11-15, counted from the TSV's production rows): 126 registered rows across the five mechanisms —
-131 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
+**Census (dated snapshot, 2026-11-17, counted from the TSV's production rows): 129 registered rows across the five mechanisms —
+134 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 131: the five mechanisms 126, plus the two micro-buckets, 1 + 4.) **This table is a
+sums to 134: the five mechanisms 129, plus the two micro-buckets, 1 + 4.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
@@ -278,10 +278,20 @@ group builds one transaction without exchanging its randomness
 checked by an independent stdlib oracle
 (`scripts/kat/multisig_intent_derive_oracle.py`).
 
+The 2026-11-17 refresh (multisig E′ slice 4a-1, R-24) adds one
+mechanism-2 info prefix, `shekyl/tx-output-order-v1`: the stream a
+transaction key expands, with no salt, for the Fisher–Yates shuffle that
+orders every wallet-built transaction's outputs
+(`shekyl-crypto-pq` `output_order.rs`, `TxKey::output_order`). Its vectors
+(`docs/test_vectors/TX_OUTPUT_ORDER_V1.json`) are written and checked by an
+independent stdlib oracle (`scripts/kat/tx_output_order_oracle.py`). The
+same refresh recounts every mechanism from the pins, mechanism 1
+included (56).
+
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 54 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 39 infos | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 56 | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 40 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |

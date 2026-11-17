@@ -870,6 +870,15 @@ jobs:
         if: '!cancelled()'
         run: python3 -I scripts/kat/multisig_intent_derive_oracle.py
 
+      - name: Run the transaction output order oracle
+        # R-24: the permutation a transaction key derives for its outputs
+        # (an unbiased Fisher-Yates over an HKDF-SHA-512 stream), recomputed
+        # with hand-written HKDF and Ed25519, anchored; requires
+        # docs/test_vectors/TX_OUTPUT_ORDER_V1.json to equal its output;
+        # exit 1 on a mismatch, 2 when the file pins nothing.
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/tx_output_order_oracle.py
+
       - name: Run clatter production-graph gate
         # clatter is an independent implementation of the RPC channel's
         # handshake pattern, in the workspace as a test-only cross-check
