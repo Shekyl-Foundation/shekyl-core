@@ -205,7 +205,7 @@ fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredW
     tx_hash[8] = seed;
     let output_index = u64::from(seed);
     let constructed = construct_output(
-        &TEST_OUTPUT_TX_KEY,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
@@ -301,7 +301,7 @@ fn populate_ledger(
         let amount = td.amount().to_raw();
         let output_index = td.internal_output_index.to_raw();
         let constructed = construct_output(
-            &TEST_OUTPUT_TX_KEY,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
             &blob.x25519_pk,
             &blob.ml_kem_ek,
             &test_recipient_spend_pk(),
@@ -637,7 +637,7 @@ async fn funded_ledger_and_tree(
     for &(seed, amt) in specs {
         let output_index = u64::from(seed);
         let c = construct_output(
-            &TEST_OUTPUT_TX_KEY,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
             &blob.x25519_pk,
             &blob.ml_kem_ek,
             &test_recipient_spend_pk(),
@@ -1506,11 +1506,10 @@ async fn submit_persists_tx_key_and_pending_hash() {
         .tx_keys
         .get(&tx_hash.to_bytes())
         .expect("dispatch persists the per-tx secret keyed by canonical txid");
-    assert_ne!(
-        *stored.primary.as_bytes(),
-        [0u8; 32],
-        "the persisted secret is the minted scalar, not a placeholder"
-    );
+    // The persisted record opens as a transaction key: what the OUTBOUND
+    // proof will read back.
+    shekyl_crypto_pq::TxKey::open(stored.primary.stored())
+        .expect("the persisted secret is a minted transaction key");
     assert!(
         guard
             .ledger
@@ -2715,7 +2714,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let blob = test_account_blob();
     let output_index = u64::from(spend_seed);
     let constructed = construct_output(
-        &TEST_OUTPUT_TX_KEY,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
@@ -2818,7 +2817,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     // with the input (a collision zeroes the FCMP++ rerandomization scalar).
     let change_output_index: u64 = output_index + 100;
     let change_out = construct_output(
-        &TEST_OUTPUT_TX_KEY,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),

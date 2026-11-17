@@ -43,7 +43,6 @@
 //! both auth legs, the backing proof and the fee FCMP against the root it
 //! proved under before it lists the claim.
 
-use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::Scalar;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::{
@@ -56,6 +55,7 @@ use shekyl_crypto_pq::output::{construct_output, sign_emission_backing_for_outpu
 use shekyl_crypto_pq::signature::{
     sign_emission_claim, HybridEd25519MlDsa, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_network::NetworkId;
 use shekyl_tx_builder::{
@@ -112,8 +112,8 @@ pub struct AssembledClaim {
 /// Assemble a persona's emission claim: `fee_inputs` are spent for the fee
 /// (and the change back to the persona), `backing` is proved a member of
 /// the tree at `tree` without being spent, `terms` are the claim, and
-/// `tx_key_secret` is the transaction key — passed in so two assemblies can
-/// draw the same one.
+/// `tx_key` is the transaction key — passed in so two assemblies can
+/// share one.
 ///
 /// The steps are the engine handler's, numbered as there (`claim.rs`):
 /// 5 the fee and the change split; 6 three vouts to the persona's base
@@ -135,7 +135,7 @@ pub struct AssembledClaim {
 )]
 pub fn assemble_emission_claim(
     keys: &ArchivalPKeys,
-    tx_key_secret: &Zeroizing<[u8; 32]>,
+    tx_key: &TxKey,
     fee_inputs: Vec<SpendInput>,
     backing: SpendInput,
     terms: ClaimTerms,
@@ -146,7 +146,7 @@ pub fn assemble_emission_claim(
     assemble(
         network,
         keys,
-        tx_key_secret,
+        tx_key,
         fee_inputs,
         backing,
         terms,
@@ -171,7 +171,7 @@ pub fn assemble_emission_claim(
 )]
 pub fn assemble_emission_claim_breaking_fee_proof(
     keys: &ArchivalPKeys,
-    tx_key_secret: &Zeroizing<[u8; 32]>,
+    tx_key: &TxKey,
     fee_inputs: Vec<SpendInput>,
     backing: SpendInput,
     terms: ClaimTerms,
@@ -182,7 +182,7 @@ pub fn assemble_emission_claim_breaking_fee_proof(
     assemble(
         network,
         keys,
-        tx_key_secret,
+        tx_key,
         fee_inputs,
         backing,
         terms,
@@ -205,7 +205,7 @@ enum FeeProof {
 fn assemble(
     network: &NetworkId,
     keys: &ArchivalPKeys,
-    tx_key_secret: &Zeroizing<[u8; 32]>,
+    tx_key: &TxKey,
     fee_inputs: Vec<SpendInput>,
     backing: SpendInput,
     terms: ClaimTerms,
@@ -238,14 +238,13 @@ fn assemble(
     // change vouts confidential. The reward commit the auth digest binds is
     // vout 0's commitment; the post-sign cross-check below holds it equal
     // to the signer's.
-    let tx_pubkey = &Scalar::from_bytes_mod_order(**tx_key_secret) * ED25519_BASEPOINT_TABLE;
     let vout_amounts = [total_reward, change_lo, change_hi];
     let constructed: Vec<OutputData> = vout_amounts
         .iter()
         .enumerate()
         .map(|(idx, amount)| {
             construct_output(
-                tx_key_secret,
+                tx_key,
                 &keys.x25519_pk,
                 &keys.ml_kem_ek,
                 keys.spend_pk.as_canonical_bytes(),
@@ -289,7 +288,7 @@ fn assemble(
         leaf_blob.extend_from_slice(&od.pqc_leaf.entry_bytes());
     }
     let tx_extra = serialize(&[
-        TxExtraField::PubKey(tx_pubkey.compress().to_bytes()),
+        TxExtraField::PubKey(tx_key.public_bytes()),
         TxExtraField::PqcKemCiphertext(kem_blob),
         TxExtraField::PqcLeafEntries(leaf_blob),
     ])

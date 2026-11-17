@@ -45,7 +45,6 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use rand::RngCore;
 use shekyl_archival_retention::{section_root, BundleBody, BundleRef};
 use shekyl_block_template::{
     build, EmissionOperands, Fill, MinerKeys, Template, TemplateContext, TemplateError,
@@ -53,6 +52,7 @@ use shekyl_block_template::{
 use shekyl_bundle_producer::WitnessRing;
 use shekyl_chain_rules::{fill_section, remember_window_epochs, DrawableMemo, Fault, RuleSet};
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreBundleView, StoreError};
+use shekyl_crypto_pq::TxKey;
 use shekyl_economics::EconomicParams;
 use shekyl_mempool::{select_shown, Evicted, Pool};
 use shekyl_miner::{Job, ListedBody};
@@ -60,7 +60,6 @@ use shekyl_types::{BlockHash, SectionRoot, Timestamp, TxHash};
 use shekyl_wire::transaction::COINBASE_RESERVE;
 use shekyl_wire::tx_extra::COINBASE_NONCE_BYTES;
 use shekyl_wire::Transaction;
-use zeroize::Zeroizing;
 
 use crate::connector::{chain_facts_on, ChainFacts, FactsStop};
 use crate::router::{claim_next, next_seed, ClaimStop};
@@ -398,11 +397,11 @@ fn judged_at_parent(pool: &Pool, parent: BlockHash) -> bool {
     pool.judged_at().is_some_and(|tip| tip.hash == parent)
 }
 
-/// One template's secrets: the coinbase's transaction secret and its draw
-/// commitment. The build takes a wiped copy of the secret; the witness
-/// key and seed behind the commitment stay in the ring.
+/// One template's secrets: the coinbase's transaction key and its draw
+/// commitment. Each build borrows the key; the witness key and seed behind
+/// the commitment stay in the ring.
 struct Secrets {
-    tx_key: Zeroizing<[u8; 32]>,
+    tx_key: TxKey,
     draw: shekyl_types::archival::DrawCommitment,
 }
 
@@ -411,10 +410,7 @@ impl Secrets {
         witness: &WitnessRing,
         connecting: shekyl_types::BlockHeight,
     ) -> Result<Self, NoTemplate> {
-        let mut tx_key = Zeroizing::new([0u8; 32]);
-        rand::rngs::OsRng
-            .try_fill_bytes(tx_key.as_mut())
-            .map_err(|e| NoTemplate::Random(e.to_string()))?;
+        let tx_key = TxKey::random().map_err(|e| NoTemplate::Random(e.to_string()))?;
         let draw = witness
             .draw(connecting)
             .map_err(|e| NoTemplate::Random(e.to_string()))?;
@@ -429,9 +425,6 @@ impl Secrets {
         listed: &[Transaction],
         root: [u8; 32],
     ) -> Result<Template, TemplateError> {
-        // Copied cell to cell: no bare copy of the secret on this stack.
-        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-        tx_key_secret.copy_from_slice(self.tx_key.as_ref());
         build(&TemplateContext {
             height: facts.connecting,
             previous: facts.previous,
@@ -452,7 +445,7 @@ impl Secrets {
             },
             params: producer.params,
             miner: producer.keys,
-            tx_key_secret,
+            tx_key: &self.tx_key,
             extra_nonce: [0; COINBASE_NONCE_BYTES],
             draw_commitment: self.draw,
             listed,

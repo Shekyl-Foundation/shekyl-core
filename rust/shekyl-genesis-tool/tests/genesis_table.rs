@@ -23,7 +23,7 @@ use shekyl_genesis_tool::table::{
     rebuild, recipients_path, recorded_timestamp, regtest_recipients, MINT_FLOOR,
     REGTEST_GENESIS_SEEDS,
 };
-use shekyl_genesis_tool::txkey::{derive_genesis_tx_secret, tx_pubkey};
+use shekyl_genesis_tool::txkey::genesis_tx_key;
 use shekyl_network::{network_id_from_genesis, prefix_for};
 use shekyl_wire::transaction::Transaction;
 use shekyl_wire::tx_extra::{self, TxExtraField, COINBASE_NONCE_BYTES};
@@ -82,12 +82,12 @@ fn every_genesis_commits_to_its_rows_name() {
             .expect("the coinbase carries its transaction key");
         let recipients = load_and_validate(&recipients_path(&repo_root(), net), net)
             .unwrap_or_else(|e| panic!("{net}: {e}"));
-        let derived = tx_pubkey(&derive_genesis_tx_secret(net, &recipients));
+        let derived = genesis_tx_key(net, &recipients).public_bytes();
         assert_eq!(pinned_pub, derived, "{net}: the key is not the name's");
         for other in Network::ALL.into_iter().filter(|o| *o != net) {
             assert_ne!(
                 pinned_pub,
-                tx_pubkey(&derive_genesis_tx_secret(other, &recipients)),
+                genesis_tx_key(other, &recipients).public_bytes(),
                 "{net}: the same recipients under {other}'s name give the same key"
             );
         }

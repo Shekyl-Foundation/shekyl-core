@@ -72,12 +72,12 @@ use shekyl_archival_retention::{
     RELEASE_COOLDOWN_EPOCHS,
 };
 use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, TxSlot};
+use shekyl_crypto_pq::TxKey;
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_types::archival::{FirstPayingHeight, SettlementOutcome};
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
-use zeroize::Zeroizing;
 
 use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
@@ -300,7 +300,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let fee_input = spender.owned_input(&owner, fee_key, at_pass);
     let claim = assemble_emission_claim(
         persona.keys(),
-        &Zeroizing::new(CLAIM_TX_KEY),
+        &TxKey::seeded(CLAIM_TX_KEY),
         vec![fee_input.input],
         backing.input,
         terms.clone(),
@@ -479,7 +479,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let twin_backing = spender.owned_input(&owner, backing_key, connecting);
     let twin = assemble_emission_claim(
         persona.keys(),
-        &Zeroizing::new(TWIN_TX_KEY),
+        &TxKey::seeded(TWIN_TX_KEY),
         vec![twin_fee_input.input],
         twin_backing.input,
         terms.clone(),
@@ -510,7 +510,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         let backing = spender.owned_input(&owner, backing_key, at_pass);
         let broken = assemble_emission_claim_breaking_fee_proof(
             persona.keys(),
-            &Zeroizing::new(CLAIM_TX_KEY),
+            &TxKey::seeded(CLAIM_TX_KEY),
             vec![fee_input.input],
             backing.input,
             terms,

@@ -49,7 +49,7 @@ pub(crate) mod support {
                 .checked_add(amount)
                 .ok_or("input amount overflow")?;
             let constructed = construct_output(
-                &TEST_TX_KEY,
+                &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY),
                 &keys.keys.x25519_pk,
                 &keys.keys.ml_kem_ek,
                 &recipient,
@@ -116,7 +116,7 @@ pub(crate) mod support {
         // `(combined_ss, output_index)` collapses pseudo-out blinding to zero.
         let recipient_output_index = (n_in as u64) + 100;
         let out_constructed = construct_output(
-            &TEST_TX_KEY,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             &recipient,

@@ -18,6 +18,7 @@ use shekyl_crypto_pq::kem::{
     HybridKemPublicKey, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation,
 };
 use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_generators::T;
 use shekyl_engine_state::UnspendableReason;
 use shekyl_wire::tx_extra::{self, KemCiphertext, MultisigEntry};
@@ -90,7 +91,8 @@ fn entry(out: &MultisigOutputData) -> MultisigEntry {
 /// constructor and carried through the production extra writer. `edit`
 /// sees the `0x0D` entry list before it is written.
 fn group_block(g: &Group, edit: impl FnOnce(&mut Vec<MultisigEntry>)) -> ScannableBlock {
-    let out = construct_multisig_output(&[0x42; 32], &g.address, AMOUNT, 0, &NET).unwrap();
+    let tx_key = TxKey::random().expect("the OS draws a key");
+    let out = construct_multisig_output(&tx_key, &g.address, AMOUNT, 0, &NET).unwrap();
     let mut entries = vec![entry(&out)];
     edit(&mut entries);
 
@@ -98,11 +100,10 @@ fn group_block(g: &Group, edit: impl FnOnce(&mut Vec<MultisigEntry>)) -> Scannab
     // in its place.
     let other = make_bench_wallet();
     let spend = other.view_pair.spend().compress().to_bytes();
-    let mut block = scannable_block_for_recipient(1, &other.wallet_kem_pk, &spend);
-    let tx_pubkey = Scalar::from_bytes_mod_order([0x42; 32]) * ED25519_BASEPOINT_POINT;
+    let mut block = scannable_block_for_recipient(1, &other.wallet_kem_pk, &spend, &tx_key);
     let mut kem = out.kem_ciphertext_x25519.to_vec();
     kem.extend_from_slice(&out.kem_ciphertext_ml_kem);
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, [kem]);
+    let mut extra = Extra::for_hybrid_transfer(tx_key.public(), [kem]);
     extra.push_pqc_leaf_entries(out.pqc_leaf.entry_bytes().to_vec());
     extra.push_pqc_multisig(entries);
     let extra = extra.serialize();

@@ -523,7 +523,7 @@ mod tests {
     fn dispatch_record(txid: [u8; 32], bytes: Vec<u8>) -> DispatchRecord {
         DispatchRecord {
             txid,
-            retained: TxSecretKey::new(zeroize::Zeroizing::new([7; 32])),
+            retained: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([7; 32]).store()),
             fee: 0,
             recipients: Vec::new(),
             inputs: Vec::new(),

@@ -32,8 +32,8 @@ use zeroize::Zeroizing;
 
 use shekyl_scanner::{
     bench_fixtures::{
-        build_typical_case_scannable_block, build_worst_case_scannable_block, make_bench_wallet,
-        BenchWalletKeys,
+        build_typical_case_scannable_block, build_worst_case_scannable_block, fresh_tx_key,
+        make_bench_wallet, BenchWalletKeys,
     },
     ScannableBlock, Scanner,
 };
@@ -48,14 +48,14 @@ fn fresh_scanner(wallet: &BenchWalletKeys) -> Scanner {
 fn setup_worst_case(n: usize) -> (Scanner, ScannableBlock) {
     let wallet = make_bench_wallet();
     let scanner = fresh_scanner(&wallet);
-    let block = build_worst_case_scannable_block(n, &wallet);
+    let block = build_worst_case_scannable_block(n, &wallet, &fresh_tx_key());
     (scanner, block)
 }
 
 fn setup_typical_case(n: usize) -> (Scanner, ScannableBlock) {
     let wallet = make_bench_wallet();
     let scanner = fresh_scanner(&wallet);
-    let block = build_typical_case_scannable_block(n);
+    let block = build_typical_case_scannable_block(n, &fresh_tx_key());
     (scanner, block)
 }
 
