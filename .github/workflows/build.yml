@@ -108,8 +108,9 @@ jobs:
           # (docs_only=false) on anything it cannot decide, and a crash of the
           # script itself also writes false, so a broken scope runs everything
           # rather than skipping the jobs that need this one.
-          python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
-            || echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          # Scratch plant for #1415 (closed unmerged): scope says docs-only
+          # so the other legs skip by scope.
+          echo "docs_only=true" >> "$GITHUB_OUTPUT"
       - id: work
         name: whether the OS builds do their work
         shell: bash
@@ -258,7 +259,7 @@ jobs:
     # (`changes.work`). A skipped matrix job reports its name expression
     # unevaluated, not `Ubuntu 24.04`; that blocks nothing, because the
     # required check is `cli-pass` (the `pass` job below), not this job.
-    if: needs.changes.outputs.work != 'false'
+    if: needs.changes.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90  # p90 44.7 min over 15 runs (the 24.04 leg)
     strategy:
@@ -284,6 +285,8 @@ jobs:
       # mount inside the job would need a privileged container.
       options: --tmpfs /mnt/shekyl-small-disk:rw,size=1m
     steps:
+      - name: planted failure (scratch, #1415)
+        run: exit 1
       - name: set apt conf
         run: ${{env.APT_SET_CONF}}
       - name: update apt
