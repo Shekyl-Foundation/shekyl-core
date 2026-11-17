@@ -173,12 +173,23 @@ impl Seeds {
         )
     }
 
-    /// A shard fill's `index`-th spend: its seeds, or the OS's for every
-    /// draw when S9 is swapped (the fill's threads drawing for themselves,
-    /// the hazard S9 names).
+    /// A shard fill's `index`-th spend: the plan's seeds, or the OS's for
+    /// all four draws when S9 is swapped (the fill's threads drawing for
+    /// themselves, the hazard S9 names). Swapped or not it is a seeded
+    /// spend, so its transaction key keeps the pin
+    /// ([`SpendSeeds`]' presence selects it) and S9's control moves the
+    /// chain only through the draws S9 names.
     #[must_use]
-    pub fn fill_spend(&self, index: u64) -> Option<SpendSeeds> {
-        (!self.swapped.contains(&Source::S9)).then(|| self.spend(index))
+    pub fn fill_spend(&self, index: u64) -> SpendSeeds {
+        if !self.swapped.contains(&Source::S9) {
+            return self.spend(index);
+        }
+        SpendSeeds::from_parts(
+            self.pick(Source::S9, Role::Range, index),
+            self.pick(Source::S9, Role::Blinds, index),
+            self.pick(Source::S9, Role::Membership, index),
+            self.pick(Source::S9, Role::Slots, index),
+        )
     }
 
     /// Persona `slot`'s master seed: 64 bytes, two derivations.
