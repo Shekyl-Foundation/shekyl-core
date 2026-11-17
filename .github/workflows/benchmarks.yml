@@ -96,13 +96,14 @@ on:
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 #
-# A push to dev is not cancelled. update-baseline publishes the baseline
-# and then raises the drift alarm. Cancelling between those two steps
-# leaves the baseline moved and the alarm unrun, and the next run
-# compares against the baseline that already absorbed the move.
+# Only a pull request's run is cancelled; a push to dev is not
+# (`scripts/ci/check_dev_push_runs_finish.py`). update-baseline publishes
+# the baseline and then raises the drift alarm. Cancelling between those
+# two steps leaves the baseline moved and the alarm unrun, and the next
+# run compares against the baseline that already absorbed the move.
 concurrency:
   group: benchmarks-${{ github.ref }}
-  cancel-in-progress: "${{ github.ref != 'refs/heads/dev' }}"
+  cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
 
 permissions:
   contents: read

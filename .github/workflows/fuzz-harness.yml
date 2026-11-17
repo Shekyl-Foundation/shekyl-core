@@ -35,9 +35,12 @@ on:
     branches: [dev]
   workflow_dispatch:
 
+# Only a pull request's run is cancelled: a merge queues behind the
+# running `dev` run, which finishes, and a newer merge replaces the queued
+# one (`scripts/ci/check_dev_push_runs_finish.py`).
 concurrency:
   group: fuzz-harness-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
 
 permissions:
   contents: read
