@@ -27,7 +27,7 @@ use crate::recon::{assemble_leaf_stream, drained_sorted, root_from_scalars};
 use crate::types::{
     AssembleInput, BlockHeight, ChunkLeaf, CurveTreeRoot, LeafEntry, ReferenceBlock,
 };
-use crate::{AssembledPath, ClientError, PathRootFault};
+use crate::{AssembledPath, AssembledPaths, ClientError, PathRootFault};
 use shekyl_consensus::COINBASE_LOCK_WINDOW;
 use shekyl_fcmp::tree::{
     layer_count_for_leaves, HELIOS_CHUNK_WIDTH, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
@@ -659,7 +659,7 @@ fn two_inputs_in_different_chunks(
 ///
 /// This is the red-bite for increment 3: computing `leaf_pos` once and reusing
 /// it across the batch would make both paths identical, and this assertion is
-/// what notices. It is not an equivalence test against `assemble_path` —
+/// what notices. It is not an equivalence test against `assemble_paths` —
 /// that method now delegates to the batch, so comparing them would compare a
 /// function to itself.
 #[test]
@@ -679,9 +679,16 @@ fn batched_assembly_keeps_each_input_its_own_path() {
         .expect("batch assembles");
 
     assert_eq!(paths.len(), inputs.len(), "one path per input");
+    assert!(
+        paths
+            .paths()
+            .map(|(input, _)| *input)
+            .eq(inputs.iter().copied()),
+        "the batch holds each path beside the input it was asked for, in that order"
+    );
+    let leaf_chunks: Vec<&[ChunkLeaf]> = paths.paths().map(|(_, p)| p.leaf_chunk()).collect();
     assert_ne!(
-        paths[0].leaf_chunk(),
-        paths[1].leaf_chunk(),
+        leaf_chunks[0], leaf_chunks[1],
         "positions {first} and {second} are in different layer-0 chunks, so their \
          leaf chunks must differ; equal chunks mean a per-input value was computed \
          once and reused across the batch"
@@ -747,6 +754,13 @@ mod expected;
 // first (`sync_inputs`), as the actor does: the rebuild they once exercised
 // is gone, and an unregistered input is refused by name.
 
+/// The one path of a one-input batch.
+fn only_path(batch: &AssembledPaths) -> &AssembledPath {
+    let mut paths = batch.paths();
+    assert_eq!(paths.len(), 1, "a one-input batch holds one path");
+    paths.next().map(|(_, path)| path).expect("one path")
+}
+
 /// Membership binds the leaf chunk to the branches.
 ///
 /// The branch hash does not take the child as an input. A path that already
@@ -769,22 +783,26 @@ fn a_mutated_leaf_chunk_is_absent_from_its_branch() {
     sync_inputs(&mut client, &inputs);
     let reference = reference_at(&client, height);
 
-    let path = client
+    let batch = client
         .assemble_paths(&[inputs[0]], &reference)
-        .expect("assembly with the whole tree present")
-        .pop()
-        .expect("one input yields one path");
+        .expect("assembly with the whole tree present");
+    let tree = batch.tree();
     assert_eq!(
-        verify_path_against_its_branches(&path),
+        verify_path_against_its_branches(only_path(&batch), &tree),
         Ok(()),
         "the path assemble just accepted must fold"
     );
 
+    let (input, path) = batch
+        .into_paths()
+        .next()
+        .expect("one input yields one path");
     let mut parts = path.into_parts();
     parts.leaf_chunk[0].cm_x[0] ^= 0x01;
-    let spliced = AssembledPath::from_parts_unchecked(parts);
+    let spliced =
+        AssembledPaths::from_parts_unchecked(reference, tree.tree_depth, vec![(input, parts)]);
     assert_eq!(
-        verify_path_against_its_branches(&spliced),
+        verify_path_against_its_branches(only_path(&spliced), &tree),
         Err(PathRootFault::ChildAbsent),
         "the folded root is unchanged; only membership can refuse this path"
     );

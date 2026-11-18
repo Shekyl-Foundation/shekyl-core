@@ -21,7 +21,10 @@ use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
-use shekyl_curve_tree::{AssembledPath, PathParts};
+use shekyl_curve_tree::{
+    AssembleInput, AssembledPaths, BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex,
+    OneTimePubkey, PathParts, ReferenceBlock,
+};
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_multisig::ceremony::nonce::InputInUse;
@@ -29,9 +32,8 @@ use shekyl_multisig::intent::{
     ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
-    import, DerivedSpend, GroupOutput, GroupOutputLookupError, GroupOutputRecord, GroupOutputs,
-    HeldNonceStore, Incoming, LedgerView, LiveCeremonies, MemberFile, SigningContext,
-    ValidatedIntent,
+    import, DerivedSpend, GroupOutputRecord, GroupOutputs, HeldNonceStore, Incoming, LedgerView,
+    LiveCeremonies, MemberFile, SigningContext, SpendPaths, ValidatedIntent,
 };
 use shekyl_tx_weight::{
     predict_spend_weight, GroupSize, InputCount, OutputCount, Signer, SpendShape,
@@ -183,32 +185,16 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
 }
 
 /// A member's ledger of the group's outputs, as a test hands it to the
-/// derivation: the records in any order, looked up by global index, each
-/// beside the parts of its path in the test's tree. The lookup builds the
-/// path to whatever block it is asked for, as a ledger assembling from
-/// its own tree does (R-26).
-pub struct Ledger(pub Vec<Held>);
-
-/// One output a test ledger holds: its record and its path's parts.
-pub type Held = (GroupOutputRecord, PathParts);
+/// derivation: the records in any order, looked up by global index. No
+/// path: those come from the tree, as one batch (R-26).
+pub struct Ledger(pub Vec<GroupOutputRecord>);
 
 impl GroupOutputs for Ledger {
-    fn output(
-        &self,
-        global_index: u64,
-        reference_block: &BlockHash,
-    ) -> Result<GroupOutput, GroupOutputLookupError> {
-        let (record, parts) = self
-            .0
+    fn record(&self, global_index: u64) -> Option<GroupOutputRecord> {
+        self.0
             .iter()
-            .find(|(record, _)| record.global_index == global_index)
-            .ok_or(GroupOutputLookupError::NotHeld)?;
-        let mut parts = parts.clone();
-        parts.tree.reference_block = *reference_block;
-        Ok(GroupOutput {
-            record: record.clone(),
-            path: AssembledPath::from_parts_unchecked(parts),
-        })
+            .find(|record| record.global_index == global_index)
+            .cloned()
     }
 }
 
@@ -220,11 +206,10 @@ pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
         paid.outputs
             .iter()
             .zip(&paid.scans)
-            .zip(&paid.paths)
             .zip(GLOBAL_INDICES)
-            .map(|((((out, output_index, _), s), path), global_index)| {
+            .map(|(((out, output_index, _), s), global_index)| {
                 let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
-                let record = GroupOutputRecord {
+                GroupOutputRecord {
                     global_index,
                     output_index: *output_index,
                     output_key: out.output_key,
@@ -236,23 +221,76 @@ pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
                     committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
                     own_x25519_ct: x25519.try_into().unwrap(),
                     own_ml_kem_ct: ml_kem.to_vec(),
-                };
-                (record, path.clone().into_parts())
+                }
             })
             .collect(),
     )
 }
 
-/// `file`'s spend of `intent`, derived from its own ledger.
-pub fn derive(file: &MemberFile, intent: ValidatedIntent, paid: &Paid) -> DerivedSpend {
-    DerivedSpend::derive(intent, &ledger(file, paid), &file.group_key(), NET)
-        .expect("every member derives the spend")
+/// What a wallet asks its tree for, for each of `paid`'s outputs, beside
+/// the path's parts: in the intent's input order.
+pub fn asked(paid: &Paid) -> Vec<(AssembleInput, PathParts)> {
+    paid.outputs
+        .iter()
+        .zip(GLOBAL_INDICES)
+        .map(|((out, _, _), global_index)| {
+            (
+                AssembleInput {
+                    gindex: Gindex::from_raw(global_index),
+                    output_key: OneTimePubkey::from_bytes(out.output_key),
+                    commitment: CommitmentBytes::from_bytes(out.commitment),
+                },
+                paid.path.clone(),
+            )
+        })
+        .collect()
+}
+
+/// A batch of `paths`, as the tree's actor would hand it over, assembled
+/// against the intents' reference block in a tree with `root` and
+/// `layers` (R-26).
+pub fn batch_in(
+    paths: Vec<(AssembleInput, PathParts)>,
+    root: CurveTreeRoot,
+    layers: u8,
+) -> AssembledPaths {
+    AssembledPaths::from_parts_unchecked(
+        ReferenceBlock {
+            height: BlockHeight::from_raw(REFERENCE_HEIGHT),
+            curve_tree_root: root,
+            block_hash: BlockHash::from_bytes(REFERENCE_HASH),
+        },
+        layers,
+        paths,
+    )
+}
+
+/// `paid`'s paths, as one batch in the test's tree.
+pub fn batch(paid: &Paid) -> AssembledPaths {
+    batch_in(asked(paid), paid.root, paid.layers)
+}
+
+/// `intent` matched to `batch`.
+pub fn spend_paths(intent: &ValidatedIntent, batch: AssembledPaths) -> SpendPaths {
+    SpendPaths::new(intent, batch).expect("the batch is the intent's inputs at its reference block")
+}
+
+/// `file`'s spend of `intent`, derived from its own ledger and the paths
+/// of `paid`.
+pub fn derive(file: &MemberFile, intent: &ValidatedIntent, paid: &Paid) -> DerivedSpend {
+    DerivedSpend::derive(
+        spend_paths(intent, batch(paid)),
+        &ledger(file, paid),
+        &file.group_key(),
+        NET,
+    )
+    .expect("every member derives the spend")
 }
 
 /// `file`'s context: its own derivation of the intent from its own ledger.
 pub fn context<'a>(
     file: &'a MemberFile,
-    intent: ValidatedIntent,
+    intent: &ValidatedIntent,
     paid: &Paid,
 ) -> SigningContext<'a> {
     SigningContext::new(file, derive(file, intent, paid)).expect("every member's context builds")

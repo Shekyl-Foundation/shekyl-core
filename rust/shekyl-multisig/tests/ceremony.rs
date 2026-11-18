@@ -38,7 +38,7 @@ fn two_of_three_spends_two_group_outputs() {
     let intent = intent(&address, 0, &[0, 2], 2);
 
     // 1: A proposes.
-    let ctx_a = context(&a.file, validate(&a.file, intent.clone()), &paid);
+    let ctx_a = context(&a.file, &validate(&a.file, intent.clone()), &paid);
     let (proposer, proposal) =
         Proposer::propose(ctx_a, &mut a.store, &mut a.live, &mut OsRng).unwrap();
     assert_eq!(proposer.responder_file(&mut OsRng).unwrap(), proposal);
@@ -47,7 +47,7 @@ fn two_of_three_spends_two_group_outputs() {
     let at_b = expect!(import_into(&b, &proposal), Proposal);
     let ctx_b = context(
         &b.file,
-        validate(&b.file, at_b.body().intent.clone()),
+        &validate(&b.file, at_b.body().intent.clone()),
         &paid,
     );
     let response = Responder::respond(
@@ -102,7 +102,7 @@ fn three_of_five_spends_two_group_outputs() {
     let intent = intent(&address, 1, &[1, 3, 4], 4);
 
     // 1: A proposes; the holder receives it.
-    let ctx_a = context(&a.file, validate(&a.file, intent.clone()), &paid);
+    let ctx_a = context(&a.file, &validate(&a.file, intent.clone()), &paid);
     let (proposer, proposal) =
         Proposer::propose(ctx_a, &mut a.store, &mut a.live, &mut OsRng).unwrap();
 
@@ -110,7 +110,7 @@ fn three_of_five_spends_two_group_outputs() {
     let at_h = expect!(import_into(&h, &proposal), Proposal);
     let ctx_h = context(
         &h.file,
-        validate(&h.file, at_h.body().intent.clone()),
+        &validate(&h.file, at_h.body().intent.clone()),
         &paid,
     );
     let (holder, commitment) =
@@ -131,7 +131,7 @@ fn three_of_five_spends_two_group_outputs() {
     let proposal_at_b = expect!(import_into(&b, &at_b.body().files[0]), Proposal);
     let ctx_b = context(
         &b.file,
-        validate(&b.file, proposal_at_b.body().intent.clone()),
+        &validate(&b.file, proposal_at_b.body().intent.clone()),
         &paid,
     );
     let response = Responder::respond(
@@ -169,7 +169,7 @@ fn three_of_five_spends_two_group_outputs() {
         .unwrap();
 
     // 9: B and the holder each build the transaction and sign.
-    let ctx_h2 = context(&h.file, validate(&h.file, intent.clone()), &paid);
+    let ctx_h2 = context(&h.file, &validate(&h.file, intent.clone()), &paid);
     let from_h = Cosigner::sign_final_tx(
         &ctx_h2,
         &expect!(import_into(&h, &final_tx), FinalTx),

@@ -265,8 +265,9 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 [dev-dependencies]
 # `test-tamper` compiles `CurveTreeClient::test_tamper_poison`, which the
 # curve-tree actor's in-place recovery tests poison a client with;
-# `test-paths` compiles `AssembledPath::from_parts_unchecked`, the
-# placeholder path a pre-proof refusal test hands the assembly (R-25). Test
+# `test-paths` compiles `AssembledPaths::from_parts_unchecked`, the
+# placeholder batch a pre-proof refusal test hands the assembly (R-25,
+# R-26). Test
 # builds only (resolver v2); production keeps the plain dependency above.
 shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper", "test-paths"] }
 # Test doubles answer with the daemon's own wire types (RK-D1), so a double

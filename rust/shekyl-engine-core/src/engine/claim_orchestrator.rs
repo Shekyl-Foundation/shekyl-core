@@ -354,15 +354,14 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
         .await
         .map_err(ClaimOrchestrationError::Tree)?;
 
-    // Field-copy across the curve-tree → tx-builder boundary. Every path
-    // shares one tree context (`assemble_tx`'s single-snapshot guarantee),
-    // so the message takes the first path's; the path↔record pairing itself
-    // is the seal's — `with_paths` counts and zips in the mint's own order,
-    // refusing a mismatch loudly.
-    let tree_ctx = paths.first().map(|p| tree_context_from(p.tree()));
+    // Field-copy across the curve-tree → tx-builder boundary. The batch is
+    // to one tree by construction (R-26), so the message takes the batch's;
+    // the path↔record pairing itself is the seal's — `with_paths` counts and
+    // zips in the mint's own order, refusing a mismatch loudly.
+    let tree_ctx = tree_context_from(&paths.tree());
     let membership_paths: Vec<MembershipPath> = paths
-        .into_iter()
-        .map(shekyl_curve_tree::AssembledPath::into_parts)
+        .into_paths()
+        .map(|(_, path)| path.into_parts())
         .map(|path| MembershipPath {
             leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),
             c1_layers: path.c1_layers,
@@ -370,7 +369,6 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
         })
         .collect();
     let operands = swept.with_paths(membership_paths)?;
-    let tree_ctx = tree_ctx.expect("with_paths minted: at least the backing path exists");
 
     // 6. Hand the sealed operands to the actor (CB-2: derivation, proving,
     //    and signing stay inside it) and return the reply unbroadcast.

@@ -211,9 +211,10 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     client
         .sync_owned(&[(target.gindex, target.output_key)])
         .expect("register the spent output");
-    let path = client
-        .assemble_path(&target, &reference)
+    let paths = client
+        .assemble_paths(std::slice::from_ref(&target), &reference)
         .expect("assemble membership path");
+    let (_, path) = paths.paths().next().expect("one input, one path");
     let leaf_chunk: Vec<LeafEntry> = path
         .leaf_chunk()
         .iter()

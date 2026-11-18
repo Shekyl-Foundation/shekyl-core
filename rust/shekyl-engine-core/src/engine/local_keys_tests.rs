@@ -1153,10 +1153,10 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
 /// depth-1 tree (`engine::synthetic_tree`), not a real on-chain tree. The
 /// synthetic fixtures survive `#[cfg(test)]` precisely for the `local_keys`
 /// signing KATs — the A4 reversion clause of `CT5C_ASSEMBLER_CUTOVER.md`, the
-/// same slice that cut production over to the real `assemble_path`. A
+/// same slice that cut production over to the real path assembler. A
 /// real-tree bond round-trip (mirroring `local_pending_tx`'s
 /// `build_then_submit_places_awaiting_confirmation_lock` over `funded_ledger_and_tree`) is
-/// **not** blocked on CT-5 — `assemble_path` is real — but on threading the
+/// **not** blocked on CT-5 — the assembler is real — but on threading the
 /// bond's cleartext `credit_term` through the engine signer, which today
 /// calls the zero-terms `sign_transaction` (`sign_bridge.rs`). That
 /// threading is PR 2c, so the real-tree bond KAT lands as 2c's closing

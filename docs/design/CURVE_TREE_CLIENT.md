@@ -21,8 +21,8 @@ test fixtures only). **What REMAINS** (per
 (a) per-input reconstruction reuse — **DISCHARGED in code 2026-09-24 (PR #842,
 `CT-6` increment 3)**: `assemble_paths` reconstructs the drained leaves and
 their layers once per transaction and indexes the `gindex` positions, so the
-`k · n` this row was opened against is now `n + k`. `assemble_path` remains as
-the one-input case, delegating. *The row is kept rather than deleted because it
+`k · n` this row was opened against is now `n + k`, and a transaction's paths
+are one sealed batch (`AssembledPaths`, R-26). *The row is kept rather than deleted because it
 is what `CT-6` was opened to discharge, and a reader arriving from
 [`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5 — which is a
 completed record and stays as written — needs the forward pointer;*
@@ -277,17 +277,28 @@ the Tier-2 `chunk_replace_*` / `undeepen_*` / `reorg_*` tests (§7.7) exercise t
 /// duplication causes drift (`21-reversion-clause-discipline.mdc`).
 ///
 /// Sealed (R-25): the fields are private, read through `leaf_chunk()`,
-/// `c1_layers()`, `c2_layers()`, `tree()` and the consuming `into_parts()`.
-/// The one constructor is the assembler's sealing step, so every path has
-/// passed both checks: its branches fold to the root it names
-/// (`PathRootMismatch`), and that root is the reference block's header root
-/// as the wallet's own tree computes it (`RootMismatch`). Tests write one
-/// from parts only under the TEST_ONLY `test-paths` feature.
+/// `c1_layers()`, `c2_layers()` and the consuming `into_parts()`. The one
+/// constructor is the assembler's sealing step, reached only inside a
+/// batch, so every path has passed both checks: its branches fold to the
+/// batch's root (`PathRootMismatch`), and that root is the reference
+/// block's header root as the wallet's own tree computes it
+/// (`RootMismatch`). A path holds no tree of its own.
 pub struct AssembledPath {
     leaf_chunk:  Vec<ChunkLeaf>,         // the path leaf node's outputs, incl. target
     c1_layers:   Vec<Vec<[u8; 32]>>,     // Selene-node chunks, x-coords, bottom→top
     c2_layers:   Vec<Vec<[u8; 32]>>,     // Helios-node chunks, x-coords, bottom→top
-    tree:        TreeContext,            // { reference_block, tree_root, tree_depth }
+}
+
+/// One transaction's paths (R-26), built only by `assemble_paths`: the
+/// block they were assembled against, the tree's depth there, and each
+/// input's path beside the input asked for, in that order. Every path is to
+/// the one tree `tree()` returns (`{ reference_block, tree_root,
+/// tree_depth }`). Tests write one from parts only under the TEST_ONLY
+/// `test-paths` feature.
+pub struct AssembledPaths {
+    reference:   ReferenceBlock,         // { height, curve_tree_root, block_hash }
+    tree_depth:  u8,
+    paths:       Vec<(AssembleInput, AssembledPath)>,
 }
 
 /// One output in the path's Selene leaf chunk. Mirrors the field names of
@@ -331,13 +342,16 @@ mod reference {
 }
 
 impl CurveTreeClient {
-    /// Assemble the path for one owned output at a chosen reference block.
-    /// `c1_layers.len() + c2_layers.len() + 1 == tree.tree_depth` on success.
-    pub fn assemble_path(
+    /// Assemble every membership path of one transaction at a chosen
+    /// reference block, as one sealed batch: the reference block, the
+    /// tree's depth there, and each input's path in the order asked for.
+    /// `c1_layers.len() + c2_layers.len() + 1 == tree().tree_depth` for
+    /// every path on success.
+    pub fn assemble_paths(
         &self,
-        id: &OutputIdentity,
+        inputs: &[AssembleInput],
         reference: &ReferenceBlock,
-    ) -> Result<AssembledPath, ClientError>;
+    ) -> Result<AssembledPaths, ClientError>;
 }
 ```
 
@@ -350,8 +364,14 @@ not carried on `ReferenceBlock`, and packed into `TreeContext`. The C3 invariant
 `c1_layers.len() + c2_layers.len() + 1 == tree_depth` is then a self-check (the
 leaf layer is the `+1`; the root layer is excluded — it is the prover's
 `TreeRoot`). In 2A tests this contract is satisfied by **synthetic vectors**; in
-production by this client. The C1 single-snapshot guarantee is preserved because
-all inputs of one tx call `assemble_path` with the **same** `ReferenceBlock`.
+production by this client. The C1 single-snapshot guarantee is a property of the
+batch (R-26): `AssembledPaths` is built only by `assemble_paths`, which the
+curve-tree actor alone calls, against one `ReferenceBlock`, and it holds that
+block and the depth once (`AssembledPaths::tree`) while no path carries a tree
+of its own, so a reader has no agreement between paths to check. A multisig
+member matches the batch to the intent it signs once, in `SpendPaths::new`
+(the batch's block is the intent's reference block, and it holds exactly the
+intent's inputs).
 
 **CT-4 design round (pinned at source).** The membership-path format is the
 FCMP++ prover's `Path` (`shekyl-oxide/crypto/fcmps/src/prover/mod.rs`; canonical
@@ -781,7 +801,7 @@ vacuous on the proving path.
 
 ### 7.5 `assemble_tree_path_for_output` reconciliation — RESOLVED (`SOK-10` Q7 → A)
 
-The wallet is the system's **only** path assembler: `assemble_path` (§3.5,
+The wallet is the system's **only** path assembler: `assemble_paths` (§3.5,
 CT-4). The daemon's per-output assembler (`get_curve_tree_path`) was deleted
 2026-09-18 as spend-revealing (`SOK-10` Q7 → A; `PHASE_2A_SEND_PATH.md` §3.0.1),
 and there is no staker-served path RPC. The name

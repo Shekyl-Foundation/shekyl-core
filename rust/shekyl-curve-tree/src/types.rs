@@ -364,7 +364,7 @@ pub struct TreeContext {
 /// block's own hash.
 ///
 /// All three are public consensus values the caller holds from its synced
-/// chain view; the struct is the single anchor [`crate::CurveTreeClient::assemble_path`]
+/// chain view; the struct is the single anchor [`crate::CurveTreeClient::assemble_paths`]
 /// consumes, so the caller cannot positionally swap one 32-byte value for
 /// another (output keys, commitments, roots, and block hashes are all
 /// `[u8; 32]`). Binding a height to its consensus root and hash is the

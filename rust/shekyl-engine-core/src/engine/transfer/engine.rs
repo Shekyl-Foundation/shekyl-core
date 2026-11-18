@@ -1011,12 +1011,11 @@ where
                 .assemble_tx(reference, assemble_inputs.clone())
                 .await
                 .map_err(|err| map_handle_err_to_reanchor(&err))?;
-            // Check *every* path's depth, not just the first: all paths share the
-            // one reference's tree so they should agree, but verifying all closes
-            // the gap if that invariant ever breaks (the per-input branch-layer
-            // count is authoritatively re-checked downstream in tx-builder's
-            // `validate_inputs`; this is the fee-sizing pre-check).
-            if paths.iter().any(|p| p.tree().tree_depth != depth) {
+            // The batch is to one tree by construction (R-26), so its depth is
+            // every path's (the per-input branch-layer count is authoritatively
+            // re-checked downstream in tx-builder's `validate_inputs`; this is
+            // the fee-sizing pre-check).
+            if paths.tree().tree_depth != depth {
                 // The tree moved under the reference between the depth read and
                 // the assemble — re-stale; retry the whole loop.
                 last_resync = Some(ReanchorError::ReferenceResyncing {
@@ -1032,7 +1031,6 @@ where
                         &request,
                         &selected_indices,
                         ledger.transfers(),
-                        &assemble_inputs,
                         &paths,
                         fee_directive,
                     )

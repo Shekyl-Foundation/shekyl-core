@@ -592,7 +592,7 @@ async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
 }
 
 /// CT-5c consistent fixture: a `(ledger, tree)` pair whose tree leaves
-/// **are** the ledger's owned outputs, so the real `assemble_path` resolves
+/// **are** the ledger's owned outputs, so the real `assemble_paths` resolves
 /// each by gindex and the signer builds a real membership proof.
 ///
 /// Each `specs` entry is `(seed, amount)`; the output's `global_output_index`
@@ -734,7 +734,7 @@ fn test_pending_tx_with_tree_and_sink(
 
 /// CT-5c: the standard funded fixture (`funded_ledger`'s two outputs,
 /// 50_000 + 30_000) backed by a **consistent** curve tree — the tree leaves
-/// are those outputs, so the real `assemble_path` resolves them and the
+/// are those outputs, so the real `assemble_paths` resolves them and the
 /// signer builds a real proof. Returns the pending engine, the ledger, and
 /// the tree-store `TempDir` (which the caller must keep alive). Replaces the
 /// pre-CT-5c `test_pending_tx(funded_ledger())`, which had no tree.
@@ -1158,7 +1158,7 @@ async fn wallet_too_young_to_spend_before_reference_anchor() {
 
 /// CT-5c DoD: a real-root membership proof builds and submits end-to-end.
 /// The consistent fixture's tree leaves **are** the ledger's owned outputs,
-/// so the engine resolves the real `assemble_path` at the reference height
+/// so the engine resolves the real `assemble_paths` at the reference height
 /// (`tip − REF_ANCHOR_AGE` = 14 for synced 20; the eligible-11 output is
 /// drained there), folds it into the signing context, and the signer builds
 /// a real FCMP++ proof against the reconstructed root — the last synthetic
@@ -1380,7 +1380,7 @@ async fn build_without_curve_tree_is_refused() {
 
 #[tokio::test]
 async fn build_then_submit_places_awaiting_confirmation_lock() {
-    // CT-5c: a consistent ledger+tree so the real `assemble_path` resolves
+    // CT-5c: a consistent ledger+tree so the real `assemble_paths` resolves
     // the spent output and the signer builds a real membership proof.
     let (ledger, _tree_dir, tree) =
         funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
@@ -2485,7 +2485,7 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
 /// single-leaf-chunk tree. This test re-runs the same composition over a
 /// **real** curve tree: the funding output is a drained leaf of the
 /// consistent `funded_ledger_and_tree` fixture, and its membership path is
-/// assembled by the production `CurveTreeClient::assemble_path` (CT-5c) — the
+/// assembled by the production `CurveTreeClient::assemble_paths` (CT-5c) — the
 /// same path the real-tree transfer KAT
 /// (`build_then_submit_places_awaiting_confirmation_lock`) drives. The bond's `bond_credit`
 /// rides as the single-sourced output-side cleartext term through
@@ -2507,7 +2507,7 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
 /// # What is real here that was synthetic in 2a
 ///
 /// The tree root, the depth, and the `c1`/`c2` branch layers come from the
-/// real `assemble_path` over a depth-2 fixture (two drained leaves), so the
+/// real `assemble_paths` over a depth-2 fixture (two drained leaves), so the
 /// FCMP++ membership proof traverses genuine branch chunks rather than a
 /// single synthetic leaf chunk. Everything else (the prover, BP+, FCMP++
 /// verify, the two retention verify entrypoints, the cofactor recovery for
@@ -2758,18 +2758,18 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
             }],
         )
         .await
-        .expect("real assemble_path resolves the funding leaf");
-    let path = paths
-        .first()
+        .expect("real assemble_paths resolves the funding leaf");
+    let tree = paths.tree();
+    let (_, path) = paths
+        .paths()
+        .next()
         .expect("assemble_tx returns one path per AssembleInput");
     assert_eq!(
-        path.tree().tree_depth,
-        ref_depth,
+        tree.tree_depth, ref_depth,
         "assembled path depth agrees with the depth resolved from the same reference block"
     );
     assert_eq!(
-        path.tree().tree_depth,
-        2,
+        tree.tree_depth, 2,
         "the two-leaf consistent fixture yields a real depth-2 tree"
     );
     assert!(
@@ -2789,9 +2789,9 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         })
         .collect();
     let tree_ctx = TreeContext {
-        reference_block: path.tree().reference_block,
-        tree_root: path.tree().tree_root,
-        tree_depth: path.tree().tree_depth,
+        reference_block: tree.reference_block,
+        tree_root: tree.tree_root,
+        tree_depth: tree.tree_depth,
     };
 
     let inputs = vec![SpendInput {
@@ -3744,8 +3744,8 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
     use crate::engine::signing_assembly::assemble_tx_to_sign;
     use crate::engine::tx_fee_model::build_fee_directive;
     use shekyl_curve_tree::{
-        AssembleInput, AssembledPath, BlockHash, CurveTreeRoot, Gindex, PathParts,
-        TreeContext as CtTreeContext,
+        AssembleInput, AssembledPaths, BlockHash, BlockHeight, CurveTreeRoot, Gindex, PathParts,
+        ReferenceBlock,
     };
     use shekyl_rpc_client::FeeRate;
 
@@ -3769,29 +3769,34 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
     // index-stability guard passes and the missing-`key_image` check inside
     // `input_context_from_transfer` is reached. The path is unused before
     // that check fires, so a placeholder suffices, written through the
-    // test-only constructor (R-25).
-    let assemble_inputs = vec![AssembleInput {
+    // test-only constructor (R-25, R-26).
+    let asked = AssembleInput {
         gindex: Gindex::from_raw(100),
         output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([0u8; 32]),
         commitment: shekyl_curve_tree::CommitmentBytes::from_bytes([0u8; 32]),
-    }];
-    let paths = vec![AssembledPath::from_parts_unchecked(PathParts {
-        leaf_chunk: Vec::new(),
-        c1_layers: Vec::new(),
-        c2_layers: Vec::new(),
-        tree: CtTreeContext {
-            reference_block: BlockHash::NULL,
-            tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-            tree_depth: 1,
+    };
+    let paths = AssembledPaths::from_parts_unchecked(
+        ReferenceBlock {
+            height: BlockHeight::from_raw(1),
+            curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+            block_hash: BlockHash::NULL,
         },
-    })];
+        1,
+        vec![(
+            asked,
+            PathParts {
+                leaf_chunk: Vec::new(),
+                c1_layers: Vec::new(),
+                c2_layers: Vec::new(),
+            },
+        )],
+    );
     let err = ledger.with_ledger_block(|block| {
         assemble_tx_to_sign(
             Network::Mainnet,
             &request,
             &[0],
             block.transfers(),
-            &assemble_inputs,
             &paths,
             fee_directive,
         )

@@ -64,7 +64,7 @@ pub mod store;
 pub mod types;
 
 pub use assemble::PathRootFault;
-pub use assemble::{AssembledPath, PathParts};
+pub use assemble::{AssembledPath, AssembledPaths, PathParts};
 pub use client::{
     BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, ExpectedOutput,
     OwnedRegistration, OwnershipSync, RawOutput, TxLeafInputs,

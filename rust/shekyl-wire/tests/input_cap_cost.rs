@@ -345,43 +345,41 @@ fn measure(
     let mut chosen: Vec<&Spent> = spent[..n].iter().collect();
     chosen.sort_unstable_by(|a, b| b.key_image.as_bytes().cmp(a.key_image.as_bytes()));
 
+    let asked: Vec<AssembleInput> = chosen
+        .iter()
+        .map(|s| AssembleInput {
+            gindex: Gindex::from_raw(s.index),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(s.data.output_key),
+            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(s.data.commitment),
+        })
+        .collect();
+    let paths = client
+        .assemble_paths(&asked, &reference)
+        .expect("assemble membership paths");
     let spend_inputs: Vec<SpendInput> = chosen
         .iter()
-        .map(|s| {
-            let path = client
-                .assemble_path(
-                    &AssembleInput {
-                        gindex: Gindex::from_raw(s.index),
-                        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(s.data.output_key),
-                        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(
-                            s.data.commitment,
-                        ),
-                    },
-                    &reference,
-                )
-                .expect("assemble membership path");
-            SpendInput {
-                output_key: s.data.output_key,
-                commitment: s.data.commitment,
-                amount: AtomicUnits::from_raw(input_amount),
-                spend_key_x: s.spend_secret_x,
-                spend_key_y: s.data.y,
-                commitment_mask: s.data.z,
-                combined_ss: s.combined_ss.to_vec(),
-                output_index: s.index,
-                leaf_chunk: path
-                    .leaf_chunk()
-                    .iter()
-                    .map(|cl| LeafEntry {
-                        output_key: cl.output_key.to_bytes(),
-                        key_image_gen: cl.key_image_gen,
-                        commitment: cl.commitment.to_bytes(),
-                        cm_x: cl.cm_x,
-                    })
-                    .collect(),
-                c1_layers: path.c1_layers().to_vec(),
-                c2_layers: path.c2_layers().to_vec(),
-            }
+        .zip(paths.paths())
+        .map(|(s, (_, path))| SpendInput {
+            output_key: s.data.output_key,
+            commitment: s.data.commitment,
+            amount: AtomicUnits::from_raw(input_amount),
+            spend_key_x: s.spend_secret_x,
+            spend_key_y: s.data.y,
+            commitment_mask: s.data.z,
+            combined_ss: s.combined_ss.to_vec(),
+            output_index: s.index,
+            leaf_chunk: path
+                .leaf_chunk()
+                .iter()
+                .map(|cl| LeafEntry {
+                    output_key: cl.output_key.to_bytes(),
+                    key_image_gen: cl.key_image_gen,
+                    commitment: cl.commitment.to_bytes(),
+                    cm_x: cl.cm_x,
+                })
+                .collect(),
+            c1_layers: path.c1_layers().to_vec(),
+            c2_layers: path.c2_layers().to_vec(),
         })
         .collect();
 

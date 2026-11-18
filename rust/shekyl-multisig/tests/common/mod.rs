@@ -31,7 +31,7 @@ use shekyl_crypto_pq::multisig_output::{
     MultisigOutputData,
 };
 use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss};
-use shekyl_curve_tree::{AssembledPath, ChunkLeaf, PathParts, TreeContext};
+use shekyl_curve_tree::{ChunkLeaf, PathParts};
 use shekyl_fcmp::frost_sal::{dealer_split, threshold_keys, Ed25519T, ThresholdKeys};
 use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::tree::{
@@ -39,7 +39,7 @@ use shekyl_fcmp::tree::{
     selene_point_to_helios_scalar,
 };
 use shekyl_multisig::{MemberFile, MemberSecrets};
-use shekyl_types::{BlockHash, CommitmentBytes, CurveTreeRoot, OneTimePubkey};
+use shekyl_types::{CommitmentBytes, CurveTreeRoot, OneTimePubkey};
 
 pub mod wallet;
 
@@ -206,9 +206,9 @@ pub struct Paid {
     /// Each output's leaf chunk and branch with its blind, for a prover
     /// outside the ceremony.
     pub chunks: Vec<ProveInputLeafChunk>,
-    /// Each output's public path to the tree at the intents' reference
-    /// block, as a ledger assembles it.
-    pub paths: Vec<AssembledPath>,
+    /// The public path both outputs have in the tree (they share one leaf
+    /// chunk), as parts a test batch is built from.
+    pub path: PathParts,
 }
 
 /// The amounts [`pay_group_twice`] pays, in output order.
@@ -246,29 +246,24 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
             first
         })
         .collect();
-    let (root, layers, chunks, paths) = tree(&outputs, &scans);
+    let (root, layers, chunks, path) = tree(&outputs, &scans);
     Paid {
         outputs,
         scans,
         root,
         layers,
         chunks,
-        paths,
+        path,
     }
 }
 
 /// The tree that holds `outputs`, as the daemon builds it: its root, its
 /// layer count, and each output's leaf chunk and branch, with its blind
-/// and as a ledger's public path to the tree at [`wallet::REFERENCE_HASH`].
+/// and as the public path both outputs have in it.
 fn tree(
     outputs: &[(MultisigOutputData, u64, u64)],
     scans: &[Scanned],
-) -> (
-    CurveTreeRoot,
-    u8,
-    Vec<ProveInputLeafChunk>,
-    Vec<AssembledPath>,
-) {
+) -> (CurveTreeRoot, u8, Vec<ProveInputLeafChunk>, PathParts) {
     let leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = outputs
         .iter()
         .map(|(out, _, _)| {
@@ -317,9 +312,9 @@ fn tree(
         })
         .collect();
     // The tree is real and its root is the fold of these branches, but the
-    // path is written out rather than assembled from a client, so it is
-    // built through the test-only constructor (R-25).
-    let path = AssembledPath::from_parts_unchecked(PathParts {
+    // path is written out rather than assembled from a client, so a batch
+    // of it is built through the test-only constructor (R-25, R-26).
+    let path = PathParts {
         leaf_chunk: leaf_outputs
             .iter()
             .zip(&leaf_cm_x)
@@ -334,12 +329,6 @@ fn tree(
             .collect(),
         c1_layers: vec![],
         c2_layers: vec![helios_chunk],
-        tree: TreeContext {
-            reference_block: BlockHash::from_bytes(wallet::REFERENCE_HASH),
-            tree_root: root,
-            tree_depth: depth,
-        },
-    });
-    let paths = vec![path; outputs.len()];
-    (root, depth, chunks, paths)
+    };
+    (root, depth, chunks, path)
 }

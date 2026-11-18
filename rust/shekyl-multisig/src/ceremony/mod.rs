@@ -65,11 +65,11 @@ pub mod files;
 pub mod nonce;
 pub mod proofs;
 pub mod roles;
+pub mod spend_paths;
 
 pub use context::{ContextError, SigningContext};
 pub use derivation::{
-    DeriveError, DerivedSpend, GroupOutput, GroupOutputLookupError, GroupOutputRecord,
-    GroupOutputs, InputContext, UnsignedSpend,
+    DeriveError, DerivedSpend, GroupOutputRecord, GroupOutputs, InputContext, UnsignedSpend,
 };
 pub use files::{import, Authenticated, BodyError, ImportError, Incoming};
 pub use nonce::{
@@ -80,6 +80,7 @@ pub use roles::{
     AwaitingSignatures, Collecting, Committed, Cosigner, Holder, Proposer, Responder,
     ResponderInput, SharesPending,
 };
+pub use spend_paths::{SpendPaths, SpendPathsError};
 
 use shekyl_bulletproofs::BulletproofError;
 use shekyl_crypto_pq::error::PqcVerifyError;

@@ -237,10 +237,6 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                     context: "curve tree",
                     detail: format!("{e:?}"),
                 },
-                DrainOrchestrationError::PathAssembly { detail } => Self::State {
-                    context: "path assembly",
-                    detail,
-                },
                 DrainOrchestrationError::Stake(e) => Self::State {
                     context: "drain assembly",
                     detail: e.to_string(),

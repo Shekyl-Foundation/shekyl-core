@@ -404,7 +404,7 @@ fn seeded_pqc_auths_are_byte_identical_per_seed_and_verify() {
 // So C2 (Helios) gets the even branch indices and C1 (Selene) the odd ones:
 // c2 = ceil(B/2), c1 = floor(B/2). This matches the prover's
 // "curve_2_layers is populated before curve_1_layers" and
-// `shekyl_curve_tree::assemble_path`.
+// `shekyl_curve_tree`'s assembler.
 
 /// Build a `SpendInput` with the spec-correct c1/c2 split for a given depth.
 fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {

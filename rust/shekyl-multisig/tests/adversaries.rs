@@ -15,11 +15,12 @@ mod common;
 use rand_core::OsRng;
 
 use common::wallet::{
-    context, import_for, intent, ledger, validate, verify_from_the_wire, Held, Live, GLOBAL_INDICES,
+    asked, batch_in, context, import_for, intent, ledger, spend_paths, validate,
+    verify_from_the_wire, Ledger, Live, GLOBAL_INDICES,
 };
 use common::{found_group, pay_group_twice, Paid, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
-use shekyl_curve_tree::{BlockHeight, ClientError};
+use shekyl_curve_tree::{AssembleInput, PathParts};
 use shekyl_fcmp::frost_sal::{participant, FrostError};
 use shekyl_multisig::ceremony::context::ContextError;
 use shekyl_multisig::ceremony::files::{Body, Commitment, FinalTx, SignatureShare, SigningSet};
@@ -27,11 +28,11 @@ use shekyl_multisig::ceremony::nonce::InputInUse;
 use shekyl_multisig::ceremony::roles::{Committed, SharesPending};
 use shekyl_multisig::intent::SpendIntent;
 use shekyl_multisig::{
-    import, seal_envelope, CeremonyError, Cosigner, DeriveError, DerivedSpend, GroupOutput,
-    GroupOutputLookupError, GroupOutputs, HeldNonceStore, Holder, ImportError, MemberFile,
-    Proposer, Responder, ResponderInput, SigningContext,
+    import, seal_envelope, CeremonyError, Cosigner, DeriveError, DerivedSpend, GroupOutputRecord,
+    HeldNonceStore, Holder, ImportError, MemberFile, Proposer, Responder, ResponderInput,
+    SigningContext,
 };
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::CurveTreeRoot;
 
 /// A 3-of-5 group that owns two outputs, and an intent to spend them.
 struct Spend {
@@ -84,7 +85,7 @@ impl Spend {
     }
 
     fn ctx_for<'w>(&self, file: &'w MemberFile, intent: SpendIntent) -> SigningContext<'w> {
-        context(file, validate(file, intent), &self.paid)
+        context(file, &validate(file, intent), &self.paid)
     }
 
     /// `body` as a file for this intent, sealed by `from`.
@@ -320,15 +321,14 @@ fn a_final_tx_that_is_not_the_intents_is_refused_before_signing() {
         expect!(import_for(&m.b, &s.sealed(&m.a, &body)), FinalTx)
     };
 
-    // A member whose ledger's paths are to another tree derives a context
+    // A member whose tree hands it paths to another root derives a context
     // under that root: the proposer's honest proof is not over it.
-    let mut elsewhere = ledger(&m.b, &s.paid);
-    for output in &mut elsewhere.0 {
-        output.1.tree.tree_root = CurveTreeRoot::EMPTY;
-    }
     let other = DerivedSpend::derive(
-        validate(&m.b, s.intent.clone()),
-        &elsewhere,
+        spend_paths(
+            &validate(&m.b, s.intent.clone()),
+            batch_in(asked(&s.paid), CurveTreeRoot::EMPTY, s.paid.layers),
+        ),
+        &ledger(&m.b, &s.paid),
         &m.b.group_key(),
         NET,
     )
@@ -669,13 +669,12 @@ fn a_proposer_resumes_after_finish_only_from_its_own_final_tx() {
 fn a_context_needs_a_layer_count_a_spend_proves_under() {
     let (s, m, ..) = setup();
     for layers in [0, 1, shekyl_fcmp::MAX_TREE_DEPTH + 1] {
-        let mut held = ledger(&m.b, &s.paid);
-        for output in &mut held.0 {
-            output.1.tree.tree_depth = layers;
-        }
         let derived = DerivedSpend::derive(
-            validate(&m.b, s.intent.clone()),
-            &held,
+            spend_paths(
+                &validate(&m.b, s.intent.clone()),
+                batch_in(asked(&s.paid), s.paid.root, layers),
+            ),
+            &ledger(&m.b, &s.paid),
             &m.b.group_key(),
             NET,
         )
@@ -688,16 +687,21 @@ fn a_context_needs_a_layer_count_a_spend_proves_under() {
 }
 
 /// A member's inputs are put in the transaction's order whatever order its
-/// ledger hands them over in: the spend derived from them reversed signs
-/// the same message.
+/// ledger holds them in and its tree hands their paths over in: the spend
+/// derived from both reversed signs the same message.
 #[test]
 fn a_derivation_orders_its_inputs_by_key_image() {
     let (s, m, ..) = setup();
     let in_order = s.ctx(&m.b);
     let mut reversed = ledger(&m.b, &s.paid);
     reversed.0.reverse();
+    let mut paths = asked(&s.paid);
+    paths.reverse();
     let derived = DerivedSpend::derive(
-        validate(&m.b, s.intent.clone()),
+        spend_paths(
+            &validate(&m.b, s.intent.clone()),
+            batch_in(paths, s.paid.root, s.paid.layers),
+        ),
         &reversed,
         &m.b.group_key(),
         NET,
@@ -710,25 +714,34 @@ fn a_derivation_orders_its_inputs_by_key_image() {
 /// A derivation looks each of the intent's inputs up in the member's
 /// ledger and re-derives its secrets from the record's `0x06` ciphertext.
 /// A ledger holding more than the intent spends derives; a record that is
-/// missing, or that names a key image or leaf its secrets do not derive,
-/// or two records of one output, derive nothing, each refusal by name.
+/// missing, that names a key image or leaf its secrets do not derive, whose
+/// commitment does not open at its amount, or whose path does not hold it,
+/// derives nothing, each refusal by name. (A batch of paths for another
+/// block, or for other inputs, never reaches a derivation: `SpendPaths`
+/// refuses it, in the derivation's unit tests.)
 #[test]
 fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
     let (s, m, ..) = setup();
-    let derive_from = |edit: &dyn Fn(&mut Vec<Held>)| {
-        let mut held = ledger(&m.b, &s.paid);
-        edit(&mut held.0);
+    let derive_with = |records: Ledger, paths: Vec<(AssembleInput, PathParts)>| {
         DerivedSpend::derive(
-            validate(&m.b, s.intent.clone()),
-            &held,
+            spend_paths(
+                &validate(&m.b, s.intent.clone()),
+                batch_in(paths, s.paid.root, s.paid.layers),
+            ),
+            &records,
             &m.b.group_key(),
             NET,
         )
         .err()
     };
+    let derive_from = |edit: &dyn Fn(&mut Vec<GroupOutputRecord>)| {
+        let mut held = ledger(&m.b, &s.paid);
+        edit(&mut held.0);
+        derive_with(held, asked(&s.paid))
+    };
     assert!(derive_from(&|l| {
         let mut unspent = l[0].clone();
-        unspent.0.global_index = 99;
+        unspent.global_index = 99;
         l.push(unspent);
     })
     .is_none());
@@ -738,68 +751,36 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
         }),
         Some(DeriveError::MissingInput { .. })
     ));
-    // A ledger that holds the output but cannot assemble its path to the
-    // intent's reference block: refused by name, not as a missing input.
-    struct Unassembled(common::wallet::Ledger);
-    impl GroupOutputs for Unassembled {
-        fn output(
-            &self,
-            global_index: u64,
-            reference_block: &BlockHash,
-        ) -> Result<GroupOutput, GroupOutputLookupError> {
-            self.0.output(global_index, reference_block)?;
-            Err(GroupOutputLookupError::NoPath(ClientError::RootMismatch {
-                height: BlockHeight::from_raw(1),
-                expected: CurveTreeRoot::EMPTY,
-                got: CurveTreeRoot::from_bytes([1; 32]),
-            }))
-        }
-    }
     assert!(matches!(
-        DerivedSpend::derive(
-            validate(&m.b, s.intent.clone()),
-            &Unassembled(ledger(&m.b, &s.paid)),
-            &m.b.group_key(),
-            NET,
-        )
-        .err(),
-        Some(DeriveError::NoPath { .. })
-    ));
-    assert!(matches!(
-        derive_from(&|l| l[0].0.key_image = l[1].0.key_image),
+        derive_from(&|l| l[0].key_image = l[1].key_image),
         Some(DeriveError::KeyImage { .. })
     ));
     assert!(matches!(
-        derive_from(&|l| l[0].0.leaf_point = l[1].0.leaf_point),
+        derive_from(&|l| l[0].leaf_point = l[1].leaf_point),
         Some(DeriveError::Leaf { .. })
     ));
     // A record whose commitment is another coin's: it does not open to
     // the mask this input's secrets derive at its stated amount (R-27).
     assert!(matches!(
-        derive_from(&|l| l[0].0.commitment = l[1].0.commitment),
+        derive_from(&|l| l[0].commitment = l[1].commitment),
         Some(DeriveError::InputCommitment { .. })
     ));
     assert!(matches!(
         derive_from(&|l| {
-            l[0].0.source_x25519_ct = l[1].0.source_x25519_ct;
-            l[0].0.source_ml_kem_ct = l[1].0.source_ml_kem_ct.clone();
+            l[0].source_x25519_ct = l[1].source_x25519_ct;
+            l[0].source_ml_kem_ct = l[1].source_ml_kem_ct.clone();
         }),
         Some(DeriveError::KeyImage { .. })
     ));
-    // A path to another tree than the other input's, or one whose leaf
-    // chunk does not hold the output. Every path is assembled to the
-    // intent's reference block (R-26), so none can name another block.
+    // A path whose leaf chunk does not hold the output it was asked for.
+    let mut paths = asked(&s.paid);
+    let spent = paths[0].0.output_key;
+    paths[0]
+        .1
+        .leaf_chunk
+        .retain(|leaf| leaf.output_key != spent);
     assert!(matches!(
-        derive_from(&|l| l[1].1.tree.tree_root = CurveTreeRoot::EMPTY),
-        Some(DeriveError::Tree { .. })
-    ));
-    assert!(matches!(
-        derive_from(&|l| {
-            let spent = l[0].0.output_key;
-            l[0].1
-                .leaf_chunk
-                .retain(|leaf| leaf.output_key.to_bytes() != spent);
-        }),
+        derive_with(ledger(&m.b, &s.paid), paths),
         Some(DeriveError::Path { .. })
     ));
     // One output recorded at both of the intent's global indices: the
@@ -810,9 +791,9 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
     // that refusal.
     assert!(matches!(
         derive_from(&|l| {
-            let global_index = l[1].0.global_index;
+            let global_index = l[1].global_index;
             l[1] = l[0].clone();
-            l[1].0.global_index = global_index;
+            l[1].global_index = global_index;
         }),
         Some(DeriveError::InputCommitment { global_index }) if global_index == GLOBAL_INDICES[1]
     ));

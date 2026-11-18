@@ -1160,16 +1160,27 @@ construction: no copy of a wallet contains one.
   in its transaction, its `0x06` ciphertext, its key image, its leaf
   point, its committed form and the member's own `0x0D` ciphertexts. No
   path and no secret (R-26). The ledger is read through `GroupOutputs`, a
-  lookup by global index and reference block hash: it returns a
-  `GroupOutput`, the record with its membership path (`AssembledPath`,
-  public material, sealed by the checked assembler, R-25) assembled to
-  that block. It refuses an output it does not hold, and, apart from that,
-  an output whose path does not assemble there.
-- **`DerivedSpend`**, made only by `DerivedSpend::derive` from the
-  validated intent, the member's ledger and the group's key from the
-  member file (`MultisigGroupKey`: the group KEM secret and `b`) (R-7,
-  §9.5). It looks each of the intent's inputs up itself, at the intent's
-  reference block, and re-derives the input's secrets (`x = ho + b`,
+  lookup by global index that returns the record, or nothing for an
+  output it does not hold.
+- **`SpendPaths`**: the membership paths of the intent's inputs, matched
+  to the intent once (R-26). The member's own curve tree assembles them
+  as one sealed batch (`AssembledPaths`, built only by
+  `CurveTreeClient::assemble_paths` inside the tree's actor, and holding
+  the reference block it was assembled against, the tree's depth there,
+  and each input's path, public material sealed by the checked assembler,
+  R-25). Every path in a batch is to one tree by construction. The only
+  constructor, `SpendPaths::new`, takes the validated intent and the
+  batch, and refuses by name a batch assembled against another block than
+  the intent's reference block, one missing an intent's input, and one
+  holding an input the intent does not spend, or one input twice. The
+  intent comes from another member and the paths from this member's own
+  tree, so that comparison cannot be removed by a type; this is the one
+  place it is made.
+- **`DerivedSpend`**, made only by `DerivedSpend::derive` from a
+  `SpendPaths` (which carries the validated intent), the member's ledger
+  and the group's key from the member file (`MultisigGroupKey`: the group
+  KEM secret and `b`) (R-7, §9.5). It looks each of the intent's inputs up
+  itself and re-derives the input's secrets (`x = ho + b`,
   `y_kem`, `z`, the leaf blind) from the record's `0x06` ciphertext in
   `shekyl-crypto-pq` (`recover_group_spend`, the scanner's own steps). It
   then checks the record's key image and leaf point against what they
@@ -1177,9 +1188,9 @@ construction: no copy of a wallet contains one.
   re-derived `z` at the amount the member's ledger states for that input,
   the amount the balance and the chain-state fingerprint were checked
   against (R-27, before any nonce exists); and that the path's leaf chunk
-  holds the output. Every input's path is to the intent's reference block
-  and all name one tree; that tree (root and layer count) is the spend's.
-  It consumes the intent, so no spend can be paired with another intent.
+  holds the output. The batch's tree (root and layer count) is the
+  spend's. It takes the intent only from the `SpendPaths` it consumes, so
+  no spend can be paired with another intent or another intent's paths.
   Recipient `i` is output `π(i)`, the order the intent's transaction key
   derives (R-24), built to its resolved payee by the builder every spend
   uses, under that key; that gives the outputs, their `tx_extra` and the
@@ -1188,12 +1199,12 @@ construction: no copy of a wallet contains one.
   Input `j` of the intent takes the `j`-th derived pseudo-out blind and
   rerandomization seed; the last blind balances the outputs' masks. The
   inputs are then put in the transaction's order. The derivation
-  refuses, each by name, an input the ledger lacks, an input whose path
-  does not assemble at the reference block, an input whose secrets do
-  not derive, a record whose key image or leaf point is not the one its
-  secrets derive, a commitment that does not open at the stated amount,
-  paths to two trees, a path that does not hold its output, and two
-  inputs with one key image. A ledger that states a different number of
+  refuses, each by name, an input the ledger lacks, an input whose secrets
+  do not derive, a record whose key image or leaf point is not the one its
+  secrets derive, a commitment that does not open at the stated amount, a
+  path that does not hold its output, and two inputs with one key image.
+  It has no reference-block or tree refusal of its own: those are
+  `SpendPaths`'s and the batch's. A ledger that states a different number of
   amounts than the intent has inputs is refused when the intent is
   validated. `InputContext` and `UnsignedSpend` have private fields and no
   other constructor: a member cannot sign a blind, a seed or an output
@@ -1682,21 +1693,22 @@ rust/shekyl-multisig/src/
 ├── ceremony/              — the signing ceremony (§11)
 │   ├── mod.rs             — Role, CeremonyError
 │   ├── context.rs         — SigningContext (§11.5)
-│   ├── derivation.rs      — GroupOutput(s), DerivedSpend, InputContext,
-│   │                        UnsignedSpend (§9.5, §11.5)
+│   ├── derivation.rs      — GroupOutputRecord, GroupOutputs, DerivedSpend,
+│   │                        InputContext, UnsignedSpend (§9.5, §11.5)
 │   ├── files.rs           — the bodies, Authenticated<B>, import (§11.1,
 │   │                        wire format §3.1)
 │   ├── nonce.rs           — HeldNonce, HeldNonceStore, ConsumedNonce,
 │   │                        LiveCeremonies (§11.4)
 │   ├── proofs.rs          — CommittedMemberKey, the verified proofs,
 │   │                        SignableTransaction (§11.3)
-│   └── roles/             — the shared steps (mod.rs) and one module per
-│       │                    role (§11.1)
-│       ├── proposer.rs    — Proposer<Collecting | SharesPending |
-│       │                    AwaitingSignatures>, both resumes (§13.1)
-│       ├── holder.rs      — Holder<Committed>
-│       ├── responder.rs   — Responder, ResponderInput
-│       └── cosigner.rs    — Cosigner
+│   ├── roles/             — the shared steps (mod.rs) and one module per
+│   │   │                    role (§11.1)
+│   │   ├── proposer.rs    — Proposer<Collecting | SharesPending |
+│   │   │                    AwaitingSignatures>, both resumes (§13.1)
+│   │   ├── holder.rs      — Holder<Committed>
+│   │   ├── responder.rs   — Responder, ResponderInput
+│   │   └── cosigner.rs    — Cosigner
+│   └── spend_paths.rs     — SpendPaths, SpendPathsError (§11.5)
 ├── intent.rs              — SpendIntent v2, canonical serialization (§9)
 ├── envelope.rs            — the ceremony file: seal as a member, trial-decrypt
 │                            import, the plaintext codec (§12.1)

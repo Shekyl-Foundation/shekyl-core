@@ -609,17 +609,19 @@ impl Spender {
                 self.hashes[usize::try_from(reference_height.to_raw()).expect("small")].to_bytes(),
             ),
         };
-        let path = self
+        let batch = self
             .client
-            .assemble_path(
-                &AssembleInput {
+            .assemble_paths(
+                &[AssembleInput {
                     gindex: Gindex::from_raw(gindex),
                     output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(output.key),
                     commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(commitment),
-                },
+                }],
                 &reference,
             )
             .expect("the output has matured into the tree at the reference height");
+        let tree = batch.tree();
+        let (_, path) = batch.into_paths().next().expect("one input, one path");
         let path = path.into_parts();
         let leaf_chunk: Vec<LeafEntry> = path
             .leaf_chunk
@@ -647,9 +649,9 @@ impl Spender {
             },
             key_image: ki.key_image,
             tree: TreeContext {
-                reference_block: path.tree.reference_block,
-                tree_root: path.tree.tree_root,
-                tree_depth: path.tree.tree_depth,
+                reference_block: tree.reference_block,
+                tree_root: tree.tree_root,
+                tree_depth: tree.tree_depth,
             },
             network: self.network,
         }

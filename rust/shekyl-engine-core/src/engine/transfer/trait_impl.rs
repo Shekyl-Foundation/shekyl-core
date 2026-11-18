@@ -385,10 +385,9 @@ where
         // Both are read at the one reference height, so a divergence means the
         // tree moved under the reference — refuse rather than sign a proof whose
         // weight the fee did not cover. Holds as a tautology under a valid
-        // reference; never fires benignly. Check *every* path (all share the one
-        // reference's tree, so they should agree — verifying all closes the gap
-        // if that invariant ever breaks).
-        if paths.iter().any(|p| p.tree().tree_depth != tree_depth) {
+        // reference; never fires benignly. The batch is to one tree by
+        // construction (R-26), so its depth is every path's.
+        if paths.tree().tree_depth != tree_depth {
             return Err(fail_build_after_attempted(
                 self.sink.as_ref(),
                 SendError::BuildInvariant {
@@ -399,15 +398,15 @@ where
         // Fold the real paths into the signing context, re-reading the selected
         // transfers by index for their secret-pathway fields (`TransferDetails`
         // is not `Clone`). `assemble_tx_to_sign` guards each re-read with a
-        // `gindex` check against `assemble_inputs`, so an index shift under a
-        // reorg during the assemble round-trip is refused, not mis-signed.
+        // `gindex` check against the input each path was assembled for, so an
+        // index shift under a reorg during the assemble round-trip is refused,
+        // not mis-signed.
         let tx_to_sign = self.ledger.with_ledger_block(|ledger| {
             assemble_tx_to_sign(
                 self.network,
                 &request,
                 &meta.selected.indices,
                 ledger.transfers(),
-                &assemble_inputs,
                 &paths,
                 fee_directive,
             )

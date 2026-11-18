@@ -184,11 +184,12 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     (
         "shekyl-curve-tree",
         "test-paths",
-    ): "AssembledPath::from_parts_unchecked: a membership path written from "
-    "its parts with neither of the assembler's checks (its branches fold to "
-    "the root it names; that root is the reference block's header root). "
-    "Production gets a path only from the checked assembler (R-25), so a "
-    "path to a made-up tree must not be constructible in shipped code. "
+    ): "AssembledPaths::from_parts_unchecked: a batch of membership paths "
+    "written from its parts with none of the assembler's checks (each "
+    "path's branches fold to the batch's root; that root is the reference "
+    "block's header root). Production gets paths only as the checked "
+    "assembler's batch (R-25, R-26), so a path to a made-up tree must not "
+    "be constructible in shipped code. "
     "Enabled from the engine-core and multisig dev edges only, for their "
     "placeholder and tampered paths",
     (

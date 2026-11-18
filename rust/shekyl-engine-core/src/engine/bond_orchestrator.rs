@@ -588,9 +588,9 @@ where
         }
         // `FundingSelection` is non-empty by construction (the sweep refuses a
         // zero-record consume), so `selection.records` carries ≥1 record and
-        // the length-checked `paths[0]` below cannot index an empty vec — this
-        // holds even for a degenerate `floor == 0`, which is why the guarantee
-        // lives in the sweep rather than an assumed `floor > 0` here.
+        // the post spends at least one input — this holds even for a
+        // degenerate `floor == 0`, which is why the guarantee lives in the
+        // sweep rather than an assumed `floor > 0` here.
 
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
@@ -614,36 +614,19 @@ where
                 }
                 other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
             })?;
-        if paths.len() != selection.records.len() {
-            return Err(BondAssemblyError::build(
-                "assemble_tx",
-                format!(
-                    "expected {} paths, got {}",
-                    selection.records.len(),
-                    paths.len()
-                ),
-            )
-            .into());
-        }
-        // Non-empty: floor gate + length agreement with a non-empty sweep.
-        let first = paths.first().ok_or_else(|| {
-            BondAssemblyError::build("assemble_tx", "assemble_tx returned no paths")
-        })?;
-
+        // One path per input asked for, in that order, all to one tree: the
+        // batch's own properties (R-26), so the records zip with its paths.
+        let tree = paths.tree();
         let tree_ctx = TreeContext {
-            reference_block: first.tree().reference_block,
-            tree_root: first.tree().tree_root,
-            tree_depth: first.tree().tree_depth,
+            reference_block: tree.reference_block,
+            tree_root: tree.tree_root,
+            tree_depth: tree.tree_depth,
         };
 
         let funding: Vec<FundingInputContext> = selection
             .records
             .into_iter()
-            .zip(
-                paths
-                    .into_iter()
-                    .map(shekyl_curve_tree::AssembledPath::into_parts),
-            )
+            .zip(paths.into_paths().map(|(_, path)| path.into_parts()))
             .map(|(record, path)| FundingInputContext {
                 record,
                 leaf_chunk: path
