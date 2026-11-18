@@ -91,9 +91,60 @@ pub fn grade_poisson(samples: &[u64], lambda: u32) -> Grade {
     Grade::new(statistic, exp.len().saturating_sub(1))
 }
 
+/// Grade a sample of [`GeometricTable`] draws against the ideal geometric
+/// pmf with `mean` failures before the first success.
+///
+/// The carrier cadence is one of these (`NoiseCadence`, as ticks less the
+/// one-tick shift), and so is a memoryless embargo. Bins with an expected
+/// count below [`MIN_EXPECTED`] are pooled from both tails inward, as for
+/// [`grade_poisson`].
+///
+/// [`GeometricTable`]: crate::geometric::GeometricTable
+///
+/// # Panics
+///
+/// Panics if `samples` is empty or `mean` is zero.
+#[must_use]
+pub fn grade_geometric(samples: &[u64], mean: u32) -> Grade {
+    assert!(!samples.is_empty(), "cannot grade an empty sample");
+    assert!(mean > 0, "a geometric needs a positive mean");
+    let n = samples.len() as f64;
+    let q = f64::from(mean) / (f64::from(mean) + 1.0);
+    // Wide enough that the mass past it is below one part in 10^13.
+    let max_k = samples
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .max(u64::from(mean) * 30);
+    let support = usize::try_from(max_k)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1);
+    let mut weights = Vec::with_capacity(support);
+    let mut w = 1.0_f64;
+    weights.push(w);
+    for _ in 1..support {
+        w *= q;
+        weights.push(w);
+    }
+    let total: f64 = weights.iter().sum();
+
+    let mut observed = vec![0_u64; support];
+    for s in samples {
+        let idx = usize::try_from(*s).unwrap_or(support - 1).min(support - 1);
+        observed[idx] += 1;
+    }
+    let expected: Vec<f64> = weights.iter().map(|w| w / total * n).collect();
+
+    let (obs, exp) = pool_thin_bins(&observed, &expected);
+    let statistic = chi_square_counts_expected(&obs, &exp);
+    // The mean is the claim under test, not estimated from the sample.
+    Grade::new(statistic, exp.len().saturating_sub(1))
+}
+
 /// Grade a sample of [`bounded_uniform`] draws over `[0, max]` for uniformity.
 ///
-/// Applied to the epoch jitter and the noise cadence: a skewed offset is a
+/// Applied to the epoch jitter: a skewed offset is a
 /// fingerprint, and modulo bias is exactly the failure mode the rejection
 /// sampler exists to prevent.
 ///

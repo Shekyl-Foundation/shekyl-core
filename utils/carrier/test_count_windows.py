@@ -9,7 +9,7 @@
 #   * WINDOW_BODY ± 1 are not (the filter is exact, not a band)
 #   * proxy→node (src port 9050) is ignored
 #   * SOCKS bytes before the signature do not hide a window
-#   * summary jitter is the per-flow aggregate, not the merged timestamp series
+#   * summary gaps are the per-flow aggregate, not the merged timestamp series
 #   * --expect-zero fails when a window is present
 #
 # A test that would also pass if the filter were `abs(n - 20480) < 64` is
@@ -191,23 +191,23 @@ class CountWindows(unittest.TestCase):
         )
         s, _ = self._run(pkts)
         self.assertEqual(s["n"], 2)
-        self.assertEqual(s["interval_buckets"].get("in_jitter"), 1)
-        self.assertEqual(s["interval_buckets"].get("below_min", 0), 0)
+        self.assertEqual(s["interval_buckets"].get("at_or_above_tick"), 1)
+        self.assertEqual(s["interval_buckets"].get("below_tick", 0), 0)
 
-    def test_metronome_lands_below_min_when_faster_than_3333(self):
+    def test_two_windows_at_one_instant_land_below_tick(self):
         a = framed_window()
         b = framed_window()
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, a, 10.0)
         pkts += segmented(
-            "127.0.0.1", 40000, "127.0.0.1", 9050, 1 + len(a), b, 10.0 + 1.000
+            "127.0.0.1", 40000, "127.0.0.1", 9050, 1 + len(a), b, 10.0 + 0.005
         )
         s, _ = self._run(pkts)
-        self.assertEqual(s["interval_buckets"].get("below_min"), 1)
+        self.assertEqual(s["interval_buckets"].get("below_tick"), 1)
 
-    def test_jitter_summary_is_per_flow_not_merged(self):
-        # Two healthy channels at 5 s. Interleaved, the merged series has
-        # 2.5 s gaps (below_min). Defect 2 is per-channel; the summary must
-        # not report that false metronome.
+    def test_interval_summary_is_per_flow_not_merged(self):
+        # Two channels, each with 5 s gaps. Interleaved, the merged series
+        # has 2.5 s gaps. The law is per channel; the summary must pool the
+        # per-flow gaps, not read the merge.
         w = framed_window()
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, w, 10.0)
         pkts += segmented(
@@ -219,10 +219,10 @@ class CountWindows(unittest.TestCase):
         )
         s, _ = self._run(pkts)
         self.assertEqual(s["n"], 4)
-        self.assertEqual(s["interval_buckets"].get("in_jitter"), 2)
-        self.assertEqual(s["interval_buckets"].get("below_min", 0), 0)
+        self.assertEqual(s["interval_buckets"].get("at_or_above_tick"), 2)
+        self.assertAlmostEqual(s["interval_mean_ms"], 5000.0, places=3)
 
-    def test_one_flow_metronome_is_visible_in_summary(self):
+    def test_one_flow_burst_is_visible_in_summary(self):
         w = framed_window()
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, w, 10.0)
         pkts += segmented(
@@ -230,11 +230,11 @@ class CountWindows(unittest.TestCase):
         )
         pkts += segmented("127.0.0.1", 40001, "127.0.0.1", 9050, 1, w, 10.0)
         pkts += segmented(
-            "127.0.0.1", 40001, "127.0.0.1", 9050, 1 + len(w), w, 11.0
+            "127.0.0.1", 40001, "127.0.0.1", 9050, 1 + len(w), w, 10.004
         )
         s, _ = self._run(pkts)
-        self.assertEqual(s["interval_buckets"].get("in_jitter"), 1)
-        self.assertEqual(s["interval_buckets"].get("below_min"), 1)
+        self.assertEqual(s["interval_buckets"].get("at_or_above_tick"), 1)
+        self.assertEqual(s["interval_buckets"].get("below_tick"), 1)
 
     def test_expect_zero_exits_nonzero(self):
         blob = framed_window()

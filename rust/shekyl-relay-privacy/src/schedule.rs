@@ -727,44 +727,54 @@ impl EmbargoTimer {
     }
 }
 
-/// Noise-channel send cadence for the Tor zones.
+/// A carrier channel's send cadence: memoryless (`CVR-R4`; §56.5).
 ///
-/// Constant-rate cover traffic, a different mechanism from Dandelion++ that
-/// happens to share the inherited `zone` struct and its timers. It is here
-/// because it draws from the same uniform primitive and raises the same
-/// conformance question, not because it is part of Dandelion++.
+/// The wait before a channel's next window is a geometric count of
+/// [`carrier::CADENCE_TICK_MS`] ticks with mean
+/// [`carrier::MEAN_CADENCE_TICKS`], the discrete form of an exponential with
+/// mean [`carrier::MEAN_CADENCE_MS`]. Memoryless is the point: the time since
+/// a channel's last window says nothing about when its next comes, so a
+/// transaction that becomes ready at any instant waits a draw from the same
+/// law as a window that carries nothing, and a watcher timing the windows
+/// learns nothing from when they come. §56 measured a residual linkage
+/// channel in the bounded law (`min + U[0, width]`) this replaces, and a
+/// fixed period is the metronome it disqualified.
+///
+/// **Shifted by one tick.** The draw is one tick plus a geometric count with
+/// mean [`carrier::MEAN_CADENCE_TICKS`] − 1, so the mean is unchanged and no
+/// gap is zero. An unshifted geometric has an atom at zero (one draw in
+/// `mean + 1`), and a zero gap puts two windows on the wire at one instant,
+/// a burst of twice the window that no other gap produces. Past the first
+/// tick the law is still memoryless.
+///
+/// One table, built once, shared by every channel and every zone: its mass
+/// is a pure function of the mean.
 #[derive(Debug, Clone, Copy)]
 pub struct NoiseCadence {
-    min_delay_ms: u32,
-    jitter_ms: u32,
+    table: &'static GeometricTable,
 }
 
 impl NoiseCadence {
-    /// The shipped cadence: 3.333 s + U[0, 3.334 s] between covert sends, a
-    /// mean of exactly 5 000 ms.
-    ///
-    /// Named `shipped` rather than `inherited` since 2026-08-28: the pair it
-    /// reads is no longer a mirror of `cryptonote_config.h`, and those
-    /// `#define`s are deleted.
+    /// The shipped cadence: mean [`carrier::MEAN_CADENCE_MS`], drawn at
+    /// [`carrier::CADENCE_TICK_MS`].
     #[must_use]
-    pub const fn shipped() -> Self {
+    pub fn shipped() -> Self {
+        static TABLE: std::sync::OnceLock<GeometricTable> = std::sync::OnceLock::new();
         Self {
-            min_delay_ms: carrier::NOISE_MIN_DELAY_MS,
-            jitter_ms: carrier::NOISE_DELAY_JITTER_MS,
+            table: TABLE.get_or_init(|| GeometricTable::new(carrier::MEAN_CADENCE_TICKS - 1)),
         }
     }
 
-    /// Next covert-send deadline relative to `start`.
+    /// The table the draws come from.
+    #[must_use]
+    pub const fn table(&self) -> &'static GeometricTable {
+        self.table
+    }
+
+    /// Next send deadline relative to `start`.
     pub fn next_send<R: RelayRng + ?Sized>(&self, start: Millis, rng: &mut R) -> Millis {
-        let jitter_ms = u64::from(self.jitter_ms);
-        let offset = if jitter_ms == 0 {
-            0
-        } else {
-            bounded_uniform(rng, jitter_ms)
-        };
-        start
-            .saturating_add(u64::from(self.min_delay_ms))
-            .saturating_add(offset)
+        let ticks = self.table.draw(rng).saturating_add(1);
+        start.saturating_add(ticks.saturating_mul(u64::from(carrier::CADENCE_TICK_MS)))
     }
 }
 
@@ -969,45 +979,50 @@ mod tests {
         );
     }
 
-    /// The band is derived from the constants rather than transcribed, so a
-    /// cadence change retargets it instead of turning it red — the literal
-    /// `10_500..=15_500` here was a second copy of the pair.
+    /// The shipped cadence is the memoryless law it claims: whole ticks, the
+    /// stated mean, an untruncated table, and the exponential's spread — a
+    /// coefficient of variation near one, where the bounded law it replaces
+    /// sat near 0.19 and a metronome at zero.
     ///
-    /// **Containment alone was too weak to be worth keeping.** A `next_send`
-    /// that ignored the jitter and returned `min` every time satisfied the old
-    /// assertion — that is precisely the **metronome**, the one shape §56
-    /// disqualified at a 1.000 re-identification rate. So the span is asserted
-    /// too: over 2 000 draws across a 3 335 ms band, missing either 5 % tail
-    /// has probability `0.95^2000`, which is zero for practical purposes.
+    /// Red edits: draw a fixed interval (the spread collapses), go back to
+    /// `min + U[0, width]` (the spread falls to about a fifth), change the
+    /// mean without the budget, or drop the one-tick shift (a zero gap).
     #[test]
-    fn noise_cadence_spans_its_band() {
+    fn noise_cadence_is_memoryless_at_the_budgeted_mean() {
         const START: u64 = 500;
-        let lo = START + u64::from(carrier::NOISE_MIN_DELAY_MS);
-        let hi = lo + u64::from(carrier::NOISE_DELAY_JITTER_MS);
-        let tail = u64::from(carrier::NOISE_DELAY_JITTER_MS) / 20;
-
+        const DRAWS: u32 = 20_000;
         let c = NoiseCadence::shipped();
+        assert!(!c.table().is_truncated(), "the cadence table's tail is cut");
+        assert_eq!(c.table().mean(), carrier::MEAN_CADENCE_TICKS - 1);
+        let tick = u64::from(carrier::CADENCE_TICK_MS);
         let mut rng = SplitMix64::new(9);
-        let (mut seen_lo, mut seen_hi) = (u64::MAX, 0_u64);
-        for _ in 0..2_000 {
-            let t = c.next_send(START, &mut rng);
+        let (mut sum, mut sum_sq) = (0.0_f64, 0.0_f64);
+        for _ in 0..DRAWS {
+            let gap = c.next_send(START, &mut rng) - START;
+            assert_eq!(gap % tick, 0, "a gap of {gap} ms is not whole ticks");
             assert!(
-                (lo..=hi).contains(&t),
-                "noise send at {t}, band {lo}..={hi}"
+                gap >= tick,
+                "a zero gap puts two windows on the wire at once"
             );
-            seen_lo = seen_lo.min(t);
-            seen_hi = seen_hi.max(t);
+            #[allow(clippy::cast_precision_loss)]
+            let gap = gap as f64;
+            sum += gap;
+            sum_sq += gap * gap;
         }
+        let n = f64::from(DRAWS);
+        let mean = sum / n;
+        let sd = (sum_sq / n - mean * mean).sqrt();
+        let want = f64::from(carrier::MEAN_CADENCE_MS);
+        // The sample mean of 20 000 exponential draws has a standard error
+        // of mean/141; 3 % is over four of them.
         assert!(
-            seen_lo <= lo + tail,
-            "no draw within 5% of the band floor ({seen_lo} vs {lo}) — a \
-             cadence pinned near its maximum is not the law that was graded"
+            (mean - want).abs() < want * 0.03,
+            "mean gap {mean} ms against {want} ms"
         );
+        let cv = sd / mean;
         assert!(
-            seen_hi >= hi - tail,
-            "no draw within 5% of the band ceiling ({seen_hi} vs {hi}) — at \
-             zero effective width the carrier is a metronome, which Q-11 \
-             Unit 2 disqualified"
+            (0.95..=1.05).contains(&cv),
+            "coefficient of variation {cv}: memoryless is one"
         );
     }
 

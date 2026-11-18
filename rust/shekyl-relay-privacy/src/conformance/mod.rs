@@ -54,7 +54,9 @@ pub use flood::{
     simulate_fluff_return_mixed, transit_for, ClassedHop, Converged, ConvergenceBudget,
     ConvergenceRefusal, FirstSpyPrecision, FloodParams, FloodReach, FloodSummary, FLOOD_TICK_MS,
 };
-pub use grade::{grade_bernoulli, grade_poisson, grade_stem_balance, grade_uniform, Grade};
+pub use grade::{
+    grade_bernoulli, grade_geometric, grade_poisson, grade_stem_balance, grade_uniform, Grade,
+};
 pub use reshape::{
     simulate_origin_exposure, simulate_precision_increment, simulate_reshape_recovery,
     OriginExposure, PrecisionIncrement, RecoveryBudget, ReshapeRecovery,

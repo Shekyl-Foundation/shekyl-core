@@ -630,15 +630,8 @@ pub mod inherited {
     /// λ for the inbound fluff draw, in quarter-seconds.
     pub const FLUFF_AVERAGE_IN_QUARTER_SECS: u32 = 20;
 
-    // The covert cadence and its epoch-window budget MOVED to `super::carrier`
-    // on 2026-08-28, with `_SECS` becoming `_MS`.
-    //
-    // They were mirrors of `CRYPTONOTE_NOISE_MIN_DELAY` and
-    // `CRYPTONOTE_NOISE_DELAY_RANGE`; both `#define`s had zero readers and are
-    // deleted by the same change. This module holds the inherited relay
-    // values, so a value that is derived rather than inherited does not
-    // belong here — and the carrier module is where the ceiling those
-    // numbers now have to satisfy can be asserted against `WINDOW_BYTES`.
+    // The carrier's cadence is not inherited: it is derived from the cover
+    // budget in `super::carrier`.
 
     /// Max outbound connections per zone used for covert sending (the
     /// inherited `CRYPTONOTE_NOISE_CHANNELS`).
@@ -678,52 +671,6 @@ mod r1_tests {
         assert!(
             (observed - target).abs() < 0.01,
             "sampler rate {observed:.4} should be {target:.4}"
-        );
-    }
-
-    /// The shipped epoch still carries a full-size message, with named slack
-    /// rather than a tautology on integer division.
-    ///
-    /// The historical 300 s / 20-window coincidence (`MAX_FRAGMENTS` was set
-    /// equal to `noise_windows_in_epoch(300)`) is not the derivation. What
-    /// this pins is the live relationship: the inherited epoch is 600 s and
-    /// the derived cap of 5 sits well under what it affords.
-    ///
-    /// # The 300 s tripwire fired, on purpose, and is retired here
-    ///
-    /// The final assertion used to read `noise_windows_in_epoch(300) == 20`,
-    /// kept — in its own words — *"so a cadence change that would have moved
-    /// that coincidence reds here"*. The 2026-08-28 cadence change is that
-    /// change, and it did red here. The coincidence it was watching is now
-    /// **gone rather than moved**: 300 s affords 44 windows against a cap of
-    /// 5, so there is no longer a number for `MAX_FRAGMENTS` to be silently
-    /// equal to. Re-pinning it at 44 would keep a tripwire whose subject has
-    /// been dismantled, so what is asserted instead is the property that
-    /// actually matters — the epoch affords the cap with room, and the cap is
-    /// not the ceiling.
-    #[test]
-    fn the_shipped_epoch_carries_a_full_noise_message_with_named_slack() {
-        let per_send_ms = carrier::NOISE_MIN_DELAY_MS + carrier::NOISE_DELAY_JITTER_MS;
-        let shipped = DandelionParams::inherited().min_epoch_secs;
-        assert_eq!(shipped, 600, "CRYPTONOTE_DANDELIONPP_MIN_EPOCH");
-        assert_eq!(
-            carrier::noise_windows_in_epoch(shipped),
-            (shipped * 1_000) / per_send_ms,
-            "the epoch-window budget is integer division of the shipped epoch"
-        );
-        let affords = carrier::noise_windows_in_epoch(shipped);
-        assert!(
-            affords >= carrier::MAX_FRAGMENTS,
-            "a {shipped} s epoch affords {affords} windows; the cap is {} — \
-             slack is {affords} − {}, not a coincidence with the cap",
-            carrier::MAX_FRAGMENTS,
-            carrier::MAX_FRAGMENTS,
-        );
-        assert!(
-            affords > carrier::MAX_FRAGMENTS,
-            "the cap must sit STRICTLY under the epoch ceiling: at equality \
-             the cap would again be a restatement of the epoch rather than a \
-             bound derived from the transactions it carries"
         );
     }
 }

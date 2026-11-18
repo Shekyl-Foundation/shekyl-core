@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::basis::DerivationMs;
-use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
+use shekyl_relay_privacy::params::{inherited, DandelionParams};
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
@@ -295,19 +295,6 @@ pub enum RelayNewError {
         /// The stem/channel count that was requested.
         got: usize,
     },
-    /// The epoch cannot carry a full-size message, so the message may never
-    /// arrive: it cannot finish within one epoch, and any roll that hands its
-    /// slot to a different peer restarts it from the first fragment (CV-1).
-    ///
-    /// Budget is [`carrier::noise_windows_in_epoch`] against
-    /// [`carrier::MAX_FRAGMENTS`]. Runtime, not `const`, because the
-    /// epoch crosses as `min_epoch_secs`.
-    NoiseCannotCrossOneEpoch {
-        /// Windows a full-size message needs.
-        needs: u32,
-        /// Windows the epoch affords.
-        affords: u32,
-    },
     /// A configured connector hides this node's address and `stems < 2`.
     /// Slot 0 is reserved for the sessions that hide it (§95.3), so the
     /// origin's pin needs one alternate and relayed traffic needs a slot of
@@ -324,12 +311,6 @@ impl fmt::Display for RelayNewError {
             Self::NoiseChannelCount { got } => write!(
                 f,
                 "noise channel count must equal inherited::NOISE_CHANNELS (got {got})"
-            ),
-            Self::NoiseCannotCrossOneEpoch { needs, affords } => write!(
-                f,
-                "noise epoch carries {affords} windows but a full message needs \
-                 {needs}; a roll that rebinds the slot restarts it from the first \
-                 fragment, so it may never finish"
             ),
             Self::HiddenSlotWidth { got } => write!(
                 f,
@@ -351,10 +332,10 @@ impl fmt::Display for RelayNewError {
 /// **CV-3 lives in how deadlines are mutated.** Each entry is drawn once and
 /// re-drawn only when *that* channel fires. A wake caused by the fluff
 /// scheduler, an epoch rollover, or another channel coming due must leave every
-/// other entry untouched. Re-drawing on a foreign wake resamples
-/// `min + U(0, jitter)` and keeps the minimum, which biases the effective
-/// noise interval **short** — a privacy defect no count assertion and no
-/// goodness-of-fit grade can see (§20.2a).
+/// other entry untouched. Re-drawing on a foreign wake and keeping the
+/// earlier deadline takes the minimum of two draws, which biases the
+/// effective noise interval **short** — a privacy defect no count assertion
+/// and no goodness-of-fit grade can see (§20.2a).
 #[derive(Debug)]
 enum NoiseSchedule {
     Off,
@@ -496,12 +477,6 @@ impl Relay {
     /// [`inherited::NOISE_CHANNELS`].** `stems` is that width. This was a
     /// `debug_assert!`, which compiles out in release.
     ///
-    /// **A noise epoch must carry a full-size message.** Otherwise it cannot
-    /// finish inside one epoch, and a roll that rebinds its slot restarts it
-    /// from the first fragment (CV-1). The budget is
-    /// [`carrier::noise_windows_in_epoch`] against
-    /// [`carrier::MAX_FRAGMENTS`].
-    ///
     /// **A hidden connector needs a stem width of at least two.** Slot 0 is
     /// then reserved for the sessions that hide this node's address, and the
     /// origin's pin needs `stems − 1 ≥ 1` alternates; at width one relayed
@@ -522,17 +497,8 @@ impl Relay {
         now: Millis,
         rng: &mut R,
     ) -> Result<Self, RelayNewError> {
-        if noise_requested {
-            if stems != inherited::NOISE_CHANNELS {
-                return Err(RelayNewError::NoiseChannelCount { got: stems });
-            }
-            let affords = carrier::noise_windows_in_epoch(params.min_epoch_secs);
-            if affords < carrier::MAX_FRAGMENTS {
-                return Err(RelayNewError::NoiseCannotCrossOneEpoch {
-                    needs: carrier::MAX_FRAGMENTS,
-                    affords,
-                });
-            }
+        if noise_requested && stems != inherited::NOISE_CHANNELS {
+            return Err(RelayNewError::NoiseChannelCount { got: stems });
         }
         let reserves_slot = any_hides_address_from_peer(configured);
         if reserves_slot && stems < 2 {

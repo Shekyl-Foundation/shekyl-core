@@ -49,6 +49,12 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 # silently and shift the window; a test reds with the constant named.
 shekyl-tx-weight = { path = "../shekyl-tx-weight" }
 shekyl-levin = { path = "../shekyl-levin" }
+# TEST-ONLY, same rule. The design stem load a channel must outrun
+# (`a_channel_outruns_the_design_stem_load`) is the chain's penalty-free
+# block weight over its block time; the test asks the crates that own those
+# facts rather than re-typing them.
+shekyl-wire = { path = "../shekyl-wire" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 
 [lints]
 workspace = true

@@ -7,7 +7,7 @@ use super::*;
 use std::sync::Arc;
 
 use shekyl_draw_rng::SplitMix64;
-use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
+use shekyl_relay_privacy::params::{inherited, DandelionParams};
 
 /// Frozen draws from seed `0xF1FF` for the wired fluff path. Not chosen —
 /// observed, then pinned. Note the shape is memoryless: a 0 ms draw sits
@@ -603,8 +603,8 @@ fn fluff_fanout_shares_one_blob_handle_across_peers() {
 /// Why the property needs a test at all: with per-channel timers it was free —
 /// nothing but channel `i`'s timer could reach channel `i`'s deadline. Folding
 /// the sleep into one wake (§20.2a) creates the shared query path, and with it
-/// the possibility of re-arming on someone else's wake. Doing so resamples
-/// `min + U(0, jitter)` and keeps the minimum, biasing the covert interval
+/// the possibility of re-arming on someone else's wake. Doing so draws again
+/// and keeps the earlier deadline, biasing the covert interval
 /// **short** — a channel emitting faster than its own distribution claims. No
 /// count assertion sees it and no goodness-of-fit grade sees it.
 ///
@@ -937,36 +937,23 @@ fn a_noise_carrier_is_refused_only_for_its_shape() {
         Some(RelayNewError::NoiseChannelCount { got: CHANNELS + 1 }),
         "the channel count is read whatever the connectors"
     );
-
-    // Arithmetic is `carrier::noise_windows_in_epoch`. This pins that
-    // Relay::new consumes it when cover is requested and ignores it otherwise.
-    let mut rng = SplitMix64::new(0x0820);
-    let per_send_ms = carrier::NOISE_MIN_DELAY_MS + carrier::NOISE_DELAY_JITTER_MS;
+    // The epoch's length is not a refusal: the tail after each boundary,
+    // not the epoch, keeps a run on its own peer (`CVR-R4`).
     let mut short = DandelionParams::inherited();
-    // One millisecond short of the epoch that would afford the full cap,
-    // floored to whole seconds because the field is seconds. The assertion
-    // below re-derives `affords` rather than trusting this arithmetic.
-    short.min_epoch_secs = (carrier::MAX_FRAGMENTS * per_send_ms - 1) / 1_000;
-    match Relay::new(
-        short,
-        CHANNELS,
-        true,
-        &[ConnectorId::Clearnet],
-        &[ConnectorId::Clearnet],
-        0,
-        &mut rng,
-    ) {
-        Err(RelayNewError::NoiseCannotCrossOneEpoch { needs, affords }) => {
-            assert_eq!(needs, carrier::MAX_FRAGMENTS);
-            assert_eq!(affords, carrier::MAX_FRAGMENTS - 1);
-        }
-        other => panic!("expected a one-epoch refusal, got {other:?}"),
-    }
-    let mut params = DandelionParams::inherited();
-    params.min_epoch_secs = 1;
+    short.min_epoch_secs = 1;
+    let mut rng = SplitMix64::new(0x0820);
     assert!(
-        Relay::new(params, 2, false, &[ConnectorId::Clearnet], &[], 0, &mut rng).is_ok(),
-        "no carrier, no fragment budget to blow"
+        Relay::new(
+            short,
+            CHANNELS,
+            true,
+            &[ConnectorId::Clearnet],
+            &[ConnectorId::Clearnet],
+            0,
+            &mut rng,
+        )
+        .is_ok(),
+        "a carrier over a one-second epoch builds"
     );
 }
 

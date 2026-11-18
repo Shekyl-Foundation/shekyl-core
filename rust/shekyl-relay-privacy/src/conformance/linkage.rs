@@ -32,23 +32,16 @@
 //! The residual — time from *now* until a stream's next emission — is the
 //! only quantity an observer holds at the moment a blackout ends.
 //!
-//! - Under the **bounded** family the daemon ships
-//!   (`NOISE_MIN_DELAY_MS + U[0, NOISE_DELAY_JITTER_MS]`, today
-//!   `3.333 s + U[0, 3.334 s]`), the residual is a function of
-//!   elapsed-since-last: once the minimum has passed, an emission is certain
-//!   within the jitter width. Each stream therefore carries a *phase*, and
-//!   phase survives a short blackout. That is a per-stream feature to match
-//!   on.
-//!
-//!   Written against the constants rather than their values because this
-//!   instrument grades the **shipped** law: a cadence change that left this
-//!   paragraph behind would leave the instrument describing a law it is no
-//!   longer measuring, which is the one failure a conformance harness cannot
-//!   afford. (It did, once — the 2026-08-28 cadence change, caught in
-//!   review.)
-//! - Under a **memoryless** family the residual is independent of elapsed
-//!   time by definition. There is no phase, so there is nothing that persists
-//!   across the blackout to match on.
+//! - Under a **bounded** family (`min + U[0, width]`, the law the carrier
+//!   shipped until `CVR-R4`; [`BOUNDED_MIN_MS`] and [`BOUNDED_WIDTH_MS`]),
+//!   the residual is a function of elapsed-since-last: once the minimum has
+//!   passed, an emission is certain within the width. Each stream therefore
+//!   carries a *phase*, and phase survives a short blackout. That is a
+//!   per-stream feature to match on.
+//! - Under a **memoryless** family — the law the carrier ships, drawn here
+//!   through production [`NoiseCadence::next_send`] — the residual is
+//!   independent of elapsed time past the first tick. There is no phase, so
+//!   there is nothing that persists across the blackout to match on.
 //!
 //! # What a null result would mean
 //!
@@ -60,7 +53,7 @@
 //! could only confirm the need for randomness would be assuming its answer.
 
 use crate::schedule::{Millis, NoiseCadence};
-use shekyl_draw_rng::RelayRng;
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 /// Which inter-emission law a stream draws from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,13 +61,12 @@ pub enum CadenceShape {
     /// A fixed interval — no draw at all. The payload-independent floor:
     /// it denies recall completely and is the shape randomness must beat.
     Metronome,
-    /// What the daemon ships: `NOISE_MIN_DELAY + U[0, NOISE_JITTER]`, drawn
-    /// through **production** [`NoiseCadence::next_send`], not a re-derived
-    /// copy of it.
+    /// `BOUNDED_MIN_MS + U[0, BOUNDED_WIDTH_MS]`: the law the carrier
+    /// shipped until `CVR-R4`, kept as the arm the shipped law is compared
+    /// against, at the shipped mean.
     BoundedUniform,
-    /// Memoryless: residual independent of elapsed time. Geometric on a
-    /// millisecond grid, mean matched to the bounded family's so the two arms
-    /// differ in *shape* and not in rate.
+    /// What the carrier ships: memoryless, drawn through **production**
+    /// [`NoiseCadence::next_send`], not a re-derived copy of it.
     Memoryless,
 }
 
@@ -116,19 +108,19 @@ fn log_density_k(shape: CadenceShape, delta_ms: f64, k: u32, mean_ms: f64) -> f6
             -(delta_ms - kf * mean_ms).abs()
         }
         CadenceShape::BoundedUniform => {
-            let lo = f64::from(crate::params::carrier::NOISE_MIN_DELAY_MS);
-            let hi = lo + f64::from(crate::params::carrier::NOISE_DELAY_JITTER_MS);
+            #[allow(clippy::cast_precision_loss)]
+            let lo = BOUNDED_MIN_MS as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let hi = lo + BOUNDED_WIDTH_MS as f64;
             // Outside the k-fold support the component contributes nothing —
             // that hard cutoff is most of the discriminating power at small k.
             if delta_ms < kf * lo || delta_ms > kf * hi {
                 return f64::NEG_INFINITY;
             }
-            // `hi > lo` is guaranteed by the non-zero-jitter invariant asserted
-            // at `NOISE_DELAY_JITTER_MS`, so `sd > 0` and neither the
-            // division nor `ln` below can degenerate. That invariant is
-            // enforced where the constant lives rather than defended here:
-            // at zero jitter this arm would not merely divide by zero, it
-            // would silently *become* the metronome arm and the sweep would
+            // `hi > lo` is guaranteed by the non-zero width asserted at
+            // `BOUNDED_WIDTH_MS`, so `sd > 0` and neither the division nor
+            // `ln` below can degenerate: at zero width this arm would
+            // silently *become* the metronome arm and the sweep would
             // compare a law with itself.
             let sd = (hi - lo) / 12.0_f64.sqrt() * kf.sqrt();
             let z = (delta_ms - kf * mean_ms) / sd;
@@ -186,39 +178,36 @@ pub struct LinkageSummary {
 
 /// Draw one inter-emission interval under `shape`.
 ///
-/// The geometric table is built **once per run** and passed in: constructing
-/// it per draw is `O(mean)` each time and dominated the instrument's runtime.
-///
-/// **The memoryless arm is shifted by one grid step.** An unshifted geometric
-/// has a ~2 % atom at zero, which would let that arm emit twice at the same
-/// instant — something the bounded arm (whose gaps start at
-/// `NOISE_MIN_DELAY_MS`) and the metronome arm cannot do.
-/// That is an asymmetry *between the arms*, not a property of memorylessness,
-/// and it would show up as a difference the shape question would then have to
-/// explain. The table is built for `mean − 1` so the shift leaves the mean
-/// where it belongs, keeping the arms matched in rate and differing only in
-/// shape — which is the whole point of the comparison.
-fn interval<R: RelayRng + ?Sized>(
-    shape: CadenceShape,
-    rng: &mut R,
-    mean_ms: u64,
-    table: Option<&crate::geometric::GeometricTable>,
-) -> Millis {
+/// The memoryless arm is production's draw, so this instrument grades the
+/// law the carrier ships. Its gaps start at one cadence tick, as the bounded
+/// arm's start at its minimum and the metronome's at its period: no arm
+/// emits twice at one instant, so the arms differ only in shape.
+fn interval<R: RelayRng + ?Sized>(shape: CadenceShape, rng: &mut R, mean_ms: u64) -> Millis {
     match shape {
         CadenceShape::Metronome => mean_ms,
+        CadenceShape::BoundedUniform => BOUNDED_MIN_MS + bounded_uniform(rng, BOUNDED_WIDTH_MS),
         // Production path: the instrument must not re-derive the law it is
         // grading, or it measures its own copy (the shim-oracle failure).
-        CadenceShape::BoundedUniform => NoiseCadence::shipped().next_send(0, rng),
-        CadenceShape::Memoryless => {
-            let t = table.expect("memoryless arm requires its table");
-            (t.draw(rng) + 1) * MEMORYLESS_GRID_MS
-        }
+        CadenceShape::Memoryless => NoiseCadence::shipped().next_send(0, rng),
     }
 }
 
-/// Grid for the memoryless arm. Fine enough that discretisation does not
-/// blunt the residual, coarse enough to keep the table small.
-const MEMORYLESS_GRID_MS: u64 = 250;
+/// The bounded arm's minimum gap, in milliseconds: two thirds of the
+/// shipped mean, the jitter-to-base ratio of one the carrier shipped with
+/// until `CVR-R4` (3 334 ms at a 5 000 ms mean).
+pub const BOUNDED_MIN_MS: u64 = MEAN_MS - MEAN_MS / 3;
+
+/// The bounded arm's width, in milliseconds: twice the distance from its
+/// minimum to the shipped mean, so the two arms share a mean and differ
+/// only in shape.
+pub const BOUNDED_WIDTH_MS: u64 = 2 * (MEAN_MS - BOUNDED_MIN_MS);
+
+const MEAN_MS: u64 = crate::params::carrier::MEAN_CADENCE_MS as u64;
+
+const _: () = assert!(
+    BOUNDED_WIDTH_MS > 0 && BOUNDED_MIN_MS + BOUNDED_WIDTH_MS / 2 == MEAN_MS,
+    "the bounded arm must have width and the shipped mean"
+);
 
 /// Maximum-weight assignment, so the "strong observer" arm actually computes
 /// the best global matching rather than a greedy approximation.
@@ -354,16 +343,6 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
         ((lambda + 8.0 * lambda.sqrt()).ceil() as u32).max(4)
     };
 
-    // Built once, not per draw.
-    let table = (shape == CadenceShape::Memoryless).then(|| {
-        crate::geometric::GeometricTable::new(
-            u32::try_from(mean_ms / MEMORYLESS_GRID_MS)
-                .unwrap_or(2)
-                .saturating_sub(1)
-                .max(1),
-        )
-    });
-
     let mut correct = 0_usize;
     let mut total = 0_usize;
 
@@ -376,7 +355,7 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
             .collect();
         for slot in &mut t {
             for _ in 0..8 {
-                *slot += interval(shape, rng, mean_ms, table.as_ref());
+                *slot += interval(shape, rng, mean_ms);
             }
         }
 
@@ -396,12 +375,12 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
             let mut prev = *slot;
             while *slot <= blackout_start {
                 prev = *slot;
-                *slot += interval(shape, rng, mean_ms, table.as_ref());
+                *slot += interval(shape, rng, mean_ms);
             }
             last.push(prev);
             // Then to the first emission after the blackout ends.
             while *slot <= blackout_end {
-                *slot += interval(shape, rng, mean_ms, table.as_ref());
+                *slot += interval(shape, rng, mean_ms);
             }
             first_after.push(*slot);
         }
@@ -513,18 +492,16 @@ mod tests {
         }
     }
 
-    /// The memoryless arm never emits twice at one instant.
-    ///
-    /// An unshifted geometric has a ~2 % atom at zero, which the bounded and
-    /// metronome arms cannot produce. Left in, that is an asymmetry *between
-    /// the arms* which the shape comparison would then have to explain away.
+    /// No arm emits twice at one instant: the memoryless arm (production's
+    /// draw) starts at one cadence tick, and the bounded arm at its minimum.
     #[test]
-    fn the_memoryless_arm_draws_no_zero_interval() {
-        let table = crate::geometric::GeometricTable::new(49);
+    fn no_arm_draws_a_zero_interval() {
         let mut rng = SplitMix64::new(0x2E80);
-        for _ in 0..200_000 {
-            let d = interval(CadenceShape::Memoryless, &mut rng, 12_500, Some(&table));
-            assert!(d > 0, "zero-length interval: two emissions at one instant");
+        for shape in [CadenceShape::Memoryless, CadenceShape::BoundedUniform] {
+            for _ in 0..200_000 {
+                let d = interval(shape, &mut rng, MEAN_MS);
+                assert!(d > 0, "{shape:?}: two emissions at one instant");
+            }
         }
     }
 }

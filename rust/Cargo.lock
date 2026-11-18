@@ -5228,12 +5228,14 @@ dependencies = [
 name = "shekyl-relay-privacy"
 version = "3.1.0"
 dependencies = [
+ "shekyl-difficulty",
  "shekyl-draw-rng",
  "shekyl-fcmp",
  "shekyl-levin",
  "shekyl-relay-privacy",
  "shekyl-stats",
  "shekyl-tx-weight",
+ "shekyl-wire",
 ]
 
 [[package]]

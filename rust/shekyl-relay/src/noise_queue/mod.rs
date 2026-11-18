@@ -322,9 +322,8 @@ pub struct NoiseQueues {
     /// nothing from `pending`. So the surplus is not something a roll would
     /// have thrown away — without this cap it simply accumulates.
     ///
-    /// Set to one epoch's worth of deliverable windows
-    /// ([`carrier::noise_windows_in_epoch`], counted at the SLOWEST cadence so
-    /// the figure cannot overstate what a channel drains). That is a backlog
+    /// Set to one epoch's worth of windows at the mean cadence
+    /// ([`carrier::noise_windows_in_epoch`]). That is a backlog
     /// bound, not a delivery promise: a channel may not fall more than about
     /// one epoch behind. What it admits is queueing delay — a message accepted
     /// behind a full budget waits up to roughly an epoch for the wire. One

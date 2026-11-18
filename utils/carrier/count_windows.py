@@ -42,9 +42,14 @@ HEADER_SIZE = 29
 # Matching m_cb == WINDOW_BYTES misses every real window.
 WINDOW_BYTES = 20_480
 WINDOW_BODY = WINDOW_BYTES - HEADER_SIZE
-NOISE_MIN_DELAY_MS = 3_333
-NOISE_DELAY_JITTER_MS = 3_334  # inclusive width → U[3333, 6667]
-JITTER_HI_MS = NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS
+# The cadence is memoryless (CVR-R4): a channel's gap is one CADENCE_TICK_MS
+# plus a geometric count of ticks, mean MEAN_CADENCE_MS. No gap is below one
+# tick; a gap below it is two windows on the wire at once, a defect. The
+# shape is read from a flow's interval mean and coefficient of variation
+# (one for memoryless, zero for a metronome), not from a band.
+MEAN_CADENCE_MS = 5_000
+CADENCE_TICK_MS = 10
+NODE_BUDGET_BPS = 8_192  # PER_NODE_BUDGET_BYTES_PER_SEC, two channels
 
 MAX_BODY = 100_000_000  # LEVIN_DEFAULT_MAX_PACKET_SIZE; larger is a false sig
 
@@ -275,15 +280,22 @@ def intervals_ms(timestamps):
 
 
 def classify_interval(ms):
-    if ms < NOISE_MIN_DELAY_MS:
-        return "below_min"
-    if ms > JITTER_HI_MS:
-        return "above_jitter"
-    return "in_jitter"
+    if ms < CADENCE_TICK_MS:
+        return "below_tick"
+    return "at_or_above_tick"
+
+
+def mean_and_cv(intervals):
+    """Mean and coefficient of variation; None when there are too few."""
+    if len(intervals) < 2:
+        return None, None
+    mean = sum(intervals) / len(intervals)
+    var = sum((m - mean) ** 2 for m in intervals) / len(intervals)
+    return mean, (var ** 0.5) / mean if mean > 0 else None
 
 
 def _flow_interval_stats(timestamps):
-    """Per-channel jitter. Defect 2 is a law on one channel, not the merge."""
+    """Per-channel gaps. The law is on one channel, not the merge."""
     iv = intervals_ms(timestamps)
     buckets = collections.Counter(classify_interval(m) for m in iv)
     hist = collections.Counter()
@@ -296,6 +308,7 @@ def summarise(flows):
     all_ts = []
     per_flow = []
     interval_buckets = collections.Counter()
+    pooled = []
     hist = collections.Counter()
     for key, flow in flows.items():
         ts = flow.windows_ts
@@ -310,6 +323,7 @@ def summarise(flows):
             }
         )
         interval_buckets.update(buckets)
+        pooled.extend(iv)
         hist.update(flow_hist)
         all_ts.extend(ts)
     all_ts.sort()
@@ -319,6 +333,7 @@ def summarise(flows):
     # under-read the §3.1c pin (20 480 × 4 ÷ 5 s) by HEADER_SIZE/window.
     payload_bytes = n * WINDOW_BYTES
     rate = (payload_bytes / duration_s) if duration_s > 0 else 0.0
+    interval_mean, interval_cv = mean_and_cv(pooled)
     return {
         "window_bytes": WINDOW_BYTES,
         "window_body_bytes": WINDOW_BODY,
@@ -329,9 +344,10 @@ def summarise(flows):
         "interval_buckets": dict(interval_buckets),
         "histogram_250ms": {str(k): hist[k] for k in sorted(hist)},
         "flows": per_flow,
-        "jitter_ms": [NOISE_MIN_DELAY_MS, JITTER_HI_MS],
-        "tor_only_two_channel_mean_Bps": WINDOW_BYTES * 2 / 5.0,
-        "dual_zone_four_channel_mean_Bps": WINDOW_BYTES * 4 / 5.0,
+        "interval_mean_ms": interval_mean,
+        "interval_cv": interval_cv,
+        "cadence_mean_ms": MEAN_CADENCE_MS,
+        "node_budget_Bps": NODE_BUDGET_BPS,
     }
 
 
@@ -347,18 +363,18 @@ def format_text(summary):
         )
     )
     lines.append(
-        "jitter_band_ms=[%d, %d]  two_ch_mean_Bps=%.3f  four_ch_mean_Bps=%.3f"
+        "cadence_mean_ms=%d  node_budget_Bps=%d  interval_mean_ms=%s  interval_cv=%s"
         % (
-            summary["jitter_ms"][0],
-            summary["jitter_ms"][1],
-            summary["tor_only_two_channel_mean_Bps"],
-            summary["dual_zone_four_channel_mean_Bps"],
+            summary["cadence_mean_ms"],
+            summary["node_budget_Bps"],
+            "-" if summary["interval_mean_ms"] is None else "%.1f" % summary["interval_mean_ms"],
+            "-" if summary["interval_cv"] is None else "%.3f" % summary["interval_cv"],
         )
     )
     b = summary["interval_buckets"]
     lines.append(
-        "intervals below_min=%d in_jitter=%d above_jitter=%d"
-        % (b.get("below_min", 0), b.get("in_jitter", 0), b.get("above_jitter", 0))
+        "intervals below_tick=%d at_or_above_tick=%d"
+        % (b.get("below_tick", 0), b.get("at_or_above_tick", 0))
     )
     if summary["histogram_250ms"]:
         lines.append("histogram_250ms (bin_start:count):")

@@ -2,7 +2,7 @@
 //
 // All rights reserved.
 
-//! The carrier's two derived sizes, checked against the facts they derive from.
+//! The carrier's derived numbers, checked against the facts they derive from.
 //!
 //! [`carrier::WINDOW_BYTES`] and [`carrier::MAX_FRAGMENTS`] are constants in
 //! `shekyl-relay-privacy`, whose default build depends only on
@@ -18,8 +18,9 @@
 //! construction.** Transaction sizes come from `predict_size_and_weight` (the
 //! predictor pinned to `Transaction::write` by
 //! `predict_weight_matches_wire_weight`), the envelope comes from building a
-//! real `NOTIFY_NEW_TRANSACTIONS` with `notify`, and the two ceilings come from
-//! `noise_windows_in_epoch` and levin's own `DEFAULT_MAX_PACKET_SIZE`.
+//! real `NOTIFY_NEW_TRANSACTIONS` with `notify`, the packet ceiling is levin's
+//! own `DEFAULT_MAX_PACKET_SIZE`, and the design stem load is the chain's
+//! full-reward zone and block time.
 //!
 //! **Why this file exists at all.** The sizes it replaces — 8395 B "modal" and
 //! 16651 B "max admissible" — were asserted flatly, with no derivation, and
@@ -32,13 +33,6 @@ use shekyl_relay_privacy::params::{carrier, inherited};
 use shekyl_tx_weight::{
     predict_size_and_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
-
-/// The Dandelion++ epoch the carrier is provisioned against, in seconds.
-///
-/// Not a constant in `inherited`: the epoch is a runtime argument
-/// (`min_epoch_secs`), so mirroring it would be the dead-mirror class Q-11
-/// Unit 0 deleted. Named here because the ceiling assertion needs a value.
-const PROVISIONED_EPOCH_SECS: u32 = 300;
 
 /// Wire bytes of the `NOTIFY_NEW_TRANSACTIONS` carrying one transaction of
 /// this shape — transaction *and* envelope, which is what a window must hold.
@@ -112,26 +106,17 @@ fn the_fragment_cap_is_ceil_of_the_structural_max_over_the_window() {
     );
 }
 
-/// Both ceilings above the cap, asserted against the constants that set them.
+/// The cap stays under levin's packet limit.
 ///
-/// Neither binds at the derived cap, which is the finding rather than a
-/// formality: the inherited 20 sat exactly ON the epoch ceiling, so the
-/// relationship read as a derivation when it was a coincidence.
+/// The epoch is not a ceiling on the cap any more: under the memoryless
+/// cadence no epoch length guarantees a run finishes, and the epoch tail
+/// (`EPOCH_TAIL_WINDOWS`, sized from the cap) lets every run that starts
+/// before a boundary finish on its own peer whatever the epoch's length.
 ///
-/// What edit reds this: raising `carrier::MAX_FRAGMENTS` past the epoch's
-/// window budget, or slowing the noise cadence without lowering the cap.
+/// What edit reds this: raising `carrier::MAX_FRAGMENTS` or the window past
+/// what one levin packet carries.
 #[test]
-fn the_cap_stays_under_both_ceilings() {
-    let affords = carrier::noise_windows_in_epoch(PROVISIONED_EPOCH_SECS);
-    assert!(
-        carrier::MAX_FRAGMENTS <= affords,
-        "a {PROVISIONED_EPOCH_SECS} s epoch affords {affords} windows at the \
-         slowest cadence but the cap is {}; a full-size message could not \
-         finish inside an epoch, and a roll that rebinds its slot would restart \
-         it from the first fragment (CV-1)",
-        carrier::MAX_FRAGMENTS,
-    );
-
+fn the_cap_stays_under_the_packet_limit() {
     // The guard `levin_notify.cpp` used to carry as a static_assert over two
     // C++ #defines, moved here with the constants it guards — which is what
     // that comment's own FOLLOWUP asked for.
@@ -144,44 +129,28 @@ fn the_cap_stays_under_both_ceilings() {
     );
 }
 
-/// The per-node bandwidth ceiling is why the window is the modal shape and the
-/// cap carries the tail — a one-sided `needed <= WINDOW_BYTES` cannot say so.
+/// The cover budget is why the window is the modal shape and the cap carries
+/// the tail — a one-sided `needed <= WINDOW_BYTES` cannot say so.
 ///
-/// The figure is [`carrier::PER_NODE_CEILING_BYTES_PER_SEC`] and is not
-/// written here. Axis 2's 8 KiB/s, which this heading used to name, was
-/// superseded per-node at 16 KiB/s by the same change that derived the
-/// cadence — and a test heading quoting a retired number is how the next
-/// reader learns the wrong ceiling.
+/// The figure is [`carrier::PER_NODE_BUDGET_BYTES_PER_SEC`] (`CVR-R5`) and
+/// is not written here. The cadence is derived from it, so the window at that
+/// cadence spends the budget exactly (a compile-time assert beside the
+/// constants); this test states the node rate in bytes, which the
+/// compile-time form cannot report when it fails. The load-bearing half is
+/// the negative control below.
 ///
-/// Byte rates here are binary (`KiB/s` = 1024 B/s), matching
-/// `COVER_TRAFFIC_RESTORATION.md` §1.7.
-///
-/// # The denominator was local, stale, and a third one (fixed 2026-08-28)
-///
-/// This test used to carry `const CEILING_BYTES_PER_SEC = 8 * 1024` of its
-/// own and apply it to a **per-channel** rate, while §3.3's figure was per
-/// zone and the ceiling it quoted was per node — three denominators for one
-/// quantity, which is the confusion §3.3 recorded and the per-node ruling
-/// settles. The local copy is deleted rather than updated:
-/// [`carrier::PER_NODE_CEILING_BYTES_PER_SEC`] is the only ceiling, and it is
-/// already enforced at compile time beside the constants it divides.
-///
-/// So the first assertion here is deliberately NOT a second guard on the
-/// window — that would be a duplicate of the `const` assert. It states the
-/// **worst posture** in bytes, which the compile-time form cannot report when
-/// it fails. The load-bearing half is the negative control below.
+/// Byte rates here are binary (`KiB/s` = 1024 B/s).
 ///
 /// What edit reds this: a structural-max shrink that would make a whole-tx
 /// window legal, at which point the two-constant split itself is owed a
 /// re-read.
 #[test]
-fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
+fn the_window_at_the_budgeted_cadence_spends_the_budget() {
     // Every channel a node runs: `NOISE_CHANNELS`, one per stem slot, whatever
-    // connectors carry them. The mean cadence is the denominator — a jittered
-    // emitter's sustained rate is its mean, not its fastest gap.
+    // connectors carry them. The mean cadence is the denominator.
     let channels = inherited::NOISE_CHANNELS as u64;
     let mean_ms = u64::from(carrier::MEAN_CADENCE_MS);
-    let ceiling = u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC);
+    let ceiling = u64::from(carrier::PER_NODE_BUDGET_BYTES_PER_SEC);
 
     // Cross-multiplied, not divided. `a / b <= c` floors, so a breach smaller
     // than 1 B/s satisfies it while the true average sits over the ceiling.
@@ -191,7 +160,7 @@ fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
     assert!(
         node_bytes <= ceiling * mean_ms,
         "WINDOW_BYTES {} across {channels} channels at a {mean_ms} ms mean \
-         cadence is {} B/s, over the {ceiling} B/s per-node ceiling",
+         cadence is {} B/s, over the {ceiling} B/s per-node budget",
         carrier::WINDOW_BYTES,
         node_bytes / mean_ms,
     );
@@ -201,7 +170,7 @@ fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
     assert!(
         whole_tx_bytes > ceiling * mean_ms,
         "a window sized for the structural max ({structural_max} B) is {} B/s \
-         at the worst posture, which should breach the per-node ceiling — that \
+         at the budgeted cadence, which should breach the per-node budget — that \
          breach is why MAX_FRAGMENTS exists",
         whole_tx_bytes / mean_ms,
     );
@@ -241,69 +210,75 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
 }
 
-/// The node's channels are its stem slots, and the peak is derived.
+/// The node's channels are its stem slots, and a channel's rate is the
+/// budget's share.
 ///
 /// The node rate counts `NOISE_CHANNELS` and no network term: cover runs per
 /// channel on whichever covered session holds the slot (`CVR-R3`), so a
-/// second network adds no channel. The `CEILING_ZONES` count of open links
-/// is deleted with the cover class it counted (`CVR-R2`).
+/// second network adds no channel. The memoryless cadence has no shortest
+/// gap, so no peak rate is stated; a connection is sized against the
+/// channel's mean rate.
 ///
-/// What edit reds this: a channel count or cadence change moves the peak
-/// pin. The compile-time ceiling assert fires when the product exceeds the
-/// signed cap.
+/// What edit reds this: a budget, window or channel-count change that
+/// moves the channel rate off the figure the documents quote.
 #[test]
-fn the_node_rate_counts_its_channels_and_states_its_peak() {
-    // The peak is an UPPER BOUND, so it rounds up. Asserted against today's
-    // sustained rate scaled by mean/min, rather than a re-derivation of the
-    // same division the constant performs, because the defect this replaces
-    // was a floor that published a "peak" the emitter exceeds — small, and
-    // in the one direction a sizing figure must not err. The signed cap is
-    // not that rate: one open link sustains half of it, and scaling the cap
-    // publishes a peak no emitter reaches.
-    let sustained =
-        u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC) * inherited::NOISE_CHANNELS as u64;
-    let exact_num = sustained * u64::from(carrier::MEAN_CADENCE_MS);
+fn a_channel_carries_its_share_of_the_budget() {
     assert_eq!(
-        u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC),
-        exact_num.div_ceil(u64::from(carrier::NOISE_MIN_DELAY_MS)),
-        "the peak must be today's sustained rate scaled by mean/min, rounded UP"
-    );
-    assert!(
-        u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC) * u64::from(carrier::NOISE_MIN_DELAY_MS)
-            >= (carrier::WINDOW_BYTES as u64) * (inherited::NOISE_CHANNELS as u64) * 1_000,
-        "the advertised peak must not be below the rate the emitter can reach"
-    );
-    assert_eq!(
-        carrier::PER_NODE_PEAK_BYTES_PER_SEC,
-        12_290,
-        "the documented burst figure moved; COVER_TRAFFIC_RESTORATION.md sec \
-         3.3 quotes it"
-    );
-
-    // The per-CIRCUIT figures, pinned because the node aggregate and the
-    // single-channel rate were conflated across two documents one review
-    // round apart — the rig spec wanted per-channel while `carrier.rs`
-    // described the node aggregate as "the burst a circuit has to absorb",
-    // which over-provisions a circuit by 4x.
-    assert_eq!(
-        carrier::PER_CIRCUIT_PEAK_BYTES_PER_SEC,
-        6_145,
-        "axis 2's rig spec quotes this as the burst one circuit absorbs"
-    );
-    assert_eq!(
-        carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC,
+        carrier::PER_CHANNEL_BYTES_PER_SEC,
         4_096,
-        "axis 2's rig spec quotes this as the sustained circuit load"
+        "COVER_TRAFFIC_RESTORATION.md quotes the per-connection cover rate"
     );
-    // One open link sustains half the signed cap. The cap was ruled for two
-    // networks and was not lowered when the count became the open-link
-    // count, so equality would be the stale claim. The factor of two is
-    // that ruling, pinned here so neither a new open link nor a re-ruled
-    // cap can pass in silence.
     assert_eq!(
-        sustained * 2,
-        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
-        "the signed cap is the two-network ruling. One open link sustains \
-         half of it. Adding an open link, or re-ruling the cap, moves this."
+        u64::from(carrier::PER_CHANNEL_BYTES_PER_SEC) * inherited::NOISE_CHANNELS as u64,
+        u64::from(carrier::PER_NODE_BUDGET_BYTES_PER_SEC),
+        "the channels spend the node's budget, no more and no less"
+    );
+    assert_eq!(
+        carrier::MEAN_CADENCE_MS,
+        5_000,
+        "channels x window / budget"
+    );
+}
+
+/// A channel carries the design stem load (`CVR-R5`): it sends windows
+/// faster than the chain can confirm transactions at its design capacity,
+/// so a node relaying every transaction through one channel does not fall
+/// behind.
+///
+/// Counted in windows, not bytes. Every transaction takes at least one
+/// whole window, so the load is transactions per second: the penalty-free
+/// block weight (`MIN_BLOCK_WEIGHT`, the full-reward zone) over the
+/// lightest admissible transaction's weight (one input, the two outputs
+/// CEN-I1 requires, at the shallowest tree depth), per block time
+/// (`T_SECONDS`). Weight, because the block bound counts weight and a
+/// transaction weighs at least its size.
+///
+/// What edit reds this: a slower cadence, a larger full-reward zone, a
+/// shorter block time, or a lighter transaction shape.
+#[test]
+// The float figures are the failure message's only; the decision is integer.
+#[allow(clippy::cast_precision_loss)]
+fn a_channel_outruns_the_design_stem_load() {
+    let lightest = (1..=MAX_TREE_DEPTH)
+        .map(|depth| {
+            predict_size_and_weight(InputCount::clamped(1), OutputCount::clamped(2), depth, 0).1
+        })
+        .min()
+        .expect("depths");
+    let block_weight = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
+    let block_secs = shekyl_difficulty::T_SECONDS;
+    // Transactions per second at capacity: block_weight / lightest / block_secs.
+    // Windows per second per channel: 1000 / MEAN_CADENCE_MS. Cross-multiplied.
+    let load = block_weight * u64::from(carrier::MEAN_CADENCE_MS);
+    let carried = (lightest as u64) * block_secs * 1_000;
+    assert!(
+        carried > load,
+        "a channel sends one window per {} ms; the design load is {} transactions \
+         of {lightest} weight per {block_secs} s block, {:.3} per second against \
+         {:.3} windows per second",
+        carrier::MEAN_CADENCE_MS,
+        block_weight / lightest as u64,
+        block_weight as f64 / lightest as f64 / block_secs as f64,
+        1_000.0 / f64::from(carrier::MEAN_CADENCE_MS),
     );
 }
