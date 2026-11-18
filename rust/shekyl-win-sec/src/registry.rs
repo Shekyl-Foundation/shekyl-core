@@ -301,98 +301,131 @@ fn status(rc: WIN32_ERROR) -> io::Result<()> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use windows_sys::Win32::System::Registry::{
-        RegCreateKeyExW, RegDeleteKeyExW, KEY_READ, REG_OPTION_NON_VOLATILE,
-    };
+/// A scratch key under `HKLM\SOFTWARE\Shekyl`, created with a test's
+/// descriptor and deleted on drop: what the installer's key is, for a test
+/// on any account's machine. Creating under HKLM needs an elevated session
+/// (CI's Windows runner is one); without it the creation panics with the
+/// reason, so a test refuses rather than skips.
+#[cfg(any(test, feature = "test-utils"))]
+pub struct ScratchKey(RendezvousKey);
 
-    use super::*;
-    use crate::sddl::OwnerOnlyDescriptor;
-
-    /// A scratch key under `HKLM\SOFTWARE\Shekyl`, created with `sddl` and
-    /// deleted on drop. Creating under HKLM needs an elevated session (CI's
-    /// runner is one); without it the test refuses with the reason, never
-    /// skips.
-    struct Scratch(RendezvousKey);
-
-    impl Scratch {
-        fn new(test: &str, sddl: &str) -> Self {
-            let subkey = format!(r"SOFTWARE\Shekyl\Test-{test}-{}", std::process::id());
-            let descriptor = OwnerOnlyDescriptor::from_sddl(sddl).expect("the test's descriptor");
-            let wide_subkey = wide(&subkey);
-            let mut key: HKEY = std::ptr::null_mut();
-            // SAFETY: `wide_subkey` is NUL-terminated; the descriptor lives
-            // across the call; `key` receives a handle closed below.
-            let rc = unsafe {
-                RegCreateKeyExW(
-                    HKEY_LOCAL_MACHINE,
-                    wide_subkey.as_ptr(),
-                    0,
-                    std::ptr::null(),
-                    REG_OPTION_NON_VOLATILE,
-                    KEY_READ | KEY_WOW64_64KEY,
-                    descriptor.attributes_ptr(),
-                    &raw mut key,
-                    std::ptr::null_mut(),
-                )
-            };
-            assert_eq!(
-                rc, 0,
-                "creating HKLM\\{subkey} failed (os error {rc}): this test writes under \
-                 HKEY_LOCAL_MACHINE; run it from an elevated session (CI's runner is one)"
-            );
-            drop(Key(key));
-            Self(RendezvousKey::new(&subkey))
-        }
+#[cfg(any(test, feature = "test-utils"))]
+impl ScratchKey {
+    /// Create `SOFTWARE\Shekyl\Test-<test>-<pid>` with the descriptor `sddl`.
+    ///
+    /// # Panics
+    ///
+    /// The descriptor does not parse, or the key cannot be created (an
+    /// unelevated session).
+    #[must_use]
+    pub fn new(test: &str, sddl: &str) -> Self {
+        use windows_sys::Win32::System::Registry::{
+            RegCreateKeyExW, KEY_READ, REG_OPTION_NON_VOLATILE,
+        };
+        let subkey = format!(r"SOFTWARE\Shekyl\Test-{test}-{}", std::process::id());
+        let descriptor =
+            crate::sddl::OwnerOnlyDescriptor::from_sddl(sddl).expect("the test's descriptor");
+        let wide_subkey = wide(&subkey);
+        let mut key: HKEY = std::ptr::null_mut();
+        // SAFETY: `wide_subkey` is NUL-terminated; the descriptor lives
+        // across the call; `key` receives a handle closed below.
+        let rc = unsafe {
+            RegCreateKeyExW(
+                HKEY_LOCAL_MACHINE,
+                wide_subkey.as_ptr(),
+                0,
+                std::ptr::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_READ | KEY_WOW64_64KEY,
+                descriptor.attributes_ptr(),
+                &raw mut key,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            rc, 0,
+            "creating HKLM\\{subkey} failed (os error {rc}): this test writes under \
+             HKEY_LOCAL_MACHINE; run it from an elevated session (CI's runner is one)"
+        );
+        drop(Key(key));
+        Self(RendezvousKey::new(&subkey))
     }
 
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let subkey = wide(&self.0.subkey);
-            // SAFETY: `subkey` is NUL-terminated.
-            unsafe { RegDeleteKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), KEY_WOW64_64KEY, 0) };
-        }
+    /// The key.
+    #[must_use]
+    pub fn key(&self) -> &RendezvousKey {
+        &self.0
     }
 
-    /// The installer's descriptor for the test: owned by Administrators,
+    /// Its name relative to `HKEY_LOCAL_MACHINE`.
+    #[must_use]
+    pub fn subkey(&self) -> &str {
+        &self.0.subkey
+    }
+
+    /// The installer's descriptor, for a test: owned by Administrators,
     /// full control for Administrators, SYSTEM and this account (the
-    /// service's, in a real install), read for BUILTIN\Users, plus `extra`.
-    fn installer_sddl(extra: &str) -> String {
+    /// service's, in a real install), read for BUILTIN\Users, then `extra`.
+    ///
+    /// # Panics
+    ///
+    /// This account's SID cannot be read.
+    #[must_use]
+    pub fn installer_sddl(extra: &str) -> String {
         let me = current_user_sid().expect("this account");
         format!(
             "O:BAG:BAD:P(A;CI;KA;;;BA)(A;CI;KA;;;SY)(A;CI;KA;;;{me})(A;CI;KR;;;BU){extra}",
             me = me.as_str()
         )
     }
+}
 
+#[cfg(any(test, feature = "test-utils"))]
+impl Drop for ScratchKey {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Registry::RegDeleteKeyExW;
+        let subkey = wide(&self.0.subkey);
+        // SAFETY: `subkey` is NUL-terminated.
+        unsafe { RegDeleteKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), KEY_WOW64_64KEY, 0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use windows_sys::Win32::System::Registry::KEY_READ;
+
+    use super::*;
+
+    fn installer_sddl(extra: &str) -> String {
+        ScratchKey::installer_sddl(extra)
+    }
     /// A key as the installer makes it passes; one another account may
     /// write is refused, naming that account; one owned by this account
     /// is refused for its owner; a missing key is `Missing`. Red edit:
     /// drop the writers check, and a key BUILTIN\Users may write passes.
     #[test]
     fn the_key_is_checked_for_its_owner_its_readers_and_its_writers() {
-        let good = Scratch::new("good", &installer_sddl(""));
-        assert_eq!(good.0.check(), Ok(()));
+        let good = ScratchKey::new("good", &installer_sddl(""));
+        assert_eq!(good.key().check(), Ok(()));
 
-        let writable = Scratch::new("writable", &installer_sddl("(A;CI;KW;;;BU)"));
+        let writable = ScratchKey::new("writable", &installer_sddl("(A;CI;KW;;;BU)"));
         assert_eq!(
-            writable.0.check(),
+            writable.key().check(),
             Err(KeyFault::Writable(vec![USERS.to_owned()]))
         );
 
         let me = current_user_sid().expect("this account");
-        let owned = Scratch::new(
+        let owned = ScratchKey::new(
             "owned",
             &installer_sddl("").replacen("O:BA", &format!("O:{}", me.as_str()), 1),
         );
         assert_eq!(
-            owned.0.check(),
+            owned.key().check(),
             Err(KeyFault::Owner(me.as_str().to_owned()))
         );
 
-        let unread = Scratch::new("unread", &installer_sddl("").replace("(A;CI;KR;;;BU)", ""));
-        assert_eq!(unread.0.check(), Err(KeyFault::NotReadableByAll));
+        let unread = ScratchKey::new("unread", &installer_sddl("").replace("(A;CI;KR;;;BU)", ""));
+        assert_eq!(unread.key().check(), Err(KeyFault::NotReadableByAll));
 
         let missing = RendezvousKey::new(r"SOFTWARE\Shekyl\Test-missing-never-created");
         assert_eq!(missing.check(), Err(KeyFault::Missing));
@@ -403,8 +436,8 @@ mod tests {
     /// decided a registry value over a file (Rick, 2026-11-18).
     #[test]
     fn a_reader_holding_the_key_does_not_stop_a_publish_or_a_removal() {
-        let scratch = Scratch::new("held", &installer_sddl(""));
-        let key = &scratch.0;
+        let scratch = ScratchKey::new("held", &installer_sddl(""));
+        let key = scratch.key();
         key.write("record", b"first").unwrap();
         let held = key.open(KEY_READ).expect("a reader's handle");
         key.write("record", b"second").unwrap();

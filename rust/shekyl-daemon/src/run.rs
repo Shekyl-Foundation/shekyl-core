@@ -126,6 +126,9 @@ impl StartEnd {
             shekyl_daemon_rpc::run::StartFault::Refused(why) => {
                 self.fail(format!("{context}: {why}"))
             }
+            shekyl_daemon_rpc::run::StartFault::RendezvousKey { key, found } => {
+                self.refuse(&[shekyl_daemon_rpc::run::rendezvous_key_refusal(&key, &found)])
+            }
         }
     }
 }
@@ -494,6 +497,11 @@ fn supervise(
             None
         }
         Err(shekyl_daemon_rpc::run::StartFault::Refused(refusal)) => {
+            tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
+            None
+        }
+        Err(shekyl_daemon_rpc::run::StartFault::RendezvousKey { key, found }) => {
+            let refusal = shekyl_daemon_rpc::run::rendezvous_key_refusal(&key, &found).render();
             tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
             None
         }

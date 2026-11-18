@@ -170,7 +170,7 @@ pub struct Channel {
     pub(crate) sessions: Arc<Sessions>,
     pub(crate) budget: HandshakeBudget,
     /// Where a service publishes its rendezvous record, when it listens.
-    pub(crate) service_rendezvous: Option<PathBuf>,
+    pub(crate) service_rendezvous: Option<shekyl_rpc_rendezvous::ServiceRecordAt>,
     /// A service's data directory, where its console leg is bound
     /// ([`console_leg`]); `None` for a daemon run as its user.
     pub(crate) console_dir: Option<PathBuf>,
@@ -246,9 +246,7 @@ impl Channel {
             store,
             sessions: Arc::new(Sessions::default()),
             budget: HandshakeBudget::new(Instant::now()),
-            service_rendezvous: setup.service_rendezvous.as_deref().map(|dir| {
-                shekyl_rpc_rendezvous::service_record_path(dir, &setup.network_id, &setup.instance)
-            }),
+            service_rendezvous: service_record_at(setup),
             console_dir: setup.service.then(|| setup.data_dir.clone()),
         }))
     }
@@ -423,6 +421,29 @@ pub fn unpadded_submission() -> RpcError {
 pub fn reset_console_key(data_dir: &Path) -> Result<PathBuf, StartFault> {
     let store = Store::open(data_dir).map_err(|e| e.to_string())?;
     Ok(console::install(data_dir, &store, Some(now()))?)
+}
+
+/// Where a service publishes its record: the file in the walk's checked
+/// rendezvous directory on Linux, FreeBSD and macOS; on Windows the value
+/// under `HKLM\SOFTWARE\Shekyl\Rendezvous` (Rick, 2026-11-18). `None` for a
+/// daemon run as its user.
+fn service_record_at(setup: &ChannelSetup) -> Option<shekyl_rpc_rendezvous::ServiceRecordAt> {
+    #[cfg(windows)]
+    {
+        setup.service.then(|| {
+            shekyl_rpc_rendezvous::ServiceRecordAt::registry(
+                shekyl_win_sec::registry::RENDEZVOUS_KEY,
+                &setup.network_id,
+                &setup.instance,
+            )
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        setup.service_rendezvous.as_deref().map(|dir| {
+            shekyl_rpc_rendezvous::ServiceRecordAt::file(dir, &setup.network_id, &setup.instance)
+        })
+    }
 }
 
 /// The public bundle as it travels: the X25519 key, then the ML-KEM-768

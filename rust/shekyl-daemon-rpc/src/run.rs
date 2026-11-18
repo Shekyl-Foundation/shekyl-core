@@ -88,6 +88,15 @@ pub enum StartFault {
     HeldOpen(shekyl_os_account::private_file::HeldOpen),
     /// The refusal, in the operator's words.
     Refused(String),
+    /// The service's rendezvous key (Windows) is missing or exposed: the
+    /// key and the condition that failed. The daemon names it with its own
+    /// refusal code, as an exposed data home is named.
+    RendezvousKey {
+        /// `HKEY_LOCAL_MACHINE\...`.
+        key: String,
+        /// The condition that failed.
+        found: String,
+    },
 }
 
 impl std::fmt::Display for StartFault {
@@ -95,6 +104,12 @@ impl std::fmt::Display for StartFault {
         match self {
             Self::HeldOpen(held) => held.fmt(f),
             Self::Refused(why) => f.write_str(why),
+            Self::RendezvousKey { key, found } => {
+                write!(
+                    f,
+                    "the service's rendezvous key {key} cannot be used: {found}"
+                )
+            }
         }
     }
 }
@@ -145,14 +160,26 @@ pub fn held_open_refusal(
     .param("dir", dir.display().to_string())
 }
 
+/// The refusal for a Windows service's rendezvous key that is missing or
+/// exposed (`config.service.rendezvous-key`): the key and the condition.
+#[must_use]
+pub fn rendezvous_key_refusal(key: &str, found: &str) -> shekyl_options::Diagnostic {
+    shekyl_options::Diagnostic::new(
+        shekyl_options::Code::ServiceRendezvousKey,
+        shekyl_options::Source::Machine,
+    )
+    .param("path", key.to_owned())
+    .param("found", found.to_owned())
+}
+
 impl StartFault {
     /// The refusal with `context` before its words; a held file is named
     /// by its own code, so it keeps its own words.
     #[must_use]
     pub fn context(self, context: impl FnOnce() -> String) -> Self {
         match self {
-            Self::HeldOpen(held) => Self::HeldOpen(held),
             Self::Refused(why) => Self::Refused(format!("{}: {why}", context())),
+            other => other,
         }
     }
 }
@@ -277,7 +304,7 @@ pub fn start(
         .as_ref()
         .and_then(|channel| Some((channel, channel.service_rendezvous.as_ref()?)))
     {
-        Some((channel, path)) => {
+        Some((channel, at)) => {
             let bound: Vec<SocketAddr> = channel_listen
                 .iter()
                 .map(BoundListener::local_addr)
@@ -286,17 +313,23 @@ pub fn start(
             let views: Vec<SocketAddr> = view.iter().map(BoundListener::local_addr).collect();
             Some(
                 crate::channel::rendezvous::ServiceRendezvous::publish(
-                    path,
+                    at,
                     (!bound.is_empty()).then_some((bound.as_slice(), bundle.as_slice())),
                     &views,
                 )
                 .map_err(|e| {
-                    StartFault::from(e).context(|| {
-                        format!(
-                            "the service's rendezvous {} could not be published",
-                            path.display()
-                        )
-                    })
+                    use crate::channel::rendezvous::PublishFault;
+                    match e {
+                        PublishFault::File(e) => StartFault::from(e).context(|| {
+                            format!("the service's rendezvous {at} could not be published")
+                        }),
+                        PublishFault::Key { key, found } => {
+                            StartFault::RendezvousKey { key, found }
+                        }
+                        PublishFault::Value(e) => StartFault::Refused(format!(
+                            "the service's rendezvous {at} could not be published: {e}"
+                        )),
+                    }
                 })?,
             )
         }
