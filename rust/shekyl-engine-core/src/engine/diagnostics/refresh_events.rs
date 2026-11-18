@@ -164,6 +164,15 @@ pub enum ProtocolErrorKind {
     /// The daemon refused the call, with this class (`RPC_WIRE.md` RW-Q3).
     /// The class is bounded; the refusal's diagnostic stays behind.
     Refused(shekyl_rpc_client::ErrorClass),
+
+    /// Something other than this account's node answered at "this
+    /// computer"'s rendezvous (`RPC_CHANNEL.md` RT-15): a security failure,
+    /// never retried.
+    PeerCheck,
+
+    /// "This computer"'s node runs as a service, which the wallet does not
+    /// dial; it names the service's view listener instead (RT-W10 step 5).
+    Service,
 }
 
 /// Bounded enumeration of the [`RefreshDiagnostic`] classes that

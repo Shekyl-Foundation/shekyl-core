@@ -400,6 +400,13 @@ pub(crate) enum TimelineBreak {
     /// contract, rule set, network or chain. Retrying the same daemon cannot
     /// clear it; the remedy is a different daemon or a matching build.
     IdentityRefused(shekyl_rpc_types::IdentityMismatch),
+    /// Something other than this account's node answered at "this
+    /// computer"'s rendezvous (`RPC_CHANNEL.md` RT-15): a security failure.
+    /// Nothing was read; retrying cannot clear it.
+    PeerCheckFailed,
+    /// "This computer"'s node is a service, which the wallet does not dial
+    /// (RT-W10 step 5): `Some` is its view listener, the address to set.
+    ServiceHere(Option<std::net::SocketAddr>),
     /// The record came back **below** the witness that preceded it: the
     /// chain rolled back between the two reads, under a `synchronized` flag
     /// that is sticky and therefore still says otherwise.
@@ -440,6 +447,8 @@ impl TimelineBreak {
             | DaemonFault::FeeResponse
             | DaemonFault::Internal
             | DaemonFault::NotPermitted => Self::FactsUnreadable,
+            DaemonFault::PeerCheck => Self::PeerCheckFailed,
+            DaemonFault::Service(view) => Self::ServiceHere(view),
         }
     }
 }

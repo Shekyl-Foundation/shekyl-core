@@ -190,6 +190,14 @@ const UNREADABLE_LINE: &str =
      too, unless the program that started it asked for Ctrl-C to be ignored, \
      which Windows does not let this node read.";
 
+/// Said in place of the platform's line when the node was started holding
+/// an owning connection (IG-Q106): the program that started it is how it
+/// is stopped, and it has no console or window of its own to stop it from
+/// (Rick, 2026-11-17).
+const STARTED_BY_LINE: &str =
+    "The program that started this node stops it: this node stops when that program \
+     closes its connection to it or exits.";
+
 impl InheritedInterrupt {
     /// The observation, before anything in the node installs a handler.
     #[must_use]
@@ -211,17 +219,22 @@ impl InheritedInterrupt {
     /// The IG-14 line this observation owes, if it owes one.
     ///
     /// Unix owes a line only when `SIGINT` was ignored. Windows owes its
-    /// line on every start, because the attribute cannot be read.
+    /// line on every start, because the attribute cannot be read. A node
+    /// `started_by` a program holding its owning connection owes the same
+    /// lines, naming that program as its stop in place of Ctrl-Break, the
+    /// window, SIGTERM or the service stop: such a node has no console or
+    /// window, and its starter is how it stops.
     #[must_use]
-    pub fn line(self) -> Option<&'static str> {
-        match self {
+    pub fn line(self, started_by: bool) -> Option<&'static str> {
+        let own = match self {
             #[cfg(unix)]
             Self::Owned => None,
             #[cfg(unix)]
             Self::Ignored => Some(IGNORED_LINE),
             #[cfg(windows)]
             Self::Unreadable => Some(UNREADABLE_LINE),
-        }
+        };
+        own.map(|line| if started_by { STARTED_BY_LINE } else { line })
     }
 
     /// What tests pass to [`own`] when the test is not about an inherited
@@ -395,9 +408,10 @@ mod tests {
     fn the_start_names_the_stops_that_work() {
         #[cfg(unix)]
         {
-            assert_eq!(InheritedInterrupt::Owned.line(), None);
+            assert_eq!(InheritedInterrupt::Owned.line(false), None);
+            assert_eq!(InheritedInterrupt::Owned.line(true), None);
             let line = InheritedInterrupt::Ignored
-                .line()
+                .line(false)
                 .expect("an ignored SIGINT is said");
             assert!(
                 line.contains("Ctrl-C is off") && line.contains("SIGTERM"),
@@ -407,12 +421,34 @@ mod tests {
         #[cfg(windows)]
         {
             let line = InheritedInterrupt::Unreadable
-                .line()
+                .line(false)
                 .expect("every Windows start names its stops");
             assert!(
                 line.contains("Ctrl-Break") && line.contains("closing its window"),
                 "{line}"
             );
+        }
+    }
+
+    /// **A node started by a program holding its owning connection names
+    /// that program as its stop** (Rick, 2026-11-17): never Ctrl-Break, a
+    /// window, SIGTERM or the service stop, which it has none of. Red edit:
+    /// `line` ignores `started_by` (a GUI's node tells its standard error
+    /// to close a window it does not have).
+    #[test]
+    fn a_node_started_by_a_program_names_that_program_as_its_stop() {
+        #[cfg(unix)]
+        let said = InheritedInterrupt::Ignored;
+        #[cfg(windows)]
+        let said = InheritedInterrupt::Unreadable;
+        let line = said.line(true).expect("the line is still owed");
+        assert_eq!(line, STARTED_BY_LINE);
+        assert!(
+            line.starts_with("The program that started this node"),
+            "{line}"
+        );
+        for gone in ["Ctrl-Break", "window", "SIGTERM", "service"] {
+            assert!(!line.contains(gone), "{gone}: {line}");
         }
     }
 }

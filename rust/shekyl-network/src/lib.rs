@@ -279,8 +279,13 @@ impl Prefixes {
 pub struct Ports {
     /// Peer-to-peer.
     pub p2p: u16,
-    /// RPC.
+    /// RPC: the plaintext admin listener's port.
     pub rpc: u16,
+    /// The plaintext view listener's port, the RPC port plus one (Rick,
+    /// 2026-11-17): where `rpc-view-listen` binds when given an address with
+    /// no port, and the `daemon-address` a wallet beside a service is told to
+    /// set.
+    pub view: u16,
 }
 
 /// A behaviour a network's row may permit (NI-R6). The armed-lever gate
@@ -475,6 +480,7 @@ const ROWS: [Row; 4] = [
         ports: Ports {
             p2p: 11021,
             rpc: 11029,
+            view: 11030,
         },
         subdirectory: None,
         permits: &[],
@@ -499,6 +505,7 @@ const ROWS: [Row; 4] = [
         ports: Ports {
             p2p: 12021,
             rpc: 12029,
+            view: 12030,
         },
         subdirectory: Some("testnet"),
         permits: &[],
@@ -523,6 +530,7 @@ const ROWS: [Row; 4] = [
         ports: Ports {
             p2p: 13021,
             rpc: 13029,
+            view: 13030,
         },
         subdirectory: Some("stagenet"),
         permits: &[],
@@ -547,6 +555,7 @@ const ROWS: [Row; 4] = [
         ports: Ports {
             p2p: 14021,
             rpc: 14029,
+            view: 14030,
         },
         subdirectory: Some("regtest"),
         permits: &Lever::ALL,

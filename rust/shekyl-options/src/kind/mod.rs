@@ -116,6 +116,10 @@ pub enum Kind {
     },
     /// A literal IP address and a port; no hostnames.
     Endpoint(EndpointRule),
+    /// A listener: a literal IP address with a port, or an address alone,
+    /// whose port its owner names (the view listener takes the network's
+    /// view port). No hostnames.
+    Listen(EndpointRule),
     /// An IP endpoint or a v3 onion with a port.
     PeerEndpoint(PeerRule),
     /// A Shekyl address; checked against the network by its owner.
@@ -207,6 +211,9 @@ pub enum Value {
     Duration(Duration),
     /// A literal endpoint.
     Endpoint(SocketAddr),
+    /// A listener's address given without a port: the owner names the
+    /// port before the value is used ([`Kind::Listen`]).
+    Host(IpAddr),
     /// A peer endpoint.
     Peer(PeerEndpoint),
     /// A Shekyl address, unchecked against the network.
@@ -243,6 +250,7 @@ impl Value {
             Self::Rate(n) => render_bytes(*n, "/s"),
             Self::Duration(d) => render_duration(*d),
             Self::Endpoint(addr) => addr.to_string(),
+            Self::Host(ip) => ip.to_string(),
             Self::Peer(peer) => peer.to_string(),
             Self::Address(a) | Self::Origin(a) | Self::Hash(a) | Self::Name(a) => a.clone(),
             Self::Path(p) => p.display().to_string(),
@@ -507,6 +515,7 @@ impl Kind {
                 parse_quantity(text, *dimension, *min)
             }
             Self::Endpoint(rule) => parse_endpoint(text, *rule).map(Value::Endpoint),
+            Self::Listen(rule) => parse_listen(text, *rule),
             Self::PeerEndpoint(rule) => parse_peer(text, *rule).map(Value::Peer),
             Self::Address => {
                 if text.is_empty() || text.chars().any(char::is_whitespace) {
@@ -555,6 +564,10 @@ impl Kind {
             } => "a duration such as `30s`",
             Self::Endpoint(_) => {
                 "a literal IP address and port, such as `127.0.0.1:11029` or `[::1]:11029`"
+            }
+            Self::Listen(_) => {
+                "a literal IP address, with a port or without one, such as `127.0.0.1` or \
+                 `127.0.0.1:11030`"
             }
             Self::PeerEndpoint(PeerRule::Any) => "an IP endpoint or a v3 onion with a port",
             Self::PeerEndpoint(PeerRule::OnionOnly) => "a v3 onion with a port",
@@ -660,10 +673,38 @@ fn parse_endpoint(text: &str, rule: EndpointRule) -> Result<SocketAddr, Fault> {
     if addr.port() == 0 {
         return Err(range(text, "a port from 1 to 65535"));
     }
+    check_rule(text, addr.ip(), rule)?;
+    Ok(addr)
+}
+
+/// A listener: an endpoint, or an address alone (`127.0.0.1`, `::1`) whose
+/// port the owner names. A bracketed address with no port is refused: the
+/// brackets are the endpoint spelling.
+fn parse_listen(text: &str, rule: EndpointRule) -> Result<Value, Fault> {
+    if let Ok(ip) = text.parse::<IpAddr>() {
+        check_rule(text, ip, rule)?;
+        return Ok(Value::Host(ip));
+    }
+    parse_endpoint(text, rule)
+        .map(Value::Endpoint)
+        .map_err(|fault| {
+            if text.parse::<SocketAddr>().is_ok() {
+                fault
+            } else {
+                syntax(
+                    text,
+                    "a literal IP address, with a port or without one, such as `127.0.0.1` or \
+                 `127.0.0.1:11030`",
+                )
+            }
+        })
+}
+
+fn check_rule(text: &str, ip: IpAddr, rule: EndpointRule) -> Result<(), Fault> {
     match rule {
         EndpointRule::Any => {}
         EndpointRule::Loopback => {
-            if !addr.ip().is_loopback() {
+            if !ip.is_loopback() {
                 return Err(range(
                     text,
                     "a loopback address: a plaintext listener never binds beyond loopback (RT-14)",
@@ -671,7 +712,7 @@ fn parse_endpoint(text: &str, rule: EndpointRule) -> Result<SocketAddr, Fault> {
             }
         }
         EndpointRule::GlobalUnicast => {
-            if !is_global_unicast(addr.ip()) {
+            if !is_global_unicast(ip) {
                 return Err(range(
                     text,
                     "a global unicast address, one a peer on the internet can reach",
@@ -679,7 +720,7 @@ fn parse_endpoint(text: &str, rule: EndpointRule) -> Result<SocketAddr, Fault> {
             }
         }
     }
-    Ok(addr)
+    Ok(())
 }
 
 /// Whether a peer on the internet can reach the address: not loopback,

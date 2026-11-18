@@ -50,6 +50,7 @@ fn every_identifying_value_is_pairwise_distinct() {
         assert!(tags.insert(n.tag()), "{n}: tag");
         assert!(ports.insert(n.ports().p2p), "{n}: p2p port");
         assert!(ports.insert(n.ports().rpc), "{n}: rpc port");
+        assert!(ports.insert(n.ports().view), "{n}: view port");
         assert!(dirs.insert(n.subdirectory()), "{n}: subdirectory");
         for p in n.prefixes().all() {
             assert!(prefixes.insert(p), "{n}: prefix {p}");
@@ -277,4 +278,15 @@ fn a_malformed_timestamp_pin_is_refused() {
             "{text:?} was accepted"
         );
     }
+}
+
+/// The view port is the RPC port plus one on every network (Rick,
+/// 2026-11-17): one rule, so a client can say where a node's view listener
+/// is from the network alone.
+#[test]
+fn the_view_port_is_the_rpc_port_plus_one() {
+    for n in Network::ALL {
+        assert_eq!(n.ports().view, n.ports().rpc + 1, "{n}");
+    }
+    assert_eq!(Network::Mainnet.ports().view, 11030);
 }

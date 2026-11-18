@@ -34,18 +34,18 @@
 use std::path::{Path, PathBuf};
 
 use shekyl_daemon_config::{paths, RunMode};
-use shekyl_rpc_client::{wire, RpcMethod};
+use shekyl_rpc_client::wire;
 use shekyl_rpc_grants::GrantSet;
 use shekyl_rpc_transport::channel::{
-    bundle_from_bytes, bundle_from_text, bundle_text, create_client_key, fingerprint_hex,
-    read_client_key, ChannelDaemon, ChannelTarget, Leg,
+    bundle_from_text, bundle_text, create_client_key, fingerprint_hex, read_client_key,
+    ChannelDaemon, ChannelTarget, Leg,
 };
-use shekyl_rpc_transport::local::LocalTarget;
 use shekyl_rpc_types::hash::HashHex;
 use shekyl_rpc_types::kinds::NoParams;
 use shekyl_rpc_types::wire::rpc::{ClientCeiling, ClientFingerprint};
 use shekyl_wallet_rpc::Network;
 
+use crate::node_leg::NodeLeg;
 use crate::resolve::Enroll;
 
 /// What the enrollment words need from the shell's options.
@@ -150,11 +150,6 @@ pub fn channel_leg(address: &str, proxy: Option<&str>) -> Result<Leg, String> {
     }
 }
 
-/// §4.5's console-key failure, in its words.
-const CONSOLE_KEY_FAILURE: &str = "This command needs the node's console key, which is missing \
-     or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it \
-     with shekyld --rpc-console-key-reset.";
-
 /// Run one word.
 ///
 /// # Errors
@@ -166,13 +161,13 @@ pub fn run(options: &EnrollOptions, word: &Enroll) -> Result<String, String> {
         Enroll::KeyShow => return key_show(&options.key_file()?),
         _ => {}
     }
-    let leg = EnrolLeg::resolve(options)?;
+    let leg = resolve_leg(options)?;
     match word {
         Enroll::ClientAdd {
             fingerprint,
             ceiling,
         } => {
-            leg.call::<wire::RpcClientAdd>(&ClientCeiling {
+            leg.call_text::<wire::RpcClientAdd>(&ClientCeiling {
                 fingerprint: hash(fingerprint)?,
                 ceiling: ceiling.clone(),
             })?;
@@ -182,20 +177,20 @@ pub fn run(options: &EnrollOptions, word: &Enroll) -> Result<String, String> {
             fingerprint,
             ceiling,
         } => {
-            leg.call::<wire::RpcClientSet>(&ClientCeiling {
+            leg.call_text::<wire::RpcClientSet>(&ClientCeiling {
                 fingerprint: hash(fingerprint)?,
                 ceiling: ceiling.clone(),
             })?;
             Ok(format!("changed {fingerprint}'s ceiling"))
         }
         Enroll::ClientRemove { fingerprint } => {
-            leg.call::<wire::RpcClientRemove>(&ClientFingerprint {
+            leg.call_text::<wire::RpcClientRemove>(&ClientFingerprint {
                 fingerprint: hash(fingerprint)?,
             })?;
             Ok(format!("removed {fingerprint}"))
         }
         Enroll::ClientList => {
-            let clients = leg.call::<wire::RpcClientList>(&NoParams)?;
+            let clients = leg.call_text::<wire::RpcClientList>(&NoParams)?;
             if clients.is_empty() {
                 return Ok("No clients are enrolled.".to_owned());
             }
@@ -209,7 +204,7 @@ pub fn run(options: &EnrollOptions, word: &Enroll) -> Result<String, String> {
                 .join("\n"))
         }
         Enroll::BundleShow => {
-            let bundle = leg.call::<wire::RpcBundleShow>(&NoParams)?;
+            let bundle = leg.call_text::<wire::RpcBundleShow>(&NoParams)?;
             Ok(bundle_text(&bundle.bundle.0))
         }
         Enroll::KeyCreate | Enroll::KeyShow => unreachable!("answered above"),
@@ -220,136 +215,43 @@ fn hash(fingerprint: &str) -> Result<HashHex, String> {
     HashHex::from_hex(fingerprint).map_err(|error| error.to_string())
 }
 
-/// The leg one enrollment word runs on.
-enum EnrolLeg {
-    /// The owner's leg of a daemon this account runs.
-    Owner(LocalTarget),
-    /// The channel: a node on another host, or a service's console leg.
-    Channel(ChannelDaemon),
-}
-
-impl EnrolLeg {
-    fn resolve(options: &EnrollOptions) -> Result<Self, String> {
-        let request = GrantSet::ALL;
-        if let Some(remote) = &options.remote {
-            let text = std::fs::read_to_string(&remote.bundle_file).map_err(|error| {
-                format!(
-                    "the node's bundle {} could not be read: {error}",
-                    remote.bundle_file.display()
-                )
-            })?;
-            let daemon = bundle_from_text(&text).ok_or_else(|| {
-                format!(
-                    "{} does not hold a node's bundle as `rpc bundle show` prints one",
-                    remote.bundle_file.display()
-                )
-            })?;
-            let key_file = options.key_file()?;
-            let key = read_client_key(&key_file)?.ok_or_else(|| {
-                format!(
-                    "this client has no key at {}; make one with `rpc key create`, then enroll \
-                     its fingerprint on the node",
-                    key_file.display()
-                )
-            })?;
-            let target = ChannelTarget::new(
-                options.network.network_id(),
-                daemon,
-                key,
-                remote.leg.clone(),
-            );
-            return ChannelDaemon::connect(&target, request)
-                .map(Self::Channel)
-                .map_err(|fault| fault.to_string());
-        }
-        if let Some(leg) = service_console(options.network, request)? {
-            return Ok(leg);
-        }
-        LocalTarget::this_computer(options.network)
-            .map(Self::Owner)
-            .map_err(|fault| fault.to_string())
-    }
-
-    fn call<M: RpcMethod>(&self, request: &M::Request) -> Result<M::Reply, String> {
-        match self {
-            Self::Owner(target) => target.call::<M>(request).map_err(|error| error.to_string()),
-            Self::Channel(channel) => channel
-                .call::<M>(request)
-                .map_err(|error| error.to_string()),
-        }
-    }
-}
-
-/// Whether a service has published its console leg at `place`.
-///
-/// Not found is the only "no service" answer. Any other failure means the
-/// leg cannot be seen, which is §4.5's console-key failure: the owner's
-/// leg is not tried in its place.
-fn leg_published(place: &Path) -> Result<bool, String> {
-    match std::fs::symlink_metadata(place) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(_) => Err(CONSOLE_KEY_FAILURE.to_owned()),
-    }
-}
-
-/// This computer's service's console leg, when a service runs here.
-fn service_console(network: Network, request: GrantSet) -> Result<Option<EnrolLeg>, String> {
-    let platform = shekyl_process::platform::current();
-    let Ok(root) = paths::root(&platform, RunMode::Service, "rpc") else {
-        return Ok(None);
+/// The leg one enrollment word runs on: the node on another host when
+/// `daemon-bundle-file` is set, otherwise this computer's node
+/// ([`NodeLeg::this_computer`]).
+fn resolve_leg(options: &EnrollOptions) -> Result<NodeLeg, String> {
+    let request = GrantSet::ALL;
+    let Some(remote) = &options.remote else {
+        return NodeLeg::this_computer(options.network, request);
     };
-    let dir = paths::data_dir_default(&root, network);
-    let place = shekyl_rpc_rendezvous::console_leg_place(&dir);
-    if !leg_published(&place)? {
-        return Ok(None);
-    }
-    // A service runs here: from now on, no other leg (§4.5).
-    let console = read_console_key(&dir.join(shekyl_rpc_rendezvous::CONSOLE_KEY_FILE))?;
-    let daemon = read_console_bytes(&dir.join(shekyl_rpc_rendezvous::CHANNEL_BUNDLE_FILE))
-        .ok()
-        .and_then(|bytes| bundle_from_bytes(&bytes))
-        .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())?;
-    let leg = console_leg_of(&place)?;
-    let target = ChannelTarget::new(network.network_id(), daemon, console, leg);
+    let text = std::fs::read_to_string(&remote.bundle_file).map_err(|error| {
+        format!(
+            "the node's bundle {} could not be read: {error}",
+            remote.bundle_file.display()
+        )
+    })?;
+    let daemon = bundle_from_text(&text).ok_or_else(|| {
+        format!(
+            "{} does not hold a node's bundle as `rpc bundle show` prints one",
+            remote.bundle_file.display()
+        )
+    })?;
+    let key_file = options.key_file()?;
+    let key = read_client_key(&key_file)?.ok_or_else(|| {
+        format!(
+            "this client has no key at {}; make one with `rpc key create`, then enroll \
+             its fingerprint on the node",
+            key_file.display()
+        )
+    })?;
+    let target = ChannelTarget::new(
+        options.network.network_id(),
+        daemon,
+        key,
+        remote.leg.clone(),
+    );
     ChannelDaemon::connect(&target, request)
-        .map(|channel| Some(EnrolLeg::Channel(channel)))
+        .map(NodeLeg::Channel)
         .map_err(|fault| fault.to_string())
-}
-
-#[cfg(unix)]
-#[allow(
-    clippy::unnecessary_wraps,
-    reason = "one signature with Windows, whose pipe's name is read from a file"
-)]
-fn console_leg_of(place: &Path) -> Result<Leg, String> {
-    Ok(Leg::Socket(place.to_path_buf()))
-}
-
-#[cfg(windows)]
-fn console_leg_of(place: &Path) -> Result<Leg, String> {
-    let name = read_console_bytes(place)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
-        .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())?;
-    Ok(Leg::Pipe(name))
-}
-
-/// A service's console file: the owning account, or an administrator of
-/// this machine. Anything else, including a file another account can read,
-/// is the console-key failure. The bytes are wiped on drop.
-fn read_console_bytes(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
-    shekyl_os_account::private_file::read_console(path)
-        .ok()
-        .flatten()
-        .ok_or_else(|| CONSOLE_KEY_FAILURE.to_owned())
-}
-
-/// The console key, read as [`read_console_bytes`].
-fn read_console_key(path: &Path) -> Result<shekyl_rpc_channel::handshake::StaticKeypair, String> {
-    let bytes = read_console_bytes(path)?;
-    shekyl_rpc_channel::handshake::StaticKeypair::from_key_file(&bytes)
-        .map_err(|_| CONSOLE_KEY_FAILURE.to_owned())
 }
 
 /// `rpc key create`: a new key at `path`, this account's alone, refused if
@@ -373,39 +275,6 @@ fn key_show(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A missing leg is no service. A leg this account cannot see is the
-    /// console-key failure, so enrollment does not fall through to the owner.
-    /// Red edit: treat every `symlink_metadata` error as absent in
-    /// `leg_published`, and a mode-000 directory is "no service".
-    #[test]
-    fn only_a_missing_console_leg_means_no_service() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!leg_published(&dir.path().join("absent")).unwrap());
-
-        let published = dir.path().join("published");
-        std::fs::write(&published, b"leg").unwrap();
-        assert!(leg_published(&published).unwrap());
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if shekyl_os_account::effective_uid() == 0 {
-                return;
-            }
-            let hidden = dir.path().join("hidden");
-            std::fs::create_dir(&hidden).unwrap();
-            let place = hidden.join("console");
-            std::fs::write(&place, b"leg").unwrap();
-            std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
-            let saw = leg_published(&place);
-            std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o700)).unwrap();
-            assert_eq!(
-                saw.expect_err("the leg cannot be seen"),
-                CONSOLE_KEY_FAILURE
-            );
-        }
-    }
 
     /// The channel leg is a peer-endpoint. A URL and a hostname are refused
     /// by that kind, and an onion without a proxy is refused. Red edit:

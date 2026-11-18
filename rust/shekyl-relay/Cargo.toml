@@ -59,6 +59,9 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 shekyl-p2p-session = { path = "../shekyl-p2p-session", features = ["harness"] }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
+# `tests/stem_logs.rs` captures every event at TRACE to check what the log
+# never records (`RPC_CHANNEL.md` §6.4). Already in the lock file.
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
 [features]
 # The fleet's learn-latency reading (DAEMON_RELAY_PRIVACY.md §97): the

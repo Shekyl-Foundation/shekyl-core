@@ -6,11 +6,10 @@
 //! Engine → daemon RPC client wrapper.
 //!
 //! [`DaemonClient`] is the [`Engine`](super::Engine)-facing type for
-//! reaching `shekyld` over HTTP(S). It is a thin wrapper around
-//! [`shekyl_rpc_transport::HttpRpc`], chosen as the
-//! default transport because it is the only daemon-RPC client crate
-//! already in the workspace and it implements
-//! [`shekyl_rpc_client::Rpc`].
+//! reaching `shekyld`. It wraps a [`DaemonTransport`], the wallet's one
+//! target (`RPC_CHANNEL.md` RT-15): "this computer", the owner's socket or
+//! pipe of the node this account runs, or a named address over HTTP(S)
+//! (RT-W10 step 5). Both implement [`shekyl_rpc_client::Rpc`].
 //!
 //! # Why a wrapper rather than `pub use`
 //!
@@ -26,7 +25,7 @@
 //!    `version`) ultimately go through this type.
 //! 3. **Keeps the cross-cutting lock 1 contract local.** The
 //!    "caller-provided multi-threaded `tokio` runtime" requirement
-//!    sits on a [`HttpRpc`] field rather than radiating through
+//!    sits on the transport rather than radiating through
 //!    the wallet API.
 //!
 //! # Identity handshake (`VC-4`)
@@ -62,7 +61,7 @@ use std::future::Future;
 
 use serde_json::{json, Value};
 use shekyl_rpc_client::{wire, FeeRate, Rejection, Rpc, RpcError, RpcMethod};
-use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_transport::DaemonTransport;
 use shekyl_rpc_types::kinds::NoParams;
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::Transaction;
@@ -112,8 +111,7 @@ impl DaemonExpectation {
 ///
 /// Held on [`Engine`](super::Engine) and shared, by clone, with
 /// `shekyl-scanner` and the tx-submission path. The underlying
-/// [`HttpRpc`] is `Clone + Send + Sync`; cloning it is cheap
-/// (an `Arc`-wrapped HTTP client + URL string).
+/// [`DaemonTransport`] is `Clone + Send + Sync`; cloning it is cheap.
 ///
 /// `DaemonClient` implements [`shekyl_rpc_client::Rpc`] (delegating `post` to
 /// the wrapped transport) and the crate-internal `DaemonEngine` Stage 1
@@ -123,7 +121,7 @@ impl DaemonExpectation {
 /// underlying transport directly.
 #[derive(Clone, Debug)]
 pub struct DaemonClient {
-    inner: HttpRpc,
+    inner: DaemonTransport,
     /// What this wallet requires of the daemon, and the verdict once the
     /// handshake has run. `None` means the caller took responsibility for
     /// identity itself — see [`DaemonClient::new`].
@@ -134,14 +132,16 @@ pub struct DaemonClient {
 }
 
 impl DaemonClient {
-    /// Wrap an existing [`HttpRpc`] connection.
+    /// Wrap a transport: an [`HttpRpc`](shekyl_rpc_transport::HttpRpc) for a named address, or a
+    /// [`LocalRpc`](shekyl_rpc_transport::local::LocalRpc) for "this
+    /// computer".
     ///
     /// **Performs no identity check.** For harnesses whose fake daemons serve
     /// no `version`, and for callers that have verified by other means.
     /// Every shipped path uses [`DaemonClient::verifying`] instead.
-    pub fn new(inner: HttpRpc) -> Self {
+    pub fn new(inner: impl Into<DaemonTransport>) -> Self {
         Self {
-            inner,
+            inner: inner.into(),
             expectation: None,
             checked: std::sync::Arc::new(tokio::sync::OnceCell::new()),
         }
@@ -152,9 +152,9 @@ impl DaemonClient {
     /// path uses**; [`DaemonClient::new`] performs no check and exists for
     /// harnesses whose fake daemons serve no `version`.
     #[must_use]
-    pub fn verifying(inner: HttpRpc, expectation: DaemonExpectation) -> Self {
+    pub fn verifying(inner: impl Into<DaemonTransport>, expectation: DaemonExpectation) -> Self {
         Self {
-            inner,
+            inner: inner.into(),
             expectation: Some(expectation),
             checked: std::sync::Arc::new(tokio::sync::OnceCell::new()),
         }
@@ -237,7 +237,7 @@ enum HandshakeFail {
 ///
 /// The result is returned as it arrived because decoding it is
 /// `IdentityExpectation::read`'s: the version is read before anything else.
-async fn fetch_version(inner: &HttpRpc) -> Result<Value, HandshakeFail> {
+async fn fetch_version(inner: &DaemonTransport) -> Result<Value, HandshakeFail> {
     let body = serde_json::to_vec(&json!({
         "jsonrpc": "2.0",
         "id": 0,
@@ -399,6 +399,7 @@ mod tests {
     //! transport (`json_rpc_call` → `post`) is covered by the Phase 6
     //! live-`shekyld` harness, not here.
     use super::*;
+    use shekyl_rpc_transport::HttpRpc;
 
     // ── VC-4: the identity handshake ────────────────────────────────────
     //
