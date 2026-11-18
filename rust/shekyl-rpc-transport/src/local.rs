@@ -888,7 +888,9 @@ mod tests {
             .bytes(),
         )
         .unwrap();
-        let fault = target.dial().unwrap_err();
+        let Err(fault) = target.dial() else {
+            panic!("a node that runs as a service is not dialled");
+        };
         assert_eq!(
             fault,
             LocalFault::Service {
@@ -921,7 +923,9 @@ mod tests {
             .bytes(),
         )
         .unwrap();
-        let fault = target.dial().unwrap_err();
+        let Err(fault) = target.dial() else {
+            panic!("a node that runs as a service is not dialled");
+        };
         assert!(
             matches!(fault, LocalFault::Service { view: None, .. }),
             "{fault:?}"
