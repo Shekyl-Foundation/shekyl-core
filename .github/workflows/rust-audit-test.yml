@@ -656,7 +656,11 @@ jobs:
         #
         # --release is mandatory (the binary refuses debug: a debug-profile
         # latency measurement is meaningless). Thresholds are x86-derived
-        # and live beside the floor ones in the example source.
+        # and live beside the floor ones in the example source. They are
+        # wall clock on GitHub's hosted runners, and the step fails only
+        # there (RUNNER_ENVIRONMENT=github-hosted); the same step run on a
+        # fleet build VM reports its cells over threshold and passes
+        # (Rick, 2026-11-18).
         run: cargo run --locked --release -p shekyl-shard-visual --example budget_matrix -- x86-smoke
       - name: "cargo clippy: test-only features off, as production builds them (lib only)"
         working-directory: rust
