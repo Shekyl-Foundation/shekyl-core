@@ -566,20 +566,21 @@ struct PreparedStakeEngine {
 /// `rt-multi-thread` ambient runtime; conformance tests must use
 /// `#[tokio::test(flavor = "multi_thread")]`.
 #[cfg(feature = "conformance")]
-fn observe_stake_self_cert(
+pub(super) fn observe_stake_self_cert(
     handle: &StakeEngineHandle,
     curve_tree: &crate::engine::curve_tree_actor::CurveTreeHandle,
 ) -> Result<(), OpenError> {
     let rt = tokio::runtime::Handle::current();
     let cert = tokio::task::block_in_place(|| rt.block_on(handle.wait_for_self_cert()));
     if let Err(failure) = cert {
+        tracing::error!(%failure, "the stake RNG self-cert refused the open");
         tokio::task::block_in_place(|| {
             rt.block_on(async {
                 handle.shutdown().await;
                 curve_tree.shutdown().await;
             })
         });
-        return Err(OpenError::StakeRngSelfCertFailed(failure));
+        return Err(OpenError::StakeRngSelfCertFailed);
     }
     Ok(())
 }
