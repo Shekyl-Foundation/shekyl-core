@@ -4053,10 +4053,22 @@ mod tests {
                 or_unwritable,
             }))
         };
-        // `EIO`, `EISDIR`: the OS's own text for each, which names no path.
-        let eio = || IoErr::from_raw_os_error(5);
-        let eio_words = IoErr::from_raw_os_error(5).to_string();
-        let eisdir_words = IoErr::from_raw_os_error(21).to_string();
+        // A generic disk error and a "not a directory's place" error, each
+        // in the OS's own text, which names no path. The raw numbers are the
+        // platform's: Linux's `EIO` (5) is Windows' `ERROR_ACCESS_DENIED`,
+        // which the mapping rightly reads as not writable, so Windows uses
+        // `ERROR_IO_DEVICE` (1117), its generic I/O device error (measured
+        // on the Windows host at 42f306f11f).
+        #[cfg(windows)]
+        const GENERIC_IO_ERROR: i32 = 1117;
+        #[cfg(not(windows))]
+        const GENERIC_IO_ERROR: i32 = 5;
+        // `EISDIR` on Unix, `ERROR_NOT_READY` on Windows: either is a disk
+        // error the mapping sends to SAVE_IO_FAILED.
+        const OTHER_IO_ERROR: i32 = 21;
+        let eio = || IoErr::from_raw_os_error(GENERIC_IO_ERROR);
+        let eio_words = IoErr::from_raw_os_error(GENERIC_IO_ERROR).to_string();
+        let eisdir_words = IoErr::from_raw_os_error(OTHER_IO_ERROR).to_string();
         let cases: Vec<(PersistenceError, C, Option<Value>, &str)> = vec![
             (
                 file(WalletFileError::Io(IoErr::from(
@@ -4109,7 +4121,7 @@ mod tests {
                 // The rename refused, the regtest gate's blocked state path.
                 file(WalletFileError::AtomicWriteRename {
                     target: path(),
-                    source: IoErr::from_raw_os_error(21),
+                    source: IoErr::from_raw_os_error(OTHER_IO_ERROR),
                 }),
                 C::SaveIoFailed,
                 Some(json!({ "error": eisdir_words })),
