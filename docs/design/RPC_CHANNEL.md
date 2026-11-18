@@ -2018,10 +2018,11 @@ a demonstrated operator recovery need returns it as a ruled capability.
   leftover never names the previous endpoint, and announces what the
   record names.
   Until RT-W12, a same-user tool reaches a run-as-me daemon on the owner's
-  socket or the plaintext admin listener, and a service on the plaintext
-  admin listener. **RT-W12 rules the channel port and gives a service a
-  loopback channel listener by default before it retires the plaintext
-  admin listener**, which is otherwise a service's only door.
+  socket or the plaintext admin listener. A service's shell words use its
+  console leg; a wallet reads the service record and names the view
+  listener, and dials nothing the record names (RT-W10 step 5). **RT-W12
+  rules the channel port and gives a service a loopback channel listener
+  by default before it retires the plaintext admin listener.**
 - **Every new surface is Rust-owned** (rule 20). The channel listener's
   flags, the key paths, the enrolled set, and `rpc client add` / `rpc client remove`
   are parsed, stored and served in `shekyl-daemon-rpc`. Nothing is added

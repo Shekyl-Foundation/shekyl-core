@@ -9,11 +9,11 @@
 #
 # 127.0.0.1 inside the container is then host loopback, and P2P is
 # reachable. The image serves the view listener alone, at the network's view
-# port (11030 on mainnet), with no plaintext admin listener; the account
-# that runs the daemon administers it on its owner's socket, in
-# /home/shekyl/rendezvous (`docker exec -u shekyl … shekyl-cli`). The image
-# exposes no RPC port on purpose; another machine reaches the node over the
-# authenticated channel (rpc-listen), which an operator adds.
+# port (11030 on mainnet), with no plaintext admin listener. The entrypoint
+# creates this account's session directory and runs the daemon as shekyl, so
+# `docker exec -u shekyl … shekyl-cli` reaches the node on its owner's
+# socket. The image exposes no RPC port on purpose; another machine reaches
+# the node over the authenticated channel (rpc-listen), which an operator adds.
 
 # builder stage
 FROM ubuntu:20.04 as builder
@@ -59,9 +59,10 @@ COPY --from=builder /src/build/x86_64-linux-gnu/release/bin /usr/local/bin/
 
 RUN adduser --system --group --disabled-password shekyl && \
 	mkdir -p /wallet /home/shekyl/.shekyl && \
-	mkdir -m 0700 /home/shekyl/rendezvous && \
-	chown -R shekyl:shekyl /home/shekyl/.shekyl /home/shekyl/rendezvous && \
-	chown -R shekyl:shekyl /wallet
+	chown -R shekyl:shekyl /home/shekyl/.shekyl /wallet
+
+COPY contrib/packaging/docker/entrypoint.sh /usr/local/bin/shekyld-entrypoint
+RUN chmod 0755 /usr/local/bin/shekyld-entrypoint
 
 VOLUME /home/shekyl/.shekyl
 
@@ -71,9 +72,7 @@ EXPOSE 11021
 # No RPC port: the plaintext listeners are loopback only; run with
 # --network host (see the header).
 
-USER shekyl
-
-ENTRYPOINT ["shekyld"]
-# P2P listens on the default (every address, the network's P2P port). The
-# container has no session directory, so the owner's socket is named.
-CMD ["--rpc-admin-listen", "none", "--rpc-view-listen", "127.0.0.1", "--rpc-socket-dir", "/home/shekyl/rendezvous"]
+# Root for the entrypoint, which creates /run/user/<uid> and drops to shekyl.
+ENTRYPOINT ["shekyld-entrypoint"]
+# P2P listens on the default (every address, the network's P2P port).
+CMD ["--rpc-admin-listen", "none", "--rpc-view-listen", "127.0.0.1"]

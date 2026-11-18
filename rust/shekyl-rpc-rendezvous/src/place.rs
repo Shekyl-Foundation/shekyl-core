@@ -19,11 +19,11 @@
 //!   [`crate::rendezvous_name`]'s.
 //! - **The record** (Windows): three lines, `shekyl-rendezvous 1`, `pipe
 //!   \\.\pipe\shekyl-owner-<32 hex>` and `session <logon SID>`.
-//! - **A service's record** (every platform; IG-Q105): three lines,
-//!   `shekyl-service-rendezvous 1`, `channel <address:port>` and
-//!   `bundle <hex>`, in the service's machine-wide rendezvous directory
-//!   under [`service_file_name`]. The service publishes it only while it
-//!   listens on the channel (Rick, 2026-11-14).
+//! - **A service's record** (every platform; IG-Q105): format 2, always
+//!   published. `channel` and `bundle` are present only when the channel
+//!   is on, and `view` only when the view listener is on, in the service's
+//!   machine-wide rendezvous directory under [`service_file_name`]
+//!   ([`ServiceRecord`]; Rick, 2026-11-17).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
