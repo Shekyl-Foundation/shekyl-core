@@ -3,7 +3,7 @@
   "chain": "small",
   "plan": {
     "path": "rust/shekyl-chain-forge/plans/small.toml",
-    "sha256": "9b138377d8b732af550e7d655c2609e0fd1b2c8f2c05e216b0899bec666aeebb"
+    "sha256": "567b5b351bd8b5ca6a8d609ac1bc0168c5eb5ecd1b5f716d852d69eb7744f2dc"
   },
   "seed": "4caafe22ad997dbcdf53d5a74394c7d9f594482231d080f2e43bb364170cdf9d",
   "network": "regtest",

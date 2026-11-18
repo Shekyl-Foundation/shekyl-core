@@ -41,8 +41,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use shekyl_chain_forge::{
-    sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord, Line, Manifest,
-    Plan, PlanRef, ScheduleRecord, MANIFEST_FORMAT_VERSION,
+    close_event, sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord, Line,
+    Manifest, Plan, PlanRef, ScheduleRecord, MANIFEST_FORMAT_VERSION,
 };
 use shekyl_chain_ingest::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use shekyl_chain_ingest::archival_driver::{ENDPOINT, FEE};
@@ -297,11 +297,15 @@ impl Forge {
     /// [`ForgeFault`].
     pub async fn run(&mut self, plan: &Plan) -> Result<Option<Difference>, ForgeFault> {
         for step in &plan.steps {
+            let closed_before = self.closed.len();
             if self.stopped.is_none() {
                 self.step(&step.action).await?;
             }
             if let Some(difference) = self.stopped.take() {
                 return Ok(Some(difference));
+            }
+            if matches!(step.action, Action::FillShards { .. }) {
+                self.name_closes(closed_before);
             }
             if let Some(name) = &step.event {
                 let tip = self.chain.last().expect("genesis at least");
@@ -314,6 +318,23 @@ impl Forge {
             }
         }
         Ok(None)
+    }
+
+    /// One `shard-<k>-closed` event for each shard closed since the first
+    /// `from` (a fill's closes, `CHAIN_FORGE.md` §11.2), at the block whose
+    /// fold first counted it closed. A fill lists no rewind, so a close's
+    /// record is the tip's, counted back by height.
+    fn name_closes(&mut self, from: usize) {
+        let tip = self.chain.last().expect("genesis at least").height.to_raw();
+        for closed in &self.closed[from..] {
+            let height = closed.close_height.to_raw();
+            self.events.push(EventRecord {
+                name: close_event(closed.shard.to_raw()),
+                height,
+                branch: Branch::Main.to_string(),
+                record: self.records - 1 - (tip - height),
+            });
+        }
     }
 
     /// The live scenario.

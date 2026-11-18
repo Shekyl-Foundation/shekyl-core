@@ -1,0 +1,39 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The pin file (CHAIN_FORGE.md §10.4, CF-R11): every hosted chain, pinned
+# by its OCI artifact's digest and each layer's SHA-256 and size. This file
+# is the only source of truth for what CI accepts: a copy pulled from GHCR
+# that differs from it in one byte is refused, whoever published it. A pin
+# changes only in a reviewed pull request here.
+#
+# Read by shekyl-chain-forge's `hosted` module (tests), by
+# scripts/ci/fetch_test_chain.py (CI and contributors), and by
+# shekyl-test-chains' publish workflow, which refuses to push a forging
+# whose digest differs from the pin at the same commit.
+
+# The `oras` release the fetch script and the publish workflow install,
+# pinned by version and by each archive's SHA-256 from the release's
+# checksums file (rule 17). A changed checksum is red, never re-pinned in
+# passing.
+#
+# Why 1.3.6 (ruled 2026-11-18): the newest release with weeks behind it
+# when CF-4a pinned it (published 2026-10-24); 1.4.0 had been out a day.
+#
+# Why each artifact sets `org.opencontainers.image.created` (ruled
+# 2026-11-18): `oras push` otherwise stamps the push time into the
+# manifest, so the same bytes pushed twice get two digests and a
+# re-publish could never match its pin. The publish workflow sets it to
+# the forged commit's committer time (each chain's `created` below), which
+# is fixed by the commit, so a chain re-published from its pinned commit
+# has its pinned digest.
+[oras]
+version = "1.3.6"
+
+[oras.sha256]
+darwin_amd64 = "844e26430aa0afe2c40fdbddafc3b39ef968a6d41955b7380684bd02907fa397"
+darwin_arm64 = "e2b25a53234e2471c5fc81936f957fa612065ab559c21834c02d8bfbc2f62b30"
+linux_amd64 = "66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0"
+linux_arm64 = "b84269e78dfc2d5329a4aab373da3200de95e6c138338cf6c66c10c0a3f248c1"
