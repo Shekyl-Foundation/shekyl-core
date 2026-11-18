@@ -303,13 +303,13 @@ three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused by the w
 derivation and the harness fixture wallet's test-only derivation, which differ only by
 salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 130 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 134 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
 carve-outs** (a rebrand sweep skips them) — enumerated with per-seam consequences in
 [`FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md), and the CI gate
-cross-checks that every frozen row still has its entry there. The remaining 119 are
+cross-checks that every frozen row still has its entry there. The remaining 123 are
 Shekyl-authored **live** strings: still byte-load-bearing, but ours to version (mint
 a `…-v2` alongside a migration, never edit `…-v1` in place — SIGNATURE_ALIGNMENT §5).
 
