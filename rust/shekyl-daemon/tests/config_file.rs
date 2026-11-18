@@ -274,9 +274,40 @@ fn the_default_file_unread_load_still_reads_a_named_file() {
         .expect("no file is a configuration");
     assert_eq!(unnamed.file_read, None);
     assert_eq!(
-        unnamed.config_path,
-        Path::new("/etc/shekyl/shekyld-regtest.toml"),
+        unnamed.config_file,
+        shekyl_daemon_config::ConfigFileChoice::Default("/etc/shekyl/shekyld-regtest.toml".into()),
         "the path announced is the default's"
     );
     assert_ne!(unnamed.config.logging.level, "debug");
+}
+
+/// **`config-file none` reads no file, wherever one is** (Rick,
+/// 2026-11-18). A program that starts its own daemon asks for the command
+/// line and the defaults alone, so its node means the same on every
+/// machine, whatever another install keeps in the shared file. `load` (the
+/// production loader, which reads the default file) is given `none`: no
+/// file is read, not even a default one present on the host, and the
+/// choice is `None`. Red edit: in `config_file`, read the default file for
+/// `Value::Word` (`file_read` is the host's default file where it has one,
+/// and the choice is `Default`).
+#[test]
+fn config_file_none_reads_no_file() {
+    let place = private_place();
+    let platform = Platform {
+        home: Some(place.path().to_path_buf()),
+        service_parent: None,
+        session_dir: None,
+        service_rendezvous: None,
+    };
+    let args: Vec<OsString> = ["--network", "regtest", "--config-file", "none"]
+        .iter()
+        .map(OsString::from)
+        .collect();
+    let loaded = load(read_cli(&TABLE, args).expect("the command line"), &platform)
+        .expect("no file is a configuration");
+    assert_eq!(loaded.file_read, None);
+    assert_eq!(
+        loaded.config_file,
+        shekyl_daemon_config::ConfigFileChoice::None
+    );
 }

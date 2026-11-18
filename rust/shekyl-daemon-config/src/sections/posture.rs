@@ -129,9 +129,18 @@ const CHILDREN: &[Child] = &[
     },
 ];
 
+/// Refuse each child row given under `parent`. Under a connector that is
+/// off, a list child given as `none` asks for nothing: `clearnet-listen
+/// none` beside `clearnet off` says the same thing twice, no clearnet
+/// listener, and is accepted (Rick, 2026-11-18). Any endpoint under an off
+/// connector is still refused.
 fn refuse_children(r: &mut Reader<'_>, parent: Parent) {
+    let off = matches!(parent, Parent::ClearnetOff | Parent::TorOff);
     for child in CHILDREN {
         if child.parent == parent && r.given(child.option) {
+            if off && r.given_none(child.option) {
+                continue;
+            }
             r.conflict(child.option, child.because);
         }
     }

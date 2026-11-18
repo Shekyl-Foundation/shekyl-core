@@ -144,11 +144,11 @@ fn one(d: Diagnostic) -> Vec<Diagnostic> {
 pub(crate) fn accept(
     resolved: &resolve::Resolved,
     read_path: Option<&Path>,
-    config_path: &Path,
+    config_file: &shekyl_daemon_config::ConfigFileChoice,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> i32 {
-    let (out, err) = accepted_lines(resolved, read_path, config_path, config, warnings);
+    let (out, err) = accepted_lines(resolved, read_path, config_file, config, warnings);
     for line in &out {
         tell(&mut std::io::stdout(), line);
     }
@@ -166,12 +166,12 @@ pub(crate) fn accept(
 fn accepted_lines(
     resolved: &resolve::Resolved,
     read_path: Option<&Path>,
-    config_path: &Path,
+    config_file: &shekyl_daemon_config::ConfigFileChoice,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> (Vec<String>, Vec<String>) {
     let mut announced =
-        announce::announcements(&TABLE, resolved, read_path, config_path, config, warnings);
+        announce::announcements(&TABLE, resolved, read_path, config_file, config, warnings);
     announced.rest.extend(crate::run::mining_notice(config));
     let out = vec![
         format!("shekyld: configuration verified for {}", account::current()),
@@ -400,7 +400,7 @@ mod tests {
         let (out, err) = accepted_lines(
             &loaded.resolved,
             loaded.file_read.as_deref(),
-            &d.path().join("shekyld.toml"),
+            &shekyl_daemon_config::ConfigFileChoice::Default(d.path().join("shekyld.toml")),
             &loaded.config,
             &walked.warnings,
         );
@@ -456,7 +456,7 @@ mod tests {
             let (_, err) = accepted_lines(
                 &loaded.resolved,
                 loaded.file_read.as_deref(),
-                &d.path().join("shekyld.toml"),
+                &shekyl_daemon_config::ConfigFileChoice::Default(d.path().join("shekyld.toml")),
                 &loaded.config,
                 &walked.warnings,
             );

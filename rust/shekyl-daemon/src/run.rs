@@ -129,7 +129,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     }
 
     let Loaded {
-        config_path,
+        config_file,
         file_read,
         resolved,
         config,
@@ -151,7 +151,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         return verify::accept(
             &resolved,
             read_path,
-            &config_path,
+            &config_file,
             &config,
             &walked.warnings,
         );
@@ -217,7 +217,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         &TABLE,
         &resolved,
         read_path,
-        &config_path,
+        &config_file,
         &config,
         &walked.warnings,
     );

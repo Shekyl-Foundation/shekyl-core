@@ -12,6 +12,7 @@ use std::path::Path;
 
 use shekyl_options::{Source, Table, Visibility};
 
+use crate::load::ConfigFileChoice;
 use crate::resolve::Resolved;
 use crate::sections::{Clearnet, DaemonConfig, Tor};
 
@@ -25,12 +26,15 @@ pub fn effective_configuration(
     table: &Table,
     resolved: &Resolved,
     config_file: Option<&Path>,
-    default_path: &Path,
+    choice: &ConfigFileChoice,
 ) -> String {
     let mut parts = Vec::with_capacity(resolved.values.len() + 1);
-    parts.push(match config_file {
-        Some(p) => format!("config-file={} (cli)", p.display()),
-        None => format!("config-file=none-at:{} (default)", default_path.display()),
+    parts.push(match (config_file, choice) {
+        (Some(p), _) => format!("config-file={} (cli)", p.display()),
+        (None, ConfigFileChoice::None) => "config-file=none (cli)".to_owned(),
+        (None, ConfigFileChoice::Default(path) | ConfigFileChoice::Named(path)) => {
+            format!("config-file=none-at:{} (default)", path.display())
+        }
     });
     // The config-file row is the first part above, with the path's fate.
     for row in table
@@ -150,7 +154,7 @@ pub fn announcements(
     table: &Table,
     resolved: &Resolved,
     config_file: Option<&Path>,
-    default_path: &Path,
+    choice: &ConfigFileChoice,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> Announcements {
@@ -158,7 +162,7 @@ pub fn announcements(
     rest.push(posture(config));
     rest.extend(warnings.iter().cloned());
     Announcements {
-        effective: effective_configuration(table, resolved, config_file, default_path),
+        effective: effective_configuration(table, resolved, config_file, choice),
         rest,
     }
 }
@@ -236,7 +240,7 @@ mod tests {
             &TABLE,
             &resolved,
             None,
-            Path::new("/etc/shekyl/shekyld-regtest.toml"),
+            &ConfigFileChoice::Default("/etc/shekyl/shekyld-regtest.toml".into()),
         );
         assert!(line.starts_with("effective configuration: config-file=none-at:/etc/shekyl/shekyld-regtest.toml (default)"), "{line}");
         assert!(line.contains("dev-difficulty=7 (cli)"), "{line}");
@@ -283,6 +287,29 @@ mod tests {
 
     /// `mine-address` prints shortened: the first and last eight characters
     /// and nothing of the middle. Red edit: print the full address.
+    /// The startup line says which file was read, the default path at which
+    /// none was found, or that none was asked for. Red edit: print
+    /// `none-at` for `ConfigFileChoice::None`.
+    #[test]
+    fn the_line_says_when_no_file_was_asked_for() {
+        let (resolved, _) = setup(&["--tor", "off"], "");
+        let none = effective_configuration(&TABLE, &resolved, None, &ConfigFileChoice::None);
+        assert!(
+            none.starts_with("effective configuration: config-file=none (cli)"),
+            "{none}"
+        );
+        let absent = effective_configuration(
+            &TABLE,
+            &resolved,
+            None,
+            &ConfigFileChoice::Default("/etc/x.toml".into()),
+        );
+        assert!(
+            absent.contains("config-file=none-at:/etc/x.toml (default)"),
+            "{absent}"
+        );
+    }
+
     #[test]
     fn the_mine_address_prints_shortened() {
         let text = shekyl_address::ShekylAddress::new(
@@ -295,7 +322,12 @@ mod tests {
         .encode()
         .unwrap();
         let (resolved, _) = setup(&["--mine-address", &text, "--tor", "off"], "");
-        let line = effective_configuration(&TABLE, &resolved, None, Path::new("/etc/x.toml"));
+        let line = effective_configuration(
+            &TABLE,
+            &resolved,
+            None,
+            &ConfigFileChoice::Default("/etc/x.toml".into()),
+        );
         let want = format!(
             "mine-address={}…{} (cli)",
             &text[..8],
@@ -341,7 +373,7 @@ mod tests {
             &TABLE,
             &resolved,
             None,
-            Path::new("/etc/shekyl/shekyld-regtest.toml"),
+            &ConfigFileChoice::Default("/etc/shekyl/shekyld-regtest.toml".into()),
             &config,
             &warnings,
         );

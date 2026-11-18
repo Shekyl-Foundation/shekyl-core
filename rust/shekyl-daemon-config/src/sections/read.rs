@@ -93,6 +93,12 @@ impl<'a> Reader<'a> {
         !matches!(self.resolved.source(name), None | Some(Source::Default))
     }
 
+    /// Whether a list row was given as `none`, the empty list.
+    pub(super) fn given_none(&self, name: &str) -> bool {
+        self.given(name)
+            && matches!(self.resolved.get(name), Some(Value::List(items)) if items.is_empty())
+    }
+
     pub(super) fn conflict(&mut self, name: &str, conflict: &str) {
         self.faults.push(
             Diagnostic::new(Code::ValueConflict, self.source(name))

@@ -174,6 +174,37 @@ fn shekyl_onion_v3_hostname() -> String {
     shekyl_onion_v3::v3_onion_hostname(&b)
 }
 
+/// **A connector that is off and a list child that is `none` say the same
+/// thing, and are accepted** (Rick, 2026-11-18). `clearnet-listen none`
+/// beside `clearnet off` is no clearnet listener, twice over, on the
+/// command line or in the file; the clearnet connector is off. Under `tor
+/// off` the same holds for a list child. An endpoint under an off
+/// connector is still a conflict (the test below). Red edit: in
+/// `refuse_children`, drop the `given_none` skip (both are refused as
+/// `config.value.conflict`).
+#[test]
+fn an_off_connector_and_a_none_list_child_agree() {
+    let c = build_from(
+        &[
+            "--clearnet",
+            "off",
+            "--clearnet-listen",
+            "none",
+            "--tor",
+            "off",
+        ],
+        "",
+    )
+    .expect("listen none beside clearnet off is accepted");
+    assert!(c.offline());
+    let c = build_from(
+        &["--clearnet", "off", "--tor", "off"],
+        "clearnet-listen = \"none\"\n",
+    )
+    .expect("the same from the file");
+    assert!(c.offline());
+}
+
 #[test]
 fn a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers() {
     let d = codes(build_from(

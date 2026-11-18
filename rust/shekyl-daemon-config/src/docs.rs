@@ -125,7 +125,7 @@ fn kind_text(kind: &Kind) -> String {
         Kind::PeerEndpoint(PeerRule::Any) => "IP endpoint or v3 onion with a port".to_owned(),
         Kind::PeerEndpoint(PeerRule::OnionOnly) => "v3 onion with a port".to_owned(),
         Kind::Address => "Shekyl address".to_owned(),
-        Kind::Path => "absolute path".to_owned(),
+        Kind::Path { keywords } => with_keywords("absolute path", keywords),
         Kind::Secret => "secret (file only, never shown)".to_owned(),
         Kind::Command { placeholders } => format!(
             "command (an array of words; placeholders {})",
@@ -202,7 +202,7 @@ fn example_value(kind: &Kind, default: &Default) -> String {
         Kind::PeerEndpoint(PeerRule::Any) => "\"203.0.113.10:11021\"".to_owned(),
         Kind::PeerEndpoint(PeerRule::OnionOnly) => "\"<56 characters>.onion:11021\"".to_owned(),
         Kind::Address => "\"<address>\"".to_owned(),
-        Kind::Path => "\"/path\"".to_owned(),
+        Kind::Path { .. } => "\"/path\"".to_owned(),
         Kind::Secret => "\"<secret>\"".to_owned(),
         Kind::Command { placeholders } => format!(
             "[\"/path/to/command\"{}]",

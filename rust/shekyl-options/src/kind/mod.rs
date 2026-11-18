@@ -124,8 +124,12 @@ pub enum Kind {
     PeerEndpoint(PeerRule),
     /// A Shekyl address; checked against the network by its owner.
     Address,
-    /// An absolute path.
-    Path,
+    /// An absolute path, or one of `keywords` (`none`: no file at all,
+    /// where a row has a default one).
+    Path {
+        /// Words accepted in place of a path.
+        keywords: &'static [&'static str],
+    },
     /// A secret: file only, never echoed, zeroized.
     Secret,
     /// A command: file only, an argument array run without a shell, with
@@ -356,6 +360,15 @@ fn keyword(text: &str, keywords: &'static [&'static str]) -> Option<&'static str
 }
 
 impl Kind {
+    /// An absolute path.
+    pub const PATH: Self = Self::Path { keywords: &[] };
+
+    /// An absolute path, or `none`: for a row with a default file, no file
+    /// at all (the daemon's `config-file`).
+    pub const PATH_OR_NONE: Self = Self::Path {
+        keywords: &["none"],
+    };
+
     /// Whether the kind may be given on the command line at all.
     #[must_use]
     pub const fn cli_allowed(&self) -> bool {
@@ -523,7 +536,10 @@ impl Kind {
                 }
                 Ok(Value::Address(text.to_owned()))
             }
-            Self::Path => {
+            Self::Path { keywords } => {
+                if let Some(k) = keyword(text, keywords) {
+                    return Ok(Value::Word(k));
+                }
                 let p = PathBuf::from(text);
                 if !p.is_absolute() {
                     return Err(syntax(text, "an absolute path"));
@@ -572,7 +588,7 @@ impl Kind {
             Self::PeerEndpoint(PeerRule::Any) => "an IP endpoint or a v3 onion with a port",
             Self::PeerEndpoint(PeerRule::OnionOnly) => "a v3 onion with a port",
             Self::Address => "a Shekyl address",
-            Self::Path => "an absolute path",
+            Self::Path { .. } => "an absolute path",
             Self::Secret => "a secret",
             Self::Command { .. } => "an array of strings",
             Self::Origin => "a web origin such as `https://example.org`",

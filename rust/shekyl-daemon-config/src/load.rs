@@ -21,12 +21,27 @@ use crate::resolve::{choosers, resolve, Resolved};
 use crate::sections::{build, DaemonConfig};
 use crate::{file, paths, Platform, TABLE};
 
-/// The file, the resolved values and the sections. `config_path` is the
-/// path the announcements name, including when the default file was absent.
-/// `file_read` is set only when a file was read.
+/// The configuration file the command line chose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConfigFileChoice {
+    /// A file the command line named. It must exist.
+    Named(PathBuf),
+    /// The run mode's default for the network. Absent, it means the
+    /// defaults.
+    Default(PathBuf),
+    /// `config-file none`: no file is read, whatever exists at the default
+    /// path. The command line and the defaults alone, as a program that
+    /// starts its own daemon asks for: a node that means the same on every
+    /// machine, whatever another install keeps in the shared file.
+    None,
+}
+
+/// The file, the resolved values and the sections. `config_file` is the
+/// choice the announcements name, including when the default file was
+/// absent. `file_read` is set only when a file was read.
 pub struct Loaded {
-    /// The configuration file named or defaulted.
-    pub config_path: PathBuf,
+    /// The configuration file named, defaulted, or none.
+    pub config_file: ConfigFileChoice,
     /// The file actually read, when one was.
     pub file_read: Option<PathBuf>,
     /// Every value and its source.
@@ -87,42 +102,45 @@ fn load_with(
     platform: &Platform,
     default_file: DefaultFile,
 ) -> Result<Loaded, Vec<Diagnostic>> {
-    let (config_path, opened) = config_file(&cli, platform, default_file).map_err(|d| vec![d])?;
+    let (choice, opened) = config_file(&cli, platform, default_file).map_err(|d| vec![d])?;
     let AfterFile {
         file_read,
         resolved,
         config,
     } = after_file(cli, platform, opened)?;
     Ok(Loaded {
-        config_path,
+        config_file: choice,
         file_read,
         resolved,
         config,
     })
 }
 
-/// [`load`]'s file step: the path `cli` names, or the run mode's default
-/// for the chosen network, and that file opened and permission-checked.
-/// `None` when the default file is absent or left unread; a named file
-/// that is absent is refused.
+/// [`load`]'s file step: the path `cli` names, the run mode's default for
+/// the chosen network, or none, and that file opened and permission-checked.
+/// The file is `None` when the default file is absent or left unread, and
+/// when `cli` asks for no file; a named file that is absent is refused.
 fn config_file(
     cli: &Cli,
     platform: &Platform,
     default_file: DefaultFile,
-) -> Result<(PathBuf, Option<ConfigFile>), Diagnostic> {
+) -> Result<(ConfigFileChoice, Option<ConfigFile>), Diagnostic> {
     let (network, mode) = choosers(cli);
-    let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
+    let choice = match cli.given.iter().find(|g| g.row.name == "config-file") {
         Some(g) => match &g.value {
-            Value::Path(p) => (p.clone(), true),
-            other => unreachable!("the config-file row's kind is a path, not {other:?}"),
+            Value::Path(p) => ConfigFileChoice::Named(p.clone()),
+            // The row's one word (`Kind::PATH_OR_NONE`).
+            Value::Word(_) => ConfigFileChoice::None,
+            other => unreachable!("the config-file row's kind is a path or none, not {other:?}"),
         },
-        None => (paths::config_file_default(platform, mode, network)?, false),
+        None => ConfigFileChoice::Default(paths::config_file_default(platform, mode, network)?),
     };
-    let opened = match (named, default_file) {
-        (false, DefaultFile::Unread) => None,
-        (true, _) | (false, DefaultFile::Read) => file::open(&config_path, named)?,
+    let opened = match (&choice, default_file) {
+        (ConfigFileChoice::None, _) | (ConfigFileChoice::Default(_), DefaultFile::Unread) => None,
+        (ConfigFileChoice::Named(path), _) => file::open(path, true)?,
+        (ConfigFileChoice::Default(path), DefaultFile::Read) => file::open(path, false)?,
     };
-    Ok((config_path, opened))
+    Ok((choice, opened))
 }
 
 /// Everything [`load`] does after its file step: read `opened`'s rows,

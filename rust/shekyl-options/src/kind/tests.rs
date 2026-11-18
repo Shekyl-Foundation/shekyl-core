@@ -234,11 +234,28 @@ fn commands_are_file_only_arrays_with_named_placeholders() {
 #[test]
 fn a_path_is_absolute_only() {
     assert!(matches!(
-        Kind::Path.parse_text(&abs("/etc/shekyl")),
+        Kind::PATH.parse_text(&abs("/etc/shekyl")),
         Ok(Value::Path(_))
     ));
-    assert_eq!(code(Kind::Path.parse_text("etc/shekyl")), Code::ValueSyntax);
-    assert_eq!(code(Kind::Path.parse_text("./x")), Code::ValueSyntax);
+    assert_eq!(code(Kind::PATH.parse_text("etc/shekyl")), Code::ValueSyntax);
+    assert_eq!(code(Kind::PATH.parse_text("./x")), Code::ValueSyntax);
+    // `none` is a word only where the row takes it; elsewhere it is a
+    // relative path, refused.
+    assert_eq!(code(Kind::PATH.parse_text("none")), Code::ValueSyntax);
+}
+
+/// A path row that names a default file may take `none`: no file at all.
+/// The word is never read as a path. Red edit: drop the keyword check in
+/// `Kind::Path`'s parse (`none` is refused as a relative path).
+#[test]
+fn a_path_row_may_take_none_for_no_file() {
+    let or_none = Kind::PATH_OR_NONE;
+    assert_eq!(or_none.parse_text("none"), Ok(Value::Word("none")));
+    assert!(matches!(
+        or_none.parse_text(&abs("/etc/shekyl/shekyld-mainnet.toml")),
+        Ok(Value::Path(_))
+    ));
+    assert_eq!(code(or_none.parse_text("None")), Code::ValueSyntax);
 }
 
 #[test]
