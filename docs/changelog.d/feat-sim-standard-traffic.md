@@ -7,12 +7,14 @@
   - **The control.** The `steady` arm offers every block its demand. Run it with `--control-steady-traffic`.
     - Its pins (stage 2's two arms, ESR-10's and EUP-4's nightly scopes) hold the reports byte for byte as they stood before, and run nightly.
     - The recorded baseline fixture and the unit tests that pin steady arithmetic name it.
-  - **The spread.** `--seed-spread` runs `--stage2`, `--esr10`, `--eup4` or one instrument at seeds 1, 2 and 3. Each figure that differs prints as its median and [its range].
+  - **The spread.** `--seed-spread` runs `--stage2`, `--esr10`, `--eup4` or one instrument at seeds 1, 2 and 3. Each figure that differs prints as its median and [its range]. A printed range such as `0.10-1.08` keeps its two ends, and a column padded to its figure's width at one seed merges with the others.
   - **The grid's honest rows** print year 1's room:
     - the cap in transactions;
     - the share of blocks overflowed by their own arrivals;
     - the share leaving a backlog;
     - the median offered and carried.
-  - Predicted in `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.35 (STD-1…STD-9) before the code.
+  - Predicted in `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.35 (STD-1…STD-9) before the code, and read in §5.35.1 after every narration was regenerated.
+    - The steady control reproduced every pinned report byte for byte, and the grid's steady rows did not move.
+    - Not predicted: where blocks may grow (past the crossing, and in the inherited cells whose multiplier admits growth from year 1), standard traffic grows them and the fee falls. ESR-10's inherited baseline median reads 1 041 K at year 30 against 765 K on steady, and m*'s year-1 fee is 0.73× the ceiling against 0.83×.
 - **The umbrella's predictability row is restated** (Rick, 2026-11-17). Every scenario's emitted fraction stays inside the release rails' envelope, with total supply unchanged.
 - **`--stage2` writes one JSON document, the run's own.** The stage-2 report is returned to the binary, which writes it, as every other mode's is. Before, the report wrote itself to stdout, so a `--set` run printed the baseline's document after the cell's. `--seed-spread` prints the merged narration only.

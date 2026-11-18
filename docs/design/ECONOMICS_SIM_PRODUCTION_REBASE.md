@@ -30,7 +30,9 @@ block-template fill rule:
 - The median stays within one transaction of the 300 KB zone (315–324 KB).
 - About **28 a block go unserved**, roughly 7.4 M a year.
 - Blocks grow in year 19, 42.4 a block on average that year. From year 20
-  they carry all 50, and the median settles at 733–765 KB.
+  they carry all 50, and the median settles at 733–765 KB. On standard
+  traffic (§5.35.1) the year-1 to year-18 figures stand, and the median
+  past the crossing reads 836–1 056 KB.
 
 On the flat control fee blocks carry 21 in year 1 and 20 from year 2 to
 year 60.
@@ -4560,6 +4562,109 @@ fill and pricing.
 - The grid's regeneration stays near 9 h.
 - If either passes its budget, the budget goes to Rick before anything is
   trimmed.
+
+#### 5.35.1 What the regeneration read (2026-11-18)
+
+Measures, not verdicts: J and G are Rick's.
+
+**The run.** A fleet host ran these steps in order, on eight threads at
+`nice 10`, beside its testnet node:
+1. the sim's unit tests (250 passed);
+2. the steady pins, as the gate (STD-2);
+3. the four regenerations, under `SHEKYL_PINNED_REGEN_DECISION="2026-11-17
+   standard traffic: every scenario runs on drawn honest counts (an
+   exponential block interval, Poisson arrivals per fee rung over it),
+   steady kept as the control and its fixtures unmoved; the grid's honest
+   rows gain year 1's room; predicted in ECONOMICS_SIM_PRODUCTION_REBASE.md
+   §5.35 (STD-1 to STD-9) and read in §5.35.1"`;
+4. the per-PR narrations lane, timed;
+5. the spread across the declared seeds. Its first attempt found no
+   binary, because the steps above build only the test harness. It ran
+   again after a build, beside ESR-10's and EUP-4's full scopes on
+   `steady` (STD-2), with nothing timed.
+
+**Which commit made the fixtures.**
+- Every regenerated fixture was written by the binary at `797ebbb565`.
+  The commit that carries them, `121033f9ee`, sits on `e182b53b30`, whose
+  two changes leave every draw and every narration byte as they were:
+  - the log-factorial takes a whole count, with the same arithmetic;
+  - stage 2's JSON payload moved out of its narration into the binary.
+- The pinned-stream tests at the carrying head check this, and so do the
+  per-PR narration pins (the grid's nightly slice among them). The
+  nine-hour full grid is accepted on its slice matching, as #1421's was.
+
+**The first run.** It ran at `a08d0990b7`, on Knuth's sampler in chunks.
+- Its steady pins passed (3 of 3, 2 008 s).
+- It was stopped before any regeneration: one test, the onset test that
+  folds sustained growth to year 60, held the unit suite for 11 159 s.
+  Knuth's sampler costs a uniform draw per arrival, and the growth
+  schedule reaches 2.35 million arrivals a block.
+- §5.35's "What is built" records the replacement, from `21b1c1d8b2`:
+  Knuth below a mean of 10, Hörmann's transformed rejection from 10.
+
+| Prediction | Outcome |
+| --- | --- |
+| **STD-1.** At a mean of 50, at each seed: median 34 or 35, mean within 1 %, interval mean within 1 %. At 1 900, the chunked draw's mean within 1 % | **Held; the chunked clause on its property, by another mechanism.** `the_rungs_sum_to_the_geometric_count` holds all three at seeds 1, 2 and 3. At 1 900 the draw is the transformed rejection, not chunks, and its mean is within five standard errors of 1 900 (`the_rejection_costs_the_same_at_any_mean`). Its shape matches the Poisson probabilities count by count at 9.99, 10, 12 and 40, on both sides of the cutover. The streams are pinned against an independent implementation |
+| **STD-2.** Every narration on `steady` reproduces its committed fixture byte for byte | **Held, at both heads and at every scope.** The three steady pins passed at `a08d0990b7` (2 008 s) and at `797ebbb565` (1 956 s): stage 2's two arms, and ESR-10's and EUP-4's nightly scopes. The four steady fixtures are byte copies of the narrations they pin. ESR-10's and EUP-4's full scopes, which no steady pin holds, were run once on `--control-steady-traffic` at `797ebbb565`. Their narrations, less the CLI's digest header and wall-time line, equal the full fixtures from before the regeneration byte for byte. The recorded baseline fixture's test passed. The grid's steady rows: STD-8 |
+| **STD-3.** The inherited zone up to the crossing within 0.5 % of `steady`: EI-1's miner income, EI-2's fractions and 50 % year (y13.83), the stage-2 burden rows; the fee part within 5 % | **Held.** EI-1's production rows equal `steady`'s to the cent from y1 to y15, fee share included, and its flat-control rows do not move. EI-2's 50 % year is y13.83 on both, and its 80 % year y29.35 against y29.34. The burden rows are within 0.2 %: the baseline by 28 bytes in 115.65 million, boom-bust by +0.04 %, sustained growth by −0.19 % |
+| **STD-4.** EI-4's "carries 50 from y20" reads y20 or y21; the growth gate's crossing y19 to y21 | **Held, at the low end.** EI-4 reads y20 on both. The growth gate's baseline crossing is y19 on both. **Not predicted:** boom-bust's crossing moves from y15 to y19 |
+| **STD-5.** The re-derived zone at seed 1: `M_r`'s yearly mean within 0.01; EI-1's miner income and the burn's yearly mean within 1 %; EI-2's crossing years within 0.05 years | **Not graded on the yearly means of `M_r` and the burn: no report and no JSON summary carries either. The rest held.** EI-1's production and flat-control rows are each within 0.51 % at every printed year. EI-2's 50 % year is y11.06 on both, and its 80 % year y25.70 against y25.69. The nearest instrument is EI-3's step trace, whose windows in the re-derived zone read `M_r` from 0.97 to 1.08 around a resting 1.000 |
+| **STD-6.** With room, a few percent to a tenth of blocks leave a backlog; age at inclusion moves off zero; EI-3's settle times within 100 blocks; the stuffers' gains in the re-derived zone within 10 % | **Held at seed 1 but for one settle time and the smallest stuffer, and both of those sit inside their seed spread. The spread itself is wider than predicted.** At N = 90, 10.6–10.8 % of blocks leave a backlog against none on `steady`. The p95 age at inclusion past the crossing is 5–7 blocks against 0. Every EI-3 settle time at seed 1 is within 100 blocks of `steady`'s but one: the re-derived stuffing edge's `M_r`, 819 blocks against 718 (+101). There `M_r` now rests near 1.007, not 1.000. Across the seeds it reads 819 [715, 1 050], a range that holds `steady`'s 718 and is 335 blocks wide. The other settle times spread by 25 to 122 blocks. At seed 1 the window-edge stuffer gains +8.4 %, +6.8 % and +8.1 % at 20, 33 and 51 %, and +19.4 % at 10 % (4 424 against 3 704 SKL). Across the seeds the 10 % gain is 4 152 [3 556, 4 424], a range that holds `steady`'s, with its median +12 %. Every miner stuffing gains +8.2 % at seed 1, and 478 312 [439 832, 488 518] SKL across the seeds, against 442 071 |
+| **STD-7.** m* in 1.300–1.400; the cell set unchanged | **Held.** m* is 1.352 and the eight cells are the same |
+| **STD-8.** The grid's steady rows unmoved; its variable rows within §5.34.1's ranges; at N = 90 the new columns near the probe: cap 122–131, about 8 % overflowed, about 10 % backlog, median 35 offered against about 39 carried | **The steady rows and the columns held. The variable rows missed: three kinds of figure shifted by a few percent, one way each.** The steady rows: 112 honest rows (without their new room columns) and 1 400 campaign rows, unchanged. At N = 90: cap 122–131, 8.4 % overflowed, 10.6–10.8 % backlog, 35 offered against 39 carried, at every seed. The variable rows hold 887 figures, each a median with [its range]. 432 of them have an old range with width, and of those 185 (43 %) have the new median inside it. An unchanged distribution read at three seeds against three would put about 60 % inside: the new median falls outside on one side only when both of the six draws' smallest (or largest) are new, with probability 1/5 a side. The misses lean one way per kind. The resting ratio is below the old range in 84 of 96 and above in none, a median move of −1.65 %. A day's fill is below in 55 of 95 and above in none (median −0.04 %, a tenth below −5.6 %). The fee is above in 22 of 138 and below in none, by up to +2 %. Only the settle times scatter both ways (41 above, 45 below). The shift runs toward `steady`. The honest SMA's resting ratio sat above 1.000 at every seed on the old draw (1.004–1.017) and now straddles it (0.970–1.013). At N = 14 the variable day's fill now equals `steady`'s (4 181.3), where §5.34.1's JG-10 found it 4 % higher and did not trace why. The draw differs from the old one in one respect: each rung is now drawn on its own over the block's interval, where the old draw split one total by arithmetic, so a block's rung mix now varies. The total's distribution is unchanged. Not traced further |
+| **STD-9.** The per-PR narrations job from 885 s to under 1 100 s; the grid's regeneration near 9 h | **The grid held. The narrations job's single run reads over the prediction and inside its own earlier spread.** The grid took 29 560 s (8.2 h). The narrations job's pins took 1 213 s in CI at `e182b53b30`. The same job took 851 s at #1421's head and 1 465 s at #1416's merged head, so one run does not resolve 1 100 s. Its budget, 55 minutes, is not approached. On the fleet host, the standard lane (the five pins, the grid's slice among them) took 1 856 s under a load near 12 on eight threads. The three steady pins took 1 956 s on the same host earlier in the run, under a lighter load. The pins differ, so this is a pair only roughly. The growth test, the one that found the cost: 93.0 s in CI (debug) against 76 s on `dev`; 87 s against 59 s at `dev`'s parent on one host (release), one after the other; about 3 h on chunked Knuth. The unit suite took 262 s, against 11 159 s on chunked Knuth |
+
+**The restated predictability row** (`ECONOMY_UMBRELLA_PLAN.md` §4,
+row 3, Rick 2026-11-17).
+- **The 50 % year.** EUP-4's EI-2 at full scope covers both arms, both
+  fees and every scenario: 32 rows. Every 50 % year is y8.51 to y13.83,
+  inside the envelope the rails allow (about y8.5 with `M_r` held at
+  1.3, and y13.8 held at 0.8). Each is the same as on `steady`.
+- **The edges.** The inherited arms sit on the 0.8 rail's trajectory,
+  y13.83. The re-derived high-history scenario reads y8.51, at the
+  envelope's other edge.
+- **Total supply.** Every fraction is read against the one asymptote, so
+  this run cannot move total supply; it reads no other measure of it.
+
+**Not predicted: where blocks may grow, standard traffic grows them, and
+the fee falls.** STD-3 and STD-4 were written for the years before the
+crossing, and these are the years after it, plus the inherited cells
+whose multiplier admits growth from year 1. It is the second sighting:
+§5.34.1's JG-10 found the year-1 fee at 0.58–0.62× `steady`'s where
+blocks grow (`w_ref′`, N ≤ 35), and did not trace it either.
+Each figure below is seed 1's; the spread across seeds 1, 2 and 3 is
+given where it differs.
+- **The long-term median.** ESR-10's inherited baseline reads 953 K at
+  y20 and 1 041 K at y30 at every seed, against `steady`'s 733 K and
+  765 K. The growth gate's reads 836–1 056 KB over y19–y25, against
+  733–765. EI-7's median block at y30 and y60 is 994 K against 734 K, and
+  its Economy rung is served 68.8 % against 52.2 %, the same at every
+  seed.
+- **The fee per block.** In ESR-10's inherited baseline it is 5.862 SKL at
+  y20, against 8.854. EI-1's fee share from y30 is 0.8 % against 1.5 %.
+  A1's flat-25 onset comes one or two years earlier, with a smaller fee
+  leg. EI-6's inherited 15/80/5 mix reads y38 at 84.5 % against y40 at
+  90.2 %, and its 15/85/0 mix y30 at 16.9 % against y31 at 28.6 %.
+  ESR-10's x1.000 baseline reads y30 at 17.1 [17.1, 17.2] % fee against
+  y31 at 30.5 %.
+- **The inherited cells with a raised multiplier.** Their year-1 Standard
+  fee falls, measured in multiples of the ratified ceiling:
+  - x1.25: 2.15×, against 2.32× (−7.5 %);
+  - m*: 0.73×, against 0.83× (0.3622 SKL against 0.4109, −12 %); across
+    the seeds 0.71 [0.71, 0.73]×;
+  - x1.5: 0.60×, against 0.88×; across the seeds 0.60 [0.59, 0.60]×;
+  - x2: 0.80×, against 1.18×, so it crosses under the ceiling; across the
+    seeds 0.79 [0.79, 0.80]×, under it at every seed;
+  - x3: 1.17×, against 1.77×.
+
+  x1.5, x2 and x3 each fall by 32–34 %. x1.000 and the two mixes do not
+  move, and every re-derived cell is within 0.2 %.
+- **EI-5's relay floor.** At y20 it is 1 813 atomic/B against 2 958, and
+  at y45 376 against 727.
+
+This fits a pool that carries one block's overflow into the next, so that
+blocks run above their median and the long-term median climbs. It was not
+traced further.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
