@@ -48,18 +48,15 @@ If you are starting fresh, prefer:
 
 The dependency matrix is maintained in `README.md` and includes:
 
-- compiler/tooling: GCC, CMake, pkg-config
-- core libs: Boost, OpenSSL, libsodium
-- optional libs/tools: readline, gtest, ccache, doxygen/graphviz
+- the Rust toolchain `rust/rust-toolchain.toml` pins, with `cargo`;
+- CMake, and a C compiler for the crates whose build scripts compile C
+  (no C or C++ library is linked from the system: no Boost, OpenSSL,
+  libsodium or readline).
 
 ### Rust integration behavior
 
-Rust modules are integrated via `cmake/BuildRust.cmake`:
-
-- if `cargo` is found, Rust workspace under `rust/` is built and linked
-- if `cargo` is not found, build continues with Rust modules disabled
-
-Install Rust toolchain when you want full Rust-enabled builds:
+Every binary is Rust. `cmake/BuildRust.cmake` runs `cargo` for the
+workspace under `rust/`, so a build needs the Rust toolchain:
 
 ```bash
 curl https://sh.rustup.rs -sSf | sh
@@ -144,9 +141,7 @@ Open MSYS2 MinGW shell and install toolchain + dependencies (64-bit example):
 
 ```bash
 pacman -Syu
-pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake \
-  mingw-w64-x86_64-boost mingw-w64-x86_64-openssl \
-  mingw-w64-x86_64-libsodium
+pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake
 ```
 
 Then:
