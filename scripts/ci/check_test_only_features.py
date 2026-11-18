@@ -173,6 +173,13 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
+        "shekyl-win-sec",
+        "test-utils",
+    ): "the probe helpers (SID readers, the label reader) and the scratch "
+    "registry key (registry::ScratchKey) the service record's tests publish "
+    "to (Rick, 2026-11-18). Enabled from shekyl-daemon-rpc's Windows dev "
+    "edge and the WP-W1 probe lane's command line, never a normal edge",
+    (
         "shekyl-rpc-transport",
         "test-override",
     ): "LocalTarget::test_override: a test node's own rendezvous directory "
@@ -574,6 +581,7 @@ PERMANENT: dict[tuple[str, str], str] = {
 # the trigger is a different, nearly free thing, and it is what landed.)
 GOVERNED_OWNERS: frozenset[str] = frozenset(
     {
+        "shekyl-win-sec",
         "shekyl-rpc-transport",
         "shekyl-wire",
         "shekyl-archival-retention",
