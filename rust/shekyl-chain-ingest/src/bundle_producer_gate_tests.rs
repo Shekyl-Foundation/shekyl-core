@@ -45,15 +45,13 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_archival_fetch_sched::{FetchScheduler, ReadFailure, ShardFacts, ShardStanding};
+use shekyl_archival_fetch_sched::{FetchScheduler, ReadFailure};
 use shekyl_bundle_producer::WitnessRing;
 use shekyl_chain_rules::{CappedEpoch, Claimable, EpochFloor, Settling};
 use shekyl_p_host::DaemonTipCache;
 use shekyl_p_loopback::{endpoint_and_client, PFetchClient, PServeEndpoint, Timeouts};
 use shekyl_types::archival::{SettlementEpochBlocks, SettlementOutcome};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
-use shekyl_wire::shard_frame::{encode_frame, FrameTx};
-use shekyl_wire::Ct;
 use tokio::sync::watch;
 
 use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
@@ -108,39 +106,6 @@ fn timeouts() -> Timeouts {
 
 fn tip_of(chain: &[Mined]) -> BlockHeight {
     chain.last().expect("a mined chain").height
-}
-
-/// Shard `shard`'s body as P serves it: the closed shard's transactions,
-/// in chain order, as one `shard_frame` over their two archival segments.
-fn shard_body(scenario: &Scenario<FreeHash>, chain: &[Mined], shard: ShardId) -> Arc<[u8]> {
-    let facts = StoreShardFacts::new(scenario.store());
-    let ShardStanding::Closed(closed) = facts.shard(shard).expect("the facts read") else {
-        panic!("shard {shard:?} is closed");
-    };
-    let mut segments = Vec::new();
-    for row in closed.expected.txs() {
-        let tx = chain
-            .iter()
-            .flat_map(|mined| mined.template.transactions.iter())
-            .find(|tx| tx.txid_parts().hash == row.hash)
-            .expect("every transaction of the shard was mined here");
-        let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
-            panic!("a fill transaction is an FCMP++ spend");
-        };
-        segments.push((
-            u64::try_from(pqc_auths.len()).expect("fits"),
-            tx.write_segments().expect("segments"),
-        ));
-    }
-    let frame: Vec<FrameTx<'_>> = segments
-        .iter()
-        .map(|(count, segments)| FrameTx {
-            pqc_auth_count: *count,
-            pqc_auths: &segments.pqc_auths,
-            prunable: &segments.prunable,
-        })
-        .collect();
-    Arc::from(encode_frame(&frame))
 }
 
 /// P, serving `body` at `shard` behind the loopback shim, with its own
@@ -385,7 +350,7 @@ async fn a_produced_bundle_is_admitted_and_connects() {
     scenario.draw_from(Arc::clone(&ring));
     let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
     p_tip.stamp_synced(tip_of(&chain));
-    let body = shard_body(&scenario, &chain, shard);
+    let body = crate::scenario_shard::shard_body(&scenario, &chain, shard);
     let (mut serving, client) = serve(shard, Arc::clone(&body), &p_tip, true).await;
     let mut producing = start(&scenario, &ring, client).await;
 
@@ -600,7 +565,7 @@ async fn a_produced_support_bundle_is_admitted_and_connects() {
     scenario.draw_from(Arc::clone(&ring));
     let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
     p_tip.stamp_synced(tip_of(&chain));
-    let body = shard_body(&scenario, &chain, shard);
+    let body = crate::scenario_shard::shard_body(&scenario, &chain, shard);
     let (_serving, client) = serve(shard, body, &p_tip, true).await;
     let mut producing = start(&scenario, &ring, client).await;
 

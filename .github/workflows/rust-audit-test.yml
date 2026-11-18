@@ -330,6 +330,17 @@ jobs:
         # workspace in one pass instead of stopping at the first crate's
         # first error, so reviewers see the full triage in one log.
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+      - name: cargo build --examples (workspace)
+        working-directory: rust
+        # CF-R8 (CHAIN_FORGE.md §11.1): the chain forge's runnable is a
+        # cargo example, and the release build never asks for examples.
+        # `clippy --all-targets` above checks an example but does not link
+        # it, so an example that stops linking would merge green; built
+        # here, it is red on the pull request that broke it.
+        # `shekyl-randomx-differential` is excluded as in the test build
+        # below: its examples and tests link the C reference, which this
+        # job does not build.
+        run: cargo build --locked --workspace --examples --exclude shekyl-randomx-differential
       - name: "cargo clippy: gf7-hooks harness lane (shekyl-engine-core)"
         working-directory: rust
         # The GF-7 sealing seam + harness (`pscan/start.rs` SealingRunOverrides,
@@ -619,6 +630,7 @@ jobs:
         # lists release (the trybuild lane debug, its header says why) and
         # runs the tests. Each script keeps its own rule.
         run: |
+          bash scripts/ci/ignored_set_chain_forge.sh --check
           bash scripts/ci/ignored_set_chain_ingest.sh --check
           bash scripts/ci/ignored_set_chain_store.sh --check
           bash scripts/ci/ignored_set_economics_sim.sh --check
@@ -666,7 +678,7 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-harness-wallet -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-wire --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-archival-retention -p shekyl-bundle-producer -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-harness-wallet -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-wire --lib -- -D warnings
       - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
         working-directory: rust
         # The economics sim depends on shekyl-mempool with

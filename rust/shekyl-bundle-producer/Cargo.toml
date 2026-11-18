@@ -22,6 +22,12 @@ default = []
 # fetch client (SF-D4; `shekyl-archival-fetch-sched` is daemon-only).
 # `shekyl-chain-ingest`'s `producer` feature turns this on for the node.
 fetch = ["dep:shekyl-archival-fetch-sched"]
+# The ring's witnesses and their signatures from a caller's draws in
+# place of the OS (`WitnessRing::drawing`, `RingDraws`): the chain forge's
+# producer plan (CHAIN_FORGE.md §4, the producer audit). TEST_ONLY
+# (check_test_only_features.py): its one enabler forwards it from
+# `shekyl-chain-ingest`'s TEST_ONLY `forge`.
+seeded-rng = []
 
 [dependencies]
 # The bundle's bytes and its assembler, the nonces, `draw_commit`, `K`.

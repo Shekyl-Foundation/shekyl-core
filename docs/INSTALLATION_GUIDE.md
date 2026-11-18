@@ -25,7 +25,14 @@ The project README documents build/run guidance for:
 - Linux and macOS
 - Windows (MSYS2/MinGW)
 - Raspberry Pi
-- FreeBSD, OpenBSD, NetBSD, Solaris
+- FreeBSD
+
+A platform is supported only if CI or gitian builds it: Linux, macOS, Windows
+and FreeBSD (Rick, 2026-11-17). OpenBSD, NetBSD, DragonFly BSD, illumos and
+Solaris are not supported. The daemon names no arm for them, so a build for any
+of them stops at the account walk's `compile_error!` in `shekyl-daemon-config`.
+The daemon has no iOS or Android arm either: no CI or gitian job builds a node
+for them.
 
 ### Practical baseline
 

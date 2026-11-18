@@ -108,6 +108,8 @@ HEADED_FOR_PRODUCTION: dict[str, str] = {
 NOT_SHIPPED: dict[str, str] = {
     "randomx-v2-sys": "bindings to the C RandomX reference for the differential and parity "
     "harnesses; never linked into shekyld (RANDOMX_V2_RUST.md §2)",
+    "shekyl-chain-forge": "the chain forge: test chains' plans, manifests and blocks.txt, its "
+    "executor a test-kind target over the scenario driver (CHAIN_FORGE.md §11.1)",
     "shekyl-economics-sim": "the economics simulation: design and verification runs over the "
     "production economics crates",
     "shekyl-harness-spender": "test support: the wallet-side spender (CHAIN_FORGE.md §11.1)",
