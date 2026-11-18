@@ -554,7 +554,7 @@ impl Forge {
             || {
                 let index = next;
                 next += 1;
-                Some(seeds.fill_spend(index))
+                seeds.fill_spend(index)
             },
         )
         .await;

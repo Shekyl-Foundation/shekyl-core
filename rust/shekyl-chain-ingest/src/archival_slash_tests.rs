@@ -15,8 +15,9 @@
 //! bundles file those as misses. The phases then run on that record, in
 //! order, without re-mining the chain:
 //!
-//! - The chain fills shards 0 and 1 with real spends and lets them close
-//!   (`scenario_shard`, §5 row 6): a compact join names only shards that
+//! - The chain is the forged shard-fill chain through shard 1's close
+//!   (`forged_fill`, `CHAIN_FORGE.md` `CF-4a`): real spends, proved once,
+//!   every rule judging them as they connect. A compact join names only shards that
 //!   are closed, final and priced at its parent (CEN-J15). One block before
 //!   both operands lift, the join is refused on J15; at the first
 //!   admissible height it connects.
@@ -42,22 +43,21 @@ use shekyl_archival_retention::{
 use shekyl_bundle_producer::DrawTarget;
 use shekyl_chain_rules::{CenRow, RecordWriteKind, SettlementSchedule};
 use shekyl_types::archival::{BadInterval, BondRecord, HeldShard, Holdings, SettlementOutcome};
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::admitted_draws::{serve_to, DriverWitness};
-use crate::archival_driver::{
-    at_post, first_spending_height, record_of, refused_at, ENDPOINT, FEE,
-};
+use crate::archival_driver::{at_post, record_of, refused_at, ENDPOINT, FEE};
 use crate::chain_drive::{failure_window_epochs, Driven};
+use crate::forged_fill::{self, FIRST_POST_COINBASE};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, first_pricing_epoch, settled_rules,
-    settled_schedule, Filled, FILL_FROM_COINBASE,
+    first_admissible_compact_join, first_pricing_epoch, settled_epoch, settled_schedule, Filled,
 };
 use crate::schedule::ChainRules;
 use shekyl_harness_spender::Spender;
+use shekyl_network::Network;
 
 /// The join this chain is about: two shards, one of them never served.
 struct Joined {
@@ -96,21 +96,14 @@ impl SlashChain {
         self.drive.height()
     }
 
-    /// Mine to the first spend, then fill shards 0 and 1 and let them close.
-    /// The fill stays straight: round-tripping, when the caller asks for it,
-    /// starts after this returns.
+    /// The forged shard-fill chain through shard 1's close. It loads
+    /// straight: round-tripping, when the caller asks for it, starts after
+    /// this returns.
     async fn open(name: &str) -> Self {
-        let rules = settled_rules();
         let schedule = settled_schedule();
-        let mut scenario = Scenario::open_under(name, FreeHash, rules);
-        let chain = scenario
-            .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
-            .await;
-        let mut drive = Driven::begin(scenario, chain);
-        let filled = {
-            let (scenario, chain) = drive.parts_mut();
-            close_shards(scenario, chain, FILL_FROM_COINBASE, 2).await
-        };
+        let (mut scenario, mut chain, rules) = forged_fill::open(name, settled_epoch()).await;
+        let filled = forged_fill::load(&mut scenario, &mut chain, 2).await;
+        let drive = Driven::begin(scenario, chain);
         assert_eq!(
             filled
                 .closed
@@ -175,7 +168,7 @@ impl SlashChain {
     /// The join onto shards 0 and 1 — one block early, refused on J15; at
     /// the first admissible height, connected (§5 row 6).
     async fn join_two_shards(&mut self) -> Joined {
-        let persona = Persona::at(11);
+        let persona = Persona::on(Network::Regtest, 11);
         let served = 1u64;
         let unserved = 0u64;
         let admissible = self
@@ -191,7 +184,7 @@ impl SlashChain {
         let riding = |chain: &[Mined], scenario: &Scenario<FreeHash>, height: BlockHeight| {
             Spender::on(scenario.network_id(), chain).spend_coinbase_posting(
                 scenario.wallet(),
-                BlockHeight::ZERO,
+                BlockHeight::from_raw(FIRST_POST_COINBASE),
                 height,
                 FEE,
                 Some(&persona.join(shard_set(vec![unserved, served]), ENDPOINT)),
@@ -399,7 +392,7 @@ impl SlashChain {
             let spender = Spender::on(self.drive.scenario.network_id(), &self.drive.chain);
             spender.spend_coinbase_posting(
                 self.drive.scenario.wallet(),
-                BlockHeight::from_raw(1),
+                BlockHeight::from_raw(FIRST_POST_COINBASE + 1),
                 reinstate_height,
                 FEE,
                 Some(&join.persona.reinstate(&slashed.record)),
@@ -452,8 +445,8 @@ impl SlashChain {
         }
     }
 
-    /// J18's two belts, then J16's cooldown refusal. Every post rides
-    /// coinbase 2 at the same height; a refused block leaves the chain
+    /// J18's two belts, then J16's cooldown refusal. Every post rides the
+    /// third post coinbase at the same height; a refused block leaves the chain
     /// where it was.
     async fn assert_j18_belts_and_the_early_release(
         &mut self,
@@ -468,7 +461,7 @@ impl SlashChain {
             let riding = |bond| {
                 spender.spend_coinbase_posting(
                     self.drive.scenario.wallet(),
-                    BlockHeight::from_raw(2),
+                    BlockHeight::from_raw(FIRST_POST_COINBASE + 2),
                     height,
                     FEE,
                     Some(&bond),
@@ -562,7 +555,7 @@ impl SlashChain {
         let at_deadline = Spender::on(self.drive.scenario.network_id(), &self.drive.chain)
             .spend_coinbase_posting(
                 self.drive.scenario.wallet(),
-                BlockHeight::from_raw(2),
+                BlockHeight::from_raw(FIRST_POST_COINBASE + 2),
                 BlockHeight::from_raw(boundary),
                 FEE,
                 Some(&full_release),
@@ -585,7 +578,7 @@ impl SlashChain {
         let past_boundary = Spender::on(self.drive.scenario.network_id(), &self.drive.chain)
             .spend_coinbase_posting(
                 self.drive.scenario.wallet(),
-                BlockHeight::from_raw(2),
+                BlockHeight::from_raw(FIRST_POST_COINBASE + 2),
                 BlockHeight::from_raw(boundary + 1),
                 FEE,
                 Some(&full_release),

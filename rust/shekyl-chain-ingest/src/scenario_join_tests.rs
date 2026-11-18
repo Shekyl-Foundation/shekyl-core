@@ -21,23 +21,20 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::BondPostKind;
 use shekyl_wire::Input;
 
-use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
-use crate::scenario::{FreeHash, Scenario};
+use crate::archival_driver::{refused_at, ENDPOINT, FEE};
+use crate::forged_fill::{self, FIRST_POST_COINBASE};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
-    mine_to,
+    first_admissible_compact_join, inside_one_epoch, levered_epoch, levered_schedule, mine_to,
 };
 use shekyl_harness_spender::Spender;
+use shekyl_network::Network;
 
 /// The settlement epoch open at `height` under the levered schedule the
 /// join mines.
 fn levered_epoch_at(height: BlockHeight) -> SettlementEpoch {
     levered_schedule().epoch_at(height)
 }
-
-/// The first coinbase the join test's fill spends; the posts ride 0–3.
-const FILL_FROM_COINBASE: u64 = 10;
 
 /// A JoinMarket through `build_join_market_vin`, signed by the persona,
 /// riding a real spend: the verdict's transition is that persona's
@@ -57,10 +54,10 @@ const FILL_FROM_COINBASE: u64 = 10;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
-    let rules = levered_rules();
-    let mut scenario = Scenario::open_under("scenario-archival-join", FreeHash, rules);
-    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
-    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 2).await;
+    // Shards 0 and 1 closed by the forged shard-fill chain (`forged_fill`).
+    let (mut scenario, mut mined, rules) =
+        forged_fill::open("scenario-archival-join", levered_epoch()).await;
+    let filled = forged_fill::load(&mut scenario, &mut mined, 2).await;
     let shards: Vec<u64> = filled.closed.iter().map(|c| c.shard.to_raw()).collect();
     assert_eq!(shards, vec![0, 1]);
     // The join connects at the first height J15 admits both shards; the
@@ -79,21 +76,21 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     mine_to(&mut scenario, &mut mined, connecting).await;
     let mut spender = Spender::on(scenario.network_id(), &mined);
 
-    let compact = Persona::at(1);
-    let whole = Persona::at(2);
+    let compact = Persona::on(Network::Regtest, 1);
+    let whole = Persona::on(Network::Regtest, 2);
     let join_compact = compact.join(shard_set(shards.clone()), ENDPOINT);
     let join_whole = whole.join(complete_tree(), ENDPOINT);
     let listed = vec![
         spender.spend_coinbase_posting(
             scenario.wallet(),
-            BlockHeight::ZERO,
+            BlockHeight::from_raw(FIRST_POST_COINBASE),
             connecting,
             FEE,
             Some(&join_compact),
         ),
         spender.spend_coinbase_posting(
             scenario.wallet(),
-            BlockHeight::from_raw(1),
+            BlockHeight::from_raw(FIRST_POST_COINBASE + 1),
             connecting,
             FEE,
             Some(&join_whole),
@@ -225,7 +222,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                BlockHeight::from_raw(2),
+                BlockHeight::from_raw(FIRST_POST_COINBASE + 2),
                 next,
                 FEE,
                 Some(&wrong_debit),
@@ -241,7 +238,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let block = scenario
         .mine_listing(vec![spender.spend_coinbase_posting(
             scenario.wallet(),
-            BlockHeight::from_raw(2),
+            BlockHeight::from_raw(FIRST_POST_COINBASE + 2),
             next,
             FEE,
             Some(&release_whole),
@@ -318,7 +315,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                BlockHeight::from_raw(3),
+                BlockHeight::from_raw(FIRST_POST_COINBASE + 3),
                 after,
                 FEE,
                 Some(&rejoin),
@@ -334,7 +331,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                BlockHeight::from_raw(3),
+                BlockHeight::from_raw(FIRST_POST_COINBASE + 3),
                 after,
                 FEE,
                 Some(&reinstate),
@@ -357,7 +354,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                BlockHeight::from_raw(3),
+                BlockHeight::from_raw(FIRST_POST_COINBASE + 3),
                 after,
                 FEE,
                 Some(&under_bonded),

@@ -51,18 +51,20 @@ use shekyl_chain_rules::{CappedEpoch, Claimable, EpochFloor, Settling};
 use shekyl_p_host::DaemonTipCache;
 use shekyl_p_loopback::{endpoint_and_client, PFetchClient, PServeEndpoint, Timeouts};
 use shekyl_types::archival::{SettlementEpochBlocks, SettlementOutcome};
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use tokio::sync::watch;
 
-use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
+use crate::archival_driver::{ENDPOINT, FEE};
 use crate::bundle_producer::{run, ProducerParts, ProducerProgress, ProducerSeat};
 use crate::connector::{TipChanged, WatchTip};
+use crate::forged_fill::{self, FIRST_POST_COINBASE};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
-use crate::scenario_shard::{close_shards, first_admissible_compact_join, mine_to};
+use crate::scenario_shard::{first_admissible_compact_join, mine_to};
 use crate::schedule::ChainRules;
 use crate::shard_facts::{StoreHolderSource, StoreShardFacts};
 use shekyl_harness_spender::Spender;
+use shekyl_network::Network;
 
 /// An epoch long enough for a response window that holds a read and a
 /// filing: `W₂ = SEB / 20 = 60`, so reads fall in `(h, h + 30]`.
@@ -73,20 +75,21 @@ const REORG_CAP_BLOCKS: u64 = 10;
 const W2: u64 = EPOCH_BLOCKS / 20;
 /// P's slot. No other scenario persona uses it on this chain.
 const SLOT: u32 = 12;
-/// The first coinbase the fill spends. Coinbase 0 funds the join.
-const FILL_FROM_COINBASE: u64 = 10;
 /// How long one block's reads and filing may take on a loaded host.
 const SETTLE: Duration = Duration::from_secs(120);
 
-fn rules() -> ChainRules {
-    ChainRules::harness_regtest(
-        Some(std::num::NonZeroU128::MIN),
-        CappedEpoch::new(
-            SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
-            BlockCount::from_raw(REORG_CAP_BLOCKS),
-        )
-        .expect("the cap sits inside the epoch and the window under the anchor depth"),
+fn epoch() -> CappedEpoch {
+    CappedEpoch::new(
+        SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
+        BlockCount::from_raw(REORG_CAP_BLOCKS),
     )
+    .expect("the cap sits inside the epoch and the window under the anchor depth")
+}
+
+/// Regtest's rules under [`epoch`]: the forged shard-fill chain's identity.
+fn rules() -> ChainRules {
+    ChainRules::new(Network::Regtest, Some(std::num::NonZeroU128::MIN), epoch())
+        .unwrap_or_else(|refused| panic!("regtest's row permits every lever: {refused}"))
 }
 
 /// The spread each read's start delay is drawn below here. The node's is
@@ -126,7 +129,7 @@ async fn serve(
 ) -> (Serving, PFetchClient) {
     if receipts {
         let (holder, key) = shekyl_engine_core::__test_helpers::resident_receipt_key(
-            shekyl_harness_spender::Persona::at(SLOT).into_keys(),
+            shekyl_harness_spender::Persona::on(Network::Regtest, SLOT).into_keys(),
             SLOT,
         );
         let signer = shekyl_p_host::signer_over_tip(Arc::clone(tip), key);
@@ -316,23 +319,21 @@ async fn step(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs and mines three long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_bundle_is_admitted"]
 async fn a_produced_bundle_is_admitted_and_connects() {
-    let rules = rules();
+    let (mut scenario, mut chain, rules) = forged_fill::open("bundle-producer-gate", epoch()).await;
     let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
-    let mut scenario = Scenario::open_under("bundle-producer-gate", FreeHash, rules);
-    let mut chain = scenario
-        .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
-        .await;
+    let network = scenario.network_id();
 
-    // 1. Shard 0 closes; P joins it.
-    let filled = close_shards(&mut scenario, &mut chain, FILL_FROM_COINBASE, 1).await;
+    // 1. Shard 0 closes (the forged shard-fill chain, `forged_fill`); P
+    // joins it.
+    let filled = forged_fill::load(&mut scenario, &mut chain, 1).await;
     let close = filled.closed[0];
     let shard = close.shard;
     let admissible = first_admissible_compact_join(&rules, close);
     mine_to(&mut scenario, &mut chain, admissible).await;
-    let persona = Persona::at(SLOT);
+    let persona = Persona::on(Network::Regtest, SLOT);
     let joining = Spender::on(scenario.network_id(), &chain).spend_coinbase_posting(
         scenario.wallet(),
-        BlockHeight::ZERO,
+        BlockHeight::from_raw(FIRST_POST_COINBASE),
         admissible,
         FEE,
         Some(&persona.join(shard_set(vec![shard.to_raw()]), ENDPOINT)),
@@ -346,7 +347,7 @@ async fn a_produced_bundle_is_admitted_and_connects() {
     let epoch = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
 
     // 2. The ring, P serving, the producer.
-    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
+    let ring = Arc::new(WitnessRing::new(network));
     scenario.draw_from(Arc::clone(&ring));
     let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
     p_tip.stamp_synced(tip_of(&chain));
@@ -377,7 +378,7 @@ async fn a_produced_bundle_is_admitted_and_connects() {
                     "the queue survives a restart, reconciled"
                 );
                 // A restart's ring is empty: a fresh one, as a new process.
-                ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
+                ring = Arc::new(WitnessRing::new(network));
                 scenario.draw_from(Arc::clone(&ring));
                 let (restarted_serving, client) =
                     serve(shard, Arc::clone(&body), &p_tip, true).await;
@@ -528,15 +529,14 @@ async fn a_produced_bundle_is_admitted_and_connects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs and mines two long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_support_bundle_is_admitted"]
 async fn a_produced_support_bundle_is_admitted_and_connects() {
-    let rules = rules();
+    let (mut scenario, mut chain, rules) =
+        forged_fill::open("bundle-producer-support", epoch()).await;
     let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
-    let mut scenario = Scenario::open_under("bundle-producer-support", FreeHash, rules);
-    let mut chain = scenario
-        .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
-        .await;
+    let network = scenario.network_id();
 
-    // 1. Shard 0 closes and is final; T joins as a complete tree.
-    let filled = close_shards(&mut scenario, &mut chain, FILL_FROM_COINBASE, 1).await;
+    // 1. Shard 0 closes and is final (the forged shard-fill chain,
+    // `forged_fill`); T joins as a complete tree.
+    let filled = forged_fill::load(&mut scenario, &mut chain, 1).await;
     let close = filled.closed[0];
     let shard = close.shard;
     mine_to(
@@ -545,10 +545,10 @@ async fn a_produced_support_bundle_is_admitted_and_connects() {
         first_admissible_compact_join(&rules, close),
     )
     .await;
-    let tree = Persona::at(SLOT);
+    let tree = Persona::on(Network::Regtest, SLOT);
     let joining = Spender::on(scenario.network_id(), &chain).spend_coinbase_posting(
         scenario.wallet(),
-        BlockHeight::ZERO,
+        BlockHeight::from_raw(FIRST_POST_COINBASE),
         tip_of(&chain).saturating_add(BlockCount::ONE),
         FEE,
         Some(&tree.join(complete_tree(), ENDPOINT)),
@@ -561,7 +561,7 @@ async fn a_produced_support_bundle_is_admitted_and_connects() {
     chain.push(join);
 
     // 2. The ring, T serving its prefix, the producer.
-    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
+    let ring = Arc::new(WitnessRing::new(network));
     scenario.draw_from(Arc::clone(&ring));
     let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
     p_tip.stamp_synced(tip_of(&chain));

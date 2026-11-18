@@ -80,19 +80,20 @@ use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
 
 use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
-use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
+use crate::archival_driver::{refused_at, ENDPOINT, FEE};
 use crate::chain_drive::{catch_up, spender_owning_before, Driven};
 use crate::emission_assembly::{
     assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimTerms,
 };
-use crate::scenario::{FreeHash, Scenario};
+use crate::forged_fill::{self, FIRST_POST_COINBASE};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, inside_one_epoch_of, load_shard_fill, mine_to,
-    settled_epoch_blocks, settled_rules, settled_schedule, FILL_FROM_COINBASE,
+    first_admissible_compact_join, inside_one_epoch_of, mine_to, settled_epoch,
+    settled_epoch_blocks, settled_schedule,
 };
 use crate::support_trees::{drive_support_trees, price_trees_claim};
 use shekyl_harness_spender::{Owner, Recipient, Spender};
+use shekyl_network::Network;
 use std::sync::Arc;
 
 use shekyl_chain_rules::AdmissionPolicy;
@@ -123,10 +124,13 @@ const OLDER_TX_KEY: [u8; 32] = [0x5e; 32];
 #[tokio::test]
 #[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
-    let rules = settled_rules();
-    let mut scenario = Scenario::open_under("scenario-emission-claim", FreeHash, rules);
-    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
-    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    // The shard is closed by the forged shard-fill chain (`forged_fill`):
+    // its spends were proved once, and every rule judges them as they
+    // connect.
+    let (mut scenario, mut mined, rules) =
+        forged_fill::open("scenario-emission-claim", settled_epoch()).await;
+    let network = scenario.network_id();
+    let filled = forged_fill::load(&mut scenario, &mut mined, 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
@@ -143,15 +147,15 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let mut spender = Spender::on(scenario.network_id(), &mined);
     let mut seen = mined.len();
 
-    // The funding spend: coinbase 0 to the persona in two outputs — the
-    // payment (index 0) is the claim's backing, the change (index 1) its
-    // fee — with the persona's join riding it.
-    let persona = Persona::at(1);
+    // The funding spend: the first post coinbase to the persona in two
+    // outputs — the payment (index 0) is the claim's backing, the change
+    // (index 1) its fee — with the persona's join riding it.
+    let persona = Persona::on(Network::Regtest, 1);
     let recipient = Recipient::persona(persona.keys());
     let join = persona.join(shard_set(vec![0]), ENDPOINT);
     let funding = spender.spend_coinbase_to(
         scenario.wallet(),
-        BlockHeight::ZERO,
+        BlockHeight::from_raw(FIRST_POST_COINBASE),
         join_height,
         FEE,
         Some(&join),
@@ -174,14 +178,15 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let join_epoch = settled_schedule().epoch_at(join_height);
     // The first epoch a persona joining in `join_epoch` is drawn in.
     let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
-    // A second funding spend — coinbase 1 to the same persona, no post —
-    // for the twin claim G9 refuses below. Its own block: the spender's output keys are drawn from the connecting
+    // A second funding spend — the next post coinbase to the same
+    // persona, no post — for the twin claim G9 refuses below. Its own
+    // block: the spender's output keys are drawn from the connecting
     // height, so two spends to one recipient at one height would pay the
     // same keys, and the twin's fee would be the claim's.
     let twin_height = join_height + BlockCount::ONE;
     let twin_funding = spender.spend_coinbase_to(
         scenario.wallet(),
-        BlockHeight::from_raw(1),
+        BlockHeight::from_raw(FIRST_POST_COINBASE + 1),
         twin_height,
         FEE,
         None,
@@ -539,7 +544,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         &claim.vin,
         &claim.reward_commits,
         &claim.tx_signable,
-        &shekyl_network::HARNESS_NETWORK_ID,
+        &network,
     )
     .expect("both auth legs verify over the Q1 messages");
     let fee_verified = proof::verify(
@@ -623,11 +628,13 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
 async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed() {
     // The settled schedule: admitted draws give a pair its counted draws
     // only on it (`settled_epoch_blocks`).
-    let rules = settled_rules();
-    let mut scenario = Scenario::open_under("scenario-emission-support-trees", FreeHash, rules);
-    // The shard is closed by the captured chain (`load_shard_fill`): its
-    // spends were proved once, and every rule judges them as they connect.
-    let (mut mined, filled) = load_shard_fill(&mut scenario, 1).await;
+    // The shard is closed by the forged shard-fill chain (`forged_fill`):
+    // its spends were proved once, and every rule judges them as they
+    // connect.
+    let (mut scenario, mut mined, rules) =
+        forged_fill::open("scenario-emission-support-trees", settled_epoch()).await;
+    let network = scenario.network_id();
+    let filled = forged_fill::load(&mut scenario, &mut mined, 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
@@ -691,7 +698,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
                         UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
-                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &network,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -703,7 +710,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
                 std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
-                shekyl_network::HARNESS_NETWORK_ID,
+                network,
             ));
             let reasons: Vec<String> = submitted[..2]
                 .iter()
@@ -727,7 +734,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
                         "the expired epoch is its own state, and unread"
                     );
                     DaemonTxVerifier
-                        .verify(&parsed, &facts, &shekyl_network::HARNESS_NETWORK_ID)
+                        .verify(&parsed, &facts, &network)
                         .expect_err("an expired claim is refused")
                         .reason()
                         .to_owned()

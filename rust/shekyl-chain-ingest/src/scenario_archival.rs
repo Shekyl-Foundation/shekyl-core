@@ -36,4 +36,11 @@ impl Persona {
     pub fn at(p_slot: u32) -> Self {
         Self(shekyl_harness_spender::Persona::at(p_slot))
     }
+
+    /// Derive the persona at `p_slot` from the harness's master seed under
+    /// `network`'s name: a chain that carries a network's identity, such as
+    /// the forged shard-fill chain (regtest's), derives its personas so.
+    pub fn on(network: shekyl_network::Network, p_slot: u32) -> Self {
+        Self(shekyl_harness_spender::Persona::on(network, p_slot))
+    }
 }

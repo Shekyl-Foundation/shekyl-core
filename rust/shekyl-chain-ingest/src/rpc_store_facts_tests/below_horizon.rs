@@ -41,12 +41,9 @@ use shekyl_types::{BlockHeight, ShardId, TxHash};
 use shekyl_wire::BoundTx;
 
 use super::reads::{serve_the_block_fetch, serve_the_block_fetch_editing, ReplyEdit};
-use super::{facts_over, open_store_under, ApplyPolicy, ChainStore, Mined, Scenario};
-use crate::archival_driver::first_spending_height;
-use crate::scenario::FreeHash;
-use crate::scenario_shard::{
-    close_shards, levered_rules, mine_to, EPOCH_BLOCKS, FILL_FROM_COINBASE,
-};
+use super::{facts_over, open_store_under, ApplyPolicy, ChainStore, Mined};
+use crate::forged_fill;
+use crate::scenario_shard::{levered_epoch, mine_to, EPOCH_BLOCKS};
 use crate::schedule::ChainRules;
 
 /// The store at `path`, opened under the levered rules, and the
@@ -128,10 +125,10 @@ fn first_fill_block(chain: &[Mined]) -> &Mined {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "closes a real shard: a few hundred proofs; live lane"]
 async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
-    let rules = levered_rules();
-    let mut scenario = Scenario::open_under("sb-below-horizon", FreeHash, rules);
-    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
-    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    // Shard 0 closed by the forged shard-fill chain (`forged_fill`).
+    let (mut scenario, mut mined, rules) =
+        forged_fill::open("sb-below-horizon", levered_epoch()).await;
+    let filled = forged_fill::load(&mut scenario, &mut mined, 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed: {:?}", filled.closed);
     };

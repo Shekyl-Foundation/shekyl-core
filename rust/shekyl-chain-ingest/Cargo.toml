@@ -289,6 +289,12 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The hosted shard-fill chain's pin and the check a fetched copy passes
+# (`forged_fill`, CHAIN_FORGE.md CF-4a). The forge's library only: no
+# driver, no seeded entry point (its own normal edges are the plan's and
+# the manifest's formats). That crate's test-kind targets depend on this
+# one; its library does not, so the edge makes no cycle.
+shekyl-chain-forge = { path = "../shekyl-chain-forge" }
 # The budget a test starts its own hasher over, and the one the service
 # tests' gate takes its jobs' permits from. The library names no budget.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
