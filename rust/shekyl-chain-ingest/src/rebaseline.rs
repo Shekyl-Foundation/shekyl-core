@@ -15,10 +15,10 @@
 //! A later replay that disagrees has changed what this pipeline derives.
 //!
 //! [`write_trace_file`] serializes the whole trace before it touches the
-//! destination, then replaces that file by renaming a sibling named for
-//! that attempt. A store that cannot be written — empty, a hole, a refused
-//! read — leaves the previous trace in place, and a failed publish removes
-//! only the sibling it created.
+//! destination, then replaces that file through the tree's one replace (a
+//! staged `<name>.new` beside it, renamed over it). A store that cannot be
+//! written — empty, a hole, a refused read — leaves the previous trace in
+//! place, and a failed publish removes its staged file.
 //!
 //! [`baseline`] is the whole of `shekyl-chain-replay baseline`: a corpus
 //! connected against a fresh store under the production proof-of-work, with
@@ -36,6 +36,7 @@ use shekyl_chain_rules::{AtHeight, InvalidBlock};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons, ReadSnapshot, StoreError};
 use shekyl_network::Network;
+use shekyl_os_account::private_file::{self, Access, CommitError};
 use shekyl_types::BlockHeight;
 
 use crate::corpus::{CorpusFault, CorpusReader};
@@ -120,10 +121,9 @@ pub fn trace_of<W: Write>(snap: &ReadSnapshot<'_>, out: W) -> Result<W, Rebaseli
 ///
 /// The trace is serialized completely first. [`RebaselineFault::Empty`], a
 /// hole, or a refused read returns before `path` is opened, so a previous
-/// trace stays byte-for-byte. The bytes are then published by renaming a
-/// same-directory sibling named for this attempt. Two publishes never share
-/// a file, so one cannot truncate the other's staged bytes, and a failure
-/// removes only the sibling this attempt created.
+/// trace stays byte-for-byte. The bytes are then published through the
+/// tree's one replace ([`publish_bytes`]); a failure removes the staged
+/// file and leaves `path` as it was.
 ///
 /// # Errors
 ///
@@ -250,65 +250,27 @@ fn horizons(rules: &ChainRules) -> Result<Horizons, StoreError> {
     Ok(Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?)
 }
 
-/// A sibling [`publish_bytes`] creates for one attempt, then renames onto
-/// `path`. Each call is a new name: the process id and an attempt count.
-fn sibling_path(path: &Path) -> std::io::Result<PathBuf> {
-    let name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "a trace path names a file",
-        )
-    })?;
-    static ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let attempt = ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut sibling = std::ffi::OsString::from(".");
-    sibling.push(name);
-    sibling.push(".");
-    sibling.push(std::process::id().to_string());
-    sibling.push(".");
-    sibling.push(attempt.to_string());
-    sibling.push(".partial");
-    Ok(trace_parent(path).join(sibling))
-}
-
-/// The directory a sibling must share with `path`, so the rename is atomic.
-fn trace_parent(path: &Path) -> &Path {
-    match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    }
-}
-
-/// Replace `path` with `bytes` by writing a sibling and renaming it.
+/// Replace `path` with `bytes` through the tree's one replace (Rick,
+/// 2026-11-18): [`private_file::replace`] stages `<name>.new` beside
+/// `path`, syncs it, renames it over `path` and syncs the directory. The
+/// destination is not opened until the staged file is complete, and a
+/// failure removes the staged file and leaves `path` as it was. The
+/// height-digest table publishes through this same replace.
 ///
-/// The destination is not opened until the sibling is complete. The sibling
-/// is created with `create_new`, so this attempt never truncates a file
-/// another attempt already holds, and the cleanup below removes only the
-/// sibling this attempt created. The height-digest table publishes through
-/// this same rename.
+/// One publisher per path: a staged file has one fixed name, and a second
+/// publish of the same path while one is in flight would remove the
+/// first's. The replay binary and the chain forge each publish a path
+/// once, from one process.
+///
+/// The trace keeps what a plain create gives it ([`Access::Default`]). A
+/// directory sync that fails after the rename
+/// ([`CommitError::Unsynced`]) is a completed publish: the bytes are in
+/// place, and this publish never synced the directory before.
 pub(crate) fn publish_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let sibling = sibling_path(path)?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&sibling)?;
-    if let Err(error) = write_synced(&mut file, bytes) {
-        // The sibling is ours. Leaving it would be a second trace beside the
-        // destination the caller still has.
-        let _removed = std::fs::remove_file(&sibling);
-        return Err(error);
+    match private_file::replace(path, bytes, Access::Default) {
+        Ok(_) | Err(CommitError::Unsynced(..)) => Ok(()),
+        Err(error) => Err(error.into()),
     }
-    if let Err(error) = std::fs::rename(&sibling, path) {
-        let _removed = std::fs::remove_file(&sibling);
-        return Err(error);
-    }
-    Ok(())
-}
-
-fn write_synced(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -344,61 +306,58 @@ mod tests {
         std::fs::write(&path, b"previous").expect("seed");
         publish_bytes(path.path(), b"next").expect("publish");
         assert_eq!(std::fs::read(&path).expect("read"), b"next");
-        assert!(siblings_of(&path).is_empty(), "the sibling was renamed");
+        assert!(
+            !private_file::staged_path(path.path()).exists(),
+            "the staged file was renamed"
+        );
+    }
+
+    /// Every publish of a path stages the same name, `<name>.new`, so one
+    /// left by a crash is the file the next publish removes and rewrites,
+    /// never a second trace that outlives it. Red edit: stage under a fresh
+    /// name per attempt again, and the crash's leftover stays beside the
+    /// trace.
+    #[test]
+    fn every_attempt_stages_the_one_name_and_clears_a_crashs_leftover() {
+        let path = crate::test_support::tmp("rebaseline-staged-name");
+        let staged = private_file::staged_path(path.path());
+        let mut name = path.path().file_name().expect("name").to_os_string();
+        name.push(".new");
+        assert_eq!(staged, path.path().with_file_name(name));
+        std::fs::write(&staged, b"a crashed attempt").expect("plant a leftover");
+        publish_bytes(path.path(), b"next").expect("publish");
+        assert_eq!(std::fs::read(&path).expect("read"), b"next");
+        assert!(!staged.exists(), "the leftover was replaced and renamed");
     }
 
     #[test]
-    fn two_attempts_name_different_siblings() {
-        let path = crate::test_support::tmp("rebaseline-sibling-names");
-        let first = sibling_path(path.path()).expect("first");
-        let second = sibling_path(path.path()).expect("second");
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn a_failed_publish_removes_only_its_own_sibling() {
+    fn a_failed_publish_removes_its_staged_file() {
         let path = crate::test_support::tmp("rebaseline-dest-dir");
         std::fs::create_dir(&path).expect("destination is a directory");
-        let foreign = trace_parent(path.path()).join({
-            let mut name = std::ffi::OsString::from(".");
-            name.push(path.path().file_name().expect("name"));
-            name.push(".partial");
-            name
-        });
-        std::fs::write(&foreign, b"another attempt").expect("plant a shared-style sibling");
+        std::fs::write(path.path().join("occupied"), b"").expect("no rename replaces it");
         let error = publish_bytes(path.path(), b"next").expect_err("a directory is not replaced");
-        assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
-        assert!(path.path().is_dir(), "the destination is untouched");
-        assert_eq!(
-            std::fs::read(&foreign).expect("the other sibling survives"),
-            b"another attempt"
+        assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::IsADirectory | std::io::ErrorKind::DirectoryNotEmpty
+            ),
+            "{error}"
         );
+        assert!(path.path().is_dir(), "the destination is untouched");
         assert!(
             siblings_of(&path).is_empty(),
-            "this attempt removed only the sibling it created"
+            "the failed publish removed its staged file"
         );
     }
 
-    /// Siblings this process would create for `path`: `.{name}.{pid}.{n}.partial`.
-    /// The old shared name `.{name}.partial` does not match.
+    /// What a publish leaves beside `path`: its staged file, `<name>.new`,
+    /// when it is there.
     fn siblings_of(path: impl AsRef<Path>) -> Vec<PathBuf> {
-        let path: &Path = path.as_ref();
-        let name = path.file_name().expect("a trace path names a file");
-        let mut prefix = std::ffi::OsString::from(".");
-        prefix.push(name);
-        prefix.push(".");
-        prefix.push(std::process::id().to_string());
-        prefix.push(".");
-        let parent = trace_parent(path);
-        let mut found = Vec::new();
-        for entry in std::fs::read_dir(parent).expect("the trace directory") {
-            let entry = entry.expect("a directory entry");
-            let file_name = entry.file_name();
-            let bytes = file_name.as_encoded_bytes();
-            if bytes.starts_with(prefix.as_encoded_bytes()) && bytes.ends_with(b".partial") {
-                found.push(entry.path());
-            }
+        let staged = private_file::staged_path(path.as_ref());
+        if staged.exists() {
+            vec![staged]
+        } else {
+            Vec::new()
         }
-        found
     }
 }
