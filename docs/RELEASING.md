@@ -211,8 +211,12 @@ The `.deb` and `.rpm` packages are available for both x86_64 and ARM64.
 Both packages, the same way:
 - Install `shekyld`, `shekyl-cli`, `shekyl-wallet-rpc` and `shekyl-rpc-tunnel`
   to `/usr/local/bin/` and the pinned Tor under `/opt/shekyl/`
-- Install `shekyld.service`, `shekyl.slice` and the tunnel's unit under
+- Install the template `shekyld@.service` (one instance per network:
+  `shekyld@testnet`), `shekyl.slice` and the tunnel's unit under
   `/lib/systemd/system/`; the tunnel's is not enabled
+- Ship each public network's settings file under `/usr/share/shekyl/` and
+  copy it to `/etc/shekyl/shekyld-<network>.toml`, `root:shekyl` `0640`,
+  when none is there; an upgrade never overwrites one (IG-Q64)
 - Declare the daemon's account and its configuration directory
   (`INPUT_GRAMMAR.md` IG-Q64): `/usr/lib/sysusers.d/shekyl.conf`, the system
   account `shekyl` with no home and no login shell, and
@@ -223,22 +227,23 @@ Both packages, the same way:
   group, a sudo rule) or another account's group (`pre-install.sh`). The
   daemon would run with that login's rights. The refusal names the rename
   that frees the name
-- Do not enable, start or restart the daemon. Put any settings in
+- Do not enable, start or restart the daemon. Set what you need in
   `/etc/shekyl/shekyld-<network>.toml`, then run
-  `sudo systemctl enable --now shekyld`; after an upgrade,
-  `sudo systemctl restart shekyld`
-- On removal, stop and disable the daemon and keep the account, `/etc/shekyl`
-  and the chain data
-- Data directory: `/var/lib/shekyl` (the unit's `StateDirectory`)
-- Log: `/var/log/shekyl/shekyld.log`
-
-The unit runs mainnet unless a drop-in passes `--network`
-(`INPUT_GRAMMAR.md` IG-F16).
+  `sudo systemctl enable --now shekyld@<network>`; after an upgrade,
+  `sudo systemctl restart shekyld@<network>`. The unit checks the file
+  (`--config-verify`, as the daemon's account) before every start
+- On removal, stop and disable every instance and keep the account,
+  `/etc/shekyl` and the chain data. Purging the `.deb` also removes the
+  per-network settings files and then `/etc/shekyl` if it is empty; the
+  `.rpm` has no purge and keeps them
+- Data directory: `/var/lib/shekyl/<network>` (the instance's `StateDirectory`)
+- Log: `/var/log/shekyl/<network>/shekyld.log`
 
 ## Windows Installer Details
 
 The NSIS installer:
-- Installs `shekyld.exe` and `shekyl-rpc-tunnel.exe` to `Program Files\Shekyl`,
+- Installs `shekyld.exe`, `shekyl-rpc-tunnel.exe` and `shekyld.example.toml`
+  (the settings reference, every option commented out) to `Program Files\Shekyl`,
   and the pinned Tor in `tor\` beside them, where the daemon looks for it on
   Windows; the package job checks that Tor against its pin. Windows ships no
   `shekyl-cli` or `shekyl-wallet-rpc`

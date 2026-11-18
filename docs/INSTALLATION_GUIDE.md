@@ -237,17 +237,21 @@ Start daemon in foreground:
 
 Run the daemon in the background via your platform's service manager
 (systemd on Linux, rc.d on FreeBSD, launchd on macOS, Task Scheduler on
-Windows). A shipped systemd unit lives at
-`contrib/packaging/linux/shekyld.service`, with `shekyl.slice` beside
-it. The `.deb` and the `.rpm` install both and create the `shekyl` system
-account the unit runs as, and `/etc/shekyl`. They refuse to install where
+Windows). The shipped systemd unit is the template
+`contrib/packaging/linux/shekyld@.service`, one instance per network,
+with `shekyl.slice` beside it. The `.deb` and the `.rpm` install both,
+create the `shekyl` system account the unit runs as and `/etc/shekyl`,
+and place each public network's settings file,
+`/etc/shekyl/shekyld-<network>.toml`, when none is there: every option in
+it is commented out, so the daemon runs on its defaults. They refuse to install where
 an account named `shekyl` is already someone's login, because the daemon
 would run with that login's rights, and say how to rename it. They do not
-start the daemon. Put any settings in
-`/etc/shekyl/shekyld-<network>.toml`, then enable and start it:
+start the daemon. Set what you need in the network's file, then enable
+and start that network's instance; before every start it checks the file
+as the daemon's account:
 
 ```bash
-sudo systemctl enable --now shekyld
+sudo systemctl enable --now shekyld@testnet
 ```
 
 Without a package, apply the same two declarations first, because
@@ -261,10 +265,10 @@ sudo cp contrib/packaging/linux/shekyl.sysusers /usr/lib/sysusers.d/shekyl.conf
 sudo cp contrib/packaging/linux/shekyl.tmpfiles /usr/lib/tmpfiles.d/shekyl.conf
 sudo systemd-sysusers shekyl.conf
 sudo systemd-tmpfiles --create shekyl.conf
-sudo cp contrib/packaging/linux/shekyld.service \
+sudo cp contrib/packaging/linux/shekyld@.service \
   contrib/packaging/linux/shekyl.slice /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now shekyld
+sudo systemctl enable --now shekyld@testnet
 ```
 
 The slice is the daemon's own

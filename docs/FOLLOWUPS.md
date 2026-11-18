@@ -495,10 +495,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
   - Target: pre-genesis
 
-- **The shipped systemd unit runs mainnet only (`INPUT_GRAMMAR.md` IG-F16).** `contrib/packaging/linux/shekyld.service` passes no `--network`, so a package cannot run testnet, the network every alpha release runs, without an operator's own unit. IG-Q64, RULED 2026-10-22, is the fix (`INPUT_GRAMMAR.md` §22); the packaging is unbuilt on `dev`. Falsify by a packaged unit whose `ExecStart` passes `--network` for the instance and still pairs `--data-dir` and `--log-file` with `StateDirectory` and `LogsDirectory`.
-  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
-  - Target: pre-genesis
-
 - **Phase 4c: no way to abandon an unconfirmed submitted transaction, so a never-mined tx can wedge `rescan`**
   - Target: pre-genesis
 

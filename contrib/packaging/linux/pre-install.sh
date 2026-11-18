@@ -2,7 +2,7 @@
 # Run by the .deb and the .rpm before their files are unpacked, on install
 # and on upgrade (fpm --before-install / --before-upgrade).
 #
-# shekyld.service runs as the account shekyl, which shekyl.sysusers
+# shekyld@.service runs as the account shekyl, which shekyl.sysusers
 # declares. systemd-sysusers keeps an account that already exists, so an
 # existing shekyl that is a person's login would become the daemon's
 # account, with that login's rights: a compromised daemon could act as an

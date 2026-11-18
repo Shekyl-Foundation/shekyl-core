@@ -391,7 +391,8 @@ future channel. It is not a property of today's loopback RPC, and
 manager for background operation (systemd on Linux, launchd on macOS,
 Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `shekyld` via the Tauri sidecar. An example systemd unit lives at
-`contrib/packaging/linux/shekyld.service`; it passes `--service`, so the
+`contrib/packaging/linux/shekyld@.service`, one instance per network
+(`systemctl enable --now shekyld@testnet`); it passes `--service`, so the
 daemon runs as the machine's service instance, serves no owner's socket,
 and keeps its loopback RPC listeners. The daemon has no console and
 reads nothing from stdin; its commands are `shekyl-cli` words (see

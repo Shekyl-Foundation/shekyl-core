@@ -1,8 +1,8 @@
 ; The Windows installer. Built as `.github/workflows/gitian.yml` does:
 ;
 ;   makensis -DVERSION=<version> -DBIN_DIR=<dir holding shekyld.exe> \
-;            -DLICENSE_FILE=<path>/LICENSE -DOUTPUT_FILE=<path>/shekyl-setup.exe \
-;            contrib/packaging/windows/shekyl.nsi
+;            -DLICENSE_FILE=<path>/LICENSE -DEXAMPLE_TOML=<path>/shekyld.example.toml \
+;            -DOUTPUT_FILE=<path>/shekyl-setup.exe contrib/packaging/windows/shekyl.nsi
 ;
 ; makensis resolves a relative path against this script's directory, not
 ; the working directory, so the defaults below are spelled from here: the
@@ -19,6 +19,9 @@
 !endif
 !ifndef LICENSE_FILE
   !define LICENSE_FILE "..\..\..\LICENSE"
+!endif
+!ifndef EXAMPLE_TOML
+  !define EXAMPLE_TOML "..\..\..\docs\generated\shekyld.example.toml"
 !endif
 !ifndef OUTPUT_FILE
   !define OUTPUT_FILE "shekyl-setup.exe"
@@ -80,6 +83,11 @@ Section "Shekyl Core (required)" SecCore
   ; installer names neither.
   File "${BIN_DIR}\shekyld.exe"
   File "${BIN_DIR}\shekyl-rpc-tunnel.exe"
+  ; The rendered example settings file, every option commented out
+  ; (INPUT_GRAMMAR.md IG-Q64). A daemon run as the user has no machine-wide
+  ; settings path: it reads %LOCALAPPDATA%\Shekyl\shekyld-<network>.toml,
+  ; and no file there means the defaults. This is the reference to copy from.
+  File "${EXAMPLE_TOML}"
 
   ; The pinned Tor, where the daemon looks for it on Windows: `tor\` beside
   ; shekyld.exe (shekyl-tor-control-client, BESIDE_TOR_DIR). The default
@@ -157,6 +165,7 @@ SectionEnd
 Section "Uninstall"
   Delete "$INSTDIR\shekyld.exe"
   Delete "$INSTDIR\shekyl-rpc-tunnel.exe"
+  Delete "$INSTDIR\shekyld.example.toml"
   RMDir /r "$INSTDIR\tor"
   RMDir /r "$INSTDIR\tor-licenses"
   ; What an earlier installer put here and this one no longer ships.
