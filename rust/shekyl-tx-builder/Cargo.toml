@@ -21,7 +21,7 @@ license.workspace = true
 # (`scripts/ci/check_test_only_features.py`): forwards the seeded provers and
 # signers below it, and no build that ships has a signer that takes its
 # caller's randomness (CF-R9).
-seeded-rng = ["shekyl-fcmp/seeded-rng", "shekyl-crypto-pq/seeded-rng", "dep:rand_chacha"]
+seeded-rng = ["shekyl-fcmp/seeded-rng", "shekyl-crypto-pq/seeded-rng", "shekyl-ct-balance/seeded-rng", "dep:rand_chacha"]
 
 [dependencies]
 # The network id each input's signature hash binds (NETWORK_IDENTITY.md NI-Q4).

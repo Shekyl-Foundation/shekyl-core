@@ -4,6 +4,8 @@
 //! This ensures fast failure with clear error messages and avoids wasting
 //! CPU on proof generation for malformed inputs.
 
+use std::num::NonZeroUsize;
+
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
@@ -23,8 +25,8 @@ use shekyl_units::AtomicUnits;
 /// funds-sufficiency arithmetic here, not the pseudo-mask balancing or range
 /// proofs. The common transfer path passes empty slices.
 ///
-/// Returns `Ok(())` if all preconditions hold, or the first failing
-/// [`TxBuilderError`] variant.
+/// Returns the input count, which it has refused to be zero, if all
+/// preconditions hold, or the first failing [`TxBuilderError`] variant.
 pub(crate) fn validate_inputs(
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
@@ -32,11 +34,11 @@ pub(crate) fn validate_inputs(
     extra_inputs: &[InputTerm],
     extra_outputs: &[OutputTerm],
     tree: &TreeContext,
-) -> Result<(), TxBuilderError> {
+) -> Result<NonZeroUsize, TxBuilderError> {
     // --- Count bounds ---
-    if inputs.is_empty() {
+    let Some(input_count) = NonZeroUsize::new(inputs.len()) else {
         return Err(TxBuilderError::NoInputs);
-    }
+    };
     if inputs.len() > MAX_INPUTS {
         return Err(TxBuilderError::TooManyInputs(inputs.len()));
     }
@@ -155,5 +157,5 @@ pub(crate) fn validate_inputs(
         }
     }
 
-    Ok(())
+    Ok(input_count)
 }

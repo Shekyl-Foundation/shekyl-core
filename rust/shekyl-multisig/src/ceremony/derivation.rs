@@ -69,8 +69,8 @@ use shekyl_crypto_pq::multisig_output::{
     recover_group_spend, GroupOutputSource, GroupSpendError, GroupSpendSecrets,
     MemberOwnCiphertext, MultisigGroupKey,
 };
-use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_crypto_pq::{CryptoError, TxKey};
+use shekyl_ct_balance::PseudoOutBlinds;
 use shekyl_curve_primitives::Commitment;
 use shekyl_curve_tree::{AssembledPath, TreeContext};
 use shekyl_fcmp::frost_sal::{FrostSalError, SalSigningParams, SpentOutput};
@@ -299,9 +299,6 @@ pub enum DeriveError {
     /// The builder refused the outputs.
     #[error("the outputs do not build: {0}")]
     Outputs(#[source] BuildSpendError),
-    /// The pseudo-out blinds do not derive.
-    #[error("the pseudo-out blinds do not derive: {0}")]
-    Blinds(CryptoError),
 }
 
 /// A member's spend, derived from a validated intent and its own ledger:
@@ -394,19 +391,15 @@ impl DerivedSpend {
         // Recipient `i` lands at `π(i)`, the order the intent's key derives,
         // alike for every member (R-24).
         let built = BuiltSpend::build(&tx_key, &recipients).map_err(DeriveError::Outputs)?;
-        let output_masks: Vec<OutputMask> = built
-            .outputs()
-            .iter()
-            .map(|b| b.commitment_mask().clone())
-            .collect();
         let output_openings: Vec<Commitment> = built
             .outputs()
             .iter()
             .map(|b| b.commitment_mask().opening(b.info.amount.to_raw()))
             .collect();
-        let blinds = seed
-            .pseudo_out_blinds(records.len(), &output_masks)
-            .map_err(DeriveError::Blinds)?;
+        // Every input's blind but the last from the intent's seed, in the
+        // intent's input order; the last balances the outputs' masks.
+        let blinds =
+            PseudoOutBlinds::from_intent(seed, intent.input_count(), &output_openings).into_bytes();
         let mut inputs: Vec<InputContext> = records
             .into_iter()
             .zip(blinds)

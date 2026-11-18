@@ -21,6 +21,8 @@
 //! second, and a device kept in a safe may have a wrong clock. `created_at`
 //! is shown to people and checked against nothing.
 
+use std::num::NonZeroUsize;
+
 use shekyl_address::multisig_address::{
     MultisigAddressError, MultisigAddressPayload, MIN_MULTISIG_THRESHOLD,
 };
@@ -550,9 +552,13 @@ impl SpendIntent {
     /// group shape (R-11), the proposer, the signer set and the responder
     /// (R-5), the size bounds [`MAX_INPUTS`], [`MAX_RECIPIENTS`] and
     /// [`MAX_ADDRESS_LEN`], no input listed twice, and the recipients'
-    /// order. Nothing here reads a
-    /// clock (R-13).
-    pub fn validate_structural(&self, n_total: u8, m_required: u8) -> Result<(), SpendIntentError> {
+    /// order. Nothing here reads a clock (R-13). Returns the intent's input
+    /// count, which it has checked is at least one.
+    pub fn validate_structural(
+        &self,
+        n_total: u8,
+        m_required: u8,
+    ) -> Result<NonZeroUsize, SpendIntentError> {
         if self.version != SPEND_INTENT_VERSION {
             return Err(SpendIntentError::WrongVersion(self.version));
         }
@@ -587,9 +593,9 @@ impl SpendIntent {
             return Err(SpendIntentError::ResponderIsProposer);
         }
         let inputs = self.input_global_indices.len();
-        if inputs == 0 || inputs > MAX_INPUTS as usize {
-            return Err(SpendIntentError::InputCount(inputs));
-        }
+        let input_count = NonZeroUsize::new(inputs)
+            .filter(|count| count.get() <= MAX_INPUTS as usize)
+            .ok_or(SpendIntentError::InputCount(inputs))?;
         let mut listed = std::collections::HashSet::with_capacity(inputs);
         if let Some(&twice) = self
             .input_global_indices
@@ -614,7 +620,7 @@ impl SpendIntent {
             return Err(SpendIntentError::RecipientsNotSorted);
         }
 
-        Ok(())
+        Ok(input_count)
     }
 
     /// Validate the intent against this member's chain view (§9.2 items 6

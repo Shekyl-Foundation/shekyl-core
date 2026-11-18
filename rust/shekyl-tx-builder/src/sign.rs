@@ -18,12 +18,14 @@
 //! includes the serialized proofs, so the proofs must exist before signing.
 
 use curve25519_dalek::scalar::Scalar;
+use std::num::NonZeroUsize;
+
 use rand_core::{CryptoRng, OsRng, RngCore};
 use zeroize::Zeroizing;
 
 use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
-use shekyl_crypto_pq::output::{balancing_pseudo_out_blind, EncryptedOutputField};
-use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
+use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm, PseudoOutBlinds};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveError, ProveInput, ProveResult};
 use shekyl_fcmp::PqcLeafScalar;
@@ -114,7 +116,7 @@ pub fn sign_transaction_with_terms(
 ) -> Result<SignedProofs, TxBuilderError> {
     sign_with(
         &mut OsRng,
-        &mut OsRng,
+        PseudoOutBlinds::random,
         proof::prove,
         &SignRequest {
             network_id,
@@ -176,7 +178,7 @@ pub fn sign_transaction_with_terms_seeded(
     let mut prover_rng = seeded::stream(&seeds.membership);
     sign_with(
         &mut seeded::stream(&seeds.range),
-        &mut seeded::stream(&seeds.blinds),
+        |inputs, outputs| PseudoOutBlinds::seeded(&seeds.blinds, inputs, outputs),
         |inputs, root, depth, hash| {
             proof::prove_with_rng(&mut prover_rng, inputs, root, depth, hash)
         },
@@ -207,13 +209,16 @@ struct SignRequest<'a> {
 }
 
 /// [`sign_transaction_with_terms`]'s body. `range_rng` draws the range
-/// proof's randomness and `blinds_rng` the pseudo-out blinds'; `prove` makes
-/// the membership proof (production's [`proof::prove`], over the OS, or the
-/// seeded prover). Private: no build that ships has a signer that takes its
-/// caller's randomness (`CHAIN_FORGE.md` `CF-R9`).
-fn sign_with<R: RngCore + CryptoRng, B: RngCore + CryptoRng>(
+/// proof's randomness; `blinds` makes the pseudo-out blinds for the input
+/// count and the outputs' openings, balanced by construction
+/// ([`PseudoOutBlinds::random`] in production, the seeded form for the
+/// forge); `prove` makes the membership proof (production's
+/// [`proof::prove`], over the OS, or the seeded prover). Private: no build
+/// that ships has a signer that takes its caller's randomness
+/// (`CHAIN_FORGE.md` `CF-R9`).
+fn sign_with<R: RngCore + CryptoRng>(
     range_rng: &mut R,
-    blinds_rng: &mut B,
+    blinds: impl FnOnce(NonZeroUsize, &[Commitment]) -> PseudoOutBlinds,
     prove: impl FnOnce(
         &[ProveInput],
         &CurveTreeRoot,
@@ -233,9 +238,7 @@ fn sign_with<R: RngCore + CryptoRng, B: RngCore + CryptoRng>(
         tree,
     } = *req;
     // ── 1. Validate ──────────────────────────────────────────────────
-    validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
-
-    let n_in = inputs.len();
+    let input_count = validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
 
     // ── 2. Bulletproofs+ range proof ─────────────────────────────────
     // Use HKDF-derived commitment masks from OutputInfo (pre-derived by construct_output).
@@ -246,6 +249,9 @@ fn sign_with<R: RngCore + CryptoRng, B: RngCore + CryptoRng>(
                 .expect("commitment_mask is not a valid scalar")
         })
         .collect();
+    // The pseudo-out blinds balance these openings (step 5); the range
+    // proof consumes them.
+    let pseudo_out_blinds = blinds(input_count, &commitments_for_bp).into_bytes();
 
     let bp = shekyl_bulletproofs::Bulletproof::prove_plus(&mut *range_rng, commitments_for_bp)
         .map_err(|e| TxBuilderError::BulletproofError(e.to_string()))?;
@@ -275,24 +281,17 @@ fn sign_with<R: RngCore + CryptoRng, B: RngCore + CryptoRng>(
     let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_label).collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
-    // Random blinds for all but the last input; the last balances the
-    // outputs' masks (the fee is committed with mask 0, fee*H), through the
-    // balancer every spend uses, a multisig one included.
-    let mut pseudo_masks: Vec<Zeroizing<[u8; 32]>> = (1..n_in)
-        .map(|_| Zeroizing::new(Scalar::random(&mut *blinds_rng).to_bytes()))
-        .collect();
-    let output_masks: Zeroizing<Vec<[u8; 32]>> =
-        Zeroizing::new(outputs.iter().map(|out| out.commitment_mask).collect());
-    pseudo_masks.push(
-        balancing_pseudo_out_blind(&pseudo_masks, &output_masks)
-            .expect("every mask opened its commitment above and every blind is a drawn scalar"),
-    );
+    // Made in step 2 as `PseudoOutBlinds`: every input's blind but the
+    // last drawn, the last balancing the outputs' masks (the fee is
+    // committed with mask 0, fee*H), as every spend's are, a multisig one
+    // included.
 
     // ── 6. Build ProveInput for FCMP++ ───────────────────────────────
     let prove_inputs: Vec<ProveInput> = inputs
         .iter()
+        .zip(&pseudo_out_blinds)
         .enumerate()
-        .map(|(i, inp)| prove_input_from_spend(i, inp, *pseudo_masks[i]))
+        .map(|(i, (inp, blind))| prove_input_from_spend(i, inp, **blind))
         .collect::<Result<_, _>>()?;
 
     // ── 7. FCMP++ prove ──────────────────────────────────────────────

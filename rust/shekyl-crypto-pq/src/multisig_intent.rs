@@ -18,9 +18,10 @@
 //! | each input's rerandomization seed | [`LABEL_INTENT_RERANDOMIZE`] | the intent's input order |
 //! | the seed's replay fingerprint | [`LABEL_INTENT_SEED_FINGERPRINT`] | — |
 //!
-//! The last input's blind balances the outputs' masks
-//! ([`crate::output::balancing_pseudo_out_blind`], the solo spend's own
-//! balancer). Indexing by the intent's input order, not the transaction's,
+//! The last input's blind balances the outputs' masks, and is not derived:
+//! `shekyl-ct-balance`'s `PseudoOutBlinds::from_intent` takes the others
+//! from here and balances them, as it does every spend's. Indexing by the
+//! intent's input order, not the transaction's,
 //! lets a member derive every value before it knows the key images that
 //! order the transaction's inputs.
 //!
@@ -38,10 +39,7 @@ use sha2::Sha512;
 use zeroize::Zeroizing;
 
 use crate::derivation::{expand_32_into, expand_wide_scalar, make_info};
-use crate::output::balance;
-use crate::output_mask::OutputMask;
 use crate::seeded_rng::SeededRng;
-use crate::CryptoError;
 
 /// HKDF info of the transaction key.
 pub const LABEL_INTENT_TX_KEY: &[u8] = b"shekyl/multisig-intent-tx-key-v1";
@@ -163,36 +161,16 @@ impl IntentSeed {
         RerandomizationSeed(seed)
     }
 
-    /// Every input's pseudo-out blind, in the intent's input order: each
-    /// derived but the last, which balances `output_masks`.
-    ///
-    /// # Errors
-    ///
-    /// [`CryptoError::InvalidInput`] for a spend with no input.
-    pub fn pseudo_out_blinds(
-        &self,
-        inputs: usize,
-        output_masks: &[OutputMask],
-    ) -> Result<Vec<Zeroizing<[u8; 32]>>, CryptoError> {
-        let derived_count = inputs
-            .checked_sub(1)
-            .ok_or_else(|| CryptoError::InvalidInput("a spend has at least one input".into()))?;
-        let hk = self.hkdf();
-        let derived: Vec<Zeroizing<Scalar>> = (0..derived_count)
-            .map(|input| {
-                let info = make_info(LABEL_INTENT_PSEUDO_OUT_BLIND, index(input));
-                expand_wide_scalar(&hk, &info)
-            })
-            .collect();
-        let last = balance(
-            derived.iter().map(|b| &**b),
-            output_masks.iter().map(OutputMask::scalar),
-        );
-        Ok(derived
-            .iter()
-            .chain(std::iter::once(&last))
-            .map(|blind| Zeroizing::new(blind.to_bytes()))
-            .collect())
+    /// Input `input`'s pseudo-out blind, `input` counted in the intent's
+    /// input order. Every input's but the last is derived here; the last
+    /// balances the outputs' masks, and `shekyl-ct-balance`'s
+    /// `PseudoOutBlinds::from_intent`, the one reader, makes it.
+    #[must_use]
+    pub fn pseudo_out_blind(&self, input: usize) -> Zeroizing<Scalar> {
+        expand_wide_scalar(
+            &self.hkdf(),
+            &make_info(LABEL_INTENT_PSEUDO_OUT_BLIND, index(input)),
+        )
     }
 }
 
@@ -207,10 +185,6 @@ mod tests {
     use crate::TxKey;
     use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 
-    fn mask(n: u64) -> OutputMask {
-        OutputMask::of_derived(&Scalar::from(n).to_bytes())
-    }
-
     /// Two members holding the same seed derive the same values, and each
     /// value differs from the others and from another seed's.
     #[test]
@@ -223,30 +197,9 @@ mod tests {
         assert_ne!(key(&a), key(&other));
         assert_eq!(*a.rerandomization_seed(1).0, *b.rerandomization_seed(1).0);
         assert_ne!(*a.rerandomization_seed(0).0, *a.rerandomization_seed(1).0);
-        let masks = [mask(7), mask(11)];
-        let blinds_a = a.pseudo_out_blinds(3, &masks).unwrap();
-        let blinds_b = b.pseudo_out_blinds(3, &masks).unwrap();
-        assert_eq!(blinds_a.len(), 3);
-        assert!(blinds_a.iter().zip(&blinds_b).all(|(x, y)| **x == **y));
-        assert_ne!(*blinds_a[0], *blinds_a[1]);
-    }
-
-    /// The blinds sum to the outputs' masks: the pseudo outputs balance the
-    /// commitments. A single input takes the whole balance.
-    #[test]
-    fn the_blinds_balance_the_outputs_masks() {
-        let seed = IntentSeed::new(&[0x61; 32]);
-        let masks = [mask(5), mask(9), mask(13)];
-        let mask_sum = Scalar::from(27u64);
-        for inputs in 1..=4 {
-            let blinds = seed.pseudo_out_blinds(inputs, &masks).unwrap();
-            let sum: Scalar = blinds
-                .iter()
-                .map(|b| Scalar::from_canonical_bytes(**b).unwrap())
-                .sum();
-            assert_eq!(sum, mask_sum);
-        }
-        assert!(seed.pseudo_out_blinds(0, &masks).is_err());
+        assert_eq!(*a.pseudo_out_blind(1), *b.pseudo_out_blind(1));
+        assert_ne!(*a.pseudo_out_blind(0), *a.pseudo_out_blind(1));
+        assert_ne!(*a.pseudo_out_blind(0), *other.pseudo_out_blind(0));
     }
 
     /// A seed's fingerprint is one-way and its own: it is not the seed,

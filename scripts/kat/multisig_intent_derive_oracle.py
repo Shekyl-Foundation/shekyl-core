@@ -99,7 +99,9 @@ def vectors() -> dict:
             "kem_randomness_seed, the transaction key, each input's pseudo-out blind (the "
             "last balancing the output masks) and rerandomization seed, and the seed's "
             "replay fingerprint. Written by scripts/kat/multisig_intent_derive_oracle.py; "
-            "checked by shekyl-crypto-pq tests/kat_multisig_intent_derive.rs."
+            "checked by shekyl-crypto-pq tests/kat_multisig_intent_derive.rs (the derived "
+            "values) and shekyl-ct-balance tests/kat_pseudo_out_blinds.rs (the balanced "
+            "blinds)."
         ),
         "vectors": [
             {

@@ -899,8 +899,11 @@ input key material (`shekyl_crypto_pq::multisig_intent::IntentSeed`):
   `ℓ`; its public key `r·G` is the `tx_extra` key;
 - input `j`'s pseudo-out blind, for every input but the last:
   `expand(label ‖ u64_le(j), 64)`, reduced wide; the last input's blind
-  is the sum of the outputs' masks less every other blind
-  (`balancing_pseudo_out_blind`, the solo signer's own balancer);
+  is the sum of the outputs' masks less every other blind. Both come out
+  of `shekyl-ct-balance`'s `PseudoOutBlinds::from_intent`, the one place
+  every spend's blinds are balanced (a solo spend's free blinds come from
+  the OS, `PseudoOutBlinds::random`), so a set of blinds balances by
+  construction;
 - input `j`'s rerandomization seed: `expand(label ‖ u64_le(j), 32)`;
 - the seed's fingerprint: `expand(label, 32)`, one-way, so the replay set
   that holds it opens nothing the seed does.
@@ -1196,9 +1199,10 @@ construction: no copy of a wallet contains one.
   uses, under that key; that gives the outputs, their `tx_extra` and the
   committed base, and each output's mask as a scalar (`OutputMask`) and
   so its opening (a commitment that wipes on drop, for the range proof).
-  Input `j` of the intent takes the `j`-th derived pseudo-out blind and
-  rerandomization seed; the last blind balances the outputs' masks. The
-  inputs are then put in the transaction's order. The derivation
+  Input `j` of the intent takes the `j`-th pseudo-out blind
+  (`PseudoOutBlinds::from_intent`: derived, the last balancing the outputs'
+  masks) and rerandomization seed. The inputs are then put in the
+  transaction's order. The derivation
   refuses, each by name, an input the ledger lacks, an input whose secrets
   do not derive, a record whose key image or leaf point is not the one its
   secrets derive, a commitment that does not open at the stated amount, a

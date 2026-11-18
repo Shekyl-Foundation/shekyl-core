@@ -250,55 +250,6 @@ impl std::fmt::Debug for ScannedOutput {
     }
 }
 
-/// The pseudo-out blind that balances a spend: the sum of its outputs'
-/// commitment masks less every other input's blind, so the inputs' pseudo
-/// outputs and the outputs' commitments (with the fee at mask zero) sum to
-/// the same point. Every spend takes its last input's blind from here,
-/// whatever drew the others: the OS for a solo spend, the intent for a
-/// multisig one.
-///
-/// # Errors
-///
-/// [`CryptoError::InvalidKeyMaterial`] for a blind or a mask that is not a
-/// canonical scalar.
-pub fn balancing_pseudo_out_blind(
-    other_blinds: &[Zeroizing<[u8; 32]>],
-    output_masks: &[[u8; 32]],
-) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
-    let scalar = |bytes: &[u8; 32]| {
-        Option::<Scalar>::from(Scalar::from_canonical_bytes(*bytes))
-            .map(Zeroizing::new)
-            .ok_or(CryptoError::InvalidKeyMaterial)
-    };
-    let masks = output_masks
-        .iter()
-        .map(scalar)
-        .collect::<Result<Vec<_>, _>>()?;
-    let blinds = other_blinds
-        .iter()
-        .map(|blind| scalar(blind))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(Zeroizing::new(
-        balance(blinds.iter().map(|b| &**b), masks.iter().map(|m| &**m)).to_bytes(),
-    ))
-}
-
-/// The balancing blind's arithmetic, the one place it is done: the outputs'
-/// masks less the other inputs' blinds.
-pub(crate) fn balance<'a>(
-    other_blinds: impl Iterator<Item = &'a Scalar>,
-    output_masks: impl Iterator<Item = &'a Scalar>,
-) -> Zeroizing<Scalar> {
-    let mut balance = Zeroizing::new(Scalar::ZERO);
-    for mask in output_masks {
-        *balance += mask;
-    }
-    for blind in other_blinds {
-        *balance -= blind;
-    }
-    balance
-}
-
 /// Construct a two-component output with deterministic KEM from the
 /// transaction key.
 ///

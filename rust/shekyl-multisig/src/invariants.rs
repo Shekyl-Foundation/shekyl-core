@@ -19,6 +19,7 @@
 
 use shekyl_crypto_pq::multisig_intent::IntentSeedFingerprint;
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 
 use shekyl_address::Network;
 use shekyl_units::AtomicUnits;
@@ -89,6 +90,7 @@ pub enum IntentRefusal {
 pub struct ValidatedIntent {
     intent: SpendIntent,
     recipients: Vec<ResolvedRecipient>,
+    input_count: NonZeroUsize,
     input_amounts: Vec<AtomicUnits>,
     hash: [u8; 32],
 }
@@ -103,7 +105,7 @@ impl ValidatedIntent {
         if intent.address_fingerprint != *ledger.our_address_fingerprint {
             return Err(IntentRefusal::OtherGroup);
         }
-        intent
+        let input_count = intent
             .validate_structural(ledger.n_total, ledger.m_required)
             .map_err(IntentRefusal::Structure)?;
         let recipients = intent
@@ -134,6 +136,7 @@ impl ValidatedIntent {
         Ok(Self {
             intent,
             recipients,
+            input_count,
             input_amounts: ledger.input_amounts.to_vec(),
             hash,
         })
@@ -151,6 +154,12 @@ impl ValidatedIntent {
     #[must_use]
     pub fn input_amounts(&self) -> &[AtomicUnits] {
         &self.input_amounts
+    }
+
+    /// The number of inputs it spends, at least one.
+    #[must_use]
+    pub fn input_count(&self) -> NonZeroUsize {
+        self.input_count
     }
 
     /// Its recipients, resolved, in output order.

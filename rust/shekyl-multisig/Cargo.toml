@@ -35,6 +35,9 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # enforces the "no transport" ban.
 shekyl-address = { path = "../shekyl-address" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Every input's pseudo-out blind, the last balancing the outputs' masks
+# (`PseudoOutBlinds::from_intent`).
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-network = { path = "../shekyl-network" }
 shekyl-types = { path = "../shekyl-types" }

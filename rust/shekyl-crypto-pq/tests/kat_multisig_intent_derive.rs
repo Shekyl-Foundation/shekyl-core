@@ -5,8 +5,10 @@
 
 //! The multisig intent derivations against their pinned vectors (R-14,
 //! `PQC_MULTISIG.md` §9.5): from an intent's seed, the transaction key, each
-//! input's pseudo-out blind and rerandomization seed, and the seed's replay
-//! fingerprint.
+//! input's derived pseudo-out blind (every input's but the last, which
+//! balances the outputs' masks and is checked with the balancer in
+//! `shekyl-ct-balance`'s `tests/kat_pseudo_out_blinds.rs`) and
+//! rerandomization seed, and the seed's replay fingerprint.
 //!
 //! Corpus: `docs/test_vectors/MULTISIG_INTENT_DERIVE_V1.json`, written by
 //! `scripts/kat/multisig_intent_derive_oracle.py`, which derives every value
@@ -19,7 +21,6 @@ use curve25519_dalek::Scalar;
 use rand::RngCore as _;
 use serde_json::Value;
 use shekyl_crypto_pq::multisig_intent::{IntentSeed, INTENT_SEED_LEN};
-use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_crypto_pq::seeded_rng::SeededRng;
 use shekyl_crypto_pq::TxKey;
 
@@ -45,13 +46,6 @@ fn the_intent_derivations_match_the_oracle() {
         let seed: [u8; INTENT_SEED_LEN] = bytes32(&v["seed_hex"]);
         let seed = IntentSeed::new(&seed);
         let inputs = usize::try_from(v["inputs"].as_u64().expect("an input count")).unwrap();
-        let masks: Vec<OutputMask> = hex_list(&v["output_masks_hex"])
-            .iter()
-            .map(|bytes| {
-                OutputMask::from_canonical_bytes_for_tests(bytes)
-                    .unwrap_or_else(|| panic!("vector {n}: a mask is not a canonical scalar"))
-            })
-            .collect();
         let expected = &v["expected"];
 
         // The key hands out no bytes, so `r` is held through its point:
@@ -74,17 +68,21 @@ fn the_intent_derivations_match_the_oracle() {
             "vector {n}: R"
         );
 
-        let blinds: Vec<[u8; 32]> = seed
-            .pseudo_out_blinds(inputs, &masks)
-            .expect("the blinds derive")
-            .iter()
-            .map(|b| **b)
-            .collect();
+        // Every input's blind but the last is derived from the seed; the
+        // last balances the outputs' masks, outside this crate.
+        let expected_blinds = hex_list(&expected["pseudo_out_blinds_hex"]);
         assert_eq!(
-            blinds,
-            hex_list(&expected["pseudo_out_blinds_hex"]),
-            "vector {n}: blinds"
+            expected_blinds.len(),
+            inputs,
+            "vector {n}: one blind per input"
         );
+        for (j, expected_blind) in expected_blinds.iter().take(inputs - 1).enumerate() {
+            assert_eq!(
+                seed.pseudo_out_blind(j).to_bytes(),
+                *expected_blind,
+                "vector {n}: blind {j}"
+            );
+        }
 
         // A rerandomization seed hands out no bytes either; it is held
         // through its stream, ChaCha20 keyed by the seed, against the same

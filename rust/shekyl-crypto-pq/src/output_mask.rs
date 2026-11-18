@@ -35,26 +35,11 @@ impl OutputMask {
         Self(Zeroizing::new(Scalar::from_bytes_mod_order(*z)))
     }
 
-    /// A mask from a vector's bytes, for tests only (the TEST_ONLY
-    /// `test-utils` feature): `None` for bytes that are not a canonical
-    /// scalar.
-    #[cfg(any(test, feature = "test-utils"))]
-    #[must_use]
-    pub fn from_canonical_bytes_for_tests(bytes: &[u8; 32]) -> Option<Self> {
-        Option::<Scalar>::from(Scalar::from_canonical_bytes(*bytes))
-            .map(|scalar| Self(Zeroizing::new(scalar)))
-    }
-
     /// The output's commitment opening at `amount`: the mask and the amount
     /// `C = z·G + amount·H` commits to.
     #[must_use]
     pub fn opening(&self, amount: u64) -> Commitment {
         Commitment::new(*self.0, amount)
-    }
-
-    /// The mask as a scalar, for the balancer that sums it.
-    pub(crate) fn scalar(&self) -> &Scalar {
-        &self.0
     }
 }
 
@@ -76,7 +61,7 @@ mod tests {
     fn a_mask_opens_to_the_commitment_its_bytes_make() {
         let z = Scalar::from(0x5eed_u64);
         let mask = OutputMask::of_derived(&z.to_bytes());
-        assert_eq!(*mask.scalar(), z);
+        assert_eq!(mask.opening(0).mask, z);
         assert_eq!(
             mask.opening(9).calculate(),
             z * ED25519_BASEPOINT_POINT + Scalar::from(9u64) * *H

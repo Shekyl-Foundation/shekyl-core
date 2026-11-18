@@ -1282,8 +1282,12 @@ name = "shekyl-ct-balance"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "rand_core",
+ "shekyl-crypto-pq",
  "shekyl-curve-generators",
+ "shekyl-curve-primitives",
  "shekyl-units",
+ "zeroize",
 ]
 
 [[package]]
@@ -1415,6 +1419,7 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-ct-balance",
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
