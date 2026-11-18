@@ -63,7 +63,8 @@ use zeroize::Zeroizing;
 const JOURNAL_SUFFIX: &str = ".new";
 
 /// How long [`StagedWrite::commit`] waits for another program to let go of
-/// the staged file, 2 s. **Assumption** (Rick, 2026-11-18). Basis: a reader
+/// the staged file, 2 s. That a wait exists is Rick's ruling (2026-11-18);
+/// its length is this lane's **Assumption**. Basis: a reader
 /// that opens a fresh file without delete sharing (Defender's real-time
 /// scan, the Windows Search indexer, a backup agent) holds a file of a few
 /// hundred bytes for a single read. The reproduction that found the hazard
@@ -72,12 +73,6 @@ const JOURNAL_SUFFIX: &str = ".new";
 /// refuses and names it ([`CommitError::HeldOpen`]). Re-derived when a
 /// Windows host measures a scanner's hold.
 pub const REPLACE_WAIT: Duration = Duration::from_secs(2);
-
-/// How long the commit sleeps between two opens of a held staged file.
-/// One fortieth of [`REPLACE_WAIT`]: a reader that lets go is seen within
-/// 50 ms, and a held file is opened at most forty times.
-#[cfg(windows)]
-const REPLACE_POLL: Duration = Duration::from_millis(50);
 
 /// Mode of a file only its owner may read.
 #[cfg(unix)]
@@ -502,32 +497,19 @@ fn rename_over(staged: &Path, live: &Path) -> Result<(), CommitError> {
     std::fs::rename(staged, live).map_err(|error| CommitError::Io(live.to_path_buf(), error))
 }
 
-/// Rename `staged` over `live` through its handle
-/// ([`shekyl_win_sec::replace`]), waiting up to [`REPLACE_WAIT`] for a
-/// reader that holds `staged` without delete sharing. Only that open is
-/// retried; the rename itself is not.
+/// Rename `staged` over `live` through the one Windows file replace
+/// ([`shekyl_win_sec::replace::replace`]), which waits up to
+/// [`REPLACE_WAIT`] for a reader that holds `staged` without delete sharing.
 #[cfg(windows)]
 fn rename_over(staged: &Path, live: &Path) -> Result<(), CommitError> {
-    use shekyl_win_sec::replace::{is_sharing_violation, open_source};
-    let deadline = std::time::Instant::now() + REPLACE_WAIT;
-    let source = loop {
-        match open_source(staged) {
-            Ok(source) => break source,
-            Err(error) if is_sharing_violation(&error) => {
-                if std::time::Instant::now() >= deadline {
-                    return Err(CommitError::HeldOpen(HeldOpen {
-                        staged: staged.to_path_buf(),
-                        live: live.to_path_buf(),
-                    }));
-                }
-                std::thread::sleep(REPLACE_POLL);
-            }
-            Err(error) => return Err(CommitError::Io(staged.to_path_buf(), error)),
-        }
-    };
-    source
-        .rename_over(live)
-        .map_err(|error| CommitError::Io(live.to_path_buf(), error))
+    use shekyl_win_sec::replace::{replace, ReplaceError};
+    replace(staged, live, REPLACE_WAIT).map_err(|error| match error {
+        ReplaceError::HeldOpen => CommitError::HeldOpen(HeldOpen {
+            staged: staged.to_path_buf(),
+            live: live.to_path_buf(),
+        }),
+        ReplaceError::Io(error) => CommitError::Io(live.to_path_buf(), error),
+    })
 }
 
 /// Where `live`'s staged file is written.
@@ -830,16 +812,23 @@ mod wait_tests {
     use std::os::windows::fs::OpenOptionsExt;
     use std::time::Instant;
 
-    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
 
     use super::*;
 
     /// Open `path` as a scanner does, sharing read alone, and keep it open
     /// for `hold` on another thread. Returns once the file is held.
     fn hold(path: &Path, hold: Duration) -> std::thread::JoinHandle<()> {
+        hold_sharing(path, hold, FILE_SHARE_READ)
+    }
+
+    /// [`hold`], sharing `share`.
+    fn hold_sharing(path: &Path, hold: Duration, share: u32) -> std::thread::JoinHandle<()> {
         let file = std::fs::OpenOptions::new()
             .read(true)
-            .share_mode(FILE_SHARE_READ)
+            .share_mode(share)
             .open(path)
             .unwrap();
         std::thread::spawn(move || {
@@ -900,7 +889,11 @@ mod wait_tests {
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("record");
         std::fs::write(&live, b"old").unwrap();
-        let reader = hold(&live, REPLACE_WAIT / 2);
+        let reader = hold_sharing(
+            &live,
+            REPLACE_WAIT / 2,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        );
         StagedWrite::<Replace>::create(&live, b"new", Access::WorldReadable)
             .unwrap()
             .commit()
