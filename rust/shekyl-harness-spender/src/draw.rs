@@ -63,20 +63,49 @@ impl MlDsaDraw {
     }
 }
 
-/// The seeds one spend draws: the proofs' (range proof, pseudo-out blinds,
-/// membership proof) and the spend slots' signatures', apart, so no
-/// randomness is shared between them.
+/// The seeds one spend draws, one per source of randomness
+/// (`CHAIN_FORGE.md` §5.2): the range proof's, the pseudo-out blinds', the
+/// membership proof's ([`shekyl_tx_builder::ProofSeeds`]) and the spend
+/// slots' signatures', apart, so no randomness is shared between them and
+/// one source can be swapped for the OS's without moving the others.
 ///
 /// One value per spend, drawn by [`SpendPlan::next_spend`] on the planning
-/// thread and moved to the worker that builds that spend. A Schnorr-style
-/// proof must never reuse its randomness across two statements: two
-/// responses that share a nonce over different challenges solve for the
-/// secret. In a build without `seeded-rng` the type has no value, so an
-/// `Option<SpendSeeds>` is always `None` and the seeded arms do not exist.
+/// thread (or built by the forge from its own derivation,
+/// [`Self::from_parts`]) and moved to the worker that builds that spend. A
+/// Schnorr-style proof must never reuse its randomness across two
+/// statements: two responses that share a nonce over different challenges
+/// solve for the secret. In a build without `seeded-rng` the type has no
+/// value, so an `Option<SpendSeeds>` is always `None` and the seeded arms do
+/// not exist.
 #[cfg(feature = "seeded-rng")]
 pub struct SpendSeeds {
-    pub(crate) sign: Zeroizing<[u8; 32]>,
-    pub(crate) open: Zeroizing<[u8; 32]>,
+    pub(crate) proofs: shekyl_tx_builder::ProofSeeds,
+    pub(crate) slots: Zeroizing<[u8; 32]>,
+}
+
+#[cfg(feature = "seeded-rng")]
+impl SpendSeeds {
+    /// One spend's seeds from the four a caller derived for it: the range
+    /// proof's, the blinds', the membership proof's and the spend slots'.
+    /// The caller's derivation must give every spend its own four (the
+    /// forge's `seed_for` keys them by role and by the spend's place in the
+    /// plan).
+    #[must_use]
+    pub fn from_parts(
+        range: [u8; 32],
+        blinds: [u8; 32],
+        membership: [u8; 32],
+        slots: [u8; 32],
+    ) -> Self {
+        Self {
+            proofs: shekyl_tx_builder::ProofSeeds {
+                range: Zeroizing::new(range),
+                blinds: Zeroizing::new(blinds),
+                membership: Zeroizing::new(membership),
+            },
+            slots: Zeroizing::new(slots),
+        }
+    }
 }
 
 /// An unseeded build has no seeded spend.
@@ -106,8 +135,8 @@ impl SpendPlan {
     }
 
     /// The next spend's seeds. Fresh for this spend, and not the seeds of
-    /// any other: the membership proof, the range proof and the ML-DSA spend
-    /// slots all derive their nonces from these bytes. Two spends from one
+    /// any other: the range proof, the blinds, the membership proof and the
+    /// ML-DSA spend slots each derive their nonces from their own bytes. Two spends from one
     /// seed would reuse those nonces over two different statements.
     ///
     /// Call this before the spend's thread starts. The bytes name the spend's
@@ -116,10 +145,18 @@ impl SpendPlan {
     #[must_use]
     pub fn next_spend(&mut self) -> SpendSeeds {
         use rand_chacha::rand_core::RngCore;
-        let mut sign = Zeroizing::new([0u8; 32]);
-        let mut open = Zeroizing::new([0u8; 32]);
-        self.stream.fill_bytes(&mut *sign);
-        self.stream.fill_bytes(&mut *open);
-        SpendSeeds { sign, open }
+        let mut draw = || {
+            let mut seed = Zeroizing::new([0u8; 32]);
+            self.stream.fill_bytes(&mut *seed);
+            seed
+        };
+        SpendSeeds {
+            proofs: shekyl_tx_builder::ProofSeeds {
+                range: draw(),
+                blinds: draw(),
+                membership: draw(),
+            },
+            slots: draw(),
+        }
     }
 }

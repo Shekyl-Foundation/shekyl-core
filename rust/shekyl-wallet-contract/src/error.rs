@@ -294,6 +294,14 @@ wallet_rpc_error_codes! {
     /// The daemon refused a call as outside this wallet's grant: the
     /// connection holds no grant the operation needs.
     DaemonGrantRefused = -29212 => "DAEMON_GRANT_REFUSED",
+    /// Something other than this account's node answers at "this
+    /// computer"'s rendezvous (`RPC_CHANNEL.md` RT-15): a security failure.
+    /// The wallet did not connect, and does not retry or try another leg.
+    DaemonPeerCheckFailed = -29213 => "DAEMON_PEER_CHECK_FAILED",
+    /// "This computer"'s node runs as a service, which a wallet reaches
+    /// only over the channel (RT-W12); until then it names the service's
+    /// view listener as `daemon-address`. Nothing was dialled.
+    DaemonIsAService = -29214 => "DAEMON_IS_A_SERVICE",
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300 => "PROOF_MALFORMED",
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -678,6 +686,20 @@ pub enum WalletRpcError {
          that holds it, or to your own node"
     )]
     DaemonGrantRefused,
+    /// `-29213`: something other than this account's node answers at "this
+    /// computer"'s rendezvous. A security failure: never retried.
+    #[error(
+        "something other than your Shekyl node is answering at its local address on this \
+         computer — the wallet did not connect. Check what is running as your node"
+    )]
+    DaemonPeerCheckFailed,
+    /// `-29214`: "this computer"'s node runs as a service. `view` is its
+    /// view listener when it has one: the `daemon-address` to set.
+    #[error("{}", shekyl_rpc_client::service_refusal(*view))]
+    DaemonIsAService {
+        /// The service's view listener, as its rendezvous record names it.
+        view: Option<std::net::SocketAddr>,
+    },
     /// `-29210`: the chain kept reorganizing during refresh.
     #[error(
         "the chain kept reorganizing during refresh and nothing was merged — retry once it settles"
@@ -1305,6 +1327,8 @@ impl WalletRpcError {
             Self::DaemonChainMismatch { .. } => WalletRpcErrorCode::DaemonChainMismatch,
             Self::DaemonProtocolViolation => WalletRpcErrorCode::DaemonProtocolViolation,
             Self::DaemonGrantRefused => WalletRpcErrorCode::DaemonGrantRefused,
+            Self::DaemonPeerCheckFailed => WalletRpcErrorCode::DaemonPeerCheckFailed,
+            Self::DaemonIsAService { .. } => WalletRpcErrorCode::DaemonIsAService,
             Self::ChainUnstable => WalletRpcErrorCode::ChainUnstable,
             Self::ResyncRequired { .. } => WalletRpcErrorCode::ResyncRequired,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
@@ -1489,6 +1513,9 @@ impl WalletRpcError {
                 "ref_anchor_age": ref_anchor_age,
             })),
             Self::SubmitLoopBreakerTripped { cause } => Some(json!({ "cause": cause })),
+            Self::DaemonIsAService { view } => {
+                Some(json!({ "view": view.map(|view| view.to_string()) }))
+            }
             Self::DaemonFeeUnreasonable {
                 reason,
                 rate,
@@ -1844,6 +1871,17 @@ pub(crate) fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcEr
         DaemonFault::NotPermitted => {
             tracing::warn!(detail, "daemon refused the call as outside the grant");
             WalletRpcError::DaemonGrantRefused
+        }
+        DaemonFault::PeerCheck => {
+            tracing::error!(
+                detail,
+                "the peer at this computer's rendezvous failed the check"
+            );
+            WalletRpcError::DaemonPeerCheckFailed
+        }
+        DaemonFault::Service(view) => {
+            tracing::warn!(detail, "this computer's node is a service; nothing dialled");
+            WalletRpcError::DaemonIsAService { view }
         }
     }
 }
@@ -2317,6 +2355,10 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 cause: "daemon",
                 detail,
             },
+            // Not that retry. A failed peer check and a service at this
+            // computer are the daemon-target codes, the same ones every
+            // other wallet verb uses.
+            E::DaemonTarget(fault) => from_daemon_fault(fault, "unstake"),
             E::FeeEstimate(e) => e.into(),
             E::FeeUnreasonable {
                 reason,
@@ -3832,7 +3874,56 @@ mod tests {
             (DaemonFault::Protocol, C::DaemonProtocolViolation, None),
             (DaemonFault::FeeResponse, C::DaemonFeeResponseInvalid, None),
             (DaemonFault::Internal, C::InternalError, None),
+            (DaemonFault::NotPermitted, C::DaemonGrantRefused, None),
+            (DaemonFault::PeerCheck, C::DaemonPeerCheckFailed, None),
+            (
+                DaemonFault::Service(Some("127.0.0.1:11030".parse().unwrap())),
+                C::DaemonIsAService,
+                Some(json!({ "view": "127.0.0.1:11030" })),
+            ),
+            (
+                DaemonFault::Service(None),
+                C::DaemonIsAService,
+                Some(json!({ "view": null })),
+            ),
         ]
+    }
+
+    /// A service at "this computer" says what to set (Rick, 2026-11-17):
+    /// the view listener as the `daemon-address`, or, with none, that the
+    /// node serves no wallet leg and `rpc-view-listen`. A failed peer check
+    /// is reported as the security failure it is.
+    #[test]
+    fn a_service_here_names_the_setting_and_a_peer_check_is_a_security_failure() {
+        let view = from_daemon_fault(
+            DaemonFault::Service(Some("127.0.0.1:11030".parse().unwrap())),
+            DAEMON_TEXT,
+        );
+        assert_eq!(
+            view.message(),
+            "The node on this computer runs as a service. Until wallets reach a service over \
+             the channel, set daemon-address = 127.0.0.1:11030"
+        );
+        let none = from_daemon_fault(DaemonFault::Service(None), DAEMON_TEXT).message();
+        assert!(none.contains("serves no wallet leg"), "{none}");
+        assert!(none.contains("rpc-view-listen"), "{none}");
+        let peer = from_daemon_fault(DaemonFault::PeerCheck, DAEMON_TEXT).message();
+        assert!(peer.contains("did not connect"), "{peer}");
+
+        // The exit reports the same codes, not a retry. Red edit: map
+        // `UnstakeError::DaemonTarget` to `UnstakeRetryTransient`.
+        use shekyl_engine_core::UnstakeError;
+        let exit_peer: WalletRpcError = UnstakeError::DaemonTarget(DaemonFault::PeerCheck).into();
+        assert_eq!(exit_peer.code(), WalletRpcErrorCode::DaemonPeerCheckFailed);
+        let exit_service: WalletRpcError = UnstakeError::DaemonTarget(DaemonFault::Service(Some(
+            "127.0.0.1:11030".parse().unwrap(),
+        )))
+        .into();
+        assert_eq!(exit_service.code(), WalletRpcErrorCode::DaemonIsAService);
+        assert_ne!(
+            exit_service.code(),
+            WalletRpcErrorCode::UnstakeRetryTransient
+        );
     }
 
     /// A daemon fault answers the same code whichever operation met it, and

@@ -116,8 +116,8 @@ pub(crate) struct ClaimLegState {
 ///    registration.
 /// 4. **Fee + transport:** the daemon's live economy estimate over the
 ///    claim envelope; the claim-source fetch rides a fresh loopback
-///    [`LocalNodeRpc`] over the driver's daemon address (a non-loopback
-///    daemon is a named, alarmable refusal).
+///    [`LocalNodeRpc`] over the driver's daemon target (this computer, or a
+///    loopback address; any other address is a named, alarmable refusal).
 /// 5. **Dispatch** through [`Engine::submit_emission_claim`] — the CB-3
 ///    seam, persist-before-dispatch and the audited submitter choke point
 ///    included.
@@ -137,9 +137,10 @@ where
     P: PendingTxEngine,
 {
     pub(crate) engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
-    /// The loopback daemon endpoint the claim-source fetch rides — the
-    /// same embedder-supplied address leg 2 serves over.
-    pub(crate) daemon_address: String,
+    /// The wallet's daemon target the claim-source fetch rides (this
+    /// computer, or a loopback address) — the same embedder-supplied target
+    /// leg 2 serves over.
+    pub(crate) daemon: shekyl_rpc_transport::DaemonTarget,
     /// The driver's shared board ([`super::CadenceHandle::alarms`]).
     pub(crate) alarms: Arc<OperatorAlarms>,
     pub(crate) state: Arc<std::sync::Mutex<ClaimLegState>>,
@@ -246,7 +247,7 @@ where
 
     fn fire(&mut self, tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let weak = Weak::clone(&self.engine);
-        let address = self.daemon_address.clone();
+        let target = self.daemon.clone();
         let alarms = Arc::clone(&self.alarms);
         let state = Arc::clone(&self.state);
         Box::pin(async move {
@@ -300,7 +301,7 @@ where
                 Err(e) => return claim_fault(&state, &alarms, settled, &e.into()),
             };
             let claim_rpc =
-                match super::super::prpc::LocalNodeRpc::new(address, CLAIM_RPC_TIMEOUT).await {
+                match super::super::prpc::LocalNodeRpc::new(&target, CLAIM_RPC_TIMEOUT).await {
                     Ok(rpc) => rpc,
                     Err(e) => {
                         // Named requirement (rule 82): the claim-source fetch is

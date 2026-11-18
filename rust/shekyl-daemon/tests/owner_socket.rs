@@ -196,7 +196,10 @@ impl Node {
     /// published, found as a client finds it: by the daemon's own naming
     /// for regtest's default instance, in the harness's directory.
     fn socket(&self) -> Option<PathBuf> {
-        let path = target(&self.dir).path().to_path_buf();
+        let path = target(&self.dir)
+            .path()
+            .expect("a named directory")
+            .to_path_buf();
         path.exists().then_some(path)
     }
 
@@ -248,16 +251,20 @@ fn target(dir: &Path) -> LocalTarget {
         Network::Regtest,
         &Instance::Default,
         Some(&rendezvous_dir(dir)),
+        None,
     )
-    .expect("a named directory")
 }
 
 /// One JSON-RPC call over the owner's leg at `rendezvous`, through the
 /// client resolved in the rendezvous's own directory; the reply's body, or
 /// `None` while nothing serves it.
 fn post(rendezvous: &Path, method: &str) -> Option<String> {
-    let target =
-        LocalTarget::resolve(Network::Regtest, &Instance::Default, rendezvous.parent()).ok()?;
+    let target = LocalTarget::resolve(
+        Network::Regtest,
+        &Instance::Default,
+        rendezvous.parent(),
+        None,
+    );
     let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}"}}"#);
     let reply = target
         .post(JSON_RPC_ROUTE, body.as_bytes(), Duration::from_secs(10))

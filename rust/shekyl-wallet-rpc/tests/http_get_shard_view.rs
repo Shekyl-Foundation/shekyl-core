@@ -31,7 +31,7 @@ use shekyl_rpc_types::{
 };
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState};
-use shekyl_wallet_rpc::tenant::{DaemonEndpoint, TenantState};
+use shekyl_wallet_rpc::tenant::{DaemonTarget, TenantState};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -101,8 +101,8 @@ fn state(dir: &TempDir, daemon_address: String) -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             dir.path().to_path_buf(),
             Network::Stagenet,
-            DaemonEndpoint {
-                address: daemon_address,
+            DaemonTarget::Address {
+                url: daemon_address,
                 proxy: None,
             },
         )),

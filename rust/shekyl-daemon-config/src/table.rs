@@ -49,6 +49,9 @@ pub fn runtime_owner(name: &str) -> Option<RuntimeOwner> {
 pub const LEVEL: Kind = Kind::OneOf(LEVELS);
 const ENDPOINT: Kind = Kind::Endpoint(EndpointRule::Any);
 const LOOPBACK: Kind = Kind::Endpoint(EndpointRule::Loopback);
+/// A loopback listener whose address may come without a port: the view
+/// listener takes the network's view port then (Rick, 2026-11-17).
+const LOOPBACK_LISTEN: Kind = Kind::Listen(EndpointRule::Loopback);
 const GLOBAL: Kind = Kind::Endpoint(EndpointRule::GlobalUnicast);
 const PEER: Kind = Kind::PeerEndpoint(PeerRule::Any);
 /// The instance-name rule is the channel crate's, where the name is hashed
@@ -285,7 +288,7 @@ const ROWS: &[Row] = &[
     public("rpc-listen", Kind::List(&ENDPOINT), Default::Value("none"), Surface::Both, "The authenticated channel's listeners: enrolled clients reach the node here over the Noise channel, from this host or another. Any address, a wildcard included; `none` is no channel listener."),
     public("rpc-socket-dir", Kind::Path, Default::Unset, Surface::Both, "The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory."),
     public("rpc-admin-listen", Kind::List(&LOOPBACK), Default::Derived("127.0.0.1 and the network's rpc port"), Surface::Both, "The plaintext full-access listeners, loopback only; `none` is no admin listener."),
-    public("rpc-view-listen", Kind::List(&LOOPBACK), Default::Value("none"), Surface::Both, "The plaintext view listeners, loopback only."),
+    public("rpc-view-listen", Kind::List(&LOOPBACK_LISTEN), Default::Value("none"), Surface::Both, "The plaintext view listeners, loopback only; an address with no port takes the network's view port."),
     public("rpc-cors-origin", Kind::List(&ORIGIN), Default::Value("none"), Surface::Both, "Web origins allowed to call the RPC; `none` denies all. `*` is refused."),
     public("rpc-connections-max", COUNT, Default::Value("25"), Surface::Both, "The RPC connection cap."),
     rejected("rpc-login", NO_TLS),

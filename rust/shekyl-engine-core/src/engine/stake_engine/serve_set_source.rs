@@ -294,7 +294,17 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         let vouched = match fetch_vouched_claim_source(&self.rpc, &self.p_id).await {
             Ok(v) => v,
             Err(e) => {
-                self.break_ledger(TimelineBreak::DaemonUnreachable);
+                // A target refusal is not "the daemon did not answer". The
+                // ledger forgets under the fault the fetch returned.
+                let why = match &e {
+                    crate::engine::emission_source::EmissionSourceError::Rpc(error)
+                        if error.fault().is_target_refusal() =>
+                    {
+                        TimelineBreak::from_facts_error(error)
+                    }
+                    _ => TimelineBreak::DaemonUnreachable,
+                };
+                self.break_ledger(why);
                 return Err(format!("claim-source fetch failed: {e}"));
             }
         };
@@ -337,6 +347,15 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                         "serve-set refresh: the daemon is not one this wallet can use — it \
                          disagrees on its identity. No pin is released and holdings are \
                          retained. Connect to a daemon on this wallet's network and build"
+                    ),
+                    TimelineBreak::PeerCheckFailed => tracing::error!(
+                        "serve-set refresh: something other than this account's node answers \
+                         at this computer's rendezvous, so the wallet did not connect. No pin is \
+                         released and holdings are retained"
+                    ),
+                    TimelineBreak::ServiceHere(view) => tracing::error!(
+                        "serve-set refresh: {}. No pin is released and holdings are retained",
+                        shekyl_rpc_client::service_refusal(view)
                     ),
                     TimelineBreak::WitnessBlockReplaced => tracing::warn!(
                         "serve-set refresh: the block the sync witness stood on was replaced \

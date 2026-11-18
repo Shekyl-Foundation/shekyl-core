@@ -5,16 +5,14 @@
 
 //! A service's machine-wide rendezvous record (`RPC_CHANNEL.md` §7.1;
 //! `INPUT_GRAMMAR.md` IG-Q105): `<the service's rendezvous
-//! directory>/shekyl-<name>`, readable by users, naming the loopback channel
-//! address and the daemon's public bundle, so a client of any account on
-//! the machine finds "this computer"'s service.
+//! directory>/shekyl-<name>`, readable by users, so a client of any account
+//! on the machine finds "this computer"'s service.
 //!
-//! **Published only when the service listens on the channel** (Rick,
-//! 2026-11-14): `rpc-listen` is off by default and no channel port is
-//! ruled, so a service started without it publishes nothing and says so at
-//! start. RT-W12 must give a service a loopback channel listener by
-//! default, on a channel port ruled then, before it retires the plaintext
-//! admin listener: until then local tools reach a service on that listener.
+//! **Always published** (Rick, 2026-11-17, amending 2026-11-14's "only when
+//! the service listens on the channel"): a wallet on this machine reads it to
+//! tell a service from no node at all. It names the loopback channel address
+//! and the daemon's public bundle only when `rpc-listen` is on, and the view
+//! listener only when `rpc-view-listen` is on.
 //!
 //! The record is published after the listener is bound, atomically (written
 //! to a fresh file beside it and renamed over it), and removed on a clean
@@ -25,7 +23,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use shekyl_rpc_rendezvous::ServiceRecord;
+use shekyl_rpc_rendezvous::{ServiceChannel, ServiceRecord};
 
 use shekyl_os_account::private_file::{Access, StagedWrite};
 
@@ -38,20 +36,28 @@ pub struct ServiceRendezvous {
 }
 
 impl ServiceRendezvous {
-    /// Publish the record at `path`, naming the channel address a local
-    /// client dials, chosen from the bound listeners ([`local_address`]),
-    /// and `bundle`.
+    /// Publish the record at `path`. `channel` is the bound channel
+    /// listeners and the daemon's bundle, when the channel is on: the record
+    /// names the address a local client dials ([`local_address`]). `view` is
+    /// the bound view listeners: the record names the first. A previous
+    /// run's record, which a crash left, is replaced.
     ///
     /// # Errors
     ///
-    /// No listener to name, or the write or the rename failed.
-    pub fn publish(path: &Path, bound: &[SocketAddr], bundle: &[u8]) -> std::io::Result<Self> {
-        let channel = local_address(bound).ok_or_else(|| {
-            std::io::Error::other("a service rendezvous needs a channel listener")
-        })?;
+    /// The write or the rename failed.
+    pub fn publish(
+        path: &Path,
+        channel: Option<(&[SocketAddr], &[u8])>,
+        view: &[SocketAddr],
+    ) -> std::io::Result<Self> {
         let record = ServiceRecord {
-            channel,
-            bundle: bundle.to_vec(),
+            channel: channel.and_then(|(bound, bundle)| {
+                local_address(bound).map(|address| ServiceChannel {
+                    address,
+                    bundle: bundle.to_vec(),
+                })
+            }),
+            view: view.first().copied(),
         }
         .bytes();
         let journal = StagedWrite::create(path, &record, Access::WorldReadable)?;
@@ -66,24 +72,6 @@ impl ServiceRendezvous {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
-    }
-}
-
-/// Remove a record at `path`, if one is there.
-///
-/// A service that is not listening publishes nothing. A previous run may
-/// have left the file (it is removed on a clean stop, and a crash does
-/// not run that). The path is this instance's, so the leftover is this
-/// instance's previous record.
-///
-/// # Errors
-///
-/// The file is there and could not be removed.
-pub fn retire(path: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
     }
 }
 
@@ -146,11 +134,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("shekyl-0123456789abcdef01234567");
         let bound = ["0.0.0.0:28100".parse().unwrap()];
-        let published = ServiceRendezvous::publish(&path, &bound, &[0xab; 4]).unwrap();
+        let view = ["127.0.0.1:11030".parse().unwrap()];
+        let published =
+            ServiceRendezvous::publish(&path, Some((&bound, &[0xab; 4])), &view).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(
             text,
-            "shekyl-service-rendezvous 1\nchannel 127.0.0.1:28100\nbundle abababab\n"
+            "shekyl-service-rendezvous 2\nchannel 127.0.0.1:28100\nbundle abababab\nview 127.0.0.1:11030\n"
         );
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o644);
@@ -158,22 +148,27 @@ mod tests {
         drop(published);
         assert!(!path.exists(), "a clean stop removes the record");
 
-        let published = ServiceRendezvous::publish(&path, &bound, &[1]).unwrap();
+        let published = ServiceRendezvous::publish(&path, Some((&bound, &[1])), &[]).unwrap();
         std::fs::write(&path, b"someone else's").unwrap();
         drop(published);
         assert!(path.exists(), "a record this daemon no longer owns is left");
     }
 
-    /// A start that is not listening removes a record a crash left, and
-    /// removing one that is already gone is the same state. Red edit:
-    /// skip `retire` when `rpc-listen` is none, and the file stays.
+    /// A service with neither listener still publishes its record, so a
+    /// wallet tells it from no node, and a crash's leftover is replaced.
+    /// Red edit: publish nothing when the channel is off, and the file is
+    /// the leftover.
     #[test]
-    fn a_record_left_by_a_crash_is_removed_when_nothing_is_published() {
+    fn a_service_with_no_listener_still_publishes_its_record() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("shekyl-record");
-        std::fs::write(&path, b"shekyl-service-rendezvous 1\n").unwrap();
-        retire(&path).unwrap();
+        std::fs::write(&path, b"shekyl-service-rendezvous 2\nview 127.0.0.1:1\n").unwrap();
+        let published = ServiceRendezvous::publish(&path, None, &[]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "shekyl-service-rendezvous 2\n"
+        );
+        drop(published);
         assert!(!path.exists());
-        retire(&path).unwrap();
     }
 }

@@ -279,6 +279,7 @@ async fn claim_of(
             },
             connecting: claim.connecting,
             tx_key: claim.tx_key,
+            seeds: None,
         },
     )
     .await

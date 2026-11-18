@@ -27,7 +27,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState};
-use shekyl_wallet_rpc::tenant::{DaemonEndpoint, TenantState};
+use shekyl_wallet_rpc::tenant::{DaemonTarget, TenantState};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 
@@ -47,8 +47,8 @@ fn state(dir: &TempDir) -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             dir.path().to_path_buf(),
             Network::Stagenet,
-            DaemonEndpoint {
-                address: "http://127.0.0.1:1".into(),
+            DaemonTarget::Address {
+                url: "http://127.0.0.1:1".into(),
                 proxy: None,
             },
         )),

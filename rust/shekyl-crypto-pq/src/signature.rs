@@ -588,6 +588,29 @@ pub fn sign_emission_claim(
     HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_EMISSION_CLAIM, message.as_bytes())
 }
 
+/// [`sign_emission_claim`] with the ML-DSA nonce drawn from `ml_dsa_seed`
+/// ([`HybridEd25519MlDsa::sign_with_ml_dsa_seed`]), so a forged chain's
+/// emission claims come out the same every forging (`CHAIN_FORGE.md` §5.3,
+/// seam T3). Deterministic signing only (the TEST_ONLY `seeded-rng` feature,
+/// or this crate's own tests).
+///
+/// # Errors
+///
+/// As [`sign_emission_claim`].
+#[cfg(any(test, feature = "seeded-rng"))]
+pub fn sign_emission_claim_with_ml_dsa_seed(
+    secret: &HybridSecretKey,
+    message: &Framed64,
+    ml_dsa_seed: &[u8; ML_DSA_SIGNING_SEED_LEN],
+) -> Result<HybridSignature, CryptoError> {
+    HybridEd25519MlDsa.sign_with_ml_dsa_seed(
+        secret,
+        SCHEME_DOMAIN_EMISSION_CLAIM,
+        message.as_bytes(),
+        ml_dsa_seed,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

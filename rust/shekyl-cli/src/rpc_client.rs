@@ -283,8 +283,7 @@ impl RpcSession {
     pub fn host_in_process(
         wallet_dir: PathBuf,
         network: Network,
-        daemon_address: String,
-        proxy: Option<String>,
+        daemon: shekyl_wallet_rpc::tenant::DaemonTarget,
         debug: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Multi-thread runtime: Engine create/open paths use
@@ -295,10 +294,7 @@ impl RpcSession {
             .build()?;
         let handle = runtime
             .block_on(shekyl_wallet_rpc::spawn_in_process(
-                wallet_dir,
-                network,
-                daemon_address,
-                proxy,
+                wallet_dir, network, daemon,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
         // A stop signal (SIGTERM, SIGINT, SIGHUP; the Windows console's

@@ -9,7 +9,7 @@
 .github/FUNDING.yml	none
 .github/actions/build-randomx-v2-ref/action.yml	randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet
 .github/actions/fuzz-one-target/action.yml	fuzz-nightly:fuzz,fuzz-nightly:fuzz-weekly
-.github/actions/install-rust/action.yml	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,build:build-ubuntu,depends-aarch64-kats:aarch64-kats,depends:build-cross,fuzz-harness:compile,fuzz-nightly:fuzz-build,gf7-no-emit-guard:no-emit-guard,nightly-live-daemon-slow:slow-gates,nightly:bench-full,nightly:chain-ingest-ignored,nightly:economics-sim-ignored,nightly:hasher-ignored,nightly:producer-gate,nightly:proptest-exhaustive,nightly:staking-sim-ignored,nightly:store-ignored,nightly:trybuild-ignored,nightly:wire-ignored,randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet,rust-audit-test:economics-sim-narrations,rust-audit-test:rust-audit-and-test,schema-snapshot:assert-snapshots
+.github/actions/install-rust/action.yml	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,build:build-ubuntu,chain-forge:aarch64,chain-forge:x86_64,depends-aarch64-kats:aarch64-kats,depends:build-cross,fuzz-harness:compile,fuzz-nightly:fuzz-build,gf7-no-emit-guard:no-emit-guard,nightly-live-daemon-slow:slow-gates,nightly:bench-full,nightly:chain-ingest-ignored,nightly:economics-sim-ignored,nightly:hasher-ignored,nightly:producer-gate,nightly:proptest-exhaustive,nightly:staking-sim-ignored,nightly:store-ignored,nightly:trybuild-ignored,nightly:wire-ignored,randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet,rust-audit-test:economics-sim-narrations,rust-audit-test:rust-audit-and-test,schema-snapshot:assert-snapshots
 .github/actions/set-make-job-count/action.yml	build:build-macos,build:build-ubuntu,nightly-live-daemon-slow:slow-gates,weekly-os:build-arch,weekly-os:build-windows-msys2
 .github/codeql/config.yml	codeql:analyze-rust
 .github/pull_request_template.md	none
@@ -65,7 +65,7 @@ scripts/ci/check_launch_recipes.py	docs-gates:check-doc-links
 scripts/ci/check_measurement_ledger.py	docs-gates:check-doc-links
 scripts/ci/check_measurement_spans.py	rust-audit-test:rust-audit-and-test
 scripts/ci/check_multisig_doc_literals.sh	grep-gates:grep-gates
-scripts/ci/check_network_uniformity.py	grep-gates:grep-gates
+scripts/ci/check_network_uniformity.py	docs-gates:check-doc-links,grep-gates:grep-gates
 scripts/ci/check_no_claim_era_spec.py	docs-gates:check-doc-links
 scripts/ci/check_no_first_party_c.py	build:build-ubuntu,grep-gates:grep-gates
 scripts/ci/check_no_orphan_tor.sh	tor-pin-verify:verify
@@ -98,7 +98,7 @@ scripts/ci/check_store_error_conversion_ban.py	docs-gates:check-doc-links
 scripts/ci/check_store_invariant_register.py	docs-gates:check-doc-links
 scripts/ci/check_store_unlock_time_projection.py	docs-gates:check-doc-links
 scripts/ci/check_template_secrets.sh	grep-gates:grep-gates
-scripts/ci/check_test_only_features.py	grep-gates:grep-gates,rust-audit-test:rust-audit-and-test
+scripts/ci/check_test_only_features.py	docs-gates:check-doc-links,grep-gates:grep-gates,rust-audit-test:rust-audit-and-test
 scripts/ci/check_tor_pin_targets.py	grep-gates:grep-gates
 scripts/ci/check_transit_marker.sh	grep-gates:grep-gates
 scripts/ci/check_tx_weight_literals.py	docs-gates:check-doc-links
@@ -117,6 +117,7 @@ scripts/ci/drop_runner_chrome_apt_source.sh	benchmarks:capture-pr,benchmarks:pro
 scripts/ci/engine_decomposition_ratchet.conf	grep-gates:grep-gates
 scripts/ci/followups_owner_grandfather.txt	docs-gates:check-doc-links
 scripts/ci/gui_wallet_core_deps.toml	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
+scripts/ci/ignored_set_chain_forge.sh	chain-forge:aarch64,chain-forge:x86_64,rust-audit-test:rust-audit-and-test
 scripts/ci/ignored_set_chain_ingest.sh	nightly:chain-ingest-ignored,nightly:report-red,rust-audit-test:rust-audit-and-test
 scripts/ci/ignored_set_chain_store.sh	nightly:store-ignored,rust-audit-test:rust-audit-and-test
 scripts/ci/ignored_set_economics_sim.sh	nightly:economics-sim-ignored,nightly:report-red,rust-audit-test:economics-sim-narrations,rust-audit-test:rust-audit-and-test

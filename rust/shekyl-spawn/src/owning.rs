@@ -19,6 +19,14 @@
 //! - **Life**: the daemon reads only to see the close ([`OwningConnection::
 //!   wait_for_close`]). The launcher's close or death closes it, and the daemon
 //!   stops. Bytes from the launcher are discarded: it is not a control channel.
+//!   A launcher that shuts down its writing half and keeps reading is a
+//!   close too: the daemon reads end of stream either way.
+//! - **The daemon's end closes when its process exits, not before.** The
+//!   daemon holds a handle from [`OwningConnection::try_clone`] until its
+//!   main returns. A launcher that reads end of stream on its own end
+//!   therefore knows the daemon is gone: its rendezvous removed, its data
+//!   directory's lock released. That read is what a launcher waits on before
+//!   it starts the next daemon; it needs no timer and no process handle.
 
 use std::io::{self, Read, Write};
 
@@ -68,7 +76,8 @@ pub struct OwningConnection(End);
 
 impl OwningConnection {
     /// A second handle on the same connection, close-on-exec / not
-    /// inheritable as the first: one for the ready line, one for the wait.
+    /// inheritable as the first: one for the ready line, one for the wait,
+    /// and one the daemon holds until its main returns.
     ///
     /// # Errors
     ///

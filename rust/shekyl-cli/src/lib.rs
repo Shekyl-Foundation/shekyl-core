@@ -15,6 +15,7 @@ pub mod daemon;
 pub mod display;
 pub mod enroll;
 pub mod grammar;
+mod node_leg;
 pub mod outcome;
 pub mod resolve;
 pub mod rpc_client;

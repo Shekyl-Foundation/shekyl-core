@@ -3815,6 +3815,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-chain-forge"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "hex",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "redb",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shekyl-archival-fetch-sched",
+ "shekyl-archival-retention",
+ "shekyl-bulletproofs",
+ "shekyl-bundle-producer",
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
+ "shekyl-curve-primitives",
+ "shekyl-genesis-tool",
+ "shekyl-harness-spender",
+ "shekyl-hash-budget",
+ "shekyl-hasher",
+ "shekyl-network",
+ "shekyl-p-host",
+ "shekyl-p-loopback",
+ "shekyl-store-codec",
+ "shekyl-tx-builder",
+ "shekyl-types",
+ "shekyl-wire",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml 0.8.23",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-chain-ingest"
 version = "3.1.0"
 dependencies = [
@@ -5181,6 +5221,7 @@ dependencies = [
  "shekyl-types",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

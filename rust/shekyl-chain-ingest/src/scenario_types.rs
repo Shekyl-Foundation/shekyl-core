@@ -277,7 +277,6 @@ impl Mined {
 
 /// A block this driver formed and did not connect ([`Scenario::assemble_unconnected`](super::Scenario::assemble_unconnected)).
 /// Its header is in the driver's target ledger; the store has never held it.
-#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct Unconnected {
     /// The connecting height the facts named.
