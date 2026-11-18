@@ -56,6 +56,10 @@ pub struct RelayConfig {
     /// The connectors this node built. The zone's embargo timers and its
     /// hidden slot are derived from their declarations.
     pub connectors: Vec<ConnectorId>,
+    /// The built connectors whose sessions this node wraps in an encryption
+    /// layer the transport adds (Noise on clearnet, when this node chose
+    /// it). Cover reads it with each connector's native encryption.
+    pub added_encryption: Vec<ConnectorId>,
 }
 
 impl RelayConfig {
@@ -63,13 +67,18 @@ impl RelayConfig {
     /// seconds of jitter (`DandelionParams::inherited`), the carrier off
     /// unless asked.
     #[must_use]
-    pub fn inherited(connectors: Vec<ConnectorId>, noise: bool) -> Self {
+    pub fn inherited(
+        connectors: Vec<ConnectorId>,
+        added_encryption: Vec<ConnectorId>,
+        noise: bool,
+    ) -> Self {
         Self {
             stems: 2,
             min_epoch_secs: 600,
             epoch_jitter_secs: 30,
             noise,
             connectors,
+            added_encryption,
         }
     }
 }
@@ -329,6 +338,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         config.stems,
         config.noise,
         &config.connectors,
+        &config.added_encryption,
         now,
         &mut *rng,
     )

@@ -293,7 +293,11 @@ impl Network {
 
         // The relay owner.
         let relay = relay::start(RelayParts {
-            config: RelayConfig::inherited(plan.connectors(), plan.relay_noise),
+            config: RelayConfig::inherited(
+                plan.connectors(),
+                plan.added_encryption(),
+                plan.relay_noise,
+            ),
             pool: door,
             node_sync,
             timing: timing.clone(),

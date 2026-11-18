@@ -27,6 +27,7 @@ fn zone(rng: &mut SplitMix64) -> Relay {
         2,
         false,
         &[ConnectorId::Clearnet],
+        &[],
         0,
         rng,
     )
@@ -43,6 +44,7 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
         2,
         false,
         &[ConnectorId::Clearnet],
+        &[],
         0,
         &mut rng,
     )
@@ -68,6 +70,7 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
         2,
         false,
         &[ConnectorId::Clearnet],
+        &[],
         0,
         &mut rng,
     )
@@ -105,6 +108,7 @@ fn a_hidden_connector_origin_does_not_draw_a_clear_edge() {
         2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )
@@ -139,6 +143,7 @@ fn a_hidden_connector_refuses_a_stem_width_below_two() {
             stems,
             false,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
+            &[],
             0,
             &mut rng,
         );
@@ -152,6 +157,7 @@ fn a_hidden_connector_refuses_a_stem_width_below_two() {
         1,
         false,
         &[ConnectorId::Clearnet],
+        &[],
         0,
         &mut rng,
     )
@@ -166,6 +172,7 @@ fn a_restricted_hop_0_is_constant_within_the_epoch() {
         2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )
@@ -209,6 +216,7 @@ fn eight_clearnet_and_one_tor_originates_every_epoch() {
         2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )
@@ -249,6 +257,7 @@ fn four_hidden_peers_share_the_hidden_slot() {
         2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )
@@ -320,6 +329,7 @@ fn the_hidden_slot_origin_uses_the_ordinary_carrier_beside_a_clearnet_slot() {
         2,
         true,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -348,7 +358,7 @@ fn the_hidden_slot_origin_uses_the_ordinary_carrier_beside_a_clearnet_slot() {
     assert_eq!(
         dispatch.carrier,
         RelayCarrier::Ordinary,
-        "no cover on Tor: the hidden slot's channel carries nothing"
+        "the own-edge leaves on the ordinary connection"
     );
 }
 
@@ -360,6 +370,7 @@ fn a_slotted_tor_own_edge_still_leaves_immediately() {
         2,
         true,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -377,7 +388,7 @@ fn a_slotted_tor_own_edge_still_leaves_immediately() {
     assert_eq!(
         dispatch.carrier,
         RelayCarrier::Ordinary,
-        "no cover on Tor, even when the own-edge occupies a stem slot"
+        "the own-edge leaves on the ordinary connection, even from a stem slot"
     );
 }
 
@@ -391,6 +402,7 @@ fn a_clearnet_slot_rides_the_cover_channel() {
             2,
             true,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -426,6 +438,7 @@ fn an_empty_hidden_pool_does_not_refresh_the_stem_map() {
         2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )
@@ -476,6 +489,7 @@ fn a_clearnet_origin_is_slot_aligned() {
         2,
         true,
         &[ConnectorId::Clearnet],
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )
@@ -495,10 +509,14 @@ fn a_clearnet_origin_is_slot_aligned() {
     );
 }
 
-/// A forwarded stem on Tor takes the ordinary connection even when the
-/// carrier is on. The envelope runs on the open link, not on volume cover.
+/// A forwarded stem on Tor rides its slot's cover channel when the carrier
+/// is on (`CVR-R3`): Tor encrypts, and an observer at this node's end still
+/// sees when its connection carries bytes.
+///
+/// Red edit: reinstate a refusal of Tor sessions in `noise_destination`; the
+/// stem takes the ordinary connection.
 #[test]
-fn a_forwarded_tor_stem_takes_no_envelope() {
+fn a_forwarded_tor_stem_rides_the_cover_channel() {
     let mut rng = SplitMix64::new(14);
     let mut built = None;
     for _ in 0..10_000 {
@@ -507,6 +525,7 @@ fn a_forwarded_tor_stem_takes_no_envelope() {
             2,
             true,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -520,10 +539,10 @@ fn a_forwarded_tor_stem_takes_no_envelope() {
     z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     let dispatch = z.plan_dispatch(Some(id(9)), false, NodeSync::Synchronised, &mut rng);
     assert_eq!(dispatch.plan, RelayPlan::Stem(id(1)));
-    assert_eq!(
-        dispatch.carrier,
-        RelayCarrier::Ordinary,
-        "no cover on Tor by ruling"
+    assert!(
+        matches!(dispatch.carrier, RelayCarrier::Noise { .. }),
+        "a Tor slot rides the cover channel, got {:?}",
+        dispatch.carrier
     );
 }
 

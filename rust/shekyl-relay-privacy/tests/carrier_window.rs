@@ -176,10 +176,10 @@ fn the_cap_stays_under_both_ceilings() {
 /// re-read.
 #[test]
 fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
-    // Every channel a node can run at once: `NOISE_CHANNELS` per zone, across
-    // the encrypted zones it may carry. The mean cadence is the denominator —
-    // a jittered emitter's sustained rate is its mean, not its fastest gap.
-    let channels = u64::from(carrier::CEILING_ZONES) * inherited::NOISE_CHANNELS as u64;
+    // Every channel a node runs: `NOISE_CHANNELS`, one per stem slot, whatever
+    // connectors carry them. The mean cadence is the denominator — a jittered
+    // emitter's sustained rate is its mean, not its fastest gap.
+    let channels = inherited::NOISE_CHANNELS as u64;
     let mean_ms = u64::from(carrier::MEAN_CADENCE_MS);
     let ceiling = u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC);
 
@@ -241,25 +241,18 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
 }
 
-/// The substitution-cover ceiling is the open-link count, and the peak is
-/// derived.
+/// The node's channels are its stem slots, and the peak is derived.
 ///
-/// `CEILING_ZONES` is the open-link count, not a count of encrypted
-/// networks. Tor is encrypted and takes no envelope. `shekyl-relay`
-/// asserts the constant equals its open-link walk; this crate cannot
-/// import `ConnectorId`, so the number is pinned here. Equating the two
-/// would bill Tor and omit clearnet the day those counts diverge.
+/// The node rate counts `NOISE_CHANNELS` and no network term: cover runs per
+/// channel on whichever covered session holds the slot (`CVR-R3`), so a
+/// second network adds no channel. The `CEILING_ZONES` count of open links
+/// is deleted with the cover class it counted (`CVR-R2`).
 ///
-/// What edit reds this: a second open link moves the count off 1. The peak
-/// pin moves with it. The compile-time ceiling assert fires when the
-/// product exceeds the signed cap.
+/// What edit reds this: a channel count or cadence change moves the peak
+/// pin. The compile-time ceiling assert fires when the product exceeds the
+/// signed cap.
 #[test]
-fn the_ceiling_counts_open_links_and_states_its_peak() {
-    assert_eq!(
-        carrier::CEILING_ZONES,
-        1,
-        "clearnet — a new open link is a ceiling change"
-    );
+fn the_node_rate_counts_its_channels_and_states_its_peak() {
     // The peak is an UPPER BOUND, so it rounds up. Asserted against today's
     // sustained rate scaled by mean/min, rather than a re-derivation of the
     // same division the constant performs, because the defect this replaces
@@ -267,9 +260,8 @@ fn the_ceiling_counts_open_links_and_states_its_peak() {
     // in the one direction a sizing figure must not err. The signed cap is
     // not that rate: one open link sustains half of it, and scaling the cap
     // publishes a peak no emitter reaches.
-    let sustained = u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC)
-        * u64::from(carrier::CEILING_ZONES)
-        * inherited::NOISE_CHANNELS as u64;
+    let sustained =
+        u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC) * inherited::NOISE_CHANNELS as u64;
     let exact_num = sustained * u64::from(carrier::MEAN_CADENCE_MS);
     assert_eq!(
         u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC),
@@ -278,10 +270,7 @@ fn the_ceiling_counts_open_links_and_states_its_peak() {
     );
     assert!(
         u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC) * u64::from(carrier::NOISE_MIN_DELAY_MS)
-            >= (carrier::WINDOW_BYTES as u64)
-                * (inherited::NOISE_CHANNELS as u64)
-                * u64::from(carrier::CEILING_ZONES)
-                * 1_000,
+            >= (carrier::WINDOW_BYTES as u64) * (inherited::NOISE_CHANNELS as u64) * 1_000,
         "the advertised peak must not be below the rate the emitter can reach"
     );
     assert_eq!(

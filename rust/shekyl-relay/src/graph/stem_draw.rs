@@ -25,6 +25,7 @@ fn zone(rng: &mut SplitMix64) -> Relay {
         2,
         false,
         &[ConnectorId::Clearnet],
+        &[],
         0,
         rng,
     )
@@ -154,6 +155,7 @@ fn stem_draws_are_not_biased_toward_one_outbound_peer() {
         1,
         false,
         &[ConnectorId::Clearnet],
+        &[],
         0,
         &mut rng,
     )
@@ -188,6 +190,7 @@ fn a_two_slot_draw_over_three_peers_uses_each_peer() {
         2,
         false,
         &[ConnectorId::Clearnet],
+        &[],
         0,
         &mut rng,
     )

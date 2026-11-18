@@ -23,6 +23,7 @@ fn driver(rng: &mut SplitMix64) -> Driver {
             2,
             false,
             &[ConnectorId::Clearnet],
+            &[],
             0,
             rng,
         )
@@ -210,6 +211,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
             2,
             true,
             &[ConnectorId::Clearnet],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -313,6 +315,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
             DandelionParams::inherited(),
             2,
             true,
+            &[ConnectorId::Clearnet],
             &[ConnectorId::Clearnet],
             0,
             &mut rng,
@@ -497,6 +500,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
             2,
             true,
             &[ConnectorId::Clearnet],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -588,6 +592,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
             2,
             true,
             &[ConnectorId::Clearnet],
+            &[ConnectorId::Clearnet],
             0,
             &mut rng,
         )
@@ -666,6 +671,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
             DandelionParams::inherited(),
             2,
             true,
+            &[ConnectorId::Clearnet],
             &[ConnectorId::Clearnet],
             0,
             &mut rng,
@@ -753,6 +759,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
             DandelionParams::inherited(),
             2,
             true,
+            &[ConnectorId::Clearnet],
             &[ConnectorId::Clearnet],
             0,
             &mut rng,

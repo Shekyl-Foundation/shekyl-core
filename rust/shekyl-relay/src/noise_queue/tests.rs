@@ -291,6 +291,7 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
         true,
         // noise ON, or there are no deadlines and this is vacuous
         &[ConnectorId::Clearnet],
+        &[ConnectorId::Clearnet],
         0,
         &mut rng,
     )

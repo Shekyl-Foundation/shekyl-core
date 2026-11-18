@@ -347,8 +347,15 @@ impl Rig {
             .expect("the nudge registers");
         let pool = FakePool::new();
         let (node_sync, node_sync_rx) = watch::channel(build.node_sync);
+        // The rig's clearnet sessions stand for encrypted ones: a carrier
+        // runs only on an encrypted session (`CVR-R3`), and the loopback
+        // carries no Noise layer of its own.
         let Started { port, handle } = start(RelayParts {
-            config: RelayConfig::inherited(vec![ConnectorId::Clearnet], build.noise),
+            config: RelayConfig::inherited(
+                vec![ConnectorId::Clearnet],
+                vec![ConnectorId::Clearnet],
+                build.noise,
+            ),
             pool: pool.clone(),
             node_sync: node_sync_rx,
             timing: timing.clone(),

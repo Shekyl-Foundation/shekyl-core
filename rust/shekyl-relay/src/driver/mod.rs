@@ -262,9 +262,10 @@ impl Driver {
                 Some(peer) if self.zone.noise_destination(peer) => {
                     effects.push(Effect::NoiseSend { channel, peer });
                 }
-                // A volume-cover peer is not a noise destination. The channel
-                // stays armed for a later open-link occupant. An empty slot
-                // still unbinds.
+                // A session that carries no cover (plaintext, or a connector
+                // that does not declare its timing visible) is not a noise
+                // destination. The channel stays armed for a later covered
+                // occupant. An empty slot still unbinds.
                 Some(_) => {}
                 None => effects.push(Effect::NoiseUnbind { channel }),
             }

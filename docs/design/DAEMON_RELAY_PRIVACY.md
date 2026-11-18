@@ -176,8 +176,8 @@ this lane.
      it; it reads `shekyl_relay_zone_min_provisioned_out_peers()`.
      *Records-was: the assignment was cited at `:926`.* Clearnet keeps
      its own degree.
-     The graph is connector-agnostic. Measured transit and cover class
-     are declaration cells. The relay reads them through
+     The graph is connector-agnostic. Measured transit, encryption and
+     local visibility are declaration cells. The relay reads them through
      `declaration(connector.column())`, as it already reads
      `address_hidden_from_peer`. It does not match `ConnectorId`.
      An unassessed transit is not a stem edge. Adding a connector is
@@ -189,16 +189,16 @@ this lane.
      `ADOPTED_TRANSIT_ASSUMPTION_MS` (50), Tor is
      `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625). A connector with no
      measurement is not a stem edge. Per transaction, not per relay.
-   - **Cover.** `CoverClass` is the ruling, not `link_encrypted` and not
-     `address_hidden_from_peer`. An open link (clearnet) may run the
-     substitution carrier when it is requested. Tor's class is `Volume`
-     (measured 2026-11-15, not cover: REOPENED, banner): no
-     envelope, and a stem or an own-edge leaves immediately. On an open
-     link the unrestricted origin is a stem slot, so it is slot-aligned
-     with that channel. No cover on Tor by ruling (**REOPENED
-     2026-11-15**, banner: ruled that Tor sessions take the carrier,
-     not yet built); on
-     cover-bearing links the own-edge is slot-aligned.
+   - **Cover** (`CVR-R2`, `CVR-R3`; Rick, 2026-11-15). A channel carries
+     cover when its slot's session is encrypted, by the connector's
+     native cell (`link_encrypted`) or by a layer this node adds (Noise on
+     clearnet), and its connector declares its timing visible to an
+     observer at this node's end (`local_observer_visibility`). No other
+     condition: Tor sessions carry cover, slot 0 included, and a
+     plaintext clearnet session carries none. `CoverClass` is deleted:
+     it stored the 2026-09-04 ruling that Tor's volume was its cover as
+     if it were a fact about the connector, and TRC-1 measured that it is
+     not.
 
    UPDATE 2026-10-02. Role, epoch, fluff, and ingress do not read the
    connector. Stem selection reads it twice: hop 0 reads the
@@ -211,8 +211,7 @@ this lane.
    connector. D7, outbound-fluff-only on a non-public zone, is deleted.
    The carrier development flag stays, default off. `make_relay`
    (`levin_notify.cpp:259`) sets the noise flag from that opt-in and
-   does not scan encryption cells. `Relay::new` refuses the flag when
-   no configured connector is an open link.
+   does not scan encryption cells.
 
    `m_network_zones` is keyed by connector identity (clearnet 0, tor 1).
    The two handshake registrations pass the connector the seam observed
@@ -16010,37 +16009,27 @@ over noise networks"*, and then broadcast the result to **every** channel,
 which is the opposite of what a stem is. **Deleted, not repaired** (§2.9 step
 4): with the premise gone there was nothing left to fix.
 
-### 93.2 Cover follows the open link — SUPERSEDED the encryption predicate, 2026-10-02
+### 93.2 Cover follows the encrypted session an observer can time (`CVR-R3`, 2026-11-15)
 
-**Current.** `CoverClass` decides, not `RelayZone::is_encrypted` and not
-`link_encrypted`. An open link (clearnet) may run the substitution carrier
-when the development flag asks for it: requesting the carrier means the
-NNhfs pipe encrypts and covers that link. Tor's class is `Volume`
-([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)): no envelope, and a stem
-or an own-edge leaves immediately. Measured 2026-11-15, relay volume is not
-cover, so on Tor nothing covers that send (**REOPENED 2026-11-15 (banner)**). The
-class does not survive: ruled 2026-11-15 in the cover-traffic lane's Round 0, cover follows the session's
-encryption and its connector's timing visibility, and the build deletes
-`CoverClass`. Until it lands, this paragraph describes the code. `Relay::new` refuses the flag when no
-configured connector is an open link, rather than silently running
-carrier-off. The FFI maps that refusal to null. `is_encrypted` stays the
-wire-observer cell. It does not select the carrier.
+A channel carries cover when its session is encrypted and its connector
+declares its timing visible to an observer at this node's end (Rick,
+2026-11-15). Encryption hides what a send says, not when it happens or
+how big it is, so every such session needs cover, Tor's included. A
+session is encrypted by its connector's native cell (`link_encrypted`) or
+by a layer this node adds to it (`Relay::session_encrypted`, fed from the
+plan's `added_encryption`: clearnet under Noise). Visibility is the
+connector's `local_observer_visibility` cell, and an unassessed cell is
+not visible. `Relay::new` no longer reads the connectors to decide
+whether a carrier may run: a node with no covered session builds its
+channels and they carry nothing until a covered session holds a slot.
 
-**Records-was (2026-08).** Noise was refused on a cleartext link because
-padding was argued to conceal nothing a cleartext observer could not
-already read, and `RelayZone::is_encrypted` was named the single site that
-would change when clearnet's answer changed. The refusal still lives in
-`Relay::new` rather than at the FFI edge, and the two errors stay
-distinct. What changed is the question: the open link, not the encryption
-cell.
-
-**Records-was (2026-08), one consequence of that predicate:** ten Rust
-fixtures had been building noise zones on `FluffReach::EveryPeer` — a
-configuration production cannot hold — and an FFI test asserted that
-outbound-only fluff plus noise on the clearnet zone builds. Under the
-encryption predicate it did not. That predicate is superseded above:
-clearnet is the open link, and noise requested there does build.
-`FluffReach` is deleted. Reach had been standing in for encryption.
+`CoverClass` is deleted (`CVR-R2`). It recorded the 2026-09-04 ruling
+that Tor's own volume was its cover as a cell of the connector's
+column, which made a ruling look like a fact about the wire. TRC-1's
+guard-connection reading measured that the volume is not cover
+([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md), banner of 2026-11-15),
+and the cell went with the ruling rather than being re-valued
+(rules 21 and 23).
 
 ### 93.3 On the vocabulary itself
 

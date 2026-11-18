@@ -8,7 +8,7 @@
 
 Tor is a connector, not a Dandelion++ variant (DAEMON_RELAY_PRIVACY.md
 §98.4, structure ruling 2026-10-09). The relay keys on declaration
-cells (`address_hidden_from_peer`, `cover_class`), never on which
+cells (`address_hidden_from_peer`, `local_observer_visibility`), never on which
 connector produced them.
 
 This catches direct naming: any `ConnectorId::<Variant>` or

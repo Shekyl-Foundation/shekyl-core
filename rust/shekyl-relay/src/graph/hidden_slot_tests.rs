@@ -31,6 +31,7 @@ fn wide_relay(configured: &[ConnectorId], rng: &mut SplitMix64) -> Relay {
         WIDE_STEMS,
         false,
         configured,
+        &[],
         0,
         rng,
     )
@@ -60,6 +61,7 @@ fn the_origin_pin_walks_to_its_alternate_and_then_holds_until_the_epoch() {
             2,
             false,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
+            &[],
             0,
             &mut rng,
         )
@@ -170,6 +172,7 @@ fn an_alternate_that_dropped_first_leaves_the_origin_holding_at_the_primary_drop
             2,
             false,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
+            &[],
             0,
             &mut rng,
         )
@@ -232,6 +235,7 @@ fn an_all_hidden_node_whose_slot_zero_died_before_the_pin_rides_the_survivor() {
             2,
             false,
             &[ConnectorId::Tor],
+            &[],
             0,
             &mut rng,
         )
@@ -286,6 +290,7 @@ fn a_mixed_node_with_its_only_hidden_session_in_slot_one_still_plans_own_edge() 
             2,
             false,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
+            &[],
             0,
             &mut rng,
         )
@@ -344,6 +349,7 @@ fn a_boot_pin_over_one_hidden_session_holds_after_it_drops() {
         2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )
@@ -388,6 +394,7 @@ fn an_origination_with_no_hidden_session_makes_no_pin() {
         2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )
@@ -422,6 +429,7 @@ fn relayed_sources_reach_both_slots_under_a_hidden_connector() {
             2,
             false,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
+            &[],
             0,
             &mut rng,
         )
@@ -472,6 +480,7 @@ fn stem_candidates_are_established_outbound_sessions_with_an_assessed_transit() 
         inherited::NOISE_CHANNELS,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )
@@ -496,11 +505,7 @@ fn stem_candidates_are_established_outbound_sessions_with_an_assessed_transit() 
         id(4),
         PeerDirection::Outbound,
         ConnectorId::Tor,
-        Declaration::synthetic(
-            Assessment::Assessed(YesNo::Yes),
-            Assessment::NotAssessed,
-            Assessment::Assessed(CoverClass::Volume),
-        ),
+        Declaration::synthetic(Assessment::Assessed(YesNo::Yes), Assessment::NotAssessed),
     );
 
     let (hidden, rest) = relay.partitioned_outbound_ids();
@@ -640,6 +645,7 @@ fn the_origin_verdict_follows_the_class_and_the_pin() {
             2,
             false,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
+            &[],
             0,
             &mut rng,
         )
@@ -711,6 +717,7 @@ fn the_origin_verdict_is_false_without_an_address_hiding_connector() {
         2,
         false,
         &[ConnectorId::Clearnet],
+        &[],
         0,
         &mut rng,
     )

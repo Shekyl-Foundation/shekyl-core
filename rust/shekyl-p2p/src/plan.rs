@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use shekyl_socks::Proxy;
-use shekyl_transport_layer::{ConnectorId, NetworkAddress};
+use shekyl_transport_layer::{stack_plan, AddedLayer, ConnectorId, NetworkAddress, StackPlan};
 
 use crate::bans::BanTarget;
 
@@ -59,6 +59,26 @@ impl NetworkPlan {
             connectors.push(ConnectorId::Tor);
         }
         connectors
+    }
+
+    /// The connectors this plan wraps in an encryption layer the transport
+    /// adds: clearnet when its encryption is on and its column's stack
+    /// plan names the Noise layer, which is the channel the clearnet
+    /// connector then builds (`shekyl_clearnet::channel_choice`). The relay
+    /// reads this with each connector's native encryption to decide cover.
+    #[must_use]
+    pub fn added_encryption(&self) -> Vec<ConnectorId> {
+        let mut layered = Vec::new();
+        if let Some(clearnet) = &self.clearnet {
+            let noise = matches!(
+                stack_plan(ConnectorId::Clearnet.column()),
+                StackPlan::Ready { layers } if layers.contains(&AddedLayer::Noise)
+            );
+            if clearnet.encrypt && noise {
+                layered.push(ConnectorId::Clearnet);
+            }
+        }
+        layered
     }
 
     /// The listening sockets the connectors bind: one per clearnet listen
@@ -140,7 +160,7 @@ mod tests {
 
     use shekyl_socks::Proxy;
 
-    use super::{ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, TorPlan};
+    use super::{ClearnetPlan, ConnectorId, LinkLimits, NetworkPlan, PeerPlan, TorPlan};
 
     fn plan(listen: usize, tor: TorPlan) -> NetworkPlan {
         let at = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
@@ -184,5 +204,20 @@ mod tests {
         assert_eq!(plan(0, operator(None)).listener_descriptors(), 0);
         let forward = SocketAddr::from((Ipv4Addr::LOCALHOST, 18083));
         assert_eq!(plan(1, operator(Some(forward))).listener_descriptors(), 2);
+    }
+
+    /// The relay is told that clearnet sessions are encrypted exactly when
+    /// this plan wraps them in Noise; Tor is never listed, because its
+    /// encryption is native and the relay reads that from the column.
+    ///
+    /// Red edits: list clearnet whatever `encrypt` says (plaintext clearnet
+    /// would carry cover), or list Tor.
+    #[test]
+    fn only_a_clearnet_under_noise_is_an_added_encryption() {
+        let mut layered = plan(1, TorPlan::Managed);
+        layered.clearnet.as_mut().expect("clearnet").encrypt = true;
+        assert_eq!(layered.added_encryption(), vec![ConnectorId::Clearnet]);
+        assert!(plan(1, TorPlan::Managed).added_encryption().is_empty());
+        assert!(plan(0, TorPlan::Managed).added_encryption().is_empty());
     }
 }

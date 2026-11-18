@@ -27,11 +27,7 @@ fn id(byte: u8) -> ConnectionId {
 }
 
 fn hidden_column(transit: Assessment<DerivationMs>) -> Declaration {
-    Declaration::synthetic(
-        Assessment::Assessed(YesNo::Yes),
-        transit,
-        Assessment::Assessed(CoverClass::Volume),
-    )
+    Declaration::synthetic(Assessment::Assessed(YesNo::Yes), transit)
 }
 
 fn relay(rng: &mut SplitMix64) -> Relay {
@@ -40,6 +36,7 @@ fn relay(rng: &mut SplitMix64) -> Relay {
         2,
         false,
         &[ConnectorId::Tor],
+        &[],
         0,
         rng,
     )

@@ -36,6 +36,7 @@ fn stem_zone(peers: &[u8], rng: &mut SplitMix64) -> Relay {
             2,
             false,
             &[ConnectorId::Clearnet],
+            &[],
             0,
             rng,
         )
@@ -412,6 +413,7 @@ fn no_own_edge_holds_until_an_own_edge_appears() {
         2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
+        &[],
         0,
         &mut rng,
     )

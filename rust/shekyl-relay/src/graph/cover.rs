@@ -9,29 +9,35 @@
 //! is a connector this relay does not stem on. An assessed transit carries
 //! its basis; today both built columns are assumptions
 //! (`DAEMON_RELAY_PRIVACY.md` §97).
+//!
+//! **Cover reads two facts, both already on the wire's side of the table**
+//! (`CVR-R2`, `CVR-R3`; Rick, 2026-11-15): whether the session is encrypted
+//! ([`super::Relay`]'s reading, the connector's native cell or a layer this
+//! node added) and whether the connector declares that an observer at this
+//! node's end sees the connection's timing ([`timing_visible`]). There is no
+//! third cell. A `CoverClass` cell stored the 2026-09-04 ruling that Tor's
+//! own volume was its cover as if it were a fact about the connector; TRC-1
+//! measured that it is not (`TOR_COVER_POSTURE.md`, banner of 2026-11-15),
+//! and the cell was deleted rather than re-valued (rules 21 and 23).
 
 use shekyl_relay_privacy::basis::DerivationMs;
-use shekyl_transport_layer::{declaration, Assessment, ConnectorId, CoverClass};
+use shekyl_transport_layer::{declaration, Assessment, ConnectorId, Declaration, LocalVisibility};
 
-/// The ruling recorded on `connector`'s declaration.
+/// Whether an observer at this node's end sees when this connector's
+/// connection carries bytes, read from the declaration's
+/// `local_observer_visibility` cell.
 ///
-/// [`None`] is a cell nobody has assessed. It is not an open link and
-/// not volume cover.
+/// Both assessed values say so: [`LocalVisibility::Visible`] and
+/// [`LocalVisibility::VisibleAsTor`] each name the connection's timing,
+/// volume and sizes; the second only says the bytes are seen as Tor
+/// traffic. [`Assessment::NotAssessed`] is not presumed visible, so such a
+/// column gets no cover.
 #[must_use]
-pub const fn cover_class(connector: ConnectorId) -> Option<CoverClass> {
-    match declaration(connector.column()).cover_class() {
-        Assessment::Assessed(class) => Some(class),
-        Assessment::NotAssessed => None,
-    }
-}
-
-/// True when any configured connector can carry a substitution envelope.
-#[must_use]
-pub fn any_open_link(configured: &[ConnectorId]) -> bool {
-    configured
-        .iter()
-        .copied()
-        .any(|connector| matches!(cover_class(connector), Some(CoverClass::OpenLink)))
+pub const fn timing_visible(declaration: &Declaration) -> bool {
+    matches!(
+        declaration.local_observer_visibility(),
+        Assessment::Assessed(LocalVisibility::Visible | LocalVisibility::VisibleAsTor)
+    )
 }
 
 /// The declared transit for `connector`, with its basis.
@@ -45,25 +51,3 @@ pub const fn transit_ms(connector: ConnectorId) -> Option<DerivationMs> {
         Assessment::NotAssessed => None,
     }
 }
-
-/// Open links in [`ConnectorId::ALL`].
-///
-/// The substitution-cover bandwidth ceiling counts these.
-pub const OPEN_LINK_COUNT: u32 = {
-    let mut open_links = 0u32;
-    let mut index = 0;
-    while index < ConnectorId::ALL.len() {
-        if matches!(
-            cover_class(ConnectorId::ALL[index]),
-            Some(CoverClass::OpenLink)
-        ) {
-            open_links += 1;
-        }
-        index += 1;
-    }
-    open_links
-};
-
-const _: () = {
-    assert!(OPEN_LINK_COUNT == shekyl_relay_privacy::params::carrier::CEILING_ZONES);
-};

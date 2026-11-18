@@ -11,10 +11,9 @@
 //! owns the state §18.5 assigned to Rust: peer fluff queues, the stem map,
 //! the epoch role, and the noise **schedule** (enable bit, cadence,
 //! per-channel deadlines). Noise **buffers** live in [`crate::NoiseQueues`]
-//! (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2). C++ is transport. The
-//! development opt-in can ask for cover; Rust refuses that ask unless a
-//! configured connector is an open link, and it sends cover only to a
-//! session on such a connector. Tor is volume cover and takes no envelope.
+//! (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2). Cover goes only to a
+//! session that is encrypted and whose connector declares its timing visible
+//! to an observer at this node's end (`CVR-R3`), Tor included.
 //! A transaction body is still an opaque blob here. See
 //! `DAEMON_RELAY_PRIVACY.md` criterion 4 and `TOR_COVER_POSTURE.md`.
 
@@ -29,8 +28,8 @@ use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex};
+pub use shekyl_transport_layer::ConnectorId;
 use shekyl_transport_layer::{declaration, Assessment, Declaration, NativeEncryption, YesNo};
-pub use shekyl_transport_layer::{ConnectorId, CoverClass};
 use shekyl_types::relay::RelayMethod;
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
@@ -49,7 +48,7 @@ pub use origin::OriginVerdict;
 
 use epoch_map::EpochMap;
 
-pub use cover::{any_open_link, cover_class, transit_ms};
+pub use cover::{timing_visible, transit_ms};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
@@ -138,22 +137,17 @@ pub fn any_hides_address_from_peer(configured: &[ConnectorId]) -> bool {
 ///
 /// Anonymity is [`address_hidden_from_peer`]. The two cells agree on the
 /// connectors that exist today, and a later connector may set only one.
+///
+/// A session can still be encrypted when this is false: the transport adds
+/// a layer where the network has none (`AddedLayer::Noise` on clearnet).
+/// That is this node's construction, not the column, so [`Relay`] reads it
+/// beside this cell when it decides cover.
 #[must_use]
 pub fn link_encrypted(connector: ConnectorId) -> bool {
     matches!(
         declaration(connector.column()).encryption(),
         Assessment::Assessed(NativeEncryption::Classical)
     )
-}
-
-/// True when any configured connector's link is encrypted.
-///
-/// The encryption cell. Cover eligibility is [`cover_class`], which
-/// disagrees with this on Tor: the link is encrypted and still takes no
-/// envelope.
-#[must_use]
-pub fn any_link_encrypted(configured: &[ConnectorId]) -> bool {
-    configured.iter().copied().any(link_encrypted)
 }
 
 // The seam's byte contract. C++ `static_assert`s the same literals; neither
@@ -274,9 +268,7 @@ pub enum RelayPlan {
     ///
     /// Not a stem-map slot. The caller sends once, on the ordinary
     /// connection, and records `relay_method::local`. A failed write returns
-    /// without a refresh and without a fluff. No cover on Tor by ruling; on
-    /// a cover-bearing link the own-edge is [`RelayPlan::Stem`], and that
-    /// slot is the channel.
+    /// without a refresh and without a fluff.
     OwnEdge(ConnectionId),
     /// No address-hiding session is slotted, or the origin's pin is
     /// exhausted for the epoch.
@@ -291,18 +283,11 @@ pub enum RelayPlan {
 
 /// Why [`Relay::new`] refused a configuration.
 ///
-/// Three refusals, three variants — collapsing them to `None` would be the
+/// Each refusal is its own variant — collapsing them to `None` would be the
 /// same axis-merge this type exists to prevent. The FFI maps every variant
 /// to a null handle; a future in-process caller matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayNewError {
-    /// The carrier was requested and no configured connector is an open link.
-    ///
-    /// Tor is volume cover: an envelope there buys nothing the network does
-    /// not already provide, and a Tor-only node has nowhere to put one.
-    /// Requesting the carrier is the NNhfs pipe on an open link, not padding
-    /// on a volume-cover connector.
-    NoiseWithoutOpenLink,
     /// `stems` doubles as the channel count. Noise is
     /// [`inherited::NOISE_CHANNELS`] wide; a mismatch sizes the schedule
     /// against a width the rest of the stack does not share.
@@ -336,9 +321,6 @@ pub enum RelayNewError {
 impl fmt::Display for RelayNewError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoiseWithoutOpenLink => {
-                write!(f, "noise carrier requires an open link")
-            }
             Self::NoiseChannelCount { got } => write!(
                 f,
                 "noise channel count must equal inherited::NOISE_CHANNELS (got {got})"
@@ -487,6 +469,11 @@ pub struct Relay {
     /// The node's sync state, as last reported. Unsynchronised until the
     /// first report, so an origin held before it waits.
     node_sync: NodeSync,
+    /// Connectors whose sessions this node wraps in a layer the transport
+    /// adds for encryption (`AddedLayer::Noise` on clearnet when this node
+    /// chose it). With [`link_encrypted`], the connector's native cell, it
+    /// is whether a session is encrypted ([`Self::session_encrypted`]).
+    added_encryption: Vec<ConnectorId>,
 }
 
 impl Relay {
@@ -498,19 +485,12 @@ impl Relay {
     ///
     /// # Refusals
     ///
-    /// **Cover traffic requires a configured connector whose [`CoverClass`]
-    /// is [`CoverClass::OpenLink`].** Tor is volume cover: no envelope, and
-    /// a Tor-only ask has nowhere to put one. Clearnet with the carrier
-    /// requested is the NNhfs pipe, which encrypts the open link and is the
-    /// envelope. This is a refusal rather than a silent downgrade: a node
-    /// that asked for a protection it is not getting is the failure worth
-    /// being loud about.
-    ///
-    /// The predicate is [`any_open_link`]. It is not [`link_encrypted`] and
-    /// it is not hop 0. [`address_hidden_from_peer`] says whether the peer
-    /// learns this node's address. [`link_encrypted`] says whether a network
-    /// observer can read the byte stream. Cover is the ruling on top of
-    /// both, and it disagrees with both on the connectors that exist today.
+    /// `added_encryption` names the connectors whose sessions this node
+    /// wraps in an encryption layer the transport adds. Cover runs per
+    /// channel, on a session that is encrypted and whose connector declares
+    /// its timing visible ([`Self::noise_destination`]); a configuration
+    /// with no such connector is not refused, its channels simply carry
+    /// nothing until a covered session holds their slot.
     ///
     /// **A noise carrier's channel count must equal
     /// [`inherited::NOISE_CHANNELS`].** `stems` is that width. This was a
@@ -528,7 +508,7 @@ impl Relay {
     /// traffic would have no slot of its own. Production width is
     /// [`inherited::NOISE_CHANNELS`]; width one is reachable only from tests.
     ///
-    /// The four refusals are distinct [`RelayNewError`] variants. The FFI
+    /// The refusals are distinct [`RelayNewError`] variants. The FFI
     /// maps every one to null. C++ passes the noise flag only behind the
     /// development opt-in and does not pre-decide which connector can carry
     /// it. The flag defaults off, so a shipped construction does not hit
@@ -538,13 +518,11 @@ impl Relay {
         stems: usize,
         noise_requested: bool,
         configured: &[ConnectorId],
+        added_encryption: &[ConnectorId],
         now: Millis,
         rng: &mut R,
     ) -> Result<Self, RelayNewError> {
         if noise_requested {
-            if !any_open_link(configured) {
-                return Err(RelayNewError::NoiseWithoutOpenLink);
-            }
             if stems != inherited::NOISE_CHANNELS {
                 return Err(RelayNewError::NoiseChannelCount { got: stems });
             }
@@ -589,6 +567,7 @@ impl Relay {
             hidden_class_watch: hidden_slot::HiddenClassWatch::BeforeRebuild,
             embargoes: embargo::Embargoes::default(),
             node_sync: NodeSync::Unsynchronised,
+            added_encryption: added_encryption.to_vec(),
         })
     }
 
@@ -615,18 +594,26 @@ impl Relay {
         self.noise.deadline_at(channel)
     }
 
-    /// Whether a substitution envelope may be sent to `peer`.
-    ///
-    /// The destination's connector must be [`CoverClass::OpenLink`]. Tor is
-    /// volume cover: no envelope, including when the peer also occupies a
-    /// stem slot. A session that is gone is not a destination.
+    /// Whether `peer`'s session carries cover (`CVR-R3`; Rick,
+    /// 2026-11-15): the session is encrypted ([`Self::session_encrypted`])
+    /// and its connector declares that an observer at this node's end sees
+    /// its timing ([`timing_visible`]). No other condition: a Tor session
+    /// carries cover, the own-origin slot 0 included, and a plaintext
+    /// clearnet session does not. Encryption hides what a send says; cover
+    /// hides when one happens and how big it is, which is all such an
+    /// observer has left. A session that is gone is not a destination.
     pub(crate) fn noise_destination(&self, peer: ConnectionId) -> bool {
         self.contexts.get(&peer).is_some_and(|session| {
-            matches!(
-                session.declaration.cover_class(),
-                Assessment::Assessed(CoverClass::OpenLink)
-            )
+            self.session_encrypted(session.connector) && timing_visible(&session.declaration)
         })
+    }
+
+    /// Whether this node's sessions on `connector` are encrypted: the
+    /// connector's native cell ([`link_encrypted`]) or a layer this node
+    /// adds to it (`added_encryption` at [`Self::new`]).
+    #[must_use]
+    pub fn session_encrypted(&self, connector: ConnectorId) -> bool {
+        link_encrypted(connector) || self.added_encryption.contains(&connector)
     }
 
     /// Whether this zone runs noise channels.
@@ -1189,10 +1176,9 @@ impl Relay {
     /// unread: the plan is the refusal, and the caller returns before any
     /// send.
     ///
-    /// No cover on Tor by ruling; on cover-bearing links the own-edge is
-    /// slot-aligned. [`RelayPlan::OwnEdge`] is the volume path and always
-    /// leaves immediately. [`RelayPlan::Stem`] on an open link, while noise
-    /// is on, is that slot's channel — including a clearnet local origin,
+    /// [`RelayPlan::OwnEdge`] leaves on the ordinary connection.
+    /// [`RelayPlan::Stem`] to a covered session ([`Self::noise_destination`]),
+    /// while noise is on, is that slot's channel — including a local origin
     /// whose first hop is the slot. A relayed stem with no slot is map
     /// corruption. In release that arm still returns
     /// [`RelayCarrier::Ordinary`]: the stem goes out. That is a cover
@@ -1215,10 +1201,8 @@ impl Relay {
                     }
                 }
             }
-            // No cover on Tor by ruling. OwnEdge leaves on the ordinary
-            // connection. On a cover-bearing link the own-edge is
-            // [`RelayPlan::Stem`] and the arm above is its channel. The
-            // other plans are a refusal or have nothing to carry.
+            // OwnEdge leaves on the ordinary connection. The other plans
+            // are a refusal or have nothing to carry.
             RelayPlan::OwnEdge(_)
             | RelayPlan::NoOwnEdge
             | RelayPlan::AwaitSync

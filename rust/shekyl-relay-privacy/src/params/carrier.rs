@@ -196,23 +196,6 @@ const _: () = assert!(
      COVER_TRAFFIC_RESTORATION.md sec 3.3 is stated against exactly 5 000 ms"
 );
 
-/// Open links one node may put a substitution envelope on.
-///
-/// Clearnet today, so the count is 1 and a per-link rate is the node rate.
-/// `NOISE_CHANNELS` is documented as *"max outbound connections **per
-/// zone**"*; the node rate is this count times that. The multiplier stays
-/// because the next open link is a ceiling change, not because a second
-/// one is live.
-///
-/// # Not a count of encrypted networks
-///
-/// Tor is encrypted and takes no envelope (`TOR_COVER_POSTURE.md`). This
-/// crate cannot import `ConnectorId`, so the number is stated here.
-/// `shekyl-relay` asserts it equals the open-link walk over that enum.
-/// Counting encrypted networks would bill Tor and omit the link the
-/// envelope actually runs on.
-pub const CEILING_ZONES: u32 = 1;
-
 /// SUSTAINED cover-bandwidth ceiling, **per node**, in bytes per second.
 ///
 /// # The denominator is per NODE, ruled 2026-08-28
@@ -266,13 +249,10 @@ pub const PER_NODE_CEILING_BYTES_PER_SEC: u32 = 16 * 1024;
 // comparison has no such gap — and a check that rounds cannot support a claim
 // that the constants were chosen to avoid rounding.
 const _: () = assert!(
-    (WINDOW_BYTES as u64)
-        * (super::inherited::NOISE_CHANNELS as u64)
-        * (CEILING_ZONES as u64)
-        * 1_000
+    (WINDOW_BYTES as u64) * (super::inherited::NOISE_CHANNELS as u64) * 1_000
         <= (PER_NODE_CEILING_BYTES_PER_SEC as u64) * (MEAN_CADENCE_MS as u64),
     "worst-posture cover bandwidth exceeds the per-node ceiling: WINDOW_BYTES \
-     x NOISE_CHANNELS x CEILING_ZONES / mean cadence must stay at or under \
+     x NOISE_CHANNELS / mean cadence must stay at or under \
      PER_NODE_CEILING_BYTES_PER_SEC (COVER_TRAFFIC_RESTORATION.md sec 3.3)"
 );
 
@@ -304,10 +284,7 @@ const _: () = assert!(
 /// figures are sustained, and an operator sizing a NODE's uplink needs this
 /// one; a circuit probe wants [`PER_CIRCUIT_PEAK_BYTES_PER_SEC`].
 pub const PER_NODE_PEAK_BYTES_PER_SEC: u32 = {
-    let numerator = (WINDOW_BYTES as u64)
-        * (super::inherited::NOISE_CHANNELS as u64)
-        * (CEILING_ZONES as u64)
-        * 1_000;
+    let numerator = (WINDOW_BYTES as u64) * (super::inherited::NOISE_CHANNELS as u64) * 1_000;
     let denominator = NOISE_MIN_DELAY_MS as u64;
     let raw = numerator.div_ceil(denominator);
     // Checked rather than assumed. Unlike `noise_windows_in_epoch`, the fit is
@@ -372,9 +349,7 @@ pub const PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC: u32 = {
 };
 
 const _: () = assert!(
-    (PER_CIRCUIT_PEAK_BYTES_PER_SEC as u64)
-        * (super::inherited::NOISE_CHANNELS as u64)
-        * (CEILING_ZONES as u64)
+    (PER_CIRCUIT_PEAK_BYTES_PER_SEC as u64) * (super::inherited::NOISE_CHANNELS as u64)
         >= PER_NODE_PEAK_BYTES_PER_SEC as u64,
     "the per-circuit peak times the channel count must cover the node peak: \
      if it does not, one of the two is derived from the wrong denominator"

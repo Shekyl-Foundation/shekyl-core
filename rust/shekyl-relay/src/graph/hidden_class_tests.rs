@@ -23,8 +23,16 @@ fn id(byte: u8) -> ConnectionId {
 }
 
 fn relay(configured: &[ConnectorId], rng: &mut SplitMix64) -> Relay {
-    Relay::new(DandelionParams::inherited(), 2, false, configured, 0, rng)
-        .expect("width two is legal with a hidden connector and noise off")
+    Relay::new(
+        DandelionParams::inherited(),
+        2,
+        false,
+        configured,
+        &[],
+        0,
+        rng,
+    )
+    .expect("width two is legal with a hidden connector and noise off")
 }
 
 fn outbound(relay: &mut Relay, byte: u8, connector: ConnectorId, rng: &mut SplitMix64) {

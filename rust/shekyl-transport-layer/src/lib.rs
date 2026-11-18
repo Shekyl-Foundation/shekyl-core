@@ -54,9 +54,9 @@ pub use cause::{CloseCause, CloseKind, Phase};
 pub use clock::{monotonic_ms, recv_mark_ms, unix_ms_of};
 pub use declaration::{
     addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,
-    BannableInbound, ConnectorId, CoverClass, DeadlineInput, Declaration, DestinationAuth,
-    InboundIdentity, LocalVisibility, NativeEncryption, NetworkColumn, NotProvided, Rendezvous,
-    StackPlan, StreamKind, YesNo,
+    BannableInbound, ConnectorId, DeadlineInput, Declaration, DestinationAuth, InboundIdentity,
+    LocalVisibility, NativeEncryption, NetworkColumn, NotProvided, Rendezvous, StackPlan,
+    StreamKind, YesNo,
 };
 pub use dial::check_dial;
 pub use failure::{DialEnd, DialFailure, Evidence, Proof, ProofKind, Reached, Retry, StreamEnd};

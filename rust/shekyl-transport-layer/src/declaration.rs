@@ -266,21 +266,6 @@ pub enum Rendezvous {
     Enabled,
 }
 
-/// The relay's cover ruling for this connector, recorded on the column.
-///
-/// Owned by `TOR_COVER_POSTURE.md`. Not a property of the wire, and not
-/// a value the transport layer edits. Not derived from encryption or from
-/// address hiding. Those cells can agree with this one, and a later
-/// connector may set only one of them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CoverClass {
-    /// An envelope is the only cover a wire observer cannot already see
-    /// through. Substitution cover may run when the carrier was requested.
-    OpenLink,
-    /// The connector's own traffic is the cover. No envelope.
-    Volume,
-}
-
 /// One column of the D7 table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Declaration {
@@ -301,7 +286,6 @@ pub struct Declaration {
     /// Whole milliseconds with their basis. Not assessed means the relay
     /// does not stem here.
     transit_ms: Assessment<DerivationMs>,
-    cover_class: Assessment<CoverClass>,
 }
 
 impl Declaration {
@@ -387,16 +371,6 @@ impl Declaration {
     pub const fn transit_ms(self) -> Assessment<DerivationMs> {
         self.transit_ms
     }
-    /// The relay's cover ruling recorded on this column.
-    ///
-    /// Owned by `TOR_COVER_POSTURE.md`. Not a property of the wire, and
-    /// not a value the transport layer edits. [`Assessment::NotAssessed`]
-    /// is no envelope: the relay does not treat it as an open link.
-    #[must_use]
-    pub const fn cover_class(self) -> Assessment<CoverClass> {
-        self.cover_class
-    }
-
     /// A column that is not a built connector.
     ///
     /// The relay guard drives this through stem draw, the hidden slot's pin, and
@@ -406,7 +380,6 @@ impl Declaration {
     pub const fn synthetic(
         address_hidden_from_peer: Assessment<YesNo>,
         transit_ms: Assessment<DerivationMs>,
-        cover_class: Assessment<CoverClass>,
     ) -> Self {
         Self {
             addressing: Assessment::NotAssessed,
@@ -424,7 +397,6 @@ impl Declaration {
             deadline_inputs: Assessment::NotAssessed,
             rendezvous: Assessment::NotAssessed,
             transit_ms,
-            cover_class,
         }
     }
 }
@@ -453,7 +425,6 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             // been measured on either path.
             rendezvous: Assessment::Assessed(Rendezvous::NotApplicable),
             transit_ms: Assessment::Assessed(ADOPTED_TRANSIT),
-            cover_class: Assessment::Assessed(CoverClass::OpenLink),
         },
         NetworkColumn::Tor => Declaration {
             addressing: Assessment::Assessed(Addressing::OnionV3),
@@ -474,7 +445,6 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             // taken on faith (§89.5).
             rendezvous: Assessment::Assessed(Rendezvous::Enabled),
             transit_ms: Assessment::Assessed(ANON_ZONE_TRANSIT),
-            cover_class: Assessment::Assessed(CoverClass::Volume),
         },
     }
 }
@@ -506,7 +476,7 @@ pub fn connector_for(address: &NetworkAddress) -> Option<ConnectorId> {
 mod tests {
     use super::{
         addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,
-        BannableInbound, ConnectorId, CoverClass, DeadlineInput, DestinationAuth, InboundIdentity,
+        BannableInbound, ConnectorId, DeadlineInput, DestinationAuth, InboundIdentity,
         LocalVisibility, NativeEncryption, NetworkColumn, NotProvided, Rendezvous, StackPlan,
         StreamKind, YesNo,
     };
@@ -572,10 +542,6 @@ mod tests {
                 Rendezvous::Enabled => "enabled",
             }),
             cell(column.transit_ms(), |_| "assessed milliseconds"),
-            cell(column.cover_class(), |value| match value {
-                CoverClass::OpenLink => "substitution envelope",
-                CoverClass::Volume => "volume cover",
-            }),
         ]
     }
 
