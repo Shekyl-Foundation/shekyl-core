@@ -222,7 +222,9 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         &walked.warnings,
     );
     announced.rest.extend(mining_notice(&config));
-    announced.rest.extend(interrupt.line().map(str::to_owned));
+    announced
+        .rest
+        .extend(interrupt.line(owning.is_some()).map(str::to_owned));
     announced.rest.extend(
         walked
             .owner_socket

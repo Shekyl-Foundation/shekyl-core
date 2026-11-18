@@ -40,6 +40,10 @@ pub(crate) const WAITING: &str = "This node is waiting for Tor and holding its o
 /// Said while Tor is off and the node sends over clearnet.
 pub(crate) const OPEN_NETWORK: &str = "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.";
 
+/// Said in a held line while a connector is configured and none holds a
+/// session yet.
+pub(crate) const NOT_SYNCING_YET: &str = "It is not syncing yet.";
+
 /// Said while Tor and clearnet are both off.
 pub(crate) const OFFLINE: &str = "This node is offline.";
 
@@ -127,7 +131,14 @@ fn behaviour(status: &TorStatus, unknown: &mut bool) -> String {
                 Some(carriage) => *carriage == Carriage::Carries,
                 None => status.origination == Origination::Rebuilding,
             };
-            held_sentence(tor_up, &status.sync_connector, unknown)
+            // A connector is configured when Tor is on (held needs it) or
+            // clearnet is on: a node with one and no session yet is "not
+            // syncing yet", not "not syncing" (Rick, 2026-11-17).
+            let configured = matches!(
+                status.posture.tor,
+                TorSetting::Managed | TorSetting::Operator
+            ) || status.posture.clearnet == Clearnet::On;
+            held_sentence(tor_up, configured, &status.sync_connector, unknown)
         }
         OwnTxFate::OpenNetwork => OPEN_NETWORK.to_owned(),
         OwnTxFate::Offline => OFFLINE.to_owned(),
@@ -146,7 +157,10 @@ fn behaviour(status: &TorStatus, unknown: &mut bool) -> String {
 
 /// The held sentence. The node is "waiting for Tor" only while the link is
 /// not up; a held origin beside a usable link is holding, not waiting.
-fn held_sentence(tor_up: bool, sync: &[Connector], unknown: &mut bool) -> String {
+/// With a connector `configured` and none holding a session, the node is
+/// not syncing *yet*: its start said it would sync over that connector, and
+/// a bare "not syncing" read as a contradiction of it.
+fn held_sentence(tor_up: bool, configured: bool, sync: &[Connector], unknown: &mut bool) -> String {
     let over_tor = sync.contains(&Connector::Tor);
     let over_clearnet = sync.contains(&Connector::Clearnet);
     if sync
@@ -159,6 +173,7 @@ fn held_sentence(tor_up: bool, sync: &[Connector], unknown: &mut bool) -> String
         (true, true) => "It is syncing over Tor and clearnet.",
         (true, false) => "It is syncing over Tor.",
         (false, true) => "It is syncing over clearnet.",
+        (false, false) if configured => NOT_SYNCING_YET,
         (false, false) => "It is not syncing.",
     };
     if tor_up {

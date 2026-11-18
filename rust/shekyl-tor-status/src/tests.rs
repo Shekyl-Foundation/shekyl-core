@@ -727,6 +727,53 @@ fn every_combination_has_one_fate_and_the_line_says_it() {
         }
     }
     assert_eq!(combinations, 6 * 5 * 4 * 3);
+
+    // A held node with a connector configured and no session on any yet
+    // is not syncing *yet* (Rick, 2026-11-17): every held combination,
+    // again with nothing syncing. Held needs Tor on, so a connector is
+    // always configured there. Red edit: drop the `configured` arm in
+    // `held_sentence` (the line says "It is not syncing.").
+    let mut held_cases = 0;
+    for origination in &originations {
+        for carriage in &carriages {
+            for tor in &tors {
+                for clearnet in &clearnets {
+                    let status = TorStatus {
+                        posture: Posture {
+                            tor: tor.clone(),
+                            clearnet: clearnet.clone(),
+                        },
+                        origination: origination.clone(),
+                        sync_connector: vec![],
+                        tor_quiet: None,
+                        tor: carriage.clone().map(|carriage| ManagedTor {
+                            state: TorState::Usable,
+                            cause: None,
+                            age: 12,
+                            respawn_count: 0,
+                            progress: None,
+                            flagged: false,
+                            fix: vec![],
+                            onion: None,
+                            bootstrap: None,
+                            carriage,
+                        }),
+                    };
+                    if status.own_tx_fate() != OwnTxFate::Held {
+                        continue;
+                    }
+                    let line = render(&status, None);
+                    assert!(
+                        line.contains(crate::render::NOT_SYNCING_YET),
+                        "{origination:?}, {carriage:?}, {tor:?}, {clearnet:?}: {line}"
+                    );
+                    assert!(!line.contains("It is not syncing."), "{line}");
+                    held_cases += 1;
+                }
+            }
+        }
+    }
+    assert!(held_cases > 0);
     assert_eq!(seen.len(), 5, "every fate is reached: {seen:?}");
 
     // Hidden, whole: under either clearnet setting.
