@@ -76,8 +76,12 @@ const POLL: Duration = Duration::from_millis(50);
 pub enum Held {
     /// The staged file (a leftover being removed, or the source's open).
     Staged,
-    /// The live file the rename would replace.
+    /// The live file the rename would replace: a sharing violation.
     Live,
+    /// The live file, on the classic rename (FAT32, exFAT): its access
+    /// denial is a reader holding it or a file that is not writable, and
+    /// the two cannot be told apart (Rick, 2026-11-18).
+    LiveOrUnwritable,
 }
 
 /// Why [`remove`] or [`replace`] failed.
@@ -90,20 +94,24 @@ pub enum ReplaceError {
 }
 
 /// Run `step` until it succeeds, fails with something other than a held
-/// file, or `deadline` passes; a held file is `held` past it.
+/// file, or `deadline` passes; past it, the last held failure's [`Held`].
 fn waiting<T>(
     deadline: Instant,
-    held: Held,
-    mut step: impl FnMut() -> Result<T, (io::Error, bool)>,
+    mut step: impl FnMut() -> Result<T, (io::Error, Option<Held>)>,
 ) -> Result<T, ReplaceError> {
     loop {
         match step() {
             Ok(value) => return Ok(value),
-            Err((_, true)) if Instant::now() < deadline => std::thread::sleep(POLL),
-            Err((_, true)) => return Err(ReplaceError::HeldOpen(held)),
-            Err((error, false)) => return Err(ReplaceError::Io(error)),
+            Err((_, Some(_))) if Instant::now() < deadline => std::thread::sleep(POLL),
+            Err((_, Some(held))) => return Err(ReplaceError::HeldOpen(held)),
+            Err((error, None)) => return Err(ReplaceError::Io(error)),
         }
     }
+}
+
+/// [`Held::Staged`] when `error` is a sharing violation.
+fn staged_held(error: &io::Error) -> Option<Held> {
+    is_sharing_violation(error).then_some(Held::Staged)
 }
 
 /// Remove the leftover staged file at `staged`, if there is one, waiting
@@ -114,14 +122,12 @@ fn waiting<T>(
 /// [`ReplaceError::HeldOpen`] past the deadline; [`ReplaceError::Io`]
 /// when the removal failed otherwise.
 pub fn remove(staged: &Path, deadline: Instant) -> Result<(), ReplaceError> {
-    waiting(deadline, Held::Staged, || {
-        match std::fs::remove_file(staged) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => {
-                let held = is_sharing_violation(&error);
-                Err((error, held))
-            }
+    waiting(deadline, || match std::fs::remove_file(staged) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            let held = staged_held(&error);
+            Err((error, held))
         }
     })
 }
@@ -135,13 +141,13 @@ pub fn remove(staged: &Path, deadline: Instant) -> Result<(), ReplaceError> {
 /// [`ReplaceError::HeldOpen`] naming the file held past the deadline;
 /// [`ReplaceError::Io`] when the open or the rename failed otherwise.
 pub fn replace(staged: &Path, live: &Path, deadline: Instant) -> Result<(), ReplaceError> {
-    let source = waiting(deadline, Held::Staged, || {
+    let source = waiting(deadline, || {
         open_source(staged).map_err(|error| {
-            let held = is_sharing_violation(&error);
+            let held = staged_held(&error);
             (error, held)
         })
     })?;
-    waiting(deadline, Held::Live, || {
+    waiting(deadline, || {
         source
             .attempt(live)
             .map_err(|failed| (failed.error, failed.held))
@@ -186,7 +192,7 @@ pub fn is_ex_unsupported(error: &io::Error) -> bool {
 /// A failed rename, and whether a reader holding the destination failed it.
 struct Failed {
     error: io::Error,
-    held: bool,
+    held: Option<Held>,
 }
 
 /// The rename a call asks for: the class and the union's value.
@@ -211,10 +217,11 @@ impl Source {
         self.attempt(destination).map_err(|failed| failed.error)
     }
 
-    /// One rename, and whether its failure is a reader holding the
-    /// destination: a sharing violation, or on the classic class (a file
-    /// system without POSIX renames) the access denial a held destination
-    /// gives there.
+    /// One rename, and whether its failure is the destination held: a
+    /// sharing violation on every path; on the classic class (a file system
+    /// without POSIX renames) an access denial too, which may as well be a
+    /// destination that is not writable. On the POSIX path an access denial
+    /// is the real error, at once (Rick, 2026-11-18).
     fn attempt(&self, destination: &Path) -> Result<(), Failed> {
         let posix =
             Rename::Ex(FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS);
@@ -222,13 +229,18 @@ impl Source {
             Ok(()) => Ok(()),
             Err(error) if is_ex_unsupported(&error) => self
                 .rename_with(destination, Rename::Classic)
-                .map_err(|error| Failed {
-                    held: is_sharing_violation(&error)
-                        || error.raw_os_error() == i32::try_from(ERROR_ACCESS_DENIED).ok(),
-                    error,
+                .map_err(|error| {
+                    let held = if is_sharing_violation(&error) {
+                        Some(Held::Live)
+                    } else if error.raw_os_error() == i32::try_from(ERROR_ACCESS_DENIED).ok() {
+                        Some(Held::LiveOrUnwritable)
+                    } else {
+                        None
+                    };
+                    Failed { error, held }
                 }),
             Err(error) => Err(Failed {
-                held: is_sharing_violation(&error),
+                held: is_sharing_violation(&error).then_some(Held::Live),
                 error,
             }),
         }

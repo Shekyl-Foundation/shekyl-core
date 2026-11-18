@@ -129,6 +129,14 @@ pub fn held_open_refusal(
     )
     .param("path", held.held.display().to_string())
     .param(
+        "cause",
+        if held.or_unwritable {
+            "another program held it open, or it is not writable,"
+        } else {
+            "another program held it open"
+        },
+    )
+    .param(
         "wait",
         shekyl_os_account::private_file::REPLACE_WAIT
             .as_secs()

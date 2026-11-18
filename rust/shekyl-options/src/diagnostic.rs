@@ -423,8 +423,9 @@ impl Diagnostic {
                 p("reason")
             ),
             Code::ReplaceHeldOpen => format!(
-                "{} could not be written: another program held it open for more than {} s, most likely an antivirus scanner or a search indexer; exclude {} from scanning and start the daemon again",
+                "{} could not be written: {} for more than {} s, most likely an antivirus scanner or a search indexer; exclude {} from scanning and start the daemon again",
                 p("path"),
+                p("cause"),
                 p("wait"),
                 p("dir")
             ),

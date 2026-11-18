@@ -342,13 +342,21 @@ pub struct HeldOpen {
     pub held: PathBuf,
     /// The file the replace was to write.
     pub live: PathBuf,
+    /// Whether the held file may instead be one that is not writable: the
+    /// classic rename (FAT32, exFAT) answers both with an access denial.
+    pub or_unwritable: bool,
 }
 
 impl std::fmt::Display for HeldOpen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cause = if self.or_unwritable {
+            "was held open by another program, or is not writable,"
+        } else {
+            "was held open by another program"
+        };
         write!(
             f,
-            "{} was held open by another program for more than {} s, so {} could not be replaced",
+            "{} {cause} for more than {} s, so {} could not be replaced",
             self.held.display(),
             REPLACE_WAIT.as_secs(),
             self.live.display()
@@ -542,9 +550,10 @@ fn windows_fault(
         ReplaceError::HeldOpen(held) => CommitError::HeldOpen(HeldOpen {
             held: match held {
                 Held::Staged => staged.to_path_buf(),
-                Held::Live => live.to_path_buf(),
+                Held::Live | Held::LiveOrUnwritable => live.to_path_buf(),
             },
             live: live.to_path_buf(),
+            or_unwritable: held == Held::LiveOrUnwritable,
         }),
         ReplaceError::Io(error) => CommitError::Io(live.to_path_buf(), error),
     }
