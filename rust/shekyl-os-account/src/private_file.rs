@@ -19,7 +19,7 @@
 //! over it ([`StagedWrite`]), and [`StagedWrite::commit`] is the one place
 //! that replaces a file (Rick, 2026-11-18). A reader sees the previous bytes
 //! or the new ones. The staged file's name is the destination's file name
-//! plus [`.new`](JOURNAL_SUFFIX), one rule for every caller, and what
+//! plus `.new`, one rule for every caller, and what
 //! becomes of it is its kind, in the type:
 //!
 //! - a [`Journal`] is named by a store transaction (the console key's), so

@@ -76,12 +76,10 @@ mod file;
 mod peer;
 #[cfg(windows)]
 mod pipe;
-/// A service's rendezvous record as a registry value.
 #[cfg(windows)]
 pub mod registry;
 #[cfg(windows)]
 pub mod rendezvous;
-/// Replacing a file by renaming another over it, through the handle.
 #[cfg(windows)]
 pub mod replace;
 #[cfg(windows)]
