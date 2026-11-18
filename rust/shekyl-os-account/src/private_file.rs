@@ -82,6 +82,10 @@ const OWNER_ONLY_MODE: u32 = 0o600;
 #[cfg(unix)]
 const WORLD_READABLE_MODE: u32 = 0o644;
 
+/// The mode a plain create asks for, which the umask then narrows.
+#[cfg(unix)]
+const DEFAULT_CREATE_MODE: u32 = 0o666;
+
 /// Who may read a file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {
@@ -96,6 +100,26 @@ pub enum Access {
     /// read and write it and BUILTIN\Administrators may read it, with the
     /// no-read-up label set in the creating call.
     Console,
+    /// This account's own file, mode `0600` on Unix like [`Self::OwnerOnly`];
+    /// on Windows the directory's inherited ACL, where `OwnerOnly` sets an
+    /// owner-only descriptor and the no-read-up label. A wallet's files and
+    /// its preferences, whose protection on Windows is the profile folder's
+    /// (a conversion changes no file's protection; Rick, 2026-11-18).
+    Private,
+    /// What a plain create gives: the mode the umask leaves on Unix, the
+    /// inherited ACL on Windows. The data directory's marker, the dialer's
+    /// address store, the vanguard state and the rebaseline traces.
+    Default,
+}
+
+/// What [`replace`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Replaced {
+    /// The live file already held exactly these bytes and passed its
+    /// reader's access check: nothing was staged, nothing renamed.
+    Unchanged,
+    /// The bytes were staged and renamed into place.
+    Written,
 }
 
 /// Why a private file cannot be used.
@@ -114,7 +138,9 @@ impl From<CommitError> for PrivateFileError {
     fn from(error: CommitError) -> Self {
         match error {
             CommitError::HeldOpen(held) => Self::HeldOpen(held),
-            CommitError::Io(path, error) => Self::Io(path, error),
+            CommitError::Io(path, error) | CommitError::Unsynced(path, error) => {
+                Self::Io(path, error)
+            }
         }
     }
 }
@@ -192,7 +218,7 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> 
 ///
 /// [`PrivateFileError::Io`] when a step fails.
 pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> {
-    replace(path, bytes, Access::OwnerOnly)
+    replace_as(path, bytes, Access::OwnerOnly)
 }
 
 /// Replace the console file at `path` with `bytes` ([`Access::Console`]).
@@ -201,13 +227,12 @@ pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError
 ///
 /// [`PrivateFileError::Io`] when a step fails.
 pub fn replace_console(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> {
-    replace(path, bytes, Access::Console)
+    replace_as(path, bytes, Access::Console)
 }
 
-fn replace(path: &Path, bytes: &[u8], access: Access) -> Result<(), PrivateFileError> {
-    StagedWrite::<Replace>::create(path, bytes, access)?
-        .commit()
-        .map_err(PrivateFileError::from)
+fn replace_as(path: &Path, bytes: &[u8], access: Access) -> Result<(), PrivateFileError> {
+    replace(path, bytes, access)?;
+    Ok(())
 }
 
 /// Whether only this account can read `path`: a file, not a link, owned by
@@ -373,6 +398,10 @@ pub enum CommitError {
     HeldOpen(HeldOpen),
     /// A step failed, at this path.
     Io(PathBuf, std::io::Error),
+    /// The rename landed, but the directory's sync after it failed: the
+    /// new file is in place, its survival of an immediate crash
+    /// unconfirmed.
+    Unsynced(PathBuf, std::io::Error),
 }
 
 impl std::fmt::Display for CommitError {
@@ -380,6 +409,11 @@ impl std::fmt::Display for CommitError {
         match self {
             Self::HeldOpen(held) => held.fmt(f),
             Self::Io(path, error) => write!(f, "{}: {error}", path.display()),
+            Self::Unsynced(path, error) => write!(
+                f,
+                "{} was replaced, but its directory could not be synced: {error}",
+                path.display()
+            ),
         }
     }
 }
@@ -390,7 +424,7 @@ impl From<CommitError> for std::io::Error {
     fn from(error: CommitError) -> Self {
         match error {
             CommitError::HeldOpen(held) => std::io::Error::other(held),
-            CommitError::Io(_, error) => error,
+            CommitError::Io(_, error) | CommitError::Unsynced(_, error) => error,
         }
     }
 }
@@ -455,7 +489,7 @@ impl<K: Kind> StagedWrite<K> {
             }
             return Err(error);
         }
-        sync_dir(parent(&self.live)).map_err(|error| CommitError::Io(self.live.clone(), error))
+        sync_dir(parent(&self.live)).map_err(|error| CommitError::Unsynced(self.live.clone(), error))
     }
 }
 
@@ -595,8 +629,16 @@ fn parent(path: &Path) -> &Path {
 fn create(path: &Path, access: Access) -> std::io::Result<File> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mode = match access {
-        Access::OwnerOnly | Access::Console => OWNER_ONLY_MODE,
+        Access::OwnerOnly | Access::Console | Access::Private => OWNER_ONLY_MODE,
         Access::WorldReadable => WORLD_READABLE_MODE,
+        // The umask decides, as a plain create's does.
+        Access::Default => {
+            return std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(DEFAULT_CREATE_MODE)
+                .open(path);
+        }
     };
     let file = std::fs::OpenOptions::new()
         .write(true)
@@ -618,11 +660,74 @@ fn create(path: &Path, access: Access) -> std::io::Result<File> {
         Access::Console => {
             shekyl_win_sec::rendezvous::create_console_file(path).map_err(std::io::Error::other)
         }
-        Access::WorldReadable => std::fs::OpenOptions::new()
+        Access::WorldReadable | Access::Private | Access::Default => std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path),
     }
+}
+
+/// Whether `path` passes the access check its readers make for `access`:
+/// a regular file, not a link, of this account, with the mode its kind
+/// gives. A file that fails is rewritten, which restores its protection.
+#[cfg(unix)]
+fn holds_access(path: &Path, access: Access) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    match access {
+        Access::OwnerOnly => check_private(path).is_ok(),
+        Access::Console => check_console(path).is_ok(),
+        Access::WorldReadable | Access::Private | Access::Default => {
+            let Ok(meta) = std::fs::symlink_metadata(path) else {
+                return false;
+            };
+            let mode = meta.permissions().mode() & 0o777;
+            meta.file_type().is_file()
+                && meta.uid() == crate::effective_uid()
+                && match access {
+                    Access::WorldReadable => mode == WORLD_READABLE_MODE,
+                    Access::Private => mode & 0o077 == 0,
+                    _ => true,
+                }
+        }
+    }
+}
+
+/// Whether `path` passes the access check its readers make for `access`:
+/// the labelled descriptors for a key and the console, and for the rest a
+/// regular file that nobody but this account and the platform's own
+/// principals may write.
+#[cfg(windows)]
+fn holds_access(path: &Path, access: Access) -> bool {
+    match access {
+        Access::OwnerOnly => check_private(path).is_ok(),
+        Access::Console => check_console(path).is_ok(),
+        Access::WorldReadable | Access::Private | Access::Default => {
+            std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
+                && shekyl_win_sec::dacl::write_grantees(path).is_ok_and(|grantees| {
+                    grantees
+                        .iter()
+                        .all(|g| *g == shekyl_win_sec::dacl::Grantee::Permitted)
+                })
+        }
+    }
+}
+
+/// Replace the file at `live` with `bytes`, as `access` gives: the one
+/// replace path (Rick, 2026-11-18). A live file that already holds exactly
+/// these bytes and passes its reader's access check is left alone: no
+/// staged file, no rename. One that matches in bytes but fails the check
+/// is replaced, which restores its protection.
+///
+/// # Errors
+///
+/// [`CommitError`], as [`StagedWrite::create`] and [`StagedWrite::commit`].
+pub fn replace(live: &Path, bytes: &[u8], access: Access) -> Result<Replaced, CommitError> {
+    let unchanged = std::fs::read(live).is_ok_and(|held| held == bytes);
+    if unchanged && holds_access(live, access) {
+        return Ok(Replaced::Unchanged);
+    }
+    StagedWrite::<Replace>::create(live, bytes, access)?.commit()?;
+    Ok(Replaced::Written)
 }
 
 #[cfg(all(test, unix))]
@@ -709,6 +814,52 @@ mod tests {
         replace_private(&path, b"new").unwrap();
         assert_eq!(read_private(&path).unwrap().unwrap().as_slice(), b"new");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// A replace whose live file already holds the bytes and passes its
+    /// access check touches nothing: no staged file, the same inode, the
+    /// same modification time. Red edit: drop the unchanged check in
+    /// `replace`, and the second write stages and renames a new inode.
+    #[test]
+    fn an_unchanged_rewrite_touches_nothing() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("rpc-channel.bundle");
+        assert_eq!(
+            replace(&live, b"bundle", Access::Console).unwrap(),
+            Replaced::Written
+        );
+        let before = std::fs::metadata(&live).unwrap();
+        assert_eq!(
+            replace(&live, b"bundle", Access::Console).unwrap(),
+            Replaced::Unchanged
+        );
+        let after = std::fs::metadata(&live).unwrap();
+        assert_eq!(before.ino(), after.ino(), "the file was not replaced");
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert!(!staged_path(&live).exists());
+        assert_eq!(
+            replace(&live, b"changed", Access::Console).unwrap(),
+            Replaced::Written
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"changed");
+    }
+
+    /// A file whose bytes match but whose mode was loosened is replaced,
+    /// which restores the mode. Red edit: skip on the bytes alone, and the
+    /// key stays readable by the group.
+    #[test]
+    fn a_loosened_mode_with_unchanged_bytes_is_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("key");
+        replace(&live, b"secret", Access::OwnerOnly).unwrap();
+        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(
+            replace(&live, b"secret", Access::OwnerOnly).unwrap(),
+            Replaced::Written
+        );
+        let mode = std::fs::metadata(&live).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, OWNER_ONLY_MODE);
     }
 
     /// The superuser reads a service-owned console file. Another account's

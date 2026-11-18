@@ -187,7 +187,7 @@ mod windows {
             .bytes();
             publish(plan, &record).map_err(|fault| match fault {
                 CommitError::HeldOpen(held) => crate::run::held_open_refusal(&held, &plan.dir),
-                CommitError::Io(_, e) => {
+                CommitError::Io(_, e) | CommitError::Unsynced(_, e) => {
                     unusable(format!("the rendezvous cannot be published: {e}"))
                 }
             })?;
