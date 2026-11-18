@@ -171,24 +171,51 @@ pub type LocalStream = std::os::unix::net::UnixStream;
 pub type LocalStream = shekyl_win_sec::VerifiedPipe;
 
 impl LocalTarget {
-    /// "This computer" for `network`: the default instance, in this
-    /// account's rendezvous directory. `service_rendezvous` is the
+    /// "This computer" for `network`: the default instance in this
+    /// account's rendezvous directory, and the service's record in the
     /// service's fixed rendezvous directory
-    /// (`shekyl_process::platform::service_rendezvous`), consulted only when
+    /// (`shekyl_rpc_rendezvous::service_rendezvous`), consulted only when
     /// no node of this account is there.
+    ///
+    /// The one way a client names "this computer" (Rick, 2026-11-18): the
+    /// network is all it gives. The directories are this account's and
+    /// this platform's, read here, so no client assembles them and none can
+    /// leave the service's out.
     #[must_use]
-    pub fn this_computer(network: Network, service_rendezvous: Option<&Path>) -> Self {
-        Self::resolve(network, &Instance::Default, None, service_rendezvous)
+    pub fn this_computer(network: Network) -> Self {
+        Self::at(
+            network,
+            &Instance::Default,
+            None,
+            shekyl_rpc_rendezvous::service_rendezvous().as_deref(),
+        )
     }
 
-    /// `instance` of `network`, in `dir` when given (a test host's
-    /// `rpc-socket-dir`, which a client reaches only when told it, §7.1),
-    /// otherwise in this account's rendezvous directory; and the service's
-    /// record for the same network and instance in `service_rendezvous`,
-    /// when given. An account with no root is [`LocalFault::NoPlace`] at the
-    /// dial, unless a service is there.
+    /// **A test's override.** `instance` of `network` in the directory
+    /// `dir` (a test host's `rpc-socket-dir`), with the service's record
+    /// looked for in `service_rendezvous`, each `None` for none: a test
+    /// node lives in directories of its own, which "this computer" does not
+    /// name. Behind the `test-override` feature, which
+    /// `scripts/ci/check_test_only_features.py` holds to dev-dependency
+    /// edges: a production client cannot name a directory, and so cannot
+    /// name a wrong one.
+    #[cfg(any(test, feature = "test-override"))]
     #[must_use]
-    pub fn resolve(
+    pub fn test_override(
+        network: Network,
+        instance: &Instance,
+        dir: Option<&Path>,
+        service_rendezvous: Option<&Path>,
+    ) -> Self {
+        Self::at(network, instance, dir, service_rendezvous)
+    }
+
+    /// `instance` of `network`, in `dir` when given, otherwise in this
+    /// account's rendezvous directory; and the service's record for the
+    /// same network and instance in `service_rendezvous`, when given. An
+    /// account with no root is [`LocalFault::NoPlace`] at the dial, unless
+    /// a service is there.
+    fn at(
         network: Network,
         instance: &Instance,
         dir: Option<&Path>,
@@ -777,6 +804,35 @@ pub fn rpc_error(fault: LocalFault) -> RpcError {
 mod tests {
     use super::*;
 
+    /// **"This computer" names the service's directory itself** (Rick,
+    /// 2026-11-18). A client gives its network and nothing else, and the
+    /// target it gets looks for the service's record in the platform's
+    /// service rendezvous directory, under this network's name for the
+    /// default instance. Pure: nothing is dialled and no host is needed.
+    /// Red edit: have `this_computer` pass `None` for the service
+    /// directory; every client then stops seeing a service, silently.
+    #[test]
+    fn this_computer_names_the_service_s_directory_itself() {
+        let target = LocalTarget::this_computer(Network::Regtest);
+        let expected = shekyl_rpc_rendezvous::service_rendezvous().map(|dir| {
+            shekyl_rpc_rendezvous::service_record_path(
+                &dir,
+                &Network::Regtest.network_id(),
+                &Instance::Default,
+            )
+        });
+        assert_eq!(target.service_record, expected);
+        // Every platform with a row has a directory, so this is not a
+        // comparison of two absences there.
+        if cfg!(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "macos"
+        )) {
+            assert!(target.service_record.is_some());
+        }
+    }
+
     #[test]
     fn a_content_length_reply_is_its_body() {
         let raw =
@@ -814,7 +870,8 @@ mod tests {
     #[test]
     fn the_target_is_the_daemons_rendezvous() {
         let dir = Path::new("dir");
-        let target = LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir), None);
+        let target =
+            LocalTarget::test_override(Network::Regtest, &Instance::Default, Some(dir), None);
         let name = rendezvous_name(&Network::Regtest.network_id(), &Instance::Default);
         assert_eq!(
             target.path().expect("a named directory"),
@@ -828,8 +885,12 @@ mod tests {
     #[test]
     fn nothing_there_is_not_running_and_not_a_security_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let target = LocalTarget::test_override(
+            Network::Regtest,
+            &Instance::Default,
+            Some(dir.path()),
+            None,
+        );
         let Err(fault) = target.dial() else {
             panic!("a dial with nothing there connected")
         };
@@ -855,7 +916,7 @@ mod tests {
     fn a_service_here_is_named_by_its_record_and_nothing_is_dialled() {
         let owner = tempfile::tempdir().unwrap();
         let service = tempfile::tempdir().unwrap();
-        let target = LocalTarget::resolve(
+        let target = LocalTarget::test_override(
             Network::Regtest,
             &Instance::Default,
             Some(owner.path()),
@@ -949,8 +1010,12 @@ mod tests {
     #[test]
     fn a_failed_peer_check_is_its_own_error_through_the_async_client() {
         let dir = tempfile::tempdir().unwrap();
-        let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let target = LocalTarget::test_override(
+            Network::Regtest,
+            &Instance::Default,
+            Some(dir.path()),
+            None,
+        );
         let path = target.path().expect("a named directory").to_path_buf();
         std::fs::write(&path, b"not a socket").unwrap();
         let client = LocalRpc::new(target);
@@ -1027,8 +1092,12 @@ mod tests {
     #[test]
     fn a_daemon_that_never_replies_is_given_up_at_the_bound() {
         let dir = tempfile::tempdir().unwrap();
-        let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let target = LocalTarget::test_override(
+            Network::Regtest,
+            &Instance::Default,
+            Some(dir.path()),
+            None,
+        );
         let (release, held) = std::sync::mpsc::channel::<()>();
         let daemon = serve_once(&target, move |mut stream| {
             let mut request = [0u8; 1024];
@@ -1056,8 +1125,12 @@ mod tests {
     #[test]
     fn a_reply_followed_by_the_close_is_read_whole() {
         let dir = tempfile::tempdir().unwrap();
-        let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let target = LocalTarget::test_override(
+            Network::Regtest,
+            &Instance::Default,
+            Some(dir.path()),
+            None,
+        );
         let daemon = serve_once(&target, |mut stream| {
             // The whole request, headers and the two-byte body, so the close
             // leaves nothing unread (an unread byte turns the close into a
@@ -1087,8 +1160,12 @@ mod tests {
     #[test]
     fn a_daemon_that_answers_a_byte_at_a_time_is_given_up_at_the_bound() {
         let dir = tempfile::tempdir().unwrap();
-        let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let target = LocalTarget::test_override(
+            Network::Regtest,
+            &Instance::Default,
+            Some(dir.path()),
+            None,
+        );
         let daemon = serve_once(&target, |mut stream| {
             let mut request = [0u8; 1024];
             drop(stream.read(&mut request));
@@ -1127,8 +1204,12 @@ mod tests {
             .build()
             .unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let target = LocalTarget::test_override(
+            Network::Regtest,
+            &Instance::Default,
+            Some(dir.path()),
+            None,
+        );
         let pipe = format!(
             "{}{:032x}",
             shekyl_rpc_rendezvous::PIPE_PREFIX,
@@ -1188,8 +1269,12 @@ mod tests {
     #[test]
     fn a_stale_socket_is_stale_and_a_plain_file_is_the_wrong_thing() {
         let dir = tempfile::tempdir().unwrap();
-        let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let target = LocalTarget::test_override(
+            Network::Regtest,
+            &Instance::Default,
+            Some(dir.path()),
+            None,
+        );
         let listener =
             std::os::unix::net::UnixListener::bind(target.path().expect("a named directory"))
                 .unwrap();
@@ -1211,8 +1296,12 @@ mod tests {
     #[test]
     fn a_socket_of_this_account_passes_the_peer_check() {
         let dir = tempfile::tempdir().unwrap();
-        let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let target = LocalTarget::test_override(
+            Network::Regtest,
+            &Instance::Default,
+            Some(dir.path()),
+            None,
+        );
         let _listener =
             std::os::unix::net::UnixListener::bind(target.path().expect("a named directory"))
                 .unwrap();

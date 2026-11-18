@@ -416,10 +416,7 @@ pub fn daemon_target(
             url: shekyl_rpc_transport::daemon_address_url(&url),
             proxy,
         }),
-        (None, None) => Ok(DaemonTarget::ThisComputer {
-            network,
-            service_rendezvous: shekyl_process::platform::service_rendezvous(),
-        }),
+        (None, None) => Ok(DaemonTarget::ThisComputer { network }),
         (None, Some(_)) => Err(
             "--proxy needs --daemon-address: without one the wallet's daemon is this \
              computer's node, reached on its owner's socket, never through a proxy"
@@ -1204,7 +1201,6 @@ mod tests {
         );
         config.daemon = DaemonTarget::ThisComputer {
             network: Network::Stagenet,
-            service_rendezvous: None,
         };
         assert!(
             daemon_disclosures(&config).is_empty(),

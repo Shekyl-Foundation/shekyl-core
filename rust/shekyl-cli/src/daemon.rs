@@ -670,7 +670,6 @@ mod tests {
         let client = super::DaemonClient::new(
             shekyl_rpc_transport::DaemonTarget::ThisComputer {
                 network: super::Network::Testnet,
-                service_rendezvous: None,
             },
             Some("Start the testnet daemon with: shekyld --network testnet".into()),
             super::Network::Testnet,
@@ -706,7 +705,7 @@ mod tests {
 
         let leg = || {
             std::sync::Arc::new(super::Connection::ThisComputer(
-                crate::node_leg::NodeLeg::Owner(LocalTarget::resolve(
+                crate::node_leg::NodeLeg::Owner(LocalTarget::test_override(
                     super::Network::Regtest,
                     &Instance::Default,
                     Some(Path::new("dir")),
