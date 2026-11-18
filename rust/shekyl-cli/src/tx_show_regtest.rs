@@ -131,8 +131,12 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
         crate::rpc_client::RpcSession::connect(&format!("http://127.0.0.1:{port}"), None, false)
             .expect("the dead socket still constructs a session");
     session.set_open("wallet");
-    let client = crate::daemon::DaemonClient::new(&daemon.url, None, None, Network::Regtest)
-        .expect("daemon client");
+    let client = crate::daemon::DaemonClient::new(
+        shekyl_rpc_transport::DaemonTarget::address(daemon.url.as_str()),
+        None,
+        Network::Regtest,
+    )
+    .expect("daemon client");
     let at = daemon.marks();
     let error = super::command(&session, Some(&client), &"ab".repeat(32), false)
         .expect_err("the wallet read fails");
@@ -353,8 +357,12 @@ fn section_13_words_answer_a_regtest_daemon() {
     crate::commands::mine::cmd_mine_stop(Some(&client)).expect("mine stop");
 
     let marks = daemon.marks();
-    let wrong = crate::daemon::DaemonClient::new(&daemon.url, None, None, Network::Mainnet)
-        .expect("a mainnet client of the same daemon");
+    let wrong = crate::daemon::DaemonClient::new(
+        shekyl_rpc_transport::DaemonTarget::address(daemon.url.as_str()),
+        None,
+        Network::Mainnet,
+    )
+    .expect("a mainnet client of the same daemon");
     let mismatch = crate::console::execute(&wrong, &View::ChainHeight).expect_err("wrong network");
     assert!(mismatch.contains("network mismatch"), "{mismatch}");
     let asked = daemon.delta_since(&marks);
@@ -504,13 +512,21 @@ impl Regtest {
     }
 
     fn client(&self) -> crate::daemon::DaemonClient {
-        crate::daemon::DaemonClient::new(&self.url, None, None, Network::Regtest)
-            .expect("daemon client")
+        crate::daemon::DaemonClient::new(
+            shekyl_rpc_transport::DaemonTarget::address(self.url.as_str()),
+            None,
+            Network::Regtest,
+        )
+        .expect("daemon client")
     }
 
     fn view_client(&self) -> crate::daemon::DaemonClient {
-        crate::daemon::DaemonClient::new(&self.view_url, None, None, Network::Regtest)
-            .expect("view client")
+        crate::daemon::DaemonClient::new(
+            shekyl_rpc_transport::DaemonTarget::address(self.view_url.as_str()),
+            None,
+            Network::Regtest,
+        )
+        .expect("view client")
     }
 
     fn wait_exit(&mut self) {

@@ -4891,7 +4891,10 @@ async fn e2e_emission_claim_accepted_and_applied() {
     fixture.arc.write().await.prefs_mut().device.tor_binary_path = tor.display().to_string();
     let serving = super::Engine::start_serving_if_staker(
         fixture.arc.clone(),
-        &format!("http://127.0.0.1:{}", daemon.rpc_port),
+        &shekyl_rpc_transport::DaemonTarget::address(format!(
+            "http://127.0.0.1:{}",
+            daemon.rpc_port
+        )),
     )
     .await
     .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
@@ -5139,7 +5142,10 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
     };
     let claim_rpc = LocalNodeRpc::new(
-        format!("http://127.0.0.1:{}", daemon.rpc_port),
+        &shekyl_rpc_transport::DaemonTarget::address(format!(
+            "http://127.0.0.1:{}",
+            daemon.rpc_port
+        )),
         Duration::from_secs(10),
     )
     .await
@@ -5936,7 +5942,10 @@ async fn e2e_release_accepted_and_connected() {
     // is what makes the post-connect zero an observed *transition* rather
     // than a state that could have held all along.
     let release_rpc = LocalNodeRpc::new(
-        format!("http://127.0.0.1:{}", daemon.rpc_port),
+        &shekyl_rpc_transport::DaemonTarget::address(format!(
+            "http://127.0.0.1:{}",
+            daemon.rpc_port
+        )),
         Duration::from_secs(10),
     )
     .await
@@ -6153,11 +6162,14 @@ async fn e2e_unstake_collect_retire_composed_arc() {
         Some(wallet),
     )
     .await;
-    let daemon_address = format!("http://127.0.0.1:{}", daemon.rpc_port);
+    let daemon_address = shekyl_rpc_transport::DaemonTarget::address(format!(
+        "http://127.0.0.1:{}",
+        daemon.rpc_port
+    ));
 
     // Pre-read: the positive balance that makes the post-connect zero a
     // transition (the PR-B walk's discipline).
-    let record_rpc = LocalNodeRpc::new(daemon_address.clone(), Duration::from_secs(10))
+    let record_rpc = LocalNodeRpc::new(&daemon_address, Duration::from_secs(10))
         .await
         .expect("loopback record transport");
     let before = fetch_claim_source_for(&record_rpc, fixture.persona_id)

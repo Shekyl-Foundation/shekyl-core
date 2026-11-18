@@ -24,6 +24,15 @@
 //! failure type and no conversion into the HTTP transport's: a fold into a
 //! connection error would make the security failure retryable.
 //!
+//! When no node of this account is there, "this computer" may be a service
+//! (RT-16). A target that knows the service's rendezvous directory reads the
+//! service's record only to say so ([`LocalFault::Service`], with the view
+//! listener it names, if any). It dials nothing the record names: a wallet
+//! reaches a service over the channel, from RT-W12 (Rick, 2026-11-17).
+//!
+//! [`LocalRpc`] is the target behind the async [`Rpc`] trait, for the wallet
+//! engine: each call runs on the blocking pool, one connection each.
+//!
 //! The account's root (the session directory on Unix, the local
 //! application data folder on Windows) and the peer's account on Unix come
 //! from `shekyl_os_account`, the leaf the daemon's process crate reads the
@@ -34,8 +43,13 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use std::future::Future;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use shekyl_network::Network;
-use shekyl_rpc_rendezvous::{rendezvous_name, Instance};
+use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_rpc_rendezvous::{rendezvous_name, Instance, ServiceRecord};
 use zeroize::Zeroizing;
 
 use crate::JsonRpcError;
@@ -75,6 +89,15 @@ pub enum LocalFault {
     /// Something other than this account's node is at the rendezvous: a
     /// peer that fails the check. A hard stop: never retried.
     PeerCheck(String),
+    /// No node of this account is there, and this computer's node is a
+    /// service: its record says so. `view` is the service's view listener
+    /// when it has one. Nothing was dialled.
+    Service {
+        /// The network and instance looked for.
+        node: String,
+        /// The service's view listener, as its record names it.
+        view: Option<SocketAddr>,
+    },
     /// The node did not answer: a timeout, a busy pipe, a broken exchange.
     Unreachable(String),
 }
@@ -119,6 +142,7 @@ impl fmt::Display for LocalFault {
                     "The Shekyl node on this computer did not answer: {detail}"
                 )
             }
+            Self::Service { view, .. } => f.write_str(&shekyl_rpc_client::service_refusal(*view)),
         }
     }
 }
@@ -127,78 +151,130 @@ impl std::error::Error for LocalFault {}
 
 /// A run-as-me daemon's owner's leg: "this computer" (the default instance
 /// in the account's own directory), or an instance or a directory named by
-/// the caller.
+/// the caller; and, when given, the service's rendezvous directory, read
+/// only to say that this computer's node is a service.
 #[derive(Clone, Debug)]
 pub struct LocalTarget {
     node: String,
-    path: PathBuf,
+    /// The owner's rendezvous; `None` when the account has no root for one.
+    path: Option<PathBuf>,
+    /// The service's record for the same network and instance.
+    service_record: Option<PathBuf>,
 }
 
-/// The connected owner's leg: the socket on Unix, the verified pipe on
-/// Windows.
+/// The stream the owner's leg is.
 #[cfg(unix)]
 pub type LocalStream = std::os::unix::net::UnixStream;
 
-/// The connected owner's leg: the socket on Unix, the verified pipe on
-/// Windows.
+/// The stream the owner's leg is: the pipe, opened through the peer check.
 #[cfg(windows)]
 pub type LocalStream = shekyl_win_sec::VerifiedPipe;
 
 impl LocalTarget {
     /// "This computer" for `network`: the default instance, in this
-    /// account's rendezvous directory.
-    ///
-    /// # Errors
-    ///
-    /// [`LocalFault::NoPlace`]: the account has no root for a rendezvous.
-    pub fn this_computer(network: Network) -> Result<Self, LocalFault> {
-        Self::resolve(network, &Instance::Default, None)
+    /// account's rendezvous directory. `service_rendezvous` is the
+    /// service's fixed rendezvous directory
+    /// (`shekyl_process::platform::service_rendezvous`), consulted only when
+    /// no node of this account is there.
+    #[must_use]
+    pub fn this_computer(network: Network, service_rendezvous: Option<&Path>) -> Self {
+        Self::resolve(network, &Instance::Default, None, service_rendezvous)
     }
 
     /// `instance` of `network`, in `dir` when given (a test host's
     /// `rpc-socket-dir`, which a client reaches only when told it, §7.1),
-    /// otherwise in this account's rendezvous directory.
-    ///
-    /// # Errors
-    ///
-    /// [`LocalFault::NoPlace`]: no `dir`, and the account has no root.
+    /// otherwise in this account's rendezvous directory; and the service's
+    /// record for the same network and instance in `service_rendezvous`,
+    /// when given. An account with no root is [`LocalFault::NoPlace`] at the
+    /// dial, unless a service is there.
+    #[must_use]
     pub fn resolve(
         network: Network,
         instance: &Instance,
         dir: Option<&Path>,
-    ) -> Result<Self, LocalFault> {
+        service_rendezvous: Option<&Path>,
+    ) -> Self {
         let node = match instance {
             Instance::Default => network.name().to_owned(),
             Instance::Named(_) => format!("{} (instance {})", network.name(), instance.label()),
         };
         let dir = match dir {
-            Some(dir) => dir.to_path_buf(),
-            None => match shekyl_os_account::account_root() {
-                Some(root) => shekyl_rpc_rendezvous::account_dir(&root),
-                None => return Err(LocalFault::NoPlace { node }),
-            },
+            Some(dir) => Some(dir.to_path_buf()),
+            None => shekyl_os_account::account_root()
+                .map(|root| shekyl_rpc_rendezvous::account_dir(&root)),
         };
-        let name = rendezvous_name(&network.network_id(), instance);
-        Ok(Self {
+        let network_id = network.network_id();
+        let name = rendezvous_name(&network_id, instance);
+        Self {
             node,
-            path: dir.join(shekyl_rpc_rendezvous::file_name(&name)),
-        })
+            path: dir.map(|dir| dir.join(shekyl_rpc_rendezvous::file_name(&name))),
+            service_record: service_rendezvous
+                .map(|dir| shekyl_rpc_rendezvous::service_record_path(dir, &network_id, instance)),
+        }
     }
 
-    /// The rendezvous: the socket (Unix) or the record (Windows).
+    /// The rendezvous: the socket (Unix) or the record (Windows); `None`
+    /// when the account has no root for one.
     #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Connect to the owner's leg and check its peer.
     ///
     /// # Errors
     ///
-    /// [`LocalFault`]: not running, stale, another session, a failed peer
-    /// check, or a dial that failed otherwise.
+    /// [`LocalFault`]: not running (or a service is), stale, another
+    /// session, a failed peer check, or a dial that failed otherwise.
     pub fn dial(&self) -> Result<LocalStream, LocalFault> {
-        dial(&self.node, &self.path, None)
+        self.dial_by(None)
+    }
+
+    /// The dial, bounded by `deadline` when given. No node of this account
+    /// at the rendezvous is the service's record's question.
+    fn dial_by(&self, deadline: Option<Instant>) -> Result<LocalStream, LocalFault> {
+        match &self.path {
+            Some(path) => match dial(&self.node, path, deadline) {
+                Err(LocalFault::NotRunning { .. }) => Err(self.nothing_here(false)),
+                other => other,
+            },
+            None => Err(self.nothing_here(true)),
+        }
+    }
+
+    /// No node of this account: a service, if its record is there, or
+    /// [`LocalFault::NotRunning`] ([`LocalFault::NoPlace`] when the account
+    /// has no root). The record is read and nothing it names is dialled.
+    fn nothing_here(&self, no_place: bool) -> LocalFault {
+        if let Some(record) = &self.service_record {
+            match std::fs::read(record) {
+                Ok(bytes) => {
+                    return match ServiceRecord::parse(&bytes) {
+                        Some(found) => LocalFault::Service {
+                            node: self.node.clone(),
+                            view: found.view,
+                        },
+                        None => LocalFault::Unreachable(format!(
+                            "{} is not a service's rendezvous record this build reads",
+                            record.display()
+                        )),
+                    };
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return LocalFault::Unreachable(format!(
+                        "the service's record {} cannot be read: {e}",
+                        record.display()
+                    ))
+                }
+            }
+        }
+        let node = self.node.clone();
+        if no_place {
+            LocalFault::NoPlace { node }
+        } else {
+            LocalFault::NotRunning { node }
+        }
     }
 
     /// POST `body` to `route` on the owner's leg and return the reply's
@@ -221,7 +297,7 @@ impl LocalTarget {
     ) -> Result<Zeroizing<Vec<u8>>, LocalFault> {
         let deadline = Instant::now() + within;
         let path = format!("/{}", route.trim_start_matches('/'));
-        let stream = dial(&self.node, &self.path, Some(deadline))?;
+        let stream = self.dial_by(Some(deadline))?;
         exchange(stream, &path, body, deadline, within)
     }
 
@@ -613,6 +689,90 @@ fn decode_chunked(body: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
     }
 }
 
+/// "This computer" behind the async [`Rpc`] trait: the wallet engine's
+/// daemon when no address is named (RT-W10 step 5). Each call is one
+/// connection on the blocking pool, bounded by its deadline; a blocking task
+/// is not a cancellation point, so a call in flight at shutdown drains
+/// within that bound.
+#[derive(Clone, Debug)]
+pub struct LocalRpc {
+    target: Arc<LocalTarget>,
+    within: Duration,
+    /// A failed peer check or a service at this computer. The target does
+    /// not change, so a later call on this client returns it without dialing.
+    refused: Arc<std::sync::Mutex<Option<RpcError>>>,
+}
+
+impl LocalRpc {
+    /// `target`, each call bounded by [`CALL_WITHIN`].
+    #[must_use]
+    pub fn new(target: LocalTarget) -> Self {
+        Self::within(target, CALL_WITHIN)
+    }
+
+    /// `target`, each call bounded by `within`.
+    #[must_use]
+    pub fn within(target: LocalTarget, within: Duration) -> Self {
+        Self {
+            target: Arc::new(target),
+            within,
+            refused: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+}
+
+impl Rpc for LocalRpc {
+    fn post(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+    ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
+        let target = Arc::clone(&self.target);
+        let route = route.to_owned();
+        let within = self.within;
+        let refused = Arc::clone(&self.refused);
+        async move {
+            if let Some(error) = refused
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+            {
+                return Err(error);
+            }
+            let result = tokio::task::spawn_blocking(move || target.post(&route, &body, within))
+                .await
+                .map_err(|e| RpcError::InternalError(format!("the local call's task: {e}")))?
+                .map(|reply| reply.to_vec())
+                .map_err(rpc_error);
+            if let Err(error) = &result {
+                if error.fault().is_target_refusal() {
+                    *refused
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.clone());
+                }
+            }
+            result
+        }
+    }
+}
+
+/// A local fault as the wallet's [`RpcError`]: the failed peer check and a
+/// service at "this computer" keep their own variants, so neither reads as
+/// a connection to retry; every other fault is the node not running or not
+/// answering, in this module's words.
+#[must_use]
+pub fn rpc_error(fault: LocalFault) -> RpcError {
+    match fault {
+        LocalFault::PeerCheck(detail) => RpcError::PeerCheck(detail),
+        LocalFault::Service { view, .. } => RpcError::Service(view),
+        other @ (LocalFault::NoPlace { .. }
+        | LocalFault::NotRunning { .. }
+        | LocalFault::Stale { .. }
+        | LocalFault::OtherSession
+        | LocalFault::Unreachable(_)) => RpcError::ConnectionError(other.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,10 +814,10 @@ mod tests {
     #[test]
     fn the_target_is_the_daemons_rendezvous() {
         let dir = Path::new("dir");
-        let target = LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir)).unwrap();
+        let target = LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir), None);
         let name = rendezvous_name(&Network::Regtest.network_id(), &Instance::Default);
         assert_eq!(
-            target.path(),
+            target.path().expect("a named directory"),
             dir.join(shekyl_rpc_rendezvous::file_name(&name))
         );
     }
@@ -669,7 +829,7 @@ mod tests {
     fn nothing_there_is_not_running_and_not_a_security_failure() {
         let dir = tempfile::tempdir().unwrap();
         let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
         let Err(fault) = target.dial() else {
             panic!("a dial with nothing there connected")
         };
@@ -681,6 +841,148 @@ mod tests {
         assert_eq!(
             fault.to_string(),
             "No Shekyl node is running on this computer for regtest."
+        );
+    }
+
+    /// No node of this account here, and a service's record beside it
+    /// (Rick, 2026-11-17): a record with a view listener names it as the
+    /// `daemon-address` to set; one without says the node serves no wallet
+    /// leg and names `rpc-view-listen`; no record is "not running"; and a
+    /// record this build does not read is not taken for a service. Nothing
+    /// the record names is dialled. Red edit: drop the record read in
+    /// `nothing_here`, and both service cases are "not running".
+    #[test]
+    fn a_service_here_is_named_by_its_record_and_nothing_is_dialled() {
+        let owner = tempfile::tempdir().unwrap();
+        let service = tempfile::tempdir().unwrap();
+        let target = LocalTarget::resolve(
+            Network::Regtest,
+            &Instance::Default,
+            Some(owner.path()),
+            Some(service.path()),
+        );
+        assert!(
+            matches!(target.dial(), Err(LocalFault::NotRunning { .. })),
+            "{:?}",
+            target.dial().err()
+        );
+
+        // Listeners at the addresses the record names: neither is dialled.
+        let view = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let channel = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let view_at = view.local_addr().unwrap();
+        let record = shekyl_rpc_rendezvous::service_record_path(
+            service.path(),
+            &Network::Regtest.network_id(),
+            &Instance::Default,
+        );
+        std::fs::write(
+            &record,
+            ServiceRecord {
+                channel: Some(shekyl_rpc_rendezvous::ServiceChannel {
+                    address: channel.local_addr().unwrap(),
+                    bundle: vec![1, 2, 3],
+                }),
+                view: Some(view_at),
+            }
+            .bytes(),
+        )
+        .unwrap();
+        let Err(fault) = target.dial() else {
+            panic!("a node that runs as a service is not dialled");
+        };
+        assert_eq!(
+            fault,
+            LocalFault::Service {
+                node: "regtest".to_owned(),
+                view: Some(view_at),
+            }
+        );
+        assert!(!fault.is_security_failure());
+        assert_eq!(
+            fault.to_string(),
+            format!(
+                "The node on this computer runs as a service. Until wallets reach a service \
+                 over the channel, set daemon-address = {view_at}"
+            )
+        );
+        for listener in [&view, &channel] {
+            listener.set_nonblocking(true).unwrap();
+            assert!(
+                listener.accept().is_err(),
+                "the record's address was dialled"
+            );
+        }
+
+        std::fs::write(
+            &record,
+            ServiceRecord {
+                channel: None,
+                view: None,
+            }
+            .bytes(),
+        )
+        .unwrap();
+        let Err(fault) = target.dial() else {
+            panic!("a node that runs as a service is not dialled");
+        };
+        assert!(
+            matches!(fault, LocalFault::Service { view: None, .. }),
+            "{fault:?}"
+        );
+        let text = fault.to_string();
+        assert!(text.contains("serves no wallet leg"), "{text}");
+        assert!(text.contains("rpc-view-listen"), "{text}");
+
+        std::fs::write(&record, b"shekyl-service-rendezvous 1\n").unwrap();
+        assert!(
+            matches!(target.dial(), Err(LocalFault::Unreachable(_))),
+            "{:?}",
+            target.dial().err()
+        );
+    }
+
+    /// The failed peer check reaches the async client as its own error,
+    /// whose fault is never retried. Red edit: fold `LocalFault::PeerCheck`
+    /// into a connection error in `rpc_error`, and this fails.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_peer_check_is_its_own_error_through_the_async_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let target =
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let path = target.path().expect("a named directory").to_path_buf();
+        std::fs::write(&path, b"not a socket").unwrap();
+        let client = LocalRpc::new(target);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let error = rt
+            .block_on(client.post("json_rpc", b"{}".to_vec()))
+            .unwrap_err();
+        assert!(matches!(error, RpcError::PeerCheck(_)), "{error:?}");
+        assert_eq!(error.fault(), shekyl_rpc_client::DaemonFault::PeerCheck);
+        assert!(!error.fault().is_retryable());
+
+        // The refusal is kept: replacing the file with this account's
+        // socket does not earn a second dial. Red edit: do not store the
+        // fault on `LocalRpc`, and the second call connects.
+        std::fs::remove_file(&path).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::Write;
+                drop(stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                ));
+            }
+        });
+        let again = rt
+            .block_on(client.post("json_rpc", b"{}".to_vec()))
+            .unwrap_err();
+        assert!(
+            matches!(again, RpcError::PeerCheck(_)),
+            "a kept refusal must not dial again: {again:?}"
         );
     }
 
@@ -710,7 +1012,9 @@ mod tests {
         target: &LocalTarget,
         serve: impl FnOnce(std::os::unix::net::UnixStream) + Send + 'static,
     ) -> std::thread::JoinHandle<()> {
-        let listener = std::os::unix::net::UnixListener::bind(target.path()).unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(target.path().expect("a named directory"))
+                .unwrap();
         std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             serve(stream);
@@ -724,7 +1028,7 @@ mod tests {
     fn a_daemon_that_never_replies_is_given_up_at_the_bound() {
         let dir = tempfile::tempdir().unwrap();
         let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
         let (release, held) = std::sync::mpsc::channel::<()>();
         let daemon = serve_once(&target, move |mut stream| {
             let mut request = [0u8; 1024];
@@ -753,7 +1057,7 @@ mod tests {
     fn a_reply_followed_by_the_close_is_read_whole() {
         let dir = tempfile::tempdir().unwrap();
         let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
         let daemon = serve_once(&target, |mut stream| {
             // The whole request, headers and the two-byte body, so the close
             // leaves nothing unread (an unread byte turns the close into a
@@ -784,7 +1088,7 @@ mod tests {
     fn a_daemon_that_answers_a_byte_at_a_time_is_given_up_at_the_bound() {
         let dir = tempfile::tempdir().unwrap();
         let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
         let daemon = serve_once(&target, |mut stream| {
             let mut request = [0u8; 1024];
             drop(stream.read(&mut request));
@@ -824,7 +1128,7 @@ mod tests {
             .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
         let pipe = format!(
             "{}{:032x}",
             shekyl_rpc_rendezvous::PIPE_PREFIX,
@@ -832,7 +1136,7 @@ mod tests {
         );
         let session = shekyl_win_sec::current_logon_sid().unwrap();
         std::fs::write(
-            target.path(),
+            target.path().expect("a named directory"),
             shekyl_rpc_rendezvous::Record {
                 pipe: pipe.clone(),
                 session: session.as_str().to_owned(),
@@ -885,16 +1189,18 @@ mod tests {
     fn a_stale_socket_is_stale_and_a_plain_file_is_the_wrong_thing() {
         let dir = tempfile::tempdir().unwrap();
         let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
-        let listener = std::os::unix::net::UnixListener::bind(target.path()).unwrap();
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let listener =
+            std::os::unix::net::UnixListener::bind(target.path().expect("a named directory"))
+                .unwrap();
         drop(listener);
         assert!(
             matches!(target.dial(), Err(LocalFault::Stale { .. })),
             "{:?}",
             target.dial().err()
         );
-        std::fs::remove_file(target.path()).unwrap();
-        std::fs::write(target.path(), b"not a socket").unwrap();
+        std::fs::remove_file(target.path().expect("a named directory")).unwrap();
+        std::fs::write(target.path().expect("a named directory"), b"not a socket").unwrap();
         let fault = target.dial().unwrap_err();
         assert!(fault.is_security_failure(), "{fault:?}");
     }
@@ -906,8 +1212,10 @@ mod tests {
     fn a_socket_of_this_account_passes_the_peer_check() {
         let dir = tempfile::tempdir().unwrap();
         let target =
-            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
-        let _listener = std::os::unix::net::UnixListener::bind(target.path()).unwrap();
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+        let _listener =
+            std::os::unix::net::UnixListener::bind(target.path().expect("a named directory"))
+                .unwrap();
         target.dial().expect("this account's socket");
     }
 }

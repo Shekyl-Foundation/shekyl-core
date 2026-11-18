@@ -57,7 +57,7 @@ pub use shekyl_engine_core::Network;
 // before confirmation (the CLI does; wrappers should) render the bound from
 // it, never a hardcoded twin.
 pub use shekyl_engine_core::archival_params;
-pub use tenant::{DaemonEndpoint, SharedEngine, Tenant, TenantState};
+pub use tenant::{DaemonTarget, SharedEngine, Tenant, TenantState};
 pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 
 /// The release version `shekyl-wallet-rpc` and `shekyl-cli` print, the

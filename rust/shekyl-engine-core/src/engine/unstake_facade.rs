@@ -223,6 +223,11 @@ pub enum UnstakeError {
         /// Which daemon query failed, and the transport's own reason.
         detail: String,
     },
+    /// The wallet's daemon target refused before any daemon answered: a
+    /// failed peer check, or a service at this computer. Nothing was sent.
+    /// Retrying cannot succeed; the fault is the remedy (`-29213`, `-29214`).
+    #[error("the daemon target refused: {0}")]
+    DaemonTarget(shekyl_rpc_client::DaemonFault),
     /// The exit's floor fee cannot be funded from the persona pool **yet**
     /// (no spendable funding, an output still mid-drain, or a shortfall the
     /// assembly names). Wait for outputs to mature or land, then retry —
@@ -648,7 +653,7 @@ where
     /// remains the DQ-T2.3 slice).
     pub async fn unstake(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
-        daemon_address: &str,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
     ) -> Result<UnstakeOutcome, UnstakeError> {
         // A wallet with no stake engine owns no exit. Answer the seam's
         // `NotStaker` (-29513) here: a non-staker's empty snapshot resolves
@@ -688,7 +693,7 @@ where
             };
 
         // ① local posture; refuses non-loopback by construction.
-        let release_rpc = LocalNodeRpc::new(daemon_address.to_owned(), EXIT_FETCH_TIMEOUT)
+        let release_rpc = LocalNodeRpc::new(daemon, EXIT_FETCH_TIMEOUT)
             .await
             .map_err(|e| UnstakeError::Transport {
                 detail: e.to_string(),
@@ -983,17 +988,26 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
                 bound: v.bound(),
             }
         }
+        // A target refusal on the fee query is not a fee problem and not a
+        // retry. The fee arm is reached before the record fetch.
+        ReleaseRequestError::Fee(FeeEstimatorError::Daemon(fault)) if fault.is_target_refusal() => {
+            UnstakeError::DaemonTarget(fault)
+        }
         ReleaseRequestError::Fee(e) => UnstakeError::FeeEstimate(e),
         // The fetch's inner class decides the disposition: a transport
         // failure or a refusal is a reachable daemon outage (retryable), a
         // malformed response is an untrusted-input rejection (internal).
+        // A target refusal is neither: it is the fault, and it is not retried.
         ReleaseRequestError::Fetch(e) => match e {
-            EmissionSourceError::Rpc(_) => UnstakeError::DaemonUnreachable {
-                detail: e.to_string(),
+            EmissionSourceError::Rpc(error) if error.fault().is_target_refusal() => {
+                UnstakeError::DaemonTarget(error.fault())
+            }
+            EmissionSourceError::Rpc(error) => UnstakeError::DaemonUnreachable {
+                detail: error.to_string(),
             },
-            EmissionSourceError::Malformed(_) => UnstakeError::Engine {
+            EmissionSourceError::Malformed(detail) => UnstakeError::Engine {
                 context: "bond record fetch",
-                detail: e.to_string(),
+                detail,
             },
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
