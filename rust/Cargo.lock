@@ -5592,6 +5592,7 @@ dependencies = [
  "sha2",
  "shekyl-onion-key",
  "shekyl-onion-v3",
+ "shekyl-os-account",
  "shekyl-spawn",
  "shekyl-timing-engine",
  "shekyl-tor-status",
