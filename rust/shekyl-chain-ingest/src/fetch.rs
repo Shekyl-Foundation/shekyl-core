@@ -31,7 +31,7 @@ use shekyl_rpc_types::kinds::{Bytes, Height};
 use shekyl_rpc_types::wire::shared::{ArchivedState, OrArchived, Slot, SlotState};
 use shekyl_types::{BlockHeight, TxHash};
 
-use crate::corpus::{CorpusFault, CorpusWriter};
+use shekyl_corpus::{CorpusFault, CorpusWriter};
 
 /// Why the corpus could not be fetched.
 #[derive(Debug, thiserror::Error)]

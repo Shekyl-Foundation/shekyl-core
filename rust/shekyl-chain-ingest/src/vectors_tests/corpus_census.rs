@@ -19,7 +19,7 @@ use std::path::Path;
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::Candidate;
 
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::mutation::{Before, Environment, Mutation, Unmutable};
 use crate::source::{IngestEvent, Source};
 use crate::test_support::h;
@@ -54,7 +54,7 @@ fn note(causes: &mut Vec<Unmutable>, cause: Unmutable) {
 fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+        CorpusSource::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut height = reader.first_height().to_raw();
     let mut chain: Vec<(u64, Candidate, Before)> = Vec::new();
     let mut below = Before::default();

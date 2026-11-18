@@ -336,6 +336,9 @@ shekyl-onion-key = { path = "../shekyl-onion-key" }
 # TEST_ONLY feature (check_test_only_features.py) — this dev edge is its
 # one enabler; never from [dependencies].
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["harness"] }
+# The capture test writes its corpus through the format's one writer
+# (`regtest_e2e.rs`).
+shekyl-corpus = { path = "../shekyl-corpus" }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
 # `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and

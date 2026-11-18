@@ -38,7 +38,9 @@ use shekyl_chain_store::store::{ChainStore, Horizons, ReadSnapshot, StoreError};
 use shekyl_network::Network;
 use shekyl_types::BlockHeight;
 
-use crate::corpus::{CorpusFault, CorpusReader};
+use shekyl_corpus::CorpusFault;
+
+use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
@@ -194,7 +196,7 @@ pub async fn replay_corpus(
     metrics: Arc<Metrics>,
     trace: Arc<Trace>,
 ) -> Result<RunReport, ReplayFault> {
-    let mut source = CorpusReader::open(BufReader::new(File::open(corpus)?))?;
+    let mut source = CorpusSource::open(BufReader::new(File::open(corpus)?))?;
     if source.net() != rules.network() {
         return Err(ReplayFault::WrongNetwork {
             corpus: source.net(),

@@ -3833,6 +3833,7 @@ dependencies = [
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-corpus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
@@ -3877,6 +3878,7 @@ dependencies = [
  "shekyl-chain-sync",
  "shekyl-chain-sync-runtime",
  "shekyl-consensus",
+ "shekyl-corpus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
@@ -4083,6 +4085,16 @@ dependencies = [
 [[package]]
 name = "shekyl-consensus"
 version = "3.1.0"
+
+[[package]]
+name = "shekyl-corpus"
+version = "3.1.0"
+dependencies = [
+ "shekyl-archival-retention",
+ "shekyl-network",
+ "shekyl-types",
+ "shekyl-wire",
+]
 
 [[package]]
 name = "shekyl-crypto-hash"
@@ -4447,6 +4459,7 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
+ "shekyl-corpus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",

@@ -286,7 +286,7 @@ pub use connector::{
     RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts, TipChanged,
     WatchDeepReorg, WatchLatch, WatchTip,
 };
-pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
+pub use corpus::CorpusSource;
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
 pub use metrics::{Concurrency, Derives, Metrics, MetricsArtifact};

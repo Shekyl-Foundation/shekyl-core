@@ -1,0 +1,24 @@
+[package]
+name = "shekyl-corpus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The corpus artifact's codec: its magic, its layout version, and the one encoder and decoder of its records (docs/design/CORPUS_CODEC.md). No pipeline, no store."
+publish = false
+
+# Each edge is already a normal dependency of shekyl-chain-ingest, the
+# codec's first user (rule 17): nothing new enters the lockfile's graph.
+[dependencies]
+# A record's block and listed bodies, parsed and their caps.
+shekyl-wire = { path = "../shekyl-wire" }
+# The header's network tag.
+shekyl-network = { path = "../shekyl-network" }
+# Heights, transaction hashes, and a block's bundle-section references.
+shekyl-types = { path = "../shekyl-types" }
+# A bundle reference and the body it accepts (§7.5 of the serve-credit spec).
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+
+[lints]
+workspace = true

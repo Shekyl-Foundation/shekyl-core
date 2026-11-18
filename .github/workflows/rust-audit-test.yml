@@ -457,6 +457,10 @@ jobs:
         # gate saw: its docs name the consensus encodings, and a link to a
         # deleted or private item is a claim about the wire nobody checked.
         #
+        # `shekyl-corpus` joined when it landed: its crate docs are the corpus
+        # artifact's layout, the one statement of the format a writer and a
+        # reader are held to.
+        #
         # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
         # compiles to nothing on this runner, so documenting it would gate an
         # empty crate and pass forever. Its rustdoc gate runs on the Windows
@@ -469,7 +473,7 @@ jobs:
           -p shekyl-hasher
           -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
           -p shekyl-onion-key -p shekyl-heap-secret -p shekyl-tor-status
-          -p shekyl-wire
+          -p shekyl-wire -p shekyl-corpus
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
