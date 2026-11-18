@@ -276,6 +276,33 @@ fn collect_resolves_lowest_exited_slot_with_rows_and_completes_on_empty() {
     );
 }
 
+/// A failed peer check and a service at this computer stay that fault
+/// through the exit, on the fee query and on the record fetch. Red edit:
+/// map either to `DaemonUnreachable`, and unstake reports a retry.
+#[test]
+fn a_target_refusal_is_not_an_unreachable_daemon() {
+    use shekyl_rpc_client::{DaemonFault, RpcError};
+
+    let peer = flatten_unstake_error(ReleaseRequestError::Fetch(EmissionSourceError::Rpc(
+        RpcError::PeerCheck("not a socket".into()),
+    )));
+    assert!(
+        matches!(peer, UnstakeError::DaemonTarget(DaemonFault::PeerCheck)),
+        "{peer:?}"
+    );
+    let view = "127.0.0.1:11030".parse().unwrap();
+    let service = flatten_unstake_error(ReleaseRequestError::Fee(FeeEstimatorError::Daemon(
+        DaemonFault::Service(Some(view)),
+    )));
+    assert!(
+        matches!(
+            service,
+            UnstakeError::DaemonTarget(DaemonFault::Service(Some(got))) if got == view
+        ),
+        "{service:?}"
+    );
+}
+
 /// This bites against the seam's two pending refusals collapsing onto
 /// one façade arm (`BondPostPending` mapped to
 /// `ExitInProgress` sent a just-bonded wallet to `collect_unstaked`,

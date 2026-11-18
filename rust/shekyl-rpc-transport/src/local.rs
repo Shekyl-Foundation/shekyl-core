@@ -698,6 +698,9 @@ fn decode_chunked(body: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
 pub struct LocalRpc {
     target: Arc<LocalTarget>,
     within: Duration,
+    /// A failed peer check or a service at this computer. The target does
+    /// not change, so a later call on this client returns it without dialing.
+    refused: Arc<std::sync::Mutex<Option<RpcError>>>,
 }
 
 impl LocalRpc {
@@ -713,6 +716,7 @@ impl LocalRpc {
         Self {
             target: Arc::new(target),
             within,
+            refused: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -726,12 +730,28 @@ impl Rpc for LocalRpc {
         let target = Arc::clone(&self.target);
         let route = route.to_owned();
         let within = self.within;
+        let refused = Arc::clone(&self.refused);
         async move {
-            tokio::task::spawn_blocking(move || target.post(&route, &body, within))
+            if let Some(error) = refused
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+            {
+                return Err(error);
+            }
+            let result = tokio::task::spawn_blocking(move || target.post(&route, &body, within))
                 .await
                 .map_err(|e| RpcError::InternalError(format!("the local call's task: {e}")))?
                 .map(|reply| reply.to_vec())
-                .map_err(rpc_error)
+                .map_err(rpc_error);
+            if let Err(error) = &result {
+                if error.fault().is_target_refusal() {
+                    *refused
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.clone());
+                }
+            }
+            result
         }
     }
 }
@@ -927,16 +947,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target =
             LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
-        std::fs::write(target.path().expect("a named directory"), b"not a socket").unwrap();
+        let path = target.path().expect("a named directory").to_path_buf();
+        std::fs::write(&path, b"not a socket").unwrap();
+        let client = LocalRpc::new(target);
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
         let error = rt
-            .block_on(LocalRpc::new(target).post("json_rpc", b"{}".to_vec()))
+            .block_on(client.post("json_rpc", b"{}".to_vec()))
             .unwrap_err();
         assert!(matches!(error, RpcError::PeerCheck(_)), "{error:?}");
         assert_eq!(error.fault(), shekyl_rpc_client::DaemonFault::PeerCheck);
         assert!(!error.fault().is_retryable());
+
+        // The refusal is kept: replacing the file with this account's
+        // socket does not earn a second dial. Red edit: do not store the
+        // fault on `LocalRpc`, and the second call connects.
+        std::fs::remove_file(&path).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::Write;
+                drop(stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                ));
+            }
+        });
+        let again = rt
+            .block_on(client.post("json_rpc", b"{}".to_vec()))
+            .unwrap_err();
+        assert!(
+            matches!(again, RpcError::PeerCheck(_)),
+            "a kept refusal must not dial again: {again:?}"
+        );
     }
 
     /// A socket left behind with nothing listening is stale, not a security

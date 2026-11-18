@@ -294,7 +294,17 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         let vouched = match fetch_vouched_claim_source(&self.rpc, &self.p_id).await {
             Ok(v) => v,
             Err(e) => {
-                self.break_ledger(TimelineBreak::DaemonUnreachable);
+                // A target refusal is not "the daemon did not answer". The
+                // ledger forgets under the fault the fetch returned.
+                let why = match &e {
+                    crate::engine::emission_source::EmissionSourceError::Rpc(error)
+                        if error.fault().is_target_refusal() =>
+                    {
+                        TimelineBreak::from_facts_error(error)
+                    }
+                    _ => TimelineBreak::DaemonUnreachable,
+                };
+                self.break_ledger(why);
                 return Err(format!("claim-source fetch failed: {e}"));
             }
         };

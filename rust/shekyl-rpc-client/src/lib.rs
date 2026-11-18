@@ -179,6 +179,16 @@ impl DaemonFault {
             Self::Identity(_) | Self::NotPermitted | Self::PeerCheck | Self::Service(_)
         )
     }
+
+    /// The target itself refused: a failed peer check, or a service at
+    /// "this computer". The same target answers the same way, so a caller
+    /// keeps the fault and does not dial again. Narrower than
+    /// [`Self::is_retryable`]: an identity refusal and a grant refusal are
+    /// also not retried, and they are not this.
+    #[must_use]
+    pub const fn is_target_refusal(self) -> bool {
+        matches!(self, Self::PeerCheck | Self::Service(_))
+    }
 }
 
 impl RpcError {

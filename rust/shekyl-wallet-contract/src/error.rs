@@ -2335,6 +2335,10 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 cause: "daemon",
                 detail,
             },
+            // Not that retry. A failed peer check and a service at this
+            // computer are the daemon-target codes, the same ones every
+            // other wallet verb uses.
+            E::DaemonTarget(fault) => from_daemon_fault(fault, "unstake"),
             E::FeeEstimate(e) => e.into(),
             E::FeeUnreasonable {
                 reason,
@@ -3869,6 +3873,21 @@ mod tests {
         assert!(none.contains("rpc-view-listen"), "{none}");
         let peer = from_daemon_fault(DaemonFault::PeerCheck, DAEMON_TEXT).message();
         assert!(peer.contains("did not connect"), "{peer}");
+
+        // The exit reports the same codes, not a retry. Red edit: map
+        // `UnstakeError::DaemonTarget` to `UnstakeRetryTransient`.
+        use shekyl_engine_core::UnstakeError;
+        let exit_peer: WalletRpcError = UnstakeError::DaemonTarget(DaemonFault::PeerCheck).into();
+        assert_eq!(exit_peer.code(), WalletRpcErrorCode::DaemonPeerCheckFailed);
+        let exit_service: WalletRpcError = UnstakeError::DaemonTarget(DaemonFault::Service(Some(
+            "127.0.0.1:11030".parse().unwrap(),
+        )))
+        .into();
+        assert_eq!(exit_service.code(), WalletRpcErrorCode::DaemonIsAService);
+        assert_ne!(
+            exit_service.code(),
+            WalletRpcErrorCode::UnstakeRetryTransient
+        );
     }
 
     /// A daemon fault answers the same code whichever operation met it, and
