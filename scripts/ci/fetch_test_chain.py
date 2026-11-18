@@ -176,9 +176,17 @@ def install_oras(pins: dict) -> Path:
 
 
 def forge_command(chain: dict, out: Path) -> str:
+    """The rebuild, run from the repository root.
+
+    `--plan` is the pin's path, which is relative to that root, so Cargo is
+    pointed at `rust/Cargo.toml` rather than run from `rust/` (where that
+    path would not resolve). The forge also writes `blocks.txt`; the pin
+    check reads only the layers, so the ledger is removed.
+    """
     return (
-        f"git checkout {chain['commit']} && cd rust && cargo run --locked --release "
-        f"-p shekyl-chain-forge --example forge -- --plan ../{chain['plan']} --out {out}"
+        f"git checkout {chain['commit']} && cargo run --manifest-path rust/Cargo.toml "
+        f"--locked --release -p shekyl-chain-forge --example forge -- "
+        f"--plan {chain['plan']} --out {out} && rm -f {out}/blocks.txt"
     )
 
 
@@ -318,6 +326,17 @@ def selftest() -> int:
             expect("a chain pinned twice is refused", False)
         except Refused as why:
             expect("a chain pinned twice is refused", "twice" in str(why))
+
+    command = forge_command(
+        {"commit": "abc", "plan": "rust/shekyl-chain-forge/plans/shard-fill.toml"},
+        Path("out"),
+    )
+    expect(
+        "the rebuild runs from the repository root and drops blocks.txt",
+        "--manifest-path rust/Cargo.toml" in command
+        and "--plan rust/shekyl-chain-forge/plans/shard-fill.toml" in command
+        and command.endswith("rm -f out/blocks.txt"),
+    )
 
     real = load_pins()
     expect("the committed pin file parses and pins oras", bool(real["oras"]["sha256"]))

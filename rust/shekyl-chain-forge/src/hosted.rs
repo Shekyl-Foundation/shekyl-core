@@ -112,9 +112,11 @@ pub enum HostedFault {
 #[derive(Debug, thiserror::Error)]
 #[error(
     "the hosted chain `{chain}` is not fetched: {path} is missing. Fetch it with \
-     `{FETCH_COMMAND} {chain}`, or rebuild it at the pinned commit {commit} with \
-     `cargo run --locked --release -p shekyl-chain-forge --example forge -- --plan {plan} \
-     --out {dir}` (CHAIN_FORGE.md §10.4)"
+     `{FETCH_COMMAND} {chain}`, or, from the repository root, rebuild it at the pinned \
+     commit {commit} with `git checkout {commit} && cargo run --manifest-path rust/Cargo.toml \
+     --locked --release -p shekyl-chain-forge --example forge -- --plan {plan} --out {dir} \
+     && rm -f {dir}/blocks.txt` (CHAIN_FORGE.md §10.4). The forge writes blocks.txt beside \
+     the layers; the pin check reads only the layers"
 )]
 pub struct MissingLayer {
     /// The chain.
@@ -529,7 +531,11 @@ mod tests {
         let missing = open_in(dir.path(), pin).expect_err("a missing layer is refused");
         let text = missing.to_string();
         assert!(
-            text.contains(FETCH_COMMAND) && text.contains("--example forge"),
+            text.contains(FETCH_COMMAND)
+                && text.contains("--manifest-path rust/Cargo.toml")
+                && text.contains("--example forge")
+                && text.contains("rm -f")
+                && text.contains("blocks.txt"),
             "{text}"
         );
     }
