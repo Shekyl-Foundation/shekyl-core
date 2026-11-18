@@ -1232,14 +1232,14 @@ mod s6_self_cert {
     // reaches the `pub(super)` decision helper by path rather than widening the
     // facade for a test-only item.
     use crate::engine::stake_engine::actor::{run_session_self_cert, StakeEngineStartError};
-    use crate::engine::stake_engine::types::{StakeEngineArgs, TestSelfCert};
-    use kameo::actor::Spawn;
-    use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+    use crate::engine::stake_engine::test_fixtures::{spawn_with_self_cert, TestSelfCert};
 
     /// The **decision**: a stuck RNG (constant output) grades non-conformant,
     /// so the extracted self-cert returns the typed start error. Proves
-    /// fail-stop *decides* correctly without spawning; the full
-    /// spawn→`OpenError` path with a degenerate source is the Round-2 test.
+    /// fail-stop *decides* correctly without spawning. The spawn's fail-stop
+    /// is `degenerate_self_cert_fail_stops_spawn` below; the wallet open's
+    /// refusal is the lifecycle suite's
+    /// `a_failed_random_source_check_refuses_the_open_and_stops_its_actors`.
     #[test]
     fn run_session_self_cert_rejects_stuck_rng() {
         struct ConstRng(u64);
@@ -1254,28 +1254,6 @@ mod s6_self_cert {
             matches!(result, Err(StakeEngineStartError::RngSelfCertFailed(_))),
             "a stuck RNG must fail the session self-cert, got {result:?}"
         );
-    }
-
-    /// Build a handle with an explicit self-cert mode (the bulk-test
-    /// `spawn_over` uses `Skip`; the S6 tests need `RealOsRng`/`Degenerate`).
-    fn spawn_with_self_cert(held: &[u32], mode: TestSelfCert) -> StakeEngineHandle {
-        let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
-            .iter()
-            .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
-            .collect();
-        let args = StakeEngineArgs {
-            bundles,
-            bonded: BTreeSet::new(),
-            active: None,
-            network: shekyl_network::HARNESS_NETWORK_ID,
-            self_cert: mode,
-            #[cfg(feature = "gf7-hooks")]
-            observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
-        };
-        StakeEngineHandle {
-            actor: StakeEngine::spawn(args),
-            bodies: super::body_store_actor::BodyStoreHandle::spawn(ephemeral_body_store()),
-        }
     }
 
     /// The **wiring**: the production `OsRng` adapter grades conformant, so a
