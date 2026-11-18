@@ -424,20 +424,15 @@ jobs:
         working-directory: rust
         run: cargo clippy --locked -p shekyl-win-sec --features test-utils --all-targets -- -D warnings
 
-      # The rustdoc gate for this crate lives HERE, not in rust-audit-test.yml's
-      # persona-serving list, and the reason is the point: that list runs on
-      # Linux, where `shekyl-win-sec` compiles to nothing. Adding it there would
-      # document an empty crate and pass forever — a gate checking nothing,
-      # which is precisely the defect the preceding follow-up round existed to
-      # remove. Its docs carry the WP-D4/WP-D5 security contracts and the safety
-      # arguments for every `unsafe` block, so they are worth gating; they just
-      # have to be gated where they exist.
+      # The rustdoc gate for this crate runs HERE: on Linux it compiles to
+      # nothing, so rust-audit-test.yml's run excludes it rather than grade an
+      # empty crate. Same script and policy as there: every doc link resolves,
+      # private items included. Its docs carry the WP-D4/WP-D5 security
+      # contracts and the safety arguments for every `unsafe` block.
       - name: "WP-W1: rustdoc -D warnings (shekyl-win-sec)"
         shell: pwsh
         working-directory: rust
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
+        run: python ../scripts/ci/check_rustdoc.py --package shekyl-win-sec
 
       # Clippy on a Windows target, every lane the Linux gate runs
       # (`rust-audit-test.yml`, `multisig-feature.yml`), with the same
