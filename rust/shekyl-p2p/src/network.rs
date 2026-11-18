@@ -303,6 +303,7 @@ impl Network {
             timing: timing.clone(),
             runtime: handle.clone(),
             rng: Box::new(SecureRelayRng),
+            carrier_rng: Box::new(SecureRelayRng),
             verdict,
         })
         .map_err(StartError::Relay)?;

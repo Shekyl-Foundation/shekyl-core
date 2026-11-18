@@ -38,22 +38,29 @@
 //! makes that move a non-event. So the inventory is an invariant this crate
 //! maintains rather than a check it passed once:
 //!
-//! - Relay state — peer fluff queues, the stem map, the epoch role, and the
-//!   noise schedule — is owned **here**, mutated only through `&mut Relay`.
-//!   C++ connection events do not mutate it; they arrive as calls into the
-//!   owner. Noise **schedule** is owned here. Noise **buffers** live here
-//!   (`NoiseQueues`) as the §2.9 step-2 executor. C++ enables the carrier
-//!   only behind a development opt-in that defaults off, and performs its
-//!   transport — as it does for stem and fluff — until step 5 deletes that
-//!   file. The inherited covert branch in `send_txs` is already deleted
-//!   (§2.9 step 4).
+//! - Relay state — peer fluff queues, the stem map, the epoch role, and
+//!   whether the zone carries — is owned by the relay owner, mutated only
+//!   through `&mut Relay`. Connection events do not mutate it; they arrive
+//!   as calls into the owner. The inherited covert branch in `send_txs` is
+//!   already deleted (§2.9 step 4).
+//! - **The carrier is the second owner, and on purpose** (`CVR-R6`; Rick,
+//!   2026-11-18). Its schedule ([`Carrier`]), each channel's binding and
+//!   tail, its buffers ([`NoiseQueues`]) and the session writers it sends
+//!   on live in their own task (`owner::carrier`), so a busy relay owner
+//!   delays what it hands the carrier and never a window: on 2026-11-05 an
+//!   owner blocked behind the pool's commit stopped the cover on both
+//!   channels for 28 s and 32 s. Nothing is shared: the owner sends the
+//!   carrier copies (the slots and the covered sessions, each message to
+//!   carry, the session handles), and the carrier sends back what became of
+//!   each message. This narrows the single-owner invariant above to the
+//!   relay state; the carrier's state is single-owner in its own task.
 //! - `connection_count` was the one genuine straddle in the inherited code
 //!   (*"only update in strand, can be read at any time"*). It stays derived
 //!   here and is published by the boundary as a single-writer atomic.
-//! - Stem bindings never cross as an array. Post-§20.3 each
-//!   [`Effect::NoiseSend`] carries its peer, and an unbound slot clears via
-//!   [`Effect::NoiseUnbind`] at its own cadence. C++ never pulls the map: a
-//!   caller-initiated read would race this crate's mutations (§18.5 finding 3).
+//! - The stem map is never read across tasks. The carrier is handed a copy
+//!   of its slots when they change ([`Relay::carrier_view`]); a
+//!   caller-initiated read would race this crate's mutations (§18.5
+//!   finding 3).
 //!
 //! Any new shared state is a new inventory line that must resolve to
 //! single-owner-or-atomic before it lands.
@@ -73,6 +80,7 @@
 //! the force-step hooks stay honest and how this crate's own tests avoid
 //! wall-clock dependence.
 
+pub mod carrier;
 pub mod driver;
 pub mod floor_diag;
 pub mod graph;
@@ -80,6 +88,7 @@ mod noise_queue;
 pub mod owner;
 pub mod stem_watch;
 
+pub use carrier::{Carrier, CarrierView, NoiseDue};
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
 pub use graph::{

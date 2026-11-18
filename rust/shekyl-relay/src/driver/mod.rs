@@ -27,19 +27,17 @@
 //! **The map never crosses, in either direction.** C++ is never given a way to
 //! read the stem map on its own schedule: with the zone strand gone, a
 //! caller-initiated read would race this driver's mutations, which is precisely
-//! the hazard the seal named (§18.5 finding 3). Nor is it pushed an array to
-//! decode: a noise binding travels with each [`Effect::NoiseSend`], and a
-//! channel whose slot is unbound is told so at its own cadence by
-//! [`Effect::NoiseUnbind`] — decisions leave, never the inputs to them
-//! (§20.3). Commands (`update_stems`, connection events) mutate and return
-//! nothing; every effect leaves through [`Driver::poll`] or a force hook.
+//! the hazard the seal named (§18.5 finding 3). The carrier, in its own task,
+//! is handed a copy of the slots and the covered sessions
+//! ([`Relay::carrier_view`]) when they change, never a reference. Commands
+//! (`update_stems`, connection events) mutate and return nothing; every
+//! effect leaves through [`Driver::poll`] or a force hook.
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-use crate::graph::{NoiseDue, Relay, TxBlob};
-use crate::noise_queue::Starts;
+use crate::graph::{Relay, TxBlob};
 
 /// Work the driver produced that the caller must perform.
 ///
@@ -54,70 +52,6 @@ pub enum Effect {
         peer: ConnectionId,
         /// The batched transaction blobs (shared handles; content-sorted).
         blobs: Vec<TxBlob>,
-    },
-    /// Noise channel `channel` is due: send on it now.
-    ///
-    /// **Carries no payload discriminant, and that is CV-4** (§20.2). Whether
-    /// this send is a dummy or drains a queued real fragment is a *queue*
-    /// question, and the queue is C++. Rust decides **when** and **who**; C++
-    /// decides **what**.
-    ///
-    /// The omission is structural, not stylistic. Handing the scheduler a
-    /// `DUMMY | REAL` tag would let the cadence react to having something real
-    /// to say — and the breaking change would look like an optimisation
-    /// (*"a real fragment is pending, drain it sooner"*), which is a
-    /// noise-channel leak wearing a latency improvement's costume. Constant-rate
-    /// cover works precisely because the schedule cannot know. With no
-    /// discriminant here, Rust is not *trusted* to ignore the queue — it is
-    /// structurally unable to consult it.
-    NoiseSend {
-        /// Channel index. Positional: channel `i` is bound to stem slot `i`.
-        channel: usize,
-        /// The peer stem slot `channel` is bound to — **the inversion** (§20.3).
-        /// Rust no longer pushes an ordered slot array for C++ to bind
-        /// positionally; it hands over the decision itself, already made
-        /// against the map it owns. An unbound slot emits nothing (CV-2), so
-        /// this is never nil. During the channel's epoch tail it is the
-        /// peer the channel was bound to before the boundary.
-        peer: ConnectionId,
-        /// Whether a new message may start in this window: closed during
-        /// the epoch tail (`CVR-R4`), decided by the schedule alone.
-        starts: Starts,
-    },
-    /// Noise channel `channel` is due but its stem slot is unbound: clear it.
-    ///
-    /// **The other half of the deleted slot array** (§20.3, amended at the
-    /// deletion). The array carried two facts per slot: *who* a bound channel
-    /// sends to — which now travels with each [`Effect::NoiseSend`] — and
-    /// *that* an unbound channel stopped. The second fact cannot ride a send,
-    /// because an unbound channel emits none (CV-2); without it, the C++
-    /// enqueue guard (`queue_covert_notify`'s nil check) reads a stale binding
-    /// forever, and a dormant channel accumulates queued messages without
-    /// bound — a node holding fewer peers than the channel width is a
-    /// *permanent* instance of that state, not a transient one.
-    ///
-    /// **Derived per due tick, not pushed per transition.** This occupies the
-    /// cadence slot a send would have: each due channel emits exactly one
-    /// effect, send or unbind by the binding's current state, read from
-    /// `stem_slots()` at the poll. A transition-shaped emission was rejected
-    /// twice over: it needs the driver to remember what the binding was last
-    /// poll — a shadow copy of a fact the map owns, the duplicate-fact class
-    /// `PeerFluff::flush_at` named and `live_stems` was designed out of — and
-    /// it is one-shot, so a clear that fails to take effect (a swallowed
-    /// exception, a dropped post) leaves the guard stale *permanently*, which
-    /// is the exact failure this effect exists to prevent. Per-tick derivation
-    /// caches nothing and self-heals: a lost clear repeats one noise interval
-    /// later, and the receiver (`clear_channel`) is idempotent, so repetition
-    /// is free.
-    ///
-    /// Still a decision, not an input: one channel index, no array, no width
-    /// for C++ to reconcile. The receiver restores the inherited nil-repoint
-    /// semantics — nil the binding, discard buffers — on the channel's strand.
-    /// A rebind never emits this: the new binding travels with the next send,
-    /// where the in-flight remainder is discarded (CV-1).
-    NoiseUnbind {
-        /// Channel index. Positional: channel `i` follows stem slot `i`.
-        channel: usize,
     },
     /// Stem this transaction to `peer`: an embargo's reshape to the
     /// alternate (§12.2), or a held origin's first send (RX-2). It leaves as
@@ -183,24 +117,16 @@ impl Driver {
     /// armed. `next_wake_follows_a_newly_queued_batch_without_re_arming` is the
     /// test that fails if someone adds that cache.
     pub fn next_wake(&self) -> Millis {
-        // Four sources, folded into one answer: the epoch always has a
-        // deadline; fluff has one only with a batch pending; noise has one
-        // only when the zone runs noise channels; stem observations have one
-        // while anything is in flight (§38 — silence resolves on this clock).
-        //
-        // **Folding the sleep is not folding the schedule** (§20.2a). Each
-        // noise channel keeps its own deadline in the zone; this only asks
-        // which is earliest. That distinction is the whole of CV-3: the shared
-        // wake is what makes a resample-on-foreign-wake bug *reachable*, so the
-        // re-arm stays in `Relay::due_noise_channel`, which touches only the
-        // single channel that actually fired. Stem observation is the same
-        // shape: per-tx deadlines live in `StemWatch`; this only folds the min.
+        // The sources, folded into one answer: the epoch always has a
+        // deadline; fluff has one only with a batch pending; stem
+        // observations have one while anything is in flight (§38 — silence
+        // resolves on this clock); held origins and held broadcasts have one
+        // while any is held. Per-tx deadlines live in their owners; this only
+        // folds the min. The carrier's channels keep their own schedule in
+        // their own task (`crate::carrier`, `CVR-R6`).
         let mut wake = self.zone.epoch_deadline();
         if let Some(fluff) = self.zone.fluff_deadline() {
             wake = wake.min(fluff);
-        }
-        if let Some(noise) = self.zone.noise_deadline() {
-            wake = wake.min(noise);
         }
         if let Some(stem) = self.zone.stem_observation_deadline() {
             wake = wake.min(stem);
@@ -260,36 +186,6 @@ impl Driver {
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
             effects.push(Effect::Fluff { peer, blobs });
-        }
-
-        // Noise steps last, and after the epoch block on purpose: a rollover
-        // rebuilds the stem slots, and channel `i` follows slot `i`, so
-        // emitting before the rebuild would name a channel against the slots it
-        // is about to stop being bound to.
-        //
-        // At most one noise effect per poll (`due_noise_channel`): a late
-        // strand that finds several deadlines past must not emit them as a
-        // synchronized multi-channel burst. Remaining due channels surface on
-        // the next wake (immediate if their deadlines are still in the past).
-        // Nothing here consults a queue or a payload — CV-4 by construction.
-        // The binding is resolved HERE, against the map the zone owns: send or
-        // unbind by the binding's current state. An unbound slot produces no
-        // noise SEND at its index and shifts no other (CV-2); its due tick
-        // carries the clear instead — see [`Effect::NoiseUnbind`].
-        // `Relay::due_noise` resolves the binding, the epoch tail included;
-        // a slot whose session carries no cover sends nothing and stays armed.
-        match self.zone.due_noise(now, rng) {
-            Some(NoiseDue::Send {
-                channel,
-                peer,
-                starts,
-            }) => effects.push(Effect::NoiseSend {
-                channel,
-                peer,
-                starts,
-            }),
-            Some(NoiseDue::Unbind { channel }) => effects.push(Effect::NoiseUnbind { channel }),
-            None => {}
         }
 
         effects

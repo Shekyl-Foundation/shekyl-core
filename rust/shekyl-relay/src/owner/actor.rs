@@ -29,9 +29,11 @@ use shekyl_relay_privacy::stem_map::ConnectionId;
 use shekyl_timing_engine::{Clock, EngineError, Handle, OwnerClass, OwnerHandle, Tick};
 use tokio::sync::{mpsc, watch};
 
+use super::carrier::{CarrierCmd, CarrierTask};
 use super::pool::PoolDoor;
 use super::port::Port;
 use super::snapshot::RelaySnapshot;
+use crate::carrier::{Carrier, CarrierView};
 use crate::driver::{Driver, Effect};
 use crate::floor_diag::{AchievedOutConnections, FloorTransition, FloorWatch};
 use crate::graph::{
@@ -97,6 +99,10 @@ pub struct RelayParts<C: Clock + Clone + Send + Sync + 'static> {
     pub runtime: tokio::runtime::Handle,
     /// The zone's draws. `SecureRelayRng` in production.
     pub rng: Box<dyn RelayRng + Send>,
+    /// The carrier task's draws, its cadence's: a stream of its own, so the
+    /// carrier draws without the zone's turn (`CVR-R6`). `SecureRelayRng`
+    /// in production.
+    pub carrier_rng: Box<dyn RelayRng + Send>,
     /// Who hears the hop-0 verdict for a local origin: the managed Tor
     /// supervisor (`GS-Q3`). `None` when none runs.
     pub verdict: Option<VerdictSink>,
@@ -118,6 +124,9 @@ pub enum RelayStartError {
     Timing(EngineError),
     /// The carrier's dummy window could not be framed.
     Carrier(shekyl_levin::Error),
+    /// The carrier's queue refused its shape: an empty window or a zero
+    /// budget.
+    CarrierQueue,
 }
 
 impl std::fmt::Display for RelayStartError {
@@ -127,6 +136,7 @@ impl std::fmt::Display for RelayStartError {
             Self::Zone(err) => write!(f, "the relay zone refused its configuration: {err:?}"),
             Self::Timing(err) => write!(f, "the timing engine refused the relay owner: {err:?}"),
             Self::Carrier(err) => write!(f, "the carrier's dummy window did not frame: {err:?}"),
+            Self::CarrierQueue => f.write_str("the carrier's queue refused its window or budget"),
         }
     }
 }
@@ -254,6 +264,9 @@ pub(super) enum Cmd {
     Local { tx: TxId, blob: TxBlob },
     /// Transactions that left the pool.
     Departed(Vec<TxId>),
+    /// What the carrier task did with messages it was handed: sent to a
+    /// peer, or discarded (a refusal at its door included).
+    Carrier(Vec<CarrierOutcome>),
     /// End the task.
     Stop,
 }
@@ -336,6 +349,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         runtime,
         verdict,
         mut rng,
+        mut carrier_rng,
     } = parts;
     if config.min_epoch_secs == 0 {
         return Err(RelayStartError::ZeroEpoch);
@@ -362,26 +376,46 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         &mut *rng,
     )
     .map_err(RelayStartError::Zone)?;
-    // The carrier's buffers exist exactly when the zone carries. The dummy
-    // goes on the wire, so it is a Levin frame (`noise_notify`), never a
-    // zeroed buffer; the budget is what one epoch can deliver on a channel.
-    let noise = if config.noise {
+    // The carrier exists exactly when the zone carries. The dummy goes on
+    // the wire, so it is a Levin frame (`noise_notify`), never a zeroed
+    // buffer; the budget is what one epoch can deliver on a channel.
+    let (inbox_tx, inbox) = mpsc::unbounded_channel();
+    let (carrier, window) = if config.noise {
         let dummy = noise_notify(carrier::WINDOW_BYTES).map_err(RelayStartError::Carrier)?;
+        let window = dummy.len();
         let budget = carrier::noise_windows_in_epoch(config.min_epoch_secs);
-        NoiseQueues::new(
+        let queues = NoiseQueues::new(
             config.stems,
             dummy,
             usize::try_from(budget).unwrap_or(usize::MAX),
         )
+        .ok_or(RelayStartError::CarrierQueue)?;
+        let carrier_owner = timing
+            .register(OwnerClass::Carrier)
+            .map_err(RelayStartError::Timing)?;
+        let schedule = Carrier::new(config.stems, now, &mut *carrier_rng);
+        let (carrier_tx, carrier_inbox) = mpsc::unbounded_channel();
+        runtime.spawn(
+            CarrierTask {
+                carrier: schedule,
+                queues,
+                sessions: HashMap::new(),
+                rng: carrier_rng,
+                owner: carrier_owner,
+                inbox: carrier_inbox,
+                to_owner: inbox_tx.clone(),
+            }
+            .run(),
+        );
+        (Some(carrier_tx), Some(window))
     } else {
-        None
+        (None, None)
     };
     let floors = config
         .connectors
         .iter()
         .map(|connector| (*connector, FloorWatch::new(MIN_PROVISIONED_OUT_PEERS)))
         .collect();
-    let (inbox_tx, inbox) = mpsc::unbounded_channel();
     let last_verdict = zone.origin_verdict();
     if let Some(sink) = &verdict {
         sink(last_verdict);
@@ -401,7 +435,10 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
     };
     let actor = Actor {
         driver: Driver::new(zone),
-        noise,
+        carrier,
+        window,
+        last_view: CarrierView::default(),
+        last_epochs: 0,
         rng,
         sessions: HashMap::new(),
         carrier_pending: HashMap::new(),
@@ -421,17 +458,28 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
     Ok(Started { port, handle })
 }
 
-fn millis(tick: Tick) -> Millis {
-    tick.get() / 1_000_000
+/// Nanoseconds in a millisecond: the engine's ticks are nanoseconds, the
+/// zone's clock milliseconds.
+const NANOS_PER_MILLI: u64 = 1_000_000;
+
+pub(super) fn millis(tick: Tick) -> Millis {
+    tick.get() / NANOS_PER_MILLI
 }
 
-fn tick_of(ms: Millis) -> Tick {
-    Tick::new(ms.saturating_mul(1_000_000))
+pub(super) fn tick_of(ms: Millis) -> Tick {
+    Tick::new(ms.saturating_mul(NANOS_PER_MILLI))
 }
 
 struct Actor<C: Clock + Clone + Send + Sync + 'static> {
     driver: Driver,
-    noise: Option<NoiseQueues>,
+    /// The carrier task, when the zone carries (`owner::carrier`).
+    carrier: Option<mpsc::UnboundedSender<CarrierCmd>>,
+    /// The carrier's window, the dummy's length: what a carried message is
+    /// framed to. `None` when there is no carrier.
+    window: Option<usize>,
+    /// The view the carrier task last heard, and the epoch count then.
+    last_view: CarrierView,
+    last_epochs: u64,
     rng: Box<dyn RelayRng + Send>,
     /// The registry: every established session, by the zone's name for it.
     sessions: HashMap<ConnectionId, Established>,
@@ -484,6 +532,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                 }
             }
         }
+        if let Some(carrier) = &self.carrier {
+            let _gone = carrier.send(CarrierCmd::Stop);
+        }
         if let Err(_engine_closing) = self.owner.deregister() {}
     }
 
@@ -533,6 +584,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                     Direction::Outbound => PeerDirection::Outbound,
                 };
                 let connector = session.connector();
+                if let Some(carrier) = &self.carrier {
+                    let _gone = carrier.send(CarrierCmd::Session {
+                        id,
+                        session: Some(session.clone()),
+                    });
+                }
                 self.sessions.insert(id, session);
                 self.driver.zone_mut().on_session_established(
                     id,
@@ -544,7 +601,15 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             Cmd::Closed(socket) => {
                 let id = connection_id(socket);
                 self.sessions.remove(&id);
+                if let Some(carrier) = &self.carrier {
+                    let _gone = carrier.send(CarrierCmd::Session { id, session: None });
+                }
                 self.driver.zone_mut().on_connection_close(&id);
+            }
+            Cmd::Carrier(outcomes) => {
+                for outcome in outcomes {
+                    self.apply_verdict(outcome);
+                }
             }
             Cmd::Arrived {
                 source,
@@ -575,6 +640,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             }
             Cmd::Stop => {}
         }
+        self.tell_carrier();
         self.arm();
         self.publish();
     }
@@ -597,16 +663,31 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         for effect in effects {
             self.apply(effect);
         }
-        let outcomes = self
-            .noise
-            .as_mut()
-            .map(NoiseQueues::take_resolved)
-            .unwrap_or_default();
-        for outcome in outcomes {
-            self.apply_verdict(outcome);
-        }
+        self.tell_carrier();
         self.arm();
         self.publish();
+    }
+
+    /// Hand the carrier task the zone's view of its slots and covered
+    /// sessions when it changed, and say when an epoch began since.
+    fn tell_carrier(&mut self) {
+        let Some(carrier) = &self.carrier else {
+            return;
+        };
+        let zone = self.driver.zone();
+        let view = zone.carrier_view();
+        let epochs = zone.epochs_started();
+        let boundary = epochs != self.last_epochs;
+        if view == self.last_view && !boundary {
+            return;
+        }
+        // The task gone means the node is stopping.
+        let _gone = carrier.send(CarrierCmd::View {
+            view: view.clone(),
+            boundary,
+        });
+        self.last_view = view;
+        self.last_epochs = epochs;
     }
 
     /// Per configured connector, the achieved outbound count against the
@@ -687,48 +768,6 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                 if !live.is_empty() {
                     self.fluff_and_record(&live, source);
                 }
-            }
-            Effect::NoiseSend {
-                channel,
-                peer,
-                starts,
-            } => {
-                // `take_for_send` hands back the same window until a
-                // resolution: `sent` advances one fragment, `failed` restarts
-                // the channel so a partly sent message is never finished to
-                // a different successor.
-                let Some(queue) = self.noise.as_mut() else {
-                    debug_assert!(false, "NoiseSend on a zone with no carrier");
-                    return;
-                };
-                let Some(send) = queue.take_for_send(channel, peer, starts) else {
-                    return;
-                };
-                let written = self
-                    .sessions
-                    .get(&peer)
-                    .is_some_and(|session: &Established| session.send_window(send.bytes()).is_ok());
-                if written {
-                    // Timestamp and size only: the realised cadence is read
-                    // from these lines (`DAEMON_RELAY_PRIVACY.md` §97); whether
-                    // a window carried a stem or a dummy is not written down.
-                    tracing::debug!(
-                        channel,
-                        ?peer,
-                        bytes = send.bytes().len(),
-                        "a carrier window was written"
-                    );
-                    send.sent(queue);
-                } else {
-                    send.failed(queue);
-                }
-            }
-            Effect::NoiseUnbind { channel } => {
-                let Some(queue) = self.noise.as_mut() else {
-                    debug_assert!(false, "NoiseUnbind on a zone with no carrier");
-                    return;
-                };
-                queue.unbind(channel);
             }
         }
     }
@@ -946,11 +985,17 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                     local,
                 },
             );
-            let enqueued = self
-                .noise
-                .as_mut()
-                .is_some_and(|queue| queue.enqueue(channel, framed, CarrierToken(token)));
-            if !enqueued {
+            // A refusal at the queue's door comes back as a discard.
+            let handed = self.carrier.as_ref().is_some_and(|carrier| {
+                carrier
+                    .send(CarrierCmd::Enqueue {
+                        channel,
+                        message: framed,
+                        token: CarrierToken(token),
+                    })
+                    .is_ok()
+            });
+            if !handed {
                 self.carrier_pending.remove(&token);
                 refused.push((*tx, TxBlob::clone(blob)));
             }
@@ -1066,7 +1111,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     /// A stem as the carrier carries it: one 2002 with the one blob, cut
     /// into the carrier's windows.
     fn frame_for_carrier(&self, blob: &TxBlob) -> Option<Vec<u8>> {
-        let window = self.noise.as_ref()?.window();
+        let window = self.window?;
         let payload = NewTransactions {
             txs: vec![blob.to_vec()],
             padding: Vec::new(),

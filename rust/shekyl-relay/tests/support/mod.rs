@@ -125,12 +125,17 @@ pub struct FakePool {
     asked: Mutex<Vec<Asked>>,
     /// While closed, `admit` blocks: the backpressure test's gate.
     gate: (Mutex<bool>, Condvar),
+    /// While closed, `holds` blocks: a pool commit stalling the relay owner,
+    /// which asks `holds` when a carrier verdict arrives (the 2026-11-05
+    /// stall, `CVR-R6`).
+    owner_gate: (Mutex<bool>, Condvar),
 }
 
 impl FakePool {
     pub fn new() -> Arc<Self> {
         let pool = Self::default();
         *pool.gate.0.lock().expect("gate") = true;
+        *pool.owner_gate.0.lock().expect("owner gate") = true;
         Arc::new(pool)
     }
 
@@ -181,6 +186,16 @@ impl FakePool {
         self.gate.1.notify_all();
     }
 
+    /// Close the owner's gate: `holds` blocks until [`Self::release_owner`].
+    pub fn stall_owner(&self) {
+        *self.owner_gate.0.lock().expect("owner gate") = false;
+    }
+
+    pub fn release_owner(&self) {
+        *self.owner_gate.0.lock().expect("owner gate") = true;
+        self.owner_gate.1.notify_all();
+    }
+
     /// The pool holds `tx` without having admitted it: a transaction this
     /// node originated, which reaches the relay by `relay_local` rather
     /// than through `admit`.
@@ -221,6 +236,12 @@ impl PoolDoor for FakePool {
     }
 
     fn holds(&self, tx: &TxId) -> bool {
+        {
+            let mut open = self.owner_gate.0.lock().expect("owner gate");
+            while !*open {
+                open = self.owner_gate.1.wait(open).expect("owner gate");
+            }
+        }
         self.held.lock().expect("held").contains(tx)
     }
 
@@ -361,6 +382,7 @@ impl Rig {
             timing: timing.clone(),
             runtime: runtime.handle().clone(),
             rng: Box::new(SplitMix64::new(0x5eed)),
+            carrier_rng: Box::new(SplitMix64::new(0xca77)),
             verdict: None,
         })
         .expect("the relay owner starts");

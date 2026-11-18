@@ -9,9 +9,9 @@
 //! The network is a property of a session's connector, read at hop 0, at the
 //! stem embargo, and at cover. It is not a property of this type. The type
 //! owns the state §18.5 assigned to Rust: peer fluff queues, the stem map,
-//! the epoch role, and the noise **schedule** (enable bit, cadence,
-//! per-channel deadlines). Noise **buffers** live in [`crate::NoiseQueues`]
-//! (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2). Cover goes only to a
+//! the epoch role, and whether the zone carries. The carrier's schedule and
+//! buffers run in their own task (`crate::carrier`, `CVR-R6`), told the
+//! slots and the covered sessions by [`Relay::carrier_view`]. Cover goes only to a
 //! session that is encrypted and whose connector declares its timing visible
 //! to an observer at this node's end (`CVR-R3`), Tor included.
 //! A transaction body is still an opaque blob here. See
@@ -23,16 +23,16 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::basis::DerivationMs;
-use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
+use shekyl_relay_privacy::params::{inherited, DandelionParams};
 use shekyl_relay_privacy::schedule::{
-    DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
+    DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, PeerDirection,
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex};
 pub use shekyl_transport_layer::ConnectorId;
 use shekyl_transport_layer::{declaration, Assessment, Declaration, NativeEncryption, YesNo};
 use shekyl_types::relay::RelayMethod;
 
-use crate::noise_queue::Starts;
+use crate::carrier::CarrierView;
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
 mod broadcast_hold;
@@ -324,148 +324,6 @@ impl fmt::Display for RelayNewError {
     }
 }
 
-/// Noise-channel schedule for a zone — or its deliberate absence.
-///
-/// One type so "enabled" and "has deadlines" cannot disagree: a disabled zone
-/// has no schedule; an enabled zone always has one deadline per stem slot.
-/// Channel `i` is bound to stem slot `i` (§20.3), so the deadline vector's
-/// length is the stem width, which production pins to
-/// [`inherited::NOISE_CHANNELS`].
-///
-/// **CV-3 lives in how deadlines are mutated.** Each entry is drawn once and
-/// re-drawn only when *that* channel fires. A wake caused by the fluff
-/// scheduler, an epoch rollover, or another channel coming due must leave every
-/// other entry untouched. Re-drawing on a foreign wake and keeping the
-/// earlier deadline takes the minimum of two draws, which biases the
-/// effective noise interval **short** — a privacy defect no count assertion
-/// and no goodness-of-fit grade can see (§20.2a).
-#[derive(Debug)]
-enum NoiseSchedule {
-    Off,
-    On {
-        cadence: NoiseCadence,
-        /// Next send deadline per channel, indexed by channel.
-        deadlines: Vec<Millis>,
-        /// Who each channel sends to, and how much of its epoch tail is
-        /// left, indexed by channel.
-        bindings: Vec<ChannelBinding>,
-    },
-}
-
-/// The peer one channel sends to, and the windows left in its epoch tail.
-///
-/// Outside a tail the binding follows the channel's stem slot at each due
-/// window. At an epoch boundary it keeps the peer it last sent to for
-/// [`carrier::EPOCH_TAIL_WINDOWS`] more windows, during which no message
-/// starts, then takes the slot's new peer (`CVR-R4`; Rick, 2026-11-18). The
-/// tail is set whatever the queue holds: the schedule does not see the
-/// queue (CV-4), so the switch comes after the same count of windows
-/// whether or not a message was in flight.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ChannelBinding {
-    /// The peer the channel last sent to. `None` before its first send and
-    /// after its slot went empty.
-    peer: Option<ConnectionId>,
-    /// Windows still owed to `peer` after the last epoch boundary.
-    tail_left: u32,
-}
-
-/// What a channel's due window does ([`Relay::due_noise`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NoiseDue {
-    /// Send one window to `peer`; [`Starts`] says whether a new message may
-    /// begin in it.
-    Send {
-        /// The channel, which is its stem slot.
-        channel: usize,
-        /// The session the window goes to.
-        peer: ConnectionId,
-        /// Closed during the channel's epoch tail.
-        starts: Starts,
-    },
-    /// The channel's slot holds no peer: drop what the channel held.
-    Unbind {
-        /// The channel.
-        channel: usize,
-    },
-}
-
-impl NoiseSchedule {
-    fn on<R: RelayRng + ?Sized>(channels: usize, now: Millis, rng: &mut R) -> Self {
-        let cadence = NoiseCadence::shipped();
-        let deadlines = (0..channels).map(|_| cadence.next_send(now, rng)).collect();
-        Self::On {
-            cadence,
-            deadlines,
-            bindings: vec![ChannelBinding::default(); channels],
-        }
-    }
-
-    /// An epoch boundary: every channel that has a peer owes it the tail.
-    /// Unconditional — the queue is not consulted (CV-4).
-    fn begin_tails(&mut self) {
-        if let Self::On { bindings, .. } = self {
-            for binding in bindings.iter_mut().filter(|binding| binding.peer.is_some()) {
-                binding.tail_left = carrier::EPOCH_TAIL_WINDOWS;
-            }
-        }
-    }
-
-    fn binding_mut(&mut self, channel: usize) -> Option<&mut ChannelBinding> {
-        match self {
-            Self::Off => None,
-            Self::On { bindings, .. } => bindings.get_mut(channel),
-        }
-    }
-
-    fn enabled(&self) -> bool {
-        matches!(self, Self::On { .. })
-    }
-
-    fn earliest(&self) -> Option<Millis> {
-        match self {
-            Self::Off => None,
-            Self::On { deadlines, .. } => deadlines.iter().copied().min(),
-        }
-    }
-
-    /// The single earliest channel due at `now`, re-armed from **`now`**.
-    ///
-    /// At most one channel per call: multi-channel emission in one poll is a
-    /// synchronized burst — the soundness defect constant-rate cover exists to
-    /// deny. A late poll that finds several deadlines past still surfaces them
-    /// one wake at a time (`next_wake` re-arms immediately for the remainder).
-    ///
-    /// Re-armed from `now`, not the old deadline: arming from a past deadline
-    /// catch-up-bursts after a stall; arming from `now` preserves inter-send
-    /// spacing under load (phase may lag; rate does not). Only the fired entry
-    /// is touched — CV-3.
-    fn due_one<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) -> Option<usize> {
-        let Self::On {
-            cadence, deadlines, ..
-        } = self
-        else {
-            return None;
-        };
-        let (idx, _) = deadlines
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|&(_, d)| d <= now)
-            .min_by_key(|&(_, d)| d)?;
-        deadlines[idx] = cadence.next_send(now, rng);
-        Some(idx)
-    }
-
-    #[cfg(test)]
-    fn deadline_at(&self, channel: usize) -> Option<Millis> {
-        match self {
-            Self::Off => None,
-            Self::On { deadlines, .. } => deadlines.get(channel).copied(),
-        }
-    }
-}
-
 /// One relay zone's owned state.
 ///
 /// Single-owner by construction: every field is private and reachable only
@@ -499,14 +357,18 @@ pub struct Relay {
     /// When noise is enabled this is also the noise channel count (channel
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
-    /// Noise schedule (enable + cadence + per-channel deadlines), or off.
+    /// Whether this zone runs the cover carrier.
     ///
-    /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
-    /// in C++, encoded as `!zone::noise.empty()` — the byte payload doing
-    /// double duty as its own enable flag. The payload buffers moved to
-    /// [`crate::NoiseQueues`] with the executor port, as this module's own
-    /// header says; Rust owns the buffers, *whether* and *when*.
-    noise: NoiseSchedule,
+    /// **Single owner of the enable fact** (§20.4). The carrier's schedule,
+    /// bindings and queue run in their own task (`crate::carrier`,
+    /// `owner::carrier`), so a busy zone delays what it hands the carrier,
+    /// never a window (`CVR-R6`); this zone decides whether there is a
+    /// carrier, and tells it the slots and the covered sessions
+    /// ([`Self::carrier_view`]).
+    noise: bool,
+    /// Epochs begun since construction. The carrier starts its tails when
+    /// this moves ([`Self::epochs_started`]).
+    epochs: u64,
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
     stem_watch: StemWatch,
@@ -540,7 +402,7 @@ impl Relay {
     /// `added_encryption` names the connectors whose sessions this node
     /// wraps in an encryption layer the transport adds. Cover runs per
     /// channel, on a session that is encrypted and whose connector declares
-    /// its timing visible ([`Self::noise_destination`]); a configuration
+    /// its timing visible (`noise_destination`); a configuration
     /// with no such connector is not refused, its channels simply carry
     /// nothing until a covered session holds their slot.
     ///
@@ -576,11 +438,6 @@ impl Relay {
             return Err(RelayNewError::HiddenSlotWidth { got: stems });
         }
         let epoch = EpochScheduler::new(params).start(now, rng);
-        let noise = if noise_requested {
-            NoiseSchedule::on(stems, now, rng)
-        } else {
-            NoiseSchedule::Off
-        };
         // Built at full width with no peers rather than an empty map, so
         // `update_stems` can grow into it. An empty map has no slots to
         // fill, which is what forced the first-population special case that
@@ -600,7 +457,8 @@ impl Relay {
             epoch_ends_at: epoch.ends_at,
             params,
             stems,
-            noise,
+            noise: noise_requested,
+            epochs: 0,
             hidden_class_watch: hidden_slot::HiddenClassWatch::BeforeRebuild,
             embargoes: embargo::Embargoes::default(),
             node_sync: NodeSync::Unsynchronised,
@@ -609,89 +467,27 @@ impl Relay {
         })
     }
 
-    /// The earliest noise send deadline, or `None` when noise is disabled.
-    pub fn noise_deadline(&self) -> Option<Millis> {
-        self.noise.earliest()
-    }
-
-    /// The single earliest channel due at `now`, re-armed from `now` (CV-3).
-    ///
-    /// See [`NoiseSchedule::due_one`]: at most one channel per call so a late
-    /// poll cannot emit a multi-channel burst.
-    pub fn due_noise_channel<R: RelayRng + ?Sized>(
-        &mut self,
-        now: Millis,
-        rng: &mut R,
-    ) -> Option<usize> {
-        self.noise.due_one(now, rng)
-    }
-
-    /// What the single earliest channel due at `now` does, re-armed from
-    /// `now` like [`Self::due_noise_channel`].
-    ///
-    /// During the channel's epoch tail the window goes to the peer it last
-    /// sent to, with [`Starts::Closed`], while that session still carries
-    /// cover; a lost peer ends the tail at once, and the half-sent message
-    /// restarts on the next peer (CV-1). Outside the tail the window goes to
-    /// the peer in the channel's stem slot with [`Starts::Open`]. A slot
-    /// whose session carries no cover sends nothing, and the channel stays
-    /// armed for a later covered occupant. An empty slot unbinds.
-    ///
-    /// The binding is resolved here, against the map this zone owns; nothing
-    /// here reads the queue (CV-4).
-    pub fn due_noise<R: RelayRng + ?Sized>(
-        &mut self,
-        now: Millis,
-        rng: &mut R,
-    ) -> Option<NoiseDue> {
-        let channel = self.noise.due_one(now, rng)?;
-        let slot = self.map.slots().get(channel).copied().flatten();
-        let binding = *self.noise.binding_mut(channel)?;
-        if binding.tail_left > 0 {
-            if let Some(old) = binding.peer.filter(|old| self.noise_destination(*old)) {
-                let held = self.noise.binding_mut(channel)?;
-                held.tail_left -= 1;
-                return Some(NoiseDue::Send {
-                    channel,
-                    peer: old,
-                    starts: Starts::Closed,
-                });
-            }
-        }
-        let bound = self.noise.binding_mut(channel)?;
-        bound.tail_left = 0;
-        match slot {
-            Some(peer) if self.noise_destination(peer) => {
-                if let Some(bound) = self.noise.binding_mut(channel) {
-                    bound.peer = Some(peer);
-                }
-                Some(NoiseDue::Send {
-                    channel,
-                    peer,
-                    starts: Starts::Open,
-                })
-            }
-            Some(_) => {
-                // Nothing was sent: the channel is bound to no one, so the
-                // next boundary owes no tail to a peer it left.
-                if let Some(bound) = self.noise.binding_mut(channel) {
-                    bound.peer = None;
-                }
-                None
-            }
-            None => {
-                if let Some(bound) = self.noise.binding_mut(channel) {
-                    bound.peer = None;
-                }
-                Some(NoiseDue::Unbind { channel })
-            }
+    /// What the carrier needs to know from this zone: the session in each
+    /// stem slot, and which sessions carry cover (`noise_destination`).
+    /// The relay owner hands it over whenever it changes.
+    #[must_use]
+    pub fn carrier_view(&self) -> CarrierView {
+        CarrierView {
+            slots: self.map.slots().to_vec(),
+            covered: self
+                .contexts
+                .keys()
+                .copied()
+                .filter(|peer| self.noise_destination(*peer))
+                .collect(),
         }
     }
 
-    /// A channel's armed deadline, for CV-3's witness.
-    #[cfg(test)]
-    pub(crate) fn noise_deadline_at(&self, channel: usize) -> Option<Millis> {
-        self.noise.deadline_at(channel)
+    /// Epochs begun since construction: the carrier begins its tails each
+    /// time this moves.
+    #[must_use]
+    pub fn epochs_started(&self) -> u64 {
+        self.epochs
     }
 
     /// Whether `peer`'s session carries cover (`CVR-R3`; Rick,
@@ -724,7 +520,7 @@ impl Relay {
     /// comes from.
     #[must_use]
     pub fn noise_enabled(&self) -> bool {
-        self.noise.enabled()
+        self.noise
     }
 
     /// Configured stem width (slot count). When noise is on, also the channel
@@ -975,15 +771,15 @@ impl Relay {
     /// calls when [`Relay::epoch_deadline`] elapses. Both paths run the same
     /// code, which is why forcing it in a test is not a special case.
     ///
-    /// Every carrier channel with a peer starts its epoch tail here: it keeps
-    /// sending to that peer for [`carrier::EPOCH_TAIL_WINDOWS`] windows,
-    /// starting no message, before it takes its slot's new peer
-    /// ([`Self::due_noise`]).
+    /// The carrier starts its epoch tails when it sees the count move
+    /// ([`Self::epochs_started`]): each channel keeps sending to its peer for
+    /// `EPOCH_TAIL_WINDOWS` windows, starting no message, before it takes its
+    /// slot's new peer (`crate::carrier`).
     pub fn start_epoch<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) {
         let epoch = EpochScheduler::new(self.params).start(now, rng);
         self.fluffing = epoch.fluffing;
         self.epoch_ends_at = epoch.ends_at;
-        self.noise.begin_tails();
+        self.epochs = self.epochs.wrapping_add(1);
     }
 
     /// When the current epoch ends.
@@ -1204,10 +1000,9 @@ impl Relay {
 
     /// The stem slots in index order, `None` for an emptied slot.
     ///
-    /// Owned here; never pushed as an array and never pulled by C++ on its own
-    /// schedule. Post-§20.3 the binding travels with each [`crate::Effect::NoiseSend`]
-    /// (or [`crate::Effect::NoiseUnbind`] when unbound). A caller-initiated
-    /// read would race this zone's mutations — §18.5 finding 3.
+    /// Owned here. The carrier task is handed a copy when the slots change
+    /// ([`Self::carrier_view`]), never a reference: a caller-initiated read
+    /// would race this zone's mutations — §18.5 finding 3.
     pub fn stem_slots(&self) -> &[Option<ConnectionId>] {
         self.map.slots()
     }
@@ -1247,7 +1042,7 @@ pub enum RelayCarrier {
     Ordinary,
     /// A noise channel, bound to the stem slot the plan chose.
     ///
-    /// `channel` **is** the slot index: `NoiseSchedule` binds channel `i` to
+    /// `channel` **is** the slot index: the carrier binds channel `i` to
     /// stem slot `i` (§20.3). Carried as [`SlotIndex`] so a crate-boundary
     /// caller cannot swap it with a walk cursor — the property the newtype
     /// exists for. The send loop must respect that binding rather than
@@ -1297,7 +1092,7 @@ impl Relay {
     /// How a stem to `destination` leaves this node (`CVR-R6`; Rick,
     /// 2026-11-15, restated 2026-11-18).
     ///
-    /// On a session that carries cover ([`Self::noise_destination`], with
+    /// On a session that carries cover (`noise_destination`, with
     /// the carrier on), the stem leaves only inside a window: its slot's
     /// channel, or [`RelayCarrier::NoWindow`] when the session holds no
     /// slot. On a session that carries none — a plaintext link, or a node
@@ -1305,7 +1100,7 @@ impl Relay {
     /// takes the ordinary connection.
     #[must_use]
     pub fn carrier_to(&self, destination: ConnectionId) -> RelayCarrier {
-        if !(self.noise.enabled() && self.noise_destination(destination)) {
+        if !(self.noise && self.noise_destination(destination)) {
             return RelayCarrier::Ordinary;
         }
         match self.map.slot_of(destination) {

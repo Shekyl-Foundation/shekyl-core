@@ -270,9 +270,14 @@ pub enum OwnerClass {
     Interim,
     /// Chain sync's request deadlines (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q8).
     Sync,
+    /// The relay's cover carrier: one window per channel at each draw of its
+    /// cadence (`CVR-R6`). Its own class, apart from [`Self::Relay`], so the
+    /// lateness report shows the carrier's ticks on time while the relay's
+    /// work is late, which is the point of running it apart.
+    Carrier,
 }
 
-const CLASS_COUNT: usize = 8;
+const CLASS_COUNT: usize = 9;
 
 impl OwnerClass {
     /// Every class, in index order: what a periodic lateness report walks.
@@ -285,6 +290,7 @@ impl OwnerClass {
         Self::Housekeeping,
         Self::Interim,
         Self::Sync,
+        Self::Carrier,
     ];
 
     const fn index(self) -> usize {
@@ -297,12 +303,13 @@ impl OwnerClass {
             Self::Housekeeping => 5,
             Self::Interim => 6,
             Self::Sync => 7,
+            Self::Carrier => 8,
         }
     }
 
     #[cfg(test)]
     fn from_index(index: u8) -> Self {
-        match index % 8 {
+        match index % 9 {
             0 => Self::Relay,
             1 => Self::Transport,
             2 => Self::TimedSync,
@@ -310,7 +317,8 @@ impl OwnerClass {
             4 => Self::Discovery,
             5 => Self::Housekeeping,
             6 => Self::Interim,
-            _ => Self::Sync,
+            7 => Self::Sync,
+            _ => Self::Carrier,
         }
     }
 }

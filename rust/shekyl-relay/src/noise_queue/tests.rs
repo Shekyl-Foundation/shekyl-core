@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 use super::*;
-use crate::{ConnectorId, Driver, Effect, Relay};
+use crate::carrier::pair::Step;
+use crate::{ConnectorId, Driver, Relay};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::PeerDirection;
@@ -303,7 +304,7 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
          otherwise a later poll(queue) change can pair the schedule with a \
          differently-shaped queue and the comparison is no longer about depth"
     );
-    let mut driver = Driver::new(zone);
+    let mut driver = crate::carrier::pair::Pair::new(Driver::new(zone), &mut rng);
     let peers = vec![id(1), id(2), id(3), id(4)];
     for peer in &peers {
         driver.zone_mut().on_session_established(
@@ -320,9 +321,9 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
         now += 1_000;
         for effect in driver.poll(now, &mut rng) {
             match effect {
-                Effect::NoiseSend { channel, .. } => out.push((now, channel, true)),
-                Effect::NoiseUnbind { channel } => out.push((now, channel, false)),
-                Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. } => {}
+                Step::NoiseSend { channel, .. } => out.push((now, channel, true)),
+                Step::NoiseUnbind { channel } => out.push((now, channel, false)),
+                Step::Zone(_) => {}
             }
         }
     }

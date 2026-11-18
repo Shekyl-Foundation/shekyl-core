@@ -613,42 +613,24 @@ fn fluff_fanout_shares_one_blob_handle_across_peers() {
 #[test]
 fn a_noise_deadline_survives_wakes_it_did_not_cause() {
     let mut rng = SplitMix64::new(7);
-    let mut z = Relay::new(
-        DandelionParams::inherited(),
-        2,
-        true,
-        &[ConnectorId::Clearnet],
-        &[ConnectorId::Clearnet],
-        // noise on — otherwise there are no deadlines and this is vacuous.
-        // The deadlines under test do not depend on which peer later
-        // occupies a slot.
-        0,
-        &mut rng,
-    )
-    .unwrap();
+    // The carrier's schedule (`crate::carrier`). The deadlines under test do
+    // not depend on which peer later occupies a slot.
+    let mut z = crate::carrier::Carrier::new(2, 0, &mut rng);
 
     // Fixture requirement: the two channels must be armed, and armed
     // *differently*, or "channel 1 unchanged" could hold by coincidence.
-    let d0 = z.noise_deadline_at(0).expect("channel 0 armed");
-    let d1 = z.noise_deadline_at(1).expect("channel 1 armed");
+    let d0 = z.deadline_at(0).expect("channel 0 armed");
+    let d1 = z.deadline_at(1).expect("channel 1 armed");
     assert!(d0 > 0 && d1 > 0, "both channels armed at construction");
 
     // Wake at a time no channel is due. This is the foreign wake: in
     // production it is the fluff scheduler or an epoch rollover reaching the
     // zone, and it must not touch any covert deadline.
     let quiet = d0.min(d1) - 1;
-    let due = z.due_noise_channel(quiet, &mut rng);
+    let due = z.due_channel(quiet, &mut rng);
     assert!(due.is_none(), "no channel is due before its deadline");
-    assert_eq!(
-        z.noise_deadline_at(0),
-        Some(d0),
-        "foreign wake re-armed ch0"
-    );
-    assert_eq!(
-        z.noise_deadline_at(1),
-        Some(d1),
-        "foreign wake re-armed ch1"
-    );
+    assert_eq!(z.deadline_at(0), Some(d0), "foreign wake re-armed ch0");
+    assert_eq!(z.deadline_at(1), Some(d1), "foreign wake re-armed ch1");
 
     // Now fire only the earlier channel. The OTHER one must still hold the
     // deadline it was armed with — this is the half a resample-all bug breaks.
@@ -657,20 +639,20 @@ fn a_noise_deadline_survives_wakes_it_did_not_cause() {
     } else {
         (1usize, 0usize)
     };
-    let late_deadline = z.noise_deadline_at(late).expect("armed");
-    let due = z.due_noise_channel(z.noise_deadline_at(early).unwrap(), &mut rng);
+    let late_deadline = z.deadline_at(late).expect("armed");
+    let due = z.due_channel(z.deadline_at(early).unwrap(), &mut rng);
     assert_eq!(due, Some(early), "only the due channel fires");
     assert_eq!(
-        z.noise_deadline_at(late),
+        z.deadline_at(late),
         Some(late_deadline),
         "a sibling channel firing must not re-arm this one — \
          re-arming here is the min-over-k-draws bias CV-3 forbids"
     );
 
     // Liveness: the fired channel really did advance, so a no-op
-    // `due_noise_channel` cannot pass the assertions above by doing nothing.
+    // `due_channel` cannot pass the assertions above by doing nothing.
     assert!(
-        z.noise_deadline_at(early).unwrap() > late_deadline.min(d0.max(d1)) - 1,
+        z.deadline_at(early).unwrap() > late_deadline.min(d0.max(d1)) - 1,
         "the fired channel re-armed forward"
     );
 }
@@ -698,12 +680,13 @@ fn noise_enabled_pins_stem_width_to_noise_channels() {
         inherited::NOISE_CHANNELS,
         "configured width is the noise channel count"
     );
-    // Covert deadlines are armed at full width at construction, even before
-    // any peer populates the map (an empty outbound set leaves stem_slots
-    // empty; the schedule still has one deadline per channel).
-    assert!(z.noise_deadline_at(0).is_some());
-    assert!(z.noise_deadline_at(inherited::NOISE_CHANNELS - 1).is_some());
-    assert!(z.noise_deadline_at(inherited::NOISE_CHANNELS).is_none());
+    // The carrier's deadlines are armed at full width at construction, even
+    // before any peer populates the map (an empty outbound set leaves
+    // stem_slots empty; the schedule still has one deadline per channel).
+    let carrier = crate::carrier::Carrier::new(z.stem_width(), 0, &mut rng);
+    assert!(carrier.deadline_at(0).is_some());
+    assert!(carrier.deadline_at(inherited::NOISE_CHANNELS - 1).is_some());
+    assert!(carrier.deadline_at(inherited::NOISE_CHANNELS).is_none());
 }
 
 /// §42.3 as a table: the carrier is a FUNCTION of the phase, never a

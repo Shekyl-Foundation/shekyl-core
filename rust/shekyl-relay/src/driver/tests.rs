@@ -4,6 +4,8 @@
 // BSD-3-Clause
 
 use super::*;
+use crate::carrier::pair::{Pair, Step};
+use crate::noise_queue::Starts;
 use crate::stem_watch::TxId;
 use crate::ConnectorId;
 use shekyl_draw_rng::SplitMix64;
@@ -179,7 +181,7 @@ fn an_outbound_handshake_fills_the_map_without_rolling_the_epoch() {
     );
 }
 
-/// A **due** channel whose slot is unbound emits [`Effect::NoiseUnbind`]
+/// A **due** channel whose slot is unbound emits `NoiseDue::Unbind`
 /// at its own index, **at every due tick** — the fact the deleted slot
 /// array carried that a send cannot: an unbound channel emits no sends
 /// (CV-2), so *stopping* must cross on its own, or the C++ enqueue guard
@@ -205,7 +207,7 @@ fn an_outbound_handshake_fills_the_map_without_rolling_the_epoch() {
 #[test]
 fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
     let mut rng = SplitMix64::new(31);
-    let mut d = Driver::new(
+    let d = Driver::new(
         Relay::new(
             DandelionParams::inherited(),
             2,
@@ -217,6 +219,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
         )
         .unwrap(),
     );
+    let mut d = Pair::new(d, &mut rng);
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
@@ -265,7 +268,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
         let wake = d.next_wake();
         for e in d.poll(wake, &mut rng) {
             match e {
-                Effect::NoiseUnbind { channel } => {
+                Step::NoiseUnbind { channel } => {
                     assert_eq!(
                         channel, 0,
                         "only the unbound channel clears — 1 here is the \
@@ -273,7 +276,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
                     );
                     unbinds += 1;
                 }
-                Effect::NoiseSend { channel, peer, .. } => {
+                Step::NoiseSend { channel, peer, .. } => {
                     assert_eq!(
                         (channel, peer),
                         (1, keep),
@@ -282,8 +285,8 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
                     );
                     sends += 1;
                 }
-                Effect::Fluff { .. } => unreachable!("nothing was queued"),
-                Effect::Stem { .. } | Effect::Broadcast { .. } => {
+                Step::Zone(Effect::Fluff { .. }) => unreachable!("nothing was queued"),
+                Step::Zone(Effect::Stem { .. } | Effect::Broadcast { .. }) => {
                     unreachable!("nothing was stemmed or held")
                 }
             }
@@ -310,7 +313,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     // Rebind: close slot 0's peer but offer a replacement, so the churned
     // slot refills — bound again by the time any tick comes due.
     let mut rng = SplitMix64::new(37);
-    let mut d = Driver::new(
+    let d = Driver::new(
         Relay::new(
             DandelionParams::inherited(),
             2,
@@ -322,6 +325,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         )
         .unwrap(),
     );
+    let mut d = Pair::new(d, &mut rng);
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
@@ -356,14 +360,14 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         let wake = d.next_wake();
         for e in d.poll(wake, &mut rng) {
             match e {
-                Effect::NoiseSend { .. } => sends += 1,
-                Effect::NoiseUnbind { channel } => panic!(
+                Step::NoiseSend { .. } => sends += 1,
+                Step::NoiseUnbind { channel } => panic!(
                     "channel {channel} cleared on a rebound slot — this \
                      drops queued messages the inherited repoint \
                      delivered to the successor"
                 ),
-                Effect::Fluff { .. } => unreachable!("nothing was queued"),
-                Effect::Stem { .. } | Effect::Broadcast { .. } => {
+                Step::Zone(Effect::Fluff { .. }) => unreachable!("nothing was queued"),
+                Step::Zone(Effect::Stem { .. } | Effect::Broadcast { .. }) => {
                     unreachable!("nothing was stemmed or held")
                 }
             }
@@ -375,7 +379,8 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
     // has no tick to ride — the gate is the schedule's absence, not a
     // check. The hole is still constructed, so the emptiness below comes
     // from the missing schedule and not from the state failing to happen.
-    let mut d = driver(&mut rng);
+    let d = driver(&mut rng);
+    let mut d = Pair::new(d, &mut rng);
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
@@ -403,7 +408,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
         "fixture: the hole exists on the disabled zone too"
     );
     assert_eq!(
-        d.zone().noise_deadline(),
+        d.carrier_deadline(),
         None,
         "no covert schedule ⇒ no tick for an unbind to ride"
     );
@@ -494,7 +499,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
 #[test]
 fn noise_channels_emit_one_per_advance_not_synchronized() {
     let mut rng = SplitMix64::new(11);
-    let mut d = Driver::new(
+    let d = Driver::new(
         Relay::new(
             DandelionParams::inherited(),
             2,
@@ -506,6 +511,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
         )
         .unwrap(),
     );
+    let mut d = Pair::new(d, &mut rng);
     // Bind both slots: since the inversion, an unbound slot emits no send
     // (CV-2), and this test is about cadence, not binding.
     d.zone_mut().on_session_established(
@@ -524,8 +530,16 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
     // Fixture requirement: distinct deadlines, or "one per advance" could
     // hold by coincidence rather than by independence.
     let (a, b) = (
-        d.zone().noise_deadline_at(0).expect("ch0 armed"),
-        d.zone().noise_deadline_at(1).expect("ch1 armed"),
+        d.carrier
+            .as_ref()
+            .expect("a carrier")
+            .deadline_at(0)
+            .expect("ch0 armed"),
+        d.carrier
+            .as_ref()
+            .expect("a carrier")
+            .deadline_at(1)
+            .expect("ch1 armed"),
     );
     assert_ne!(a, b, "the two channels must be armed independently");
 
@@ -535,7 +549,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
         .poll(first, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
-            Effect::NoiseSend { channel, .. } => Some(channel),
+            Step::NoiseSend { channel, .. } => Some(channel),
             _ => None,
         })
         .collect();
@@ -554,7 +568,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
         .poll(second, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
-            Effect::NoiseSend { channel, .. } => Some(channel),
+            Step::NoiseSend { channel, .. } => Some(channel),
             _ => None,
         })
         .collect();
@@ -586,7 +600,7 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
 #[test]
 fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
     let mut rng = SplitMix64::new(23);
-    let mut d = Driver::new(
+    let d = Driver::new(
         Relay::new(
             DandelionParams::inherited(),
             2,
@@ -598,6 +612,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
         )
         .unwrap(),
     );
+    let mut d = Pair::new(d, &mut rng);
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
@@ -629,7 +644,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
         }
         let wake = d.next_wake();
         for e in d.poll(wake, &mut rng) {
-            if let Effect::NoiseSend { channel, peer, .. } = e {
+            if let Step::NoiseSend { channel, peer, .. } = e {
                 assert_eq!(
                     Some(peer),
                     truth[channel],
@@ -650,7 +665,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
 
 /// CV-2, half 2: an **unbound** slot emits no covert *send* at its index,
 /// and shifts no other channel's index. (Its due tick carries the clear
-/// instead — [`Effect::NoiseUnbind`], witnessed separately — which this
+/// instead — `NoiseDue::Unbind`, witnessed separately — which this
 /// test's collector deliberately ignores: CV-2 is a statement about wire
 /// emissions, and an unbind never reaches the wire.)
 ///
@@ -666,7 +681,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
 #[test]
 fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
     let mut rng = SplitMix64::new(29);
-    let mut d = Driver::new(
+    let d = Driver::new(
         Relay::new(
             DandelionParams::inherited(),
             2,
@@ -678,6 +693,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
         )
         .unwrap(),
     );
+    let mut d = Pair::new(d, &mut rng);
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
@@ -717,7 +733,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
         }
         let wake = d.next_wake();
         for e in d.poll(wake, &mut rng) {
-            if let Effect::NoiseSend { channel, peer, .. } = e {
+            if let Step::NoiseSend { channel, peer, .. } = e {
                 emissions.push((channel, peer));
             }
         }
@@ -754,7 +770,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
 #[test]
 fn a_late_poll_emits_at_most_one_noise_channel() {
     let mut rng = SplitMix64::new(13);
-    let mut d = Driver::new(
+    let d = Driver::new(
         Relay::new(
             DandelionParams::inherited(),
             2,
@@ -766,6 +782,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         )
         .unwrap(),
     );
+    let mut d = Pair::new(d, &mut rng);
     d.zone_mut().on_session_established(
         id(1),
         PeerDirection::Outbound,
@@ -779,8 +796,18 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         &mut rng,
     );
 
-    let a = d.zone().noise_deadline_at(0).expect("ch0 armed");
-    let b = d.zone().noise_deadline_at(1).expect("ch1 armed");
+    let a = d
+        .carrier
+        .as_ref()
+        .expect("a carrier")
+        .deadline_at(0)
+        .expect("ch0 armed");
+    let b = d
+        .carrier
+        .as_ref()
+        .expect("a carrier")
+        .deadline_at(1)
+        .expect("ch1 armed");
     assert_ne!(a, b, "fixture: independent arms");
     let late = a.max(b) + 60_000;
 
@@ -788,8 +815,10 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .poll(late, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
-            Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
-            Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. } => None,
+            Step::NoiseSend { channel, .. } | Step::NoiseUnbind { channel } => Some(channel),
+            Step::Zone(Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. }) => {
+                None
+            }
         })
         .collect();
     assert_eq!(
@@ -799,8 +828,10 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
     );
     let fired = first[0];
     let rearmed = d
-        .zone()
-        .noise_deadline_at(fired)
+        .carrier
+        .as_ref()
+        .expect("a carrier")
+        .deadline_at(fired)
         .expect("fired channel still scheduled");
     assert!(
         rearmed > late,
@@ -813,8 +844,10 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .poll(late, &mut rng)
         .into_iter()
         .filter_map(|e| match e {
-            Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
-            Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. } => None,
+            Step::NoiseSend { channel, .. } | Step::NoiseUnbind { channel } => Some(channel),
+            Step::Zone(Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. }) => {
+                None
+            }
         })
         .collect();
     assert_eq!(second.len(), 1, "the remaining overdue channel fires next");
@@ -966,9 +999,9 @@ const WINDOW: usize = 8;
 const REAL_BYTE: u8 = 0xAA;
 
 /// A carrier zone over four encrypted clearnet sessions, both slots bound.
-fn carrier_driver(seed: u64) -> (Driver, SplitMix64) {
+fn carrier_driver(seed: u64) -> (Pair, SplitMix64) {
     let mut rng = SplitMix64::new(seed);
-    let mut d = Driver::new(
+    let d = Driver::new(
         Relay::new(
             DandelionParams::inherited(),
             2,
@@ -980,6 +1013,7 @@ fn carrier_driver(seed: u64) -> (Driver, SplitMix64) {
         )
         .unwrap(),
     );
+    let mut d = Pair::new(d, &mut rng);
     for byte in 1..=4 {
         d.zone_mut().on_session_established(
             id(byte),
@@ -998,7 +1032,7 @@ type Sends = Vec<(usize, ConnectionId, Starts, bool)>;
 /// Drive the zone and the queue together, as the actor does, for `polls`
 /// wakes, recording every carrier send.
 fn drive(
-    d: &mut Driver,
+    d: &mut Pair,
     queues: &mut crate::NoiseQueues,
     rng: &mut SplitMix64,
     polls: usize,
@@ -1007,7 +1041,7 @@ fn drive(
     for _ in 0..polls {
         let wake = d.next_wake();
         for e in d.poll(wake, rng) {
-            if let Effect::NoiseSend {
+            if let Step::NoiseSend {
                 channel,
                 peer,
                 starts,

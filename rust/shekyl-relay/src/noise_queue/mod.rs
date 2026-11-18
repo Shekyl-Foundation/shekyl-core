@@ -468,7 +468,7 @@ impl NoiseQueues {
     /// `None` means *no such channel*, a caller bug. It never means "nothing to
     /// send": a bound noise channel always sends, which is what constant-rate
     /// cover is. An unbound slot emits nothing, but that is the scheduler's
-    /// call — it yields `Effect::NoiseUnbind` rather than asking here.
+    /// call — it yields `NoiseDue::Unbind` rather than asking here.
     ///
     /// **CV-1: a rebind discards the in-flight remainder.** If `peer` differs
     /// from the binding the run started under, the offset is dropped and the

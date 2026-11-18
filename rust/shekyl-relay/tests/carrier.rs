@@ -453,3 +453,65 @@ fn a_failed_stem_is_not_recorded_and_falls_back_to_fluff() {
     assert_eq!(rig.pool.shown(), vec![id_of(&blob(2))]);
     drop(sender);
 }
+
+/// **The carrier keeps its cadence while the relay owner is blocked**
+/// (`CVR-R6`; Rick, 2026-11-18).
+///
+/// On 2026-11-05 the relay owner blocked behind the pool's commit and the
+/// carrier, which wrote its windows from that owner's turn, went silent on
+/// both channels for 28.3 s and 32.3 s. The carrier now runs in its own
+/// task: here a carried stem's verdict makes the owner ask the pool
+/// `holds`, the pool blocks it, and for a minute of clock the owner records
+/// nothing — while windows keep reaching both stem peers at the cadence.
+///
+/// What edit reds this: write the carrier's windows from the owner's turn
+/// again (no window reaches either wire while the owner is blocked).
+#[test]
+fn the_carrier_keeps_its_cadence_while_the_relay_owner_is_blocked() {
+    use shekyl_relay_privacy::params::carrier::WINDOW_BYTES;
+
+    let rig = carrier_rig();
+    let mut first = rig.outbound(1);
+    let mut second = rig.outbound(2);
+    let sender = rig.inbound(1);
+    rig.pool.stall_owner();
+    sender.inject_blocking(new_transactions(vec![blob(9)], false));
+    support::wait_until("the blob was admitted", || rig.pool.admits().len() == 1);
+
+    // The carrier sends the stem; its verdict then blocks the owner.
+    let mut carried = Vec::new();
+    let sent = rig.drive(STEP, 120, || {
+        carried.extend(read_all(&rig, &mut [&mut first, &mut second]));
+        carrying(&carried, &blob(9)) != 0
+    });
+    assert!(sent, "the carrier never sent the stem");
+    thread::sleep(SETTLE);
+    let _ = first.take_bytes() + second.take_bytes();
+
+    // A minute of clock with the owner blocked.
+    let mut bytes = 0;
+    rig.drive(STEP, 60, || {
+        bytes += first.take_bytes() + second.take_bytes();
+        false
+    });
+    bytes += first.take_bytes() + second.take_bytes();
+    assert_eq!(
+        rig.relay.snapshot().stem_in_flight,
+        0,
+        "fixture: the owner was not blocked — it recorded the stem's verdict"
+    );
+    let windows = bytes / WINDOW_BYTES;
+    assert!(
+        windows >= 4,
+        "{windows} window(s) reached the stem peers in a minute with the relay \
+         owner blocked; at a 5 s mean on two channels about 24 are due, and a \
+         carrier that waits on the owner sends none"
+    );
+    assert_eq!(bytes % WINDOW_BYTES, 0, "every window is whole");
+
+    rig.pool.release_owner();
+    support::wait_until("the owner recorded the stem once released", || {
+        rig.relay.snapshot().stem_in_flight == 1
+    });
+    drop(sender);
+}

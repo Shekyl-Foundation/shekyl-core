@@ -168,6 +168,22 @@ impl Wire {
         }
     }
 
+    /// The bytes the session has written so far and not yet read, taken
+    /// without waiting and fed to the reader: what a watcher of the link
+    /// sees, carrier dummies included, which [`Self::read`] consumes
+    /// silently. Messages they complete stay for [`Self::read`].
+    ///
+    /// # Panics
+    /// When the session wrote a malformed bucket.
+    pub fn take_bytes(&mut self) -> usize {
+        let mut taken = 0;
+        while let Ok(bytes) = self.out.try_recv() {
+            taken += bytes.len();
+            self.reader.feed(&bytes).expect("the session's bytes frame");
+        }
+        taken
+    }
+
     /// `true` once the session's queue closed with nothing more to read.
     pub async fn drained(&mut self) -> bool {
         within("the session's queue to close", self.out.recv())

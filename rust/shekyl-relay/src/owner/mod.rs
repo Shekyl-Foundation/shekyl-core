@@ -30,6 +30,7 @@
 //! [`ConnectionId`]: crate::graph::ConnectionId
 
 mod actor;
+mod carrier;
 mod pool;
 mod port;
 mod rng;
