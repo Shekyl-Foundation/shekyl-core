@@ -3638,6 +3638,17 @@ mod tests {
                 WalletRpcErrorCode::WalletFileIoFailed,
             ),
             (
+                // Outside a send, a file another program held past the
+                // replace's wait stays the file-I/O code; its `Display`
+                // names both paths, which must stay in the log.
+                WalletFileError::HeldOpen(shekyl_engine_file::HeldOpen {
+                    held: path(),
+                    live: path(),
+                    or_unwritable: false,
+                }),
+                WalletRpcErrorCode::WalletFileIoFailed,
+            ),
+            (
                 WalletFileError::Envelope(WalletEnvelopeError::InvalidPasswordOrCorrupt),
                 WalletRpcErrorCode::InvalidPassword,
             ),
