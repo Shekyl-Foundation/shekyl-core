@@ -114,7 +114,7 @@ use std::io;
 use std::path::Path;
 
 use shekyl_os_account::private_file::{
-    self, staged_path, Access, CommitError, Replace, StagedWrite,
+    self, staged_path, Access, CommitError, Replace, Sharing, StagedWrite,
 };
 
 use crate::error::WalletFileError;
@@ -232,7 +232,8 @@ pub(crate) fn atomic_write_file(
     target: &Path,
     bytes: &[u8],
 ) -> Result<Durability, WalletFileError> {
-    atomic_write_file_with(target, bytes, |_| Ok(())).map(|((), durability)| durability)
+    write_through_staged(target, bytes, Sharing::Read, |_| Ok(()))
+        .map(|((), durability)| durability)
 }
 
 /// [`atomic_write_file`] with a hook that runs after the staged file is
@@ -244,6 +245,11 @@ pub(crate) fn atomic_write_file(
 /// The one caller is password rotation, which locks the staged file here
 /// so the keys-file lock follows the inode the path is about to name.
 ///
+/// The staged file is created with [`Sharing::ReadWrite`]: the lock is
+/// taken through a second handle the hook opens for reading and writing,
+/// which the creating handle's default, read sharing, refuses on Windows.
+/// [`atomic_write_file`], which has no hook, keeps the default.
+///
 /// # Errors
 ///
 /// Exactly [`atomic_write_file`]'s, and the hook's own. A hook or rename
@@ -252,6 +258,16 @@ pub(crate) fn atomic_write_file(
 pub(crate) fn atomic_write_file_with<T>(
     target: &Path,
     bytes: &[u8],
+    before_persist: impl FnOnce(&Path) -> Result<T, WalletFileError>,
+) -> Result<(T, Durability), WalletFileError> {
+    write_through_staged(target, bytes, Sharing::ReadWrite, before_persist)
+}
+
+/// The steps in the module docs, the staged file shared as `sharing` says.
+fn write_through_staged<T>(
+    target: &Path,
+    bytes: &[u8],
+    sharing: Sharing,
     before_persist: impl FnOnce(&Path) -> Result<T, WalletFileError>,
 ) -> Result<(T, Durability), WalletFileError> {
     if target.parent().is_none() {
@@ -263,7 +279,7 @@ pub(crate) fn atomic_write_file_with<T>(
             ),
         )));
     }
-    let staged = StagedWrite::<Replace>::create(target, bytes, Access::Private)
+    let staged = StagedWrite::<Replace>::create_with(target, bytes, Access::Private, sharing)
         .map_err(|error| WalletFileError::Io(io::Error::from(error)))?;
 
     // The staged file is complete and durable; the caller may now attach

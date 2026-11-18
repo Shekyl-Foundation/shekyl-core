@@ -123,6 +123,27 @@ pub enum Access {
     Default,
 }
 
+/// What another program may do with a staged file while this process
+/// holds it, between its create and its commit. Windows alone enforces it,
+/// on the creating handle; on Unix nothing does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Sharing {
+    /// Read it, and nothing else: the default, every staged file but one.
+    /// Delete is not shared because the creating handle holds delete
+    /// access to rename the file, and write is not shared because no other
+    /// writer has any business in a file this process is about to rename
+    /// into place (Rick, 2026-11-18).
+    #[default]
+    Read,
+    /// Read and write it. Only the wallet's keys file during password
+    /// rotation (`shekyl-engine-file`'s `atomic_write_file_with`): its hook
+    /// locks the staged file through a second handle, opened for reading
+    /// and writing, before the rename, so the keys-file lock follows the
+    /// file the path is about to name. Read sharing alone refuses that
+    /// open. Delete is still not shared.
+    ReadWrite,
+}
+
 /// What [`replace`] did.
 #[derive(Debug)]
 pub enum Replaced {
@@ -542,14 +563,36 @@ impl<K: Kind> StagedWrite<K> {
     /// staged file past [`REPLACE_WAIT`]; [`CommitError::Io`] when it could
     /// not be removed, or the new one created or written.
     pub fn create(live: &Path, bytes: &[u8], access: Access) -> Result<Self, CommitError> {
+        Self::create_with(live, bytes, access, Sharing::Read)
+    }
+
+    /// [`Self::create`], the staged file shared with other programs as
+    /// `sharing` says until the commit. Every caller but the wallet's
+    /// password rotation uses [`Self::create`], which shares read only
+    /// ([`Sharing`]).
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::create`]'s.
+    pub fn create_with(
+        live: &Path,
+        bytes: &[u8],
+        access: Access,
+        sharing: Sharing,
+    ) -> Result<Self, CommitError> {
         let deadline = Instant::now() + REPLACE_WAIT;
         let staged = staged_path(live);
         remove_leftover(&staged, live, deadline)?;
         #[cfg(unix)]
-        write_new(&staged, bytes, access)
-            .map_err(|error| CommitError::Io(staged.clone(), error))?;
+        {
+            // Unix has no sharing modes: any process this account runs may
+            // open the staged file, as it may any of this account's files.
+            let _: Sharing = sharing;
+            write_new(&staged, bytes, access)
+                .map_err(|error| CommitError::Io(staged.clone(), error))?;
+        }
         #[cfg(windows)]
-        let handle = write_staged(&staged, bytes, access)
+        let handle = write_staged(&staged, bytes, access, sharing)
             .map_err(|error| CommitError::Io(staged.clone(), error))?;
         Ok(Self {
             staged,
@@ -720,14 +763,16 @@ fn durability_of(durability: shekyl_win_sec::replace::Durability) -> Durability 
 }
 
 /// Create the staged file `path` through the write-through creating handle
-/// with `access`'s descriptor, write `bytes` through it and flush them.
+/// with `access`'s descriptor and `sharing`, write `bytes` through it and
+/// flush them.
 #[cfg(windows)]
 fn write_staged(
     path: &Path,
     bytes: &[u8],
     access: Access,
+    sharing: Sharing,
 ) -> std::io::Result<shekyl_win_sec::replace::Staged> {
-    use shekyl_win_sec::replace::StagedDescriptor;
+    use shekyl_win_sec::replace::{StagedDescriptor, StagedSharing};
     let descriptor = match access {
         // The owner-only, no-read-up descriptor a key file requires
         // (RT-O34), set in the creating call.
@@ -735,7 +780,11 @@ fn write_staged(
         Access::Console => StagedDescriptor::ConsoleFile,
         Access::WorldReadable | Access::Private | Access::Default => StagedDescriptor::Inherited,
     };
-    let staged = shekyl_win_sec::replace::create_staged(path, descriptor)?;
+    let sharing = match sharing {
+        Sharing::Read => StagedSharing::Read,
+        Sharing::ReadWrite => StagedSharing::ReadWrite,
+    };
+    let staged = shekyl_win_sec::replace::create_staged_with(path, descriptor, sharing)?;
     let mut file = staged.file();
     file.write_all(bytes)?;
     staged.sync()?;
@@ -1308,6 +1357,65 @@ mod wait_tests {
         let began = Instant::now();
         staged.commit().unwrap();
         assert!(began.elapsed() < REPLACE_WAIT / 2, "{:?}", began.elapsed());
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
+    }
+
+    /// A daemon's staged file ([`StagedWrite::create`]'s default, read
+    /// sharing) refuses a second writer, whatever that writer shares, with a
+    /// sharing violation, while a reader still opens it. Red edit: share
+    /// write by default in `shekyl_win_sec::replace::create_staged`, and the
+    /// writer that shares everything opens it.
+    #[test]
+    fn a_second_writer_cannot_open_a_daemon_staged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("record");
+        let staged = StagedWrite::<Replace>::create(&live, b"new", Access::WorldReadable).unwrap();
+        for share in [
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_SHARE_READ,
+            0,
+        ] {
+            let writer = std::fs::OpenOptions::new()
+                .write(true)
+                .share_mode(share)
+                .open(staged_path(&live))
+                .unwrap_err();
+            assert!(
+                shekyl_win_sec::replace::is_sharing_violation(&writer),
+                "share {share:#x}: {writer}"
+            );
+        }
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(staged_path(&live))
+            .expect("a reader that shares everything opens the staged file");
+        drop(reader);
+        staged.commit().unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
+    }
+
+    /// With [`Sharing::ReadWrite`] a writer that shares read, write and
+    /// delete opens the staged file, as the wallet's password rotation does
+    /// to lock it, and the commit renames the file under that open handle.
+    /// Red edit: ignore `sharing` in `write_staged`, and the open is a
+    /// sharing violation.
+    #[test]
+    fn write_sharing_lets_the_rotation_lock_open_the_staged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("record");
+        let staged =
+            StagedWrite::<Replace>::create_with(&live, b"new", Access::Private, Sharing::ReadWrite)
+                .unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(staged_path(&live))
+            .expect("write sharing lets the rotation's lock open the staged file");
+        staged.commit().unwrap();
+        drop(lock);
         assert_eq!(std::fs::read(&live).unwrap(), b"new");
     }
 
