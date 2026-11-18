@@ -31,19 +31,30 @@
 //!   each is written at every start that uses it), and a failed commit
 //!   removes its own.
 //!
-//! **The wait.** On Windows a reader that holds the staged file open
-//! without delete sharing (an antivirus scanner, a search indexer) fails
-//! the rename's open with a sharing violation. [`StagedWrite::commit`]
-//! retries that open, and nothing else, until [`REPLACE_WAIT`]; past it the
-//! commit is [`CommitError::HeldOpen`]. No caller retries anything.
+//! **The creating handle on Windows** (Rick, 2026-11-18). A staged file
+//! this process writes is created write-through, with its descriptor, and
+//! held by that one handle until the commit has renamed it, flushed it and
+//! closed it (`shekyl_win_sec::replace::Staged`). Another program that
+//! opens it without delete sharing (an antivirus scanner, a search indexer)
+//! fails its own open while the handle is held, so the commit never waits
+//! on the staged file. It waits, until [`REPLACE_WAIT`], only on a reader
+//! that holds the live file, and on a leftover staged file being removed;
+//! a journal a previous process left ([`StagedWrite::resume`]) is reopened
+//! for its rename, and that open waits too. Past the wait the commit is
+//! [`CommitError::HeldOpen`]. No caller retries anything.
 //!
 //! **Durable at each step.** A new file's bytes are synced, and then its
-//! directory, before [`write_new`] returns; a rename is followed by a sync
-//! of its directory before [`StagedWrite::commit`] returns. A store
-//! transaction that names a journal (the console key's) therefore never
-//! outlives the journal across a power loss. Unix syncs the directory;
-//! Windows has no directory handle to sync, and the file's own flush is
-//! the platform's whole durability step ([`sync_dir`]).
+//! directory, before [`write_new`] returns. On Unix a rename is followed by
+//! a sync of its directory before [`StagedWrite::commit`] returns, and a
+//! commit that returns is [`Durability::Durable`]. Windows has no directory
+//! to sync ([`sync_dir`]): the rename is a request on the write-through
+//! handle, which NTFS documents flushing with it, and the commit reports
+//! [`Durability::Durable`] only on NTFS, on the POSIX rename, with the flush
+//! after the rename returned; any other file system, and a resumed journal
+//! (reopened, not write-through), is [`Durability::Unconfirmed`] with its
+//! reason (`shekyl_win_sec::replace`'s module docs cite the documentation).
+//! A store transaction that names a journal (the console key's) therefore
+//! never outlives the journal across a power loss.
 //!
 //! **The mode is set, not requested.** On Unix the creating call's mode is
 //! filtered by the umask, so the file's mode is then set to exactly its
@@ -62,8 +73,8 @@ use zeroize::Zeroizing;
 /// Appended to a destination's file name to name its staged file.
 const JOURNAL_SUFFIX: &str = ".new";
 
-/// How long [`StagedWrite::commit`] waits for another program to let go of
-/// the staged file, 2 s. That a wait exists is Rick's ruling (2026-11-18);
+/// How long a replace waits for another program to let go of a file it
+/// needs (a leftover staged file, a resumed journal, the live file), 2 s. That a wait exists is Rick's ruling (2026-11-18);
 /// its length is this lane's **Assumption**. Basis: a reader
 /// that opens a fresh file without delete sharing (Defender's real-time
 /// scan, the Windows Search indexer, a backup agent) holds a file of a few
@@ -113,13 +124,80 @@ pub enum Access {
 }
 
 /// What [`replace`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Replaced {
     /// The live file already held exactly these bytes and passed its
     /// reader's access check: nothing was staged, nothing renamed.
     Unchanged,
-    /// The bytes were staged and renamed into place.
-    Written,
+    /// The bytes were staged and renamed into place, with this durability.
+    Written(Durability),
+}
+
+/// Whether a commit's rename is known to survive a power loss.
+#[derive(Debug)]
+pub enum Durability {
+    /// On Unix the rename and its directory's sync; on Windows NTFS, the
+    /// POSIX rename through the write-through creating handle, and the
+    /// flush after it (module docs).
+    Durable,
+    /// The rename landed; that it survives a power loss is not confirmed.
+    Unconfirmed(Unconfirmed),
+}
+
+/// Why a rename that landed is not reported durable. Windows alone gives
+/// these: on Unix a failed directory sync is [`CommitError::Unsynced`].
+#[derive(Debug)]
+pub enum Unconfirmed {
+    /// The volume's file system is not NTFS: this is its name (`FAT32`,
+    /// `exFAT`, `ReFS`, ...).
+    FileSystem(String),
+    /// The volume is NTFS, but it refused the POSIX rename and the classic
+    /// one renamed the file.
+    ClassicRename,
+    /// The flush after the rename failed.
+    Flush(std::io::Error),
+    /// The volume's file system could not be read.
+    FileSystemUnread(std::io::Error),
+    /// A journal a previous process left, renamed through a handle reopened
+    /// on it, which is not write-through.
+    Reopened,
+}
+
+impl Unconfirmed {
+    /// The volume's file system, when that is the reason.
+    #[must_use]
+    pub fn file_system(&self) -> Option<&str> {
+        match self {
+            Self::FileSystem(name) => Some(name),
+            Self::ClassicRename | Self::Flush(_) | Self::FileSystemUnread(_) | Self::Reopened => {
+                None
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Unconfirmed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FileSystem(name) => write!(
+                f,
+                "the volume is {name}, where Windows does not confirm that a replaced file \
+                 survives a power loss; only NTFS does"
+            ),
+            Self::ClassicRename => f.write_str(
+                "the volume refused the rename that keeps a file's readers working, so the \
+                 replace was not confirmed",
+            ),
+            Self::Flush(error) => write!(f, "the flush after the rename failed: {error}"),
+            Self::FileSystemUnread(error) => {
+                write!(f, "the volume's file system could not be read: {error}")
+            }
+            Self::Reopened => f.write_str(
+                "a file left by an earlier start was renamed through a handle that does not \
+                 write through",
+            ),
+        }
+    }
 }
 
 /// Why a private file cannot be used.
@@ -130,7 +208,8 @@ pub enum PrivateFileError {
     /// Someone other than this account can read it, it is not this
     /// account's, or it is a link.
     Exposed(PathBuf, String),
-    /// Another program held the staged file open past [`REPLACE_WAIT`].
+    /// Another program held a file the replace needs open past
+    /// [`REPLACE_WAIT`].
     HeldOpen(HeldOpen),
 }
 
@@ -361,8 +440,9 @@ impl Kind for Replace {
     const REMOVED_ON_FAILURE: bool = true;
 }
 
-/// Another program held a staged file open past [`REPLACE_WAIT`], so it
-/// could not be renamed over its destination.
+/// Another program held a staged file or the live one open past
+/// [`REPLACE_WAIT`], so the staged file could not be renamed over its
+/// destination.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldOpen {
     /// The file another program held: the staged file, or the live one.
@@ -396,7 +476,8 @@ impl std::error::Error for HeldOpen {}
 /// Why [`StagedWrite::commit`] failed.
 #[derive(Debug)]
 pub enum CommitError {
-    /// Another program held the staged file open past [`REPLACE_WAIT`].
+    /// Another program held a file the replace needs (a leftover or resumed
+    /// staged file, or the live one) open past [`REPLACE_WAIT`].
     HeldOpen(HeldOpen),
     /// A step failed, at this path.
     Io(PathBuf, std::io::Error),
@@ -441,6 +522,10 @@ pub struct StagedWrite<K: Kind> {
     /// The one deadline the leftover's removal, the source's open and the
     /// rename share: [`REPLACE_WAIT`] from the start of the replace.
     deadline: Instant,
+    /// The creating handle, write-through, held until the commit closes it;
+    /// `None` for a journal a previous process left ([`Self::resume`]).
+    #[cfg(windows)]
+    handle: Option<shekyl_win_sec::replace::Staged>,
     kind: PhantomData<K>,
 }
 
@@ -460,29 +545,51 @@ impl<K: Kind> StagedWrite<K> {
         let deadline = Instant::now() + REPLACE_WAIT;
         let staged = staged_path(live);
         remove_leftover(&staged, live, deadline)?;
+        #[cfg(unix)]
         write_new(&staged, bytes, access)
+            .map_err(|error| CommitError::Io(staged.clone(), error))?;
+        #[cfg(windows)]
+        let handle = write_staged(&staged, bytes, access)
             .map_err(|error| CommitError::Io(staged.clone(), error))?;
         Ok(Self {
             staged,
             live: live.to_path_buf(),
             deadline,
+            #[cfg(windows)]
+            handle: Some(handle),
             kind: PhantomData,
         })
     }
 
     /// Rename the staged file over the destination, and make the rename
-    /// durable. The one place a file is replaced: on Windows a reader that
-    /// holds the staged file or the live one without delete sharing is
-    /// waited for until the replace's one deadline, and nothing else is
-    /// retried.
+    /// durable where the platform can say so. The one place a file is
+    /// replaced: on Windows a reader that holds the live file without
+    /// delete sharing is waited for until the replace's one deadline (and,
+    /// for a resumed journal, one that holds the journal), and nothing else
+    /// is retried.
     ///
     /// # Errors
     ///
     /// [`CommitError::HeldOpen`] past the wait; [`CommitError::Io`] when the
-    /// rename or the directory's sync failed. A [`Journal`] is left for a
-    /// later start; a [`Replace`]'s staged file is removed, and a removal
-    /// that fails too is left to the next start's [`StagedWrite::create`].
-    pub fn commit(self) -> Result<(), CommitError> {
+    /// rename failed; [`CommitError::Unsynced`] when the directory's sync
+    /// after it failed (Unix). A [`Journal`] is left for a later start; a
+    /// [`Replace`]'s staged file is removed, and a removal that fails too is
+    /// left to the next start's [`StagedWrite::create`]. What happens after
+    /// a Windows rename lands is never an error: it is the [`Durability`].
+    pub fn commit(self) -> Result<Durability, CommitError> {
+        #[cfg(windows)]
+        if let Some(handle) = self.handle {
+            use shekyl_win_sec::replace::OnFailure;
+            let on_failure = if K::REMOVED_ON_FAILURE {
+                OnFailure::Remove
+            } else {
+                OnFailure::Keep
+            };
+            return handle
+                .commit(&self.live, self.deadline, on_failure)
+                .map(durability_of)
+                .map_err(|error| windows_fault(error, &self.staged, &self.live));
+        }
         if let Err(error) = rename_over(&self.staged, &self.live, self.deadline) {
             if K::REMOVED_ON_FAILURE {
                 // The reader that held the rename may hold the removal too;
@@ -491,8 +598,31 @@ impl<K: Kind> StagedWrite<K> {
             }
             return Err(error);
         }
-        sync_dir(parent(&self.live))
-            .map_err(|error| CommitError::Unsynced(self.live.clone(), error))
+        #[cfg(windows)]
+        {
+            Ok(Durability::Unconfirmed(Unconfirmed::Reopened))
+        }
+        #[cfg(unix)]
+        {
+            sync_dir(parent(&self.live))
+                .map(|()| Durability::Durable)
+                .map_err(|error| CommitError::Unsynced(self.live.clone(), error))
+        }
+    }
+
+    /// Remove the staged file without renaming it; the destination is left
+    /// as it is. On Windows a staged file this process created is deleted
+    /// through its creating handle.
+    ///
+    /// # Errors
+    ///
+    /// The staged file could not be removed.
+    pub fn discard(self) -> std::io::Result<()> {
+        #[cfg(windows)]
+        if let Some(handle) = self.handle {
+            return handle.discard();
+        }
+        remove_if_present(&self.staged)
     }
 }
 
@@ -500,7 +630,10 @@ impl StagedWrite<Journal> {
     /// Adopt the journal a previous process left beside `live`.
     ///
     /// The bytes are not rewritten. [`Self::commit`] renames the journal
-    /// over `live` and syncs the directory; [`Self::discard`] removes it.
+    /// over `live` and syncs the directory (on Windows through a handle
+    /// reopened on it, reported [`Unconfirmed::Reopened`]); [`Self::discard`]
+    /// removes it, which a start does to a journal its store does not name.
+    /// Never a failure's response: a failed commit keeps its journal.
     /// A path that is missing, or that is not a file, is an error: a
     /// symbolic link is not renamed over the key.
     ///
@@ -520,19 +653,10 @@ impl StagedWrite<Journal> {
             staged,
             live: live.to_path_buf(),
             deadline: Instant::now() + REPLACE_WAIT,
+            #[cfg(windows)]
+            handle: None,
             kind: PhantomData,
         })
-    }
-
-    /// Remove a journal a start found its store does not name. The
-    /// destination is left as it is. Never a failure's response: a failed
-    /// commit keeps its journal.
-    ///
-    /// # Errors
-    ///
-    /// The journal could not be removed.
-    pub fn discard(self) -> std::io::Result<()> {
-        remove_if_present(&self.staged)
     }
 }
 
@@ -571,13 +695,51 @@ fn rename_over(staged: &Path, live: &Path, _deadline: Instant) -> Result<(), Com
     std::fs::rename(staged, live).map_err(|error| CommitError::Io(live.to_path_buf(), error))
 }
 
-/// Rename `staged` over `live` through the one Windows file replace
-/// ([`shekyl_win_sec::replace::replace`]), which waits until `deadline`
-/// for a reader that holds either file.
+/// Rename a resumed journal `staged` over `live` through the one Windows
+/// file replace's reopening path ([`shekyl_win_sec::replace::replace`]),
+/// which waits until `deadline` for a reader that holds either file.
 #[cfg(windows)]
 fn rename_over(staged: &Path, live: &Path, deadline: Instant) -> Result<(), CommitError> {
     shekyl_win_sec::replace::replace(staged, live, deadline)
         .map_err(|error| windows_fault(error, staged, live))
+}
+
+/// A Windows commit's durability, in this module's terms.
+#[cfg(windows)]
+fn durability_of(durability: shekyl_win_sec::replace::Durability) -> Durability {
+    use shekyl_win_sec::replace::{Durability as Win, Unconfirmed as Why};
+    match durability {
+        Win::Durable => Durability::Durable,
+        Win::Unconfirmed(why) => Durability::Unconfirmed(match why {
+            Why::FileSystem(name) => Unconfirmed::FileSystem(name),
+            Why::ClassicRename => Unconfirmed::ClassicRename,
+            Why::Flush(error) => Unconfirmed::Flush(error),
+            Why::FileSystemUnread(error) => Unconfirmed::FileSystemUnread(error),
+        }),
+    }
+}
+
+/// Create the staged file `path` through the write-through creating handle
+/// with `access`'s descriptor, write `bytes` through it and flush them.
+#[cfg(windows)]
+fn write_staged(
+    path: &Path,
+    bytes: &[u8],
+    access: Access,
+) -> std::io::Result<shekyl_win_sec::replace::Staged> {
+    use shekyl_win_sec::replace::StagedDescriptor;
+    let descriptor = match access {
+        // The owner-only, no-read-up descriptor a key file requires
+        // (RT-O34), set in the creating call.
+        Access::OwnerOnly => StagedDescriptor::RendezvousFile,
+        Access::Console => StagedDescriptor::ConsoleFile,
+        Access::WorldReadable | Access::Private | Access::Default => StagedDescriptor::Inherited,
+    };
+    let staged = shekyl_win_sec::replace::create_staged(path, descriptor)?;
+    let mut file = staged.file();
+    file.write_all(bytes)?;
+    staged.sync()?;
+    Ok(staged)
 }
 
 /// The commit's error for a Windows replace's, naming the file held.
@@ -728,6 +890,7 @@ fn holds_access(path: &Path, access: Access) -> bool {
 ///
 /// An unchanged file still has its directory synced, so a skip never
 /// leaves an earlier rename of the same bytes unsynced (Rick, 2026-11-18).
+/// A written one reports its commit's [`Durability`].
 ///
 /// **Not the wallet's path** (Rick, 2026-11-18). The wallet's files are
 /// written through [`StagedWrite`] directly, never skipped: its save
@@ -748,8 +911,8 @@ pub fn replace(live: &Path, bytes: &[u8], access: Access) -> Result<Replaced, Co
         sync_dir(parent(live)).map_err(|error| CommitError::Unsynced(live.to_path_buf(), error))?;
         return Ok(Replaced::Unchanged);
     }
-    StagedWrite::<Replace>::create(live, bytes, access)?.commit()?;
-    Ok(Replaced::Written)
+    let durability = StagedWrite::<Replace>::create(live, bytes, access)?.commit()?;
+    Ok(Replaced::Written(durability))
 }
 
 #[cfg(all(test, unix))]
@@ -847,23 +1010,23 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("rpc-channel.bundle");
-        assert_eq!(
+        assert!(matches!(
             replace(&live, b"bundle", Access::Console).unwrap(),
-            Replaced::Written
-        );
+            Replaced::Written(Durability::Durable)
+        ));
         let before = std::fs::metadata(&live).unwrap();
-        assert_eq!(
+        assert!(matches!(
             replace(&live, b"bundle", Access::Console).unwrap(),
             Replaced::Unchanged
-        );
+        ));
         let after = std::fs::metadata(&live).unwrap();
         assert_eq!(before.ino(), after.ino(), "the file was not replaced");
         assert_eq!(before.modified().unwrap(), after.modified().unwrap());
         assert!(!staged_path(&live).exists());
-        assert_eq!(
+        assert!(matches!(
             replace(&live, b"changed", Access::Console).unwrap(),
-            Replaced::Written
-        );
+            Replaced::Written(_)
+        ));
         assert_eq!(std::fs::read(&live).unwrap(), b"changed");
     }
 
@@ -876,10 +1039,10 @@ mod tests {
         let live = dir.path().join("key");
         replace(&live, b"secret", Access::OwnerOnly).unwrap();
         std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o640)).unwrap();
-        assert_eq!(
+        assert!(matches!(
             replace(&live, b"secret", Access::OwnerOnly).unwrap(),
-            Replaced::Written
-        );
+            Replaced::Written(_)
+        ));
         let mode = std::fs::metadata(&live).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, OWNER_ONLY_MODE);
     }
@@ -994,6 +1157,26 @@ mod crash_tests {
         );
     }
 
+    /// A journal this process created whose commit fails is kept, on every
+    /// platform: on Windows the creating handle's failure path leaves it.
+    /// Red edit: have the Windows commit always remove on failure, and the
+    /// console key a store transaction already names is lost.
+    #[test]
+    fn a_created_journal_survives_a_failed_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked");
+        unreplaceable(&blocked);
+        let failed = StagedWrite::<Journal>::create(&blocked, b"named", Access::Default)
+            .unwrap()
+            .commit();
+        assert!(failed.is_err());
+        assert_eq!(
+            std::fs::read(staged_path(&blocked)).unwrap(),
+            b"named",
+            "a failed commit keeps its journal"
+        );
+    }
+
     /// A replace left by a crash is removed by the next start's write and
     /// never becomes the live file; a commit that fails removes its own.
     /// Red edit: make `Replace::REMOVED_ON_FAILURE` false, and a failed
@@ -1057,47 +1240,75 @@ mod wait_tests {
         })
     }
 
-    /// A reader that lets go within the wait does not fail the commit, and
-    /// leaves no staged file. Red edit: drop the retry, and the commit is a
-    /// sharing violation (the Windows rendezvous's os error 32).
+    /// A journal a previous process left is renamed through a reopened
+    /// handle, and a reader of it that lets go within the wait does not
+    /// fail the commit; the commit reports the rename unconfirmed. Red edit:
+    /// drop the source wait in `shekyl_win_sec::replace::replace`, and the
+    /// commit is a sharing violation (the Windows rendezvous's os error 32).
     #[test]
-    fn a_reader_shorter_than_the_wait_is_waited_for() {
+    fn a_reader_of_a_resumed_journal_shorter_than_the_wait_is_waited_for() {
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("record");
         std::fs::write(&live, b"old").unwrap();
-        let staged = StagedWrite::<Replace>::create(&live, b"new", Access::WorldReadable).unwrap();
+        std::fs::write(staged_path(&live), b"new").unwrap();
         let reader = hold(&staged_path(&live), REPLACE_WAIT / 10);
-        staged.commit().expect("the reader let go within the wait");
+        let durability = StagedWrite::<Journal>::resume(&live)
+            .unwrap()
+            .commit()
+            .expect("the reader let go within the wait");
         reader.join().unwrap();
+        assert!(
+            matches!(durability, Durability::Unconfirmed(Unconfirmed::Reopened)),
+            "{durability:?}"
+        );
         assert_eq!(std::fs::read(&live).unwrap(), b"new");
         assert!(!staged_path(&live).exists());
     }
 
-    /// A reader that outstays the wait is `HeldOpen`, after the wait and
-    /// not before; the next start's write replaces what was left. Red edit: return the sharing
-    /// violation as `Io`, and the start's refusal blames the directory.
+    /// A reader of a resumed journal that outstays the wait is `HeldOpen`,
+    /// after the wait and not before, and the journal is kept for the next
+    /// start. Red edit: return the sharing violation as `Io`, and the
+    /// start's refusal blames the directory.
     #[test]
-    fn a_reader_past_the_wait_is_held_open() {
+    fn a_reader_of_a_resumed_journal_past_the_wait_is_held_open() {
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("record");
-        let staged = StagedWrite::<Replace>::create(&live, b"new", Access::WorldReadable).unwrap();
+        std::fs::write(staged_path(&live), b"new").unwrap();
         let reader = hold(&staged_path(&live), REPLACE_WAIT * 2);
         let began = Instant::now();
-        let failed = staged.commit();
+        let failed = StagedWrite::<Journal>::resume(&live).unwrap().commit();
         assert!(began.elapsed() >= REPLACE_WAIT);
         assert!(
             matches!(&failed, Err(CommitError::HeldOpen(held)) if held.held == staged_path(&live)),
             "{failed:?}"
         );
         reader.join().unwrap();
-        // The removal on failure ran while the reader still held the file,
-        // so the next start's write is what clears it.
-        StagedWrite::<Replace>::create(&live, b"next start", Access::WorldReadable)
-            .unwrap()
-            .commit()
-            .unwrap();
-        assert_eq!(std::fs::read(&live).unwrap(), b"next start");
-        assert!(!staged_path(&live).exists());
+        assert_eq!(std::fs::read(staged_path(&live)).unwrap(), b"new");
+    }
+
+    /// A staged file this process writes is held by its creating handle
+    /// until the commit: a watcher that opens it without delete sharing
+    /// fails its own open, and the commit does not wait. Red edit: close
+    /// the creating handle after the write and rename through a reopened
+    /// one, and the watcher holds the commit until the wait ends.
+    #[test]
+    fn a_watcher_of_a_staged_write_fails_its_own_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("record");
+        let staged = StagedWrite::<Replace>::create(&live, b"new", Access::WorldReadable).unwrap();
+        let watcher = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(staged_path(&live))
+            .unwrap_err();
+        assert!(
+            shekyl_win_sec::replace::is_sharing_violation(&watcher),
+            "{watcher}"
+        );
+        let began = Instant::now();
+        staged.commit().unwrap();
+        assert!(began.elapsed() < REPLACE_WAIT / 2, "{:?}", began.elapsed());
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
     }
 
     /// A reader of the destination does not hold the commit: the rename

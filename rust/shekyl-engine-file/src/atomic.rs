@@ -22,7 +22,9 @@
 //!
 //! 1. **Create the staged file** `<target name>.new` beside the target
 //!    ([`staged_path`]), `O_CREAT | O_EXCL`, mode `0o600` on Unix and the
-//!    directory's inherited ACL on Windows ([`Access::Private`]). A
+//!    directory's inherited ACL on Windows ([`Access::Private`]). On
+//!    Windows it is created write-through and that one handle writes,
+//!    renames and flushes it (`shekyl_win_sec::replace::Staged`). A
 //!    leftover from a crashed write is removed first. "Beside" (same
 //!    parent directory) matters: POSIX `rename(2)` is only guaranteed
 //!    atomic within a filesystem, and in practice within a mount.
@@ -39,16 +41,23 @@
 //!    through the staged file's handle with `FileRenameInfoEx`, replace-if-
 //!    exists and POSIX semantics, so a target another handle holds open or
 //!    under a byte-range lock (the keys file during password rotation) is
-//!    superseded rather than refused; a reader that holds either file
+//!    superseded rather than refused; a reader that holds the target
 //!    without delete sharing (a scanner) is waited for up to
-//!    `REPLACE_WAIT`; FAT32 and exFAT take the classic rename, where
-//!    replacing a held target fails.
-//! 5. **`fsync(parent_dir)`**. Without this, the rename is not
-//!    guaranteed durable across a crash on ext4/xfs/btrfs even though
-//!    the file data is; the dirent entry pointing `target` at the new
-//!    inode may still be buffered in the dcache. This step runs *after*
-//!    the rename has committed, so its failure does not un-apply the
-//!    write — it is reported as [`Durability::Unconfirmed`], not an error.
+//!    `REPLACE_WAIT`, and one that tries to open the staged file without
+//!    delete sharing fails its own open; FAT32 and exFAT take the classic
+//!    rename, where replacing a held target fails.
+//! 5. **Confirm the rename.** On Unix, `fsync(parent_dir)`. Without this,
+//!    the rename is not guaranteed durable across a crash on ext4/xfs/btrfs
+//!    even though the file data is; the dirent entry pointing `target` at
+//!    the new inode may still be buffered in the dcache. On Windows there
+//!    is no directory to sync: the rename was a request on the
+//!    write-through handle, which NTFS documents flushing with it, and the
+//!    handle is flushed once more after it. This step runs *after* the
+//!    rename has committed, so its failure does not un-apply the write — it
+//!    is reported as [`Durability::Unconfirmed`] with its reason
+//!    ([`Unconfirmed`]), not an error. On Windows every file system but
+//!    NTFS is unconfirmed: a wallet there saves, and refuses to broadcast
+//!    (Rick, 2026-11-18).
 //!
 //! On any failure before the rename lands, **the guarantee is that the
 //! target is byte-unchanged**, returned as `Err`. Removing the staged file
@@ -79,9 +88,10 @@
 //! # Platform notes
 //!
 //! - On POSIX the file and the parent directory are both `fsync`ed. On
-//!   Windows there is no directory-fsync; [`std::fs::File::sync_all`] on
-//!   the file is sufficient per Windows' durability model, and the parent
-//!   sync is a no-op there.
+//!   Windows there is no directory-fsync; what confirms the rename there is
+//!   the write-through creating handle on NTFS, with `FlushFileBuffers`
+//!   after the rename as a second layer Microsoft does not document for
+//!   renames (`shekyl_win_sec::replace`'s module docs).
 //! - `rename(2)` across mount points returns `EXDEV`, which we surface
 //!   unchanged as an `io::Error`. It cannot arise here: the staged file is
 //!   beside the target.
@@ -103,40 +113,103 @@
 use std::io;
 use std::path::Path;
 
-use shekyl_os_account::private_file::{staged_path, Access, CommitError, Replace, StagedWrite};
+use shekyl_os_account::private_file::{
+    self, staged_path, Access, CommitError, Replace, StagedWrite,
+};
 
 use crate::error::WalletFileError;
 
 /// Whether an [`atomic_write_file`] that **applied** its write also confirmed
 /// the write's crash-durability.
 ///
-/// The write's *data* is always fsynced before the rename, so `Unconfirmed`
-/// means only that the post-rename parent-directory fsync — which hardens the
-/// rename itself against an immediate crash — failed. The bytes are on disk
-/// and the rename is visible; only a crash in the narrow window before the
-/// filesystem journals the directory entry could revert the rename (the same
-/// window any program that does not fsync the parent dir already lives with).
+/// The write's *data* is always flushed before the rename, so `Unconfirmed`
+/// means only that the rename itself is not confirmed against an immediate
+/// crash: on Unix the post-rename parent-directory fsync failed; on Windows
+/// the volume is not NTFS, or the confirmation failed otherwise
+/// ([`Unconfirmed`]). The bytes are on disk and the rename is visible.
 ///
 /// The dispatch mint branches on it: only [`Durability::Confirmed`] authorizes
 /// a broadcast (`commit_dispatch`). It is deliberately not an error: the write
 /// is applied, so surfacing it as `Err` would force every caller to unwind an
 /// already-committed write. A caller that does not broadcast treats either
 /// variant as success.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Durability {
-    /// The write is applied and the parent-directory fsync succeeded.
+    /// The write is applied and its rename confirmed durable: the
+    /// parent-directory fsync on Unix; on Windows an NTFS volume, the POSIX
+    /// rename through the write-through handle, and the flush after it.
     Confirmed,
-    /// The write is applied, but the post-rename parent-directory fsync
-    /// failed — durability across an immediate crash is unconfirmed.
-    Unconfirmed,
+    /// The write is applied, but its durability across an immediate crash
+    /// is unconfirmed, for this reason.
+    Unconfirmed(Unconfirmed),
+}
+
+/// Why a wallet write that was applied is not confirmed durable. Its
+/// `Display` is the user's sentence: what happened, and the fix.
+#[derive(Debug)]
+pub enum Unconfirmed {
+    /// The parent directory's sync after the rename failed (Unix).
+    DirectoryNotSynced(io::Error),
+    /// The wallet's volume has this file system, on which Windows does not
+    /// confirm a save survives a power loss: anything but NTFS (`FAT32`,
+    /// `exFAT`, `ReFS`, ...).
+    FileSystem(String),
+    /// The Windows replace could not confirm it otherwise.
+    Replace(private_file::Unconfirmed),
+}
+
+impl Unconfirmed {
+    /// The wallet volume's file system, when that is the reason.
+    #[must_use]
+    pub fn file_system(&self) -> Option<&str> {
+        match self {
+            Self::FileSystem(name) => Some(name),
+            Self::DirectoryNotSynced(_) | Self::Replace(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Unconfirmed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DirectoryNotSynced(error) => write!(
+                f,
+                "the wallet was saved, but its folder could not be synced to disk ({error}), \
+                 so the save may not survive a power cut"
+            ),
+            Self::FileSystem(name) => write!(
+                f,
+                "the wallet is on a {name} volume, where Windows cannot confirm that a save \
+                 survives a power cut; move the wallet to an NTFS volume"
+            ),
+            Self::Replace(why) => write!(
+                f,
+                "the wallet was saved, but Windows could not confirm the save is on disk: {why}"
+            ),
+        }
+    }
+}
+
+impl From<private_file::Durability> for Durability {
+    fn from(durability: private_file::Durability) -> Self {
+        match durability {
+            private_file::Durability::Durable => Self::Confirmed,
+            private_file::Durability::Unconfirmed(private_file::Unconfirmed::FileSystem(name)) => {
+                Self::Unconfirmed(Unconfirmed::FileSystem(name))
+            }
+            private_file::Durability::Unconfirmed(why) => {
+                Self::Unconfirmed(Unconfirmed::Replace(why))
+            }
+        }
+    }
 }
 
 /// Write `bytes` to `target` through the steps in the module docs. Mode is
 /// `0o600` on Unix; the directory's inherited ACL on Windows.
 ///
 /// Returns [`Durability`] once the write is **applied** (the rename has
-/// landed): `Confirmed` when the parent-directory fsync also succeeded,
-/// `Unconfirmed` when it did not. A failure *before* the rename leaves the
+/// landed): `Confirmed` when the rename is confirmed durable,
+/// `Unconfirmed` with its reason when it is not. A failure *before* the rename leaves the
 /// target untouched and returns `Err`.
 ///
 /// # Errors
@@ -144,8 +217,9 @@ pub enum Durability {
 /// - [`WalletFileError::Io`] for a filesystem failure while **producing**
 ///   the staged file: removing a leftover, create, write, or fsync.
 /// - [`WalletFileError::AtomicWriteRename`] specifically for failures
-///   of the rename step, including another program holding the staged
-///   file or the target past the Windows replace's wait. The dedicated
+///   of the rename step, including another program holding the target
+///   past the Windows replace's wait. (A leftover staged file held past
+///   the wait fails the staging, as `Io`.) The dedicated
 ///   variant exists so callers can distinguish "couldn't write the bytes"
 ///   from "wrote the bytes but couldn't swap them in" — the latter means
 ///   the target is untouched, which is sometimes recoverable.
@@ -198,8 +272,9 @@ pub(crate) fn atomic_write_file_with<T>(
         Ok(hooked) => hooked,
         Err(error) => {
             // Dropping a `StagedWrite` leaves its file; this write is not
-            // going to commit, so the file is removed here, best-effort.
-            remove_staged(target);
+            // going to commit, so the file is removed here, best-effort (on
+            // Windows through the creating handle).
+            remove_staged(target, staged);
             return Err(error);
         }
     };
@@ -212,14 +287,17 @@ pub(crate) fn atomic_write_file_with<T>(
     // and a `LockFileEx` byte range does not block deletion), and a removal
     // that fails is left to the next write of the target.
     match staged.commit() {
-        Ok(()) => Ok((hooked, Durability::Confirmed)),
+        Ok(durability) => Ok((hooked, Durability::from(durability))),
         // The rename has already committed the new file into place, and the
         // file data was fsynced before it. The parent-dir fsync only hardens
         // the rename against an immediate crash; if it fails the write is
         // still applied, so this is a completed write with unconfirmed
         // durability — not a failure a caller must unwind an already-applied
         // write around.
-        Err(CommitError::Unsynced(..)) => Ok((hooked, Durability::Unconfirmed)),
+        Err(CommitError::Unsynced(_, error)) => Ok((
+            hooked,
+            Durability::Unconfirmed(Unconfirmed::DirectoryNotSynced(error)),
+        )),
         Err(CommitError::Io(_, error)) => {
             drop(hooked);
             Err(WalletFileError::rename(target.to_path_buf(), error))
@@ -238,13 +316,11 @@ pub(crate) fn atomic_write_file_with<T>(
 /// stranded staged file is clutter rather than corruption — it is a
 /// `<name>.new` sibling, never the wallet itself, and the next write of the
 /// target removes it. Reported so it is not silent.
-fn remove_staged(target: &Path) {
-    let staged = staged_path(target);
-    match std::fs::remove_file(&staged) {
+fn remove_staged(target: &Path, staged: StagedWrite<Replace>) {
+    match staged.discard() {
         Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => tracing::warn!(
-            staged = %staged.display(),
+            staged = %staged_path(target).display(),
             error = %error,
             "could not remove the staged file after a failed write"
         ),
@@ -520,14 +596,57 @@ mod tests {
         assert!(!staged_path(&target).exists());
     }
 
+    /// A save on a FAT volume is applied and unconfirmed, and the refusal
+    /// a broadcast gives for it names the volume's file system and the fix,
+    /// an NTFS volume (Rick, 2026-11-18). Refuses, never passes, when the
+    /// variable is unset. Red edit: report `Confirmed` whatever the file
+    /// system, and the save is confirmed.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs SHEKYL_TEST_FAT_DIR: a directory on a FAT32 volume (a scratch VHD)"]
+    fn a_save_on_fat_is_unconfirmed_and_names_the_file_system() {
+        let Some(dir) = std::env::var_os("SHEKYL_TEST_FAT_DIR") else {
+            panic!("SHEKYL_TEST_FAT_DIR is unset: set it to a directory on a FAT32 volume");
+        };
+        let dir = tempfile::tempdir_in(dir).unwrap();
+        let target = dir.path().join("x.wallet");
+        let durability = atomic_write_file(&target, b"sealed").unwrap();
+        let Durability::Unconfirmed(why) = durability else {
+            panic!("a save on FAT was confirmed: {durability:?}");
+        };
+        let name = why
+            .file_system()
+            .expect("the reason is the volume's file system");
+        assert!(["FAT32", "FAT"].contains(&name), "the volume is {name}");
+        let refusal = why.to_string();
+        assert!(
+            refusal.contains(name) && refusal.contains("NTFS"),
+            "the refusal does not name the file system and the fix: {refusal}"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"sealed");
+    }
+
+    /// The file-system reason's sentence names the file system and the
+    /// fix, on every platform; the other reasons do not send the user to
+    /// NTFS. Red edit: drop the volume's name from the sentence.
+    #[test]
+    fn the_file_system_reason_names_it_and_the_fix() {
+        let fat = Unconfirmed::FileSystem("exFAT".to_owned()).to_string();
+        assert!(fat.contains("exFAT") && fat.contains("NTFS"), "{fat}");
+        let unsynced = Unconfirmed::DirectoryNotSynced(io::Error::other("EIO")).to_string();
+        assert!(!unsynced.contains("NTFS"), "{unsynced}");
+    }
+
     #[test]
     fn writes_to_fresh_target() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("foo.bin");
-        // A normal write on a healthy filesystem confirms durability.
-        assert_eq!(
-            atomic_write_file(&target, b"hello").unwrap(),
-            Durability::Confirmed
+        // A normal write on a healthy filesystem confirms durability (on
+        // Windows, the test directory on NTFS).
+        let durability = atomic_write_file(&target, b"hello").unwrap();
+        assert!(
+            matches!(durability, Durability::Confirmed),
+            "{durability:?}"
         );
         assert_eq!(fs::read(&target).unwrap(), b"hello");
     }

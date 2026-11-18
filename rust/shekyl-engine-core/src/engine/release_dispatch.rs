@@ -307,11 +307,11 @@ impl ReleaseRequestError {
 /// pins that the release call sits behind exactly this predicate.
 fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
     // Nothing left the wallet: a persona mismatch, or a seal whose
-    // parent-directory fsync did not confirm. The just-taken seal is
+    // durability was not confirmed. The just-taken seal is
     // released so the lane can be retried.
     matches!(
         e,
-        BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealUnconfirmed
+        BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealUnconfirmed(_)
     )
 }
 

@@ -58,7 +58,7 @@ pub mod paths;
 pub mod payload;
 pub mod secrets_transitional;
 
-pub use atomic::Durability;
+pub use atomic::{Durability, Unconfirmed};
 pub use capability::Capability;
 pub use error::WalletFileError;
 pub use handle::{CreateParams, OpenOutcome, SealedKeysEnvelope, WalletFile};

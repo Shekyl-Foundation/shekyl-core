@@ -626,7 +626,9 @@ impl WalletFile {
     /// on the save path — amended `docs/WALLET_FILE_FORMAT_V1.md` §4.3).
     /// Returns the write's durability once the rename has landed.
     /// [`Durability::Unconfirmed`] is still an applied write: the bytes are
-    /// the new file, and only the post-rename parent-directory fsync missed.
+    /// the new file, and only the rename's durability is unconfirmed (the
+    /// post-rename parent-directory fsync missed, or on Windows the volume
+    /// is not NTFS; the reason says which).
     /// A caller that would broadcast on this save must require
     /// [`Durability::Confirmed`] and must not undo the applied record.
     pub fn save_state(

@@ -251,7 +251,7 @@ pub enum SubmitError {
     /// retained tx secret, the inputs the F14 lock holds) is not
     /// confirmed on disk, so **nothing was sent**. A save that failed
     /// before the rename undoes the record under the same guard. A rename
-    /// whose parent-directory fsync did not confirm leaves the applied
+    /// whose durability was not confirmed leaves the applied
     /// record (undoing it would diverge from disk) and still sends
     /// nothing. Either way the reservation is back in `consumer_held`
     /// with its output locks; the consumer may retry the submit once the

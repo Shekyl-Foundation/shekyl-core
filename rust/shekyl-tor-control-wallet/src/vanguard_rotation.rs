@@ -539,7 +539,7 @@ fn save_state(path: &Path, state: &RotationState) -> std::io::Result<()> {
     let staged =
         StagedWrite::<Journal>::create(path, state.serialize().as_bytes(), Access::Default)?;
     match staged.commit() {
-        Ok(()) | Err(CommitError::Unsynced(..)) => Ok(()),
+        Ok(_) | Err(CommitError::Unsynced(..)) => Ok(()),
         Err(error) => Err(std::io::Error::from(error)),
     }
 }

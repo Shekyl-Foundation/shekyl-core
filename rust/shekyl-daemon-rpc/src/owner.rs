@@ -90,7 +90,9 @@ pub async fn watch(
 ///   ([`shekyl_os_account::private_file::StagedWrite`], a `Replace`), so a
 ///   reader sees the old record or the new one. A staged record a crash
 ///   left is replaced at the next start, and a failed publish removes its
-///   own. A scanner that holds the staged record is waited for; one that
+///   own. A scanner that opens the staged record without delete sharing
+///   fails its own open while the creating handle holds it; one that holds
+///   the old record, or a leftover staged one, is waited for, and one that
 ///   outstays the wait is `config.replace.held-open`.
 /// - **Clean exit** removes the record before the pipe closes, so the name
 ///   is never free while a record still points at it.
@@ -156,8 +158,8 @@ mod windows {
         ///   account's;
         /// - `config.socket-dir.unusable`: a directory fails its check or a
         ///   create failed;
-        /// - `config.replace.held-open`: another program held the staged
-        ///   record open past the wait.
+        /// - `config.replace.held-open`: another program held the record, or
+        ///   a leftover staged one, open past the wait.
         pub fn bind(plan: &OwnerSocketPlan, network: &str) -> Result<Self, Diagnostic> {
             let unusable = |found: String| {
                 Diagnostic::new(Code::SocketDirUnusable, Source::Machine)
@@ -218,7 +220,9 @@ mod windows {
     /// and rename it over the path: a reader sees the old record or the new
     /// one.
     fn publish(plan: &OwnerSocketPlan, record: &[u8]) -> Result<(), CommitError> {
-        StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)?.commit()
+        StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)?
+            .commit()
+            .map(drop)
     }
 
     /// The start-up dial (`RPC_CHANNEL.md` §7.1).
