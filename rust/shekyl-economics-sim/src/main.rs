@@ -183,6 +183,8 @@ fn main() {
                  no --set, no --control-steady-traffic, and not --jg-grid, which prints its own seeds",
             );
         }
+        // The spread merges the narrations; no seed's JSON summary is
+        // written, so stdout stays empty in this mode.
         let render = |at: &SimParams| {
             let mut narration = String::new();
             if eup4 || instrument.is_some() {
@@ -395,7 +397,8 @@ fn main() {
         // intent (no ad-hoc printing in non-binary source) is satisfied by
         // construction rather than by exemption.
         let mut narration = String::new();
-        stage2::run_stage2(&mut narration, &params).expect("String sink is infallible");
+        let report =
+            stage2::run_stage2(&mut narration, &params).expect("String sink is infallible");
         if params.overrides().is_empty() {
             eprint!("{narration}");
         } else {
@@ -407,6 +410,12 @@ fn main() {
                 baseline::beside_baseline(&narration, &baseline_narration)
             );
         }
+        // One JSON document, the run's own: the baseline beside it is
+        // narration only.
+        let json = serde_json::to_string_pretty(&report).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
         return;
     }
 

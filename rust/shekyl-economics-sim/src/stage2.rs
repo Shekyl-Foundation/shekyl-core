@@ -18,7 +18,6 @@
 use std::fmt;
 
 use serde::Serialize;
-use std::io::Write;
 
 use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{params::SCALE, CirculatingSupply, ClosedShardCount, TxVolume};
@@ -1938,9 +1937,13 @@ fn oq2_corpus_samples(traj: &BurdenTrajectory) -> Vec<u64> {
     ]
 }
 
-/// `--stage2` entry: the burden trajectory across the scenario set. JSON to
-/// stdout, a human-readable summary to stderr.
-pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result {
+/// `--stage2` entry: the burden trajectory across the scenario set. The
+/// narration is rendered into `out`; the JSON payload is returned, and the
+/// binary's `main` writes it.
+pub fn run_stage2(
+    out: &mut impl fmt::Write,
+    params: &SimParams,
+) -> Result<Stage2Report, fmt::Error> {
     if let Some(traffic) = params.traffic.report_line() {
         writeln!(out, "{traffic}")?;
     }
@@ -2103,16 +2106,12 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
         a1_levers,
         a4_stuffing: a4,
     };
-    let json = serde_json::to_string_pretty(&report).expect("JSON serialization failed");
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(json.as_bytes()).expect("write failed");
-    stdout.write_all(b"\n").expect("write failed");
     writeln!(
         out,
         "\nStage-2 (burden trajectory + escalation family + A1 clearance + A4 W9 ROI) complete."
     )?;
 
-    Ok(())
+    Ok(report)
 }
 
 /// The combined `--stage2` JSON payload (grows as arms land).

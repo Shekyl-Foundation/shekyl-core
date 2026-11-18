@@ -15,3 +15,4 @@
     - the median offered and carried.
   - Predicted in `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.35 (STD-1…STD-9) before the code.
 - **The umbrella's predictability row is restated** (Rick, 2026-11-17). Every scenario's emitted fraction stays inside the release rails' envelope, with total supply unchanged.
+- **`--stage2` writes one JSON document, the run's own.** The stage-2 report is returned to the binary, which writes it, as every other mode's is. Before, the report wrote itself to stdout, so a `--set` run printed the baseline's document after the cell's. `--seed-spread` prints the merged narration only.

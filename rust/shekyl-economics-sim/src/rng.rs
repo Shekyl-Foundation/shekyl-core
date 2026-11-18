@@ -200,7 +200,7 @@ fn ptrs_poisson(mean: f64, mut unit: impl FnMut() -> f64) -> u64 {
             continue;
         }
         if libm::log(v) + libm::log(inv_alpha) - libm::log(a / (us * us) + b)
-            <= -mean + k * log_mean - log_gamma(k + 1.0)
+            <= -mean + k * log_mean - ln_factorial(count(k))
         {
             return count(k);
         }
@@ -237,16 +237,23 @@ const LOG_GAMMA_SERIES: [f64; 10] = [
 /// `ln(2π)`.
 const LN_TWO_PI: f64 = 1.837_877_066_409_345_3;
 
-/// `ln Γ(x)` for `x ≥ 1` by Zhang and Jin's series, in numpy's order: the
-/// series at `x` raised to at least 7, then the steps back down. On
-/// `libm`'s `log`, so the bits are the same on every host.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn log_gamma(x: f64) -> f64 {
-    if x == 1.0 || x == 2.0 {
+/// The least argument the series is evaluated at; a smaller one is reached
+/// by stepping down from here.
+const LOG_GAMMA_SERIES_FROM: u64 = 7;
+
+/// `ln k!`, as `ln Γ(k + 1)` by Zhang and Jin's series in numpy's order:
+/// at `k + 1` when that is at least [`LOG_GAMMA_SERIES_FROM`], else at
+/// [`LOG_GAMMA_SERIES_FROM`] and then down to `k + 1`, one `ln` a step. The
+/// argument is a whole count, so the series' argument is a whole number
+/// exactly; every `ln` is `libm`'s, so the bits are the same on every host.
+#[allow(clippy::cast_precision_loss)]
+fn ln_factorial(k: u64) -> f64 {
+    if k <= 1 {
         return 0.0;
     }
-    let steps = if x < 7.0 { (7.0 - x) as u32 } else { 0 };
-    let mut x0 = x + f64::from(steps);
+    let x = k + 1;
+    let steps = LOG_GAMMA_SERIES_FROM.saturating_sub(x);
+    let mut x0 = (x + steps) as f64;
     let x2 = (1.0 / x0) * (1.0 / x0);
     let mut series = LOG_GAMMA_SERIES[9];
     for coefficient in LOG_GAMMA_SERIES[..9].iter().rev() {
@@ -392,20 +399,19 @@ mod tests {
         );
     }
 
-    /// The series `ln Γ` against known values: `ln Γ(n) = ln (n−1)!`, and
-    /// Γ(6.5) = 10395√π / 64, below 7, where the series steps back down.
+    /// The series against `ln k!` summed term by term, on both sides of
+    /// [`LOG_GAMMA_SERIES_FROM`] and far past it.
     #[test]
-    fn the_log_gamma_series_is_ln_factorial() {
-        let ln_factorial = |n: u32| (1..n).map(|i| f64::from(i).ln()).sum::<f64>();
-        for n in [1u32, 2, 3, 5, 7, 10, 100] {
-            let got = log_gamma(f64::from(n));
+    fn the_series_is_ln_factorial() {
+        for k in [0u64, 1, 2, 3, 5, 6, 7, 9, 99, 10_000] {
+            #[allow(clippy::cast_precision_loss)]
+            let summed = (2..=k).map(|i| (i as f64).ln()).sum::<f64>();
+            let got = ln_factorial(k);
             assert!(
-                (got - ln_factorial(n)).abs() < 1e-12 * got.max(1.0),
-                "n {n}: {got}"
+                (got - summed).abs() <= 1e-12 * summed.max(1.0),
+                "k {k}: {got} against {summed}"
             );
         }
-        let half = (10_395.0 * std::f64::consts::PI.sqrt() / 64.0).ln();
-        assert!((log_gamma(6.5) - half).abs() < 1e-12, "{}", log_gamma(6.5));
     }
 
     /// The draw is keyed (the same block draws the same traffic, each seed
