@@ -905,13 +905,13 @@ pub enum WalletRpcError {
     #[error(
         "the send was not saved, so it was not sent — {}",
         if *or_unwritable {
-            "another program held the wallet's file open, or the file is read-only, most \
-             likely an antivirus scanner or a search indexer; exclude the wallet's folder \
-             from scanning (or make the file writable) and submit again, or discard the send"
+            "another program, most likely an antivirus scanner or a search indexer, held the \
+             wallet's file open, or the file is read-only; exclude the wallet's folder from \
+             scanning (or make the file writable) and submit again, or discard the send"
         } else {
-            "another program held the wallet's file open, most likely an antivirus scanner \
-             or a search indexer; exclude the wallet's folder from scanning and submit \
-             again, or discard the send"
+            "another program, most likely an antivirus scanner or a search indexer, held the \
+             wallet's file open; exclude the wallet's folder from scanning and submit again, \
+             or discard the send"
         }
     )]
     SaveFileHeld {

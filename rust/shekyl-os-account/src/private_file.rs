@@ -477,14 +477,14 @@ pub struct HeldOpen {
 
 impl std::fmt::Display for HeldOpen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let cause = if self.or_unwritable {
-            "was held open by another program, or is not writable,"
+        let or_unwritable = if self.or_unwritable {
+            ", or is not writable"
         } else {
-            "was held open by another program"
+            ""
         };
         write!(
             f,
-            "{} {cause} for more than {} s, so {} could not be replaced",
+            "{} was held open by another program for more than {} s{or_unwritable}, so {} could not be replaced",
             self.held.display(),
             REPLACE_WAIT.as_secs(),
             self.live.display()
