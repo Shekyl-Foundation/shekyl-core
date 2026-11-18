@@ -4235,6 +4235,7 @@ dependencies = [
  "shekyl-node",
  "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-os-account",
  "shekyl-p2p",
  "shekyl-process",
  "shekyl-rpc-channel",

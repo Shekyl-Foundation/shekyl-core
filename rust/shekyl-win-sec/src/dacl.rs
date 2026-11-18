@@ -35,7 +35,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_READ_DATA, FILE_WRITE_ATTRIBUTES,
     FILE_WRITE_DATA, FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
 };
-use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
 
 use crate::sid::{current_user_sid, sid_to_string, SidString};
 
@@ -183,12 +183,14 @@ fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>,
     Ok(out)
 }
 
-/// An object's owner and its allow entries that apply to the object itself
-/// (inherit-only entries are skipped): each SID with its access mask.
-/// `allowed` is `None` for a null DACL, which grants everyone everything.
+/// An object's owner and its allow and deny entries that apply to the
+/// object itself (inherit-only entries are skipped): each SID with its
+/// access mask. `allowed` is `None` for a null DACL, which grants everyone
+/// everything (and holds no deny entry).
 pub(crate) struct DescriptorView {
     pub(crate) owner: Option<SidString>,
     pub(crate) allowed: Option<Vec<(SidString, u32)>>,
+    pub(crate) denied: Vec<(SidString, u32)>,
 }
 
 /// Read the owner and the DACL of the object `name` (NUL-terminated wide
@@ -228,6 +230,7 @@ pub(crate) fn read_descriptor(
         return Ok(DescriptorView {
             owner,
             allowed: None,
+            denied: Vec::new(),
         });
     }
     let mut info = ACL_SIZE_INFORMATION {
@@ -249,6 +252,7 @@ pub(crate) fn read_descriptor(
         return Err(DaclError(crate::sid::last_error()));
     }
     let mut allowed = Vec::new();
+    let mut denied = Vec::new();
     for index in 0..info.AceCount {
         let mut ace: *mut c_void = std::ptr::null_mut();
         // SAFETY: `index` is below the ACE count the ACL reported. `GetAce`
@@ -264,24 +268,29 @@ pub(crate) fn read_descriptor(
         }
         // SAFETY: every ACE begins with an `ACE_HEADER`.
         let header = unsafe { ace.cast::<ACE_HEADER>().read_unaligned() };
-        if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE
-            || u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0
-        {
+        let into = match u32::from(header.AceType) {
+            ACCESS_ALLOWED_ACE_TYPE => &mut allowed,
+            ACCESS_DENIED_ACE_TYPE => &mut denied,
+            _ => continue,
+        };
+        if u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0 {
             continue;
         }
-        // SAFETY: the type says this ACE is an `ACCESS_ALLOWED_ACE`, whose
-        // `SidStart` is the first dword of the SID that follows it in the ACL.
+        // SAFETY: the type says this ACE is an `ACCESS_ALLOWED_ACE` or an
+        // `ACCESS_DENIED_ACE`, which share one layout: a header, a mask, and
+        // `SidStart`, the first dword of the SID that follows in the ACL.
         let entry = ace.cast::<ACCESS_ALLOWED_ACE>();
         // Read through the raw pointer, as the header is: an ACE is
         // dword-aligned by contract, and the read does not depend on it.
         let ace_mask = unsafe { std::ptr::addr_of!((*entry).Mask).read_unaligned() };
         let sid = unsafe { (&raw const (*entry).SidStart).cast_mut().cast::<c_void>() };
         if let Ok(sid) = sid_to_string(sid) {
-            allowed.push((sid, ace_mask));
+            into.push((sid, ace_mask));
         }
     }
     Ok(DescriptorView {
         owner,
         allowed: Some(allowed),
+        denied,
     })
 }

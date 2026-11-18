@@ -16,15 +16,16 @@
 //!
 //! [`RendezvousKey::check`]'s rule: the owner is Administrators or SYSTEM;
 //! every account may read (an allow entry for Everyone, Authenticated Users
-//! or BUILTIN\Users carrying a read right); and nobody may write but this
-//! account (the service's) and the platform's own principals.
+//! or BUILTIN\Users carrying a read right, and no entry denying a read right
+//! to anyone); and nobody may write but this account (the service's) and the
+//! platform's own principals.
 
 #![cfg(windows)]
 
 use std::io;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_FILE_NOT_FOUND, GENERIC_ALL, GENERIC_READ, GENERIC_WRITE, WIN32_ERROR,
+    ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, GENERIC_ALL, GENERIC_READ, GENERIC_WRITE, WIN32_ERROR,
 };
 use windows_sys::Win32::Security::Authorization::SE_REGISTRY_WOW64_64KEY;
 use windows_sys::Win32::Storage::FileSystem::{DELETE, WRITE_DAC, WRITE_OWNER};
@@ -58,6 +59,11 @@ const KEY_WRITE_MASK: u32 = KEY_SET_VALUE
     | WRITE_OWNER
     | GENERIC_WRITE
     | GENERIC_ALL;
+
+/// How many times [`RendezvousKey::read`] asks for the value when a
+/// publish keeps growing it between the size and the read: a publish is
+/// rare (a service's start), so a few reads always see one settle.
+const READ_ATTEMPTS: usize = 4;
 
 /// A right that reads a value.
 const KEY_READ_MASK: u32 = KEY_QUERY_VALUE | GENERIC_READ | GENERIC_ALL;
@@ -160,10 +166,18 @@ impl RendezvousKey {
         if !writers.is_empty() {
             return Err(KeyFault::Writable(writers));
         }
-        let readable_by_all = allowed.iter().any(|(sid, mask)| {
-            mask & KEY_READ_MASK != 0
-                && matches!(sid.as_str(), EVERYONE | AUTHENTICATED_USERS | USERS)
-        });
+        // A deny of a read right to anyone means some account cannot read
+        // the record, whatever the allow entries say: a client of that
+        // account would fail its discovery with an access denial.
+        let read_denied = view
+            .denied
+            .iter()
+            .any(|(_, mask)| mask & KEY_READ_MASK != 0);
+        let readable_by_all = !read_denied
+            && allowed.iter().any(|(sid, mask)| {
+                mask & KEY_READ_MASK != 0
+                    && matches!(sid.as_str(), EVERYONE | AUTHENTICATED_USERS | USERS)
+            });
         if !readable_by_all {
             return Err(KeyFault::NotReadableByAll);
         }
@@ -199,43 +213,48 @@ impl RendezvousKey {
             Err(e) => return Err(e),
         };
         let name = wide(name);
+        // A publish may grow the value between the size the read asks for
+        // and the read itself, which then answers `ERROR_MORE_DATA` with the
+        // new size: read again at that size, a bounded number of times, so
+        // a concurrent publish is never a discovery failure.
         let mut len: u32 = 0;
-        // SAFETY: a size query: no buffer, `len` receives the size.
-        let rc = unsafe {
-            RegGetValueW(
-                key.0,
-                std::ptr::null(),
-                name.as_ptr(),
-                RRF_RT_REG_BINARY,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &raw mut len,
-            )
-        };
-        if rc == ERROR_FILE_NOT_FOUND {
-            return Ok(None);
+        for _ in 0..READ_ATTEMPTS {
+            let mut bytes = vec![0u8; len as usize];
+            let buffer = if bytes.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                bytes.as_mut_ptr().cast()
+            };
+            // SAFETY: `buffer` is null (a size query) or `bytes`, which
+            // holds `len` bytes; `len` receives the size or what was
+            // written.
+            let rc = unsafe {
+                RegGetValueW(
+                    key.0,
+                    std::ptr::null(),
+                    name.as_ptr(),
+                    RRF_RT_REG_BINARY,
+                    std::ptr::null_mut(),
+                    buffer,
+                    &raw mut len,
+                )
+            };
+            match rc {
+                ERROR_FILE_NOT_FOUND => return Ok(None),
+                ERROR_MORE_DATA => continue,
+                // A size query on a value: `len` now holds its size.
+                0 if bytes.is_empty() && len > 0 => continue,
+                0 => {
+                    bytes.truncate(len as usize);
+                    return Ok(Some(bytes));
+                }
+                other => return status(other).map(|()| None),
+            }
         }
-        status(rc)?;
-        let mut bytes = vec![0u8; len as usize];
-        // SAFETY: `bytes` holds `len` bytes, the size just reported; `len`
-        // receives what was written.
-        let rc = unsafe {
-            RegGetValueW(
-                key.0,
-                std::ptr::null(),
-                name.as_ptr(),
-                RRF_RT_REG_BINARY,
-                std::ptr::null_mut(),
-                bytes.as_mut_ptr().cast(),
-                &raw mut len,
-            )
-        };
-        if rc == ERROR_FILE_NOT_FOUND {
-            return Ok(None);
-        }
-        status(rc)?;
-        bytes.truncate(len as usize);
-        Ok(Some(bytes))
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "the record kept changing while it was read",
+        ))
     }
 
     /// Remove the value `name`; absent is done.
@@ -426,6 +445,12 @@ mod tests {
 
         let unread = ScratchKey::new("unread", &installer_sddl("").replace("(A;CI;KR;;;BU)", ""));
         assert_eq!(unread.key().check(), Err(KeyFault::NotReadableByAll));
+
+        // A deny of read to any account (here BUILTIN\Guests), beside the
+        // installer's grants, is not readable by all: a client of that
+        // account would fail its discovery (Copilot, #1439).
+        let denied = ScratchKey::new("denied", &installer_sddl("(D;CI;KR;;;BG)"));
+        assert_eq!(denied.key().check(), Err(KeyFault::NotReadableByAll));
 
         let missing = RendezvousKey::new(r"SOFTWARE\Shekyl\Test-missing-never-created");
         assert_eq!(missing.check(), Err(KeyFault::Missing));

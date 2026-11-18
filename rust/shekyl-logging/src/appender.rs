@@ -496,11 +496,36 @@ impl Write for SizeRollingWriter {
 /// logger opens it (created at mode `0600`, appended to); its directory is
 /// never created, so a log that cannot be opened is left unwritten.
 ///
+/// The open never blocks and the handle is checked, not the path: on Unix
+/// it is non-blocking, so a FIFO with no reader refuses it at once rather
+/// than hanging the refused start, and whatever the handle opened must be
+/// a regular file before a byte is written (a path that changes between a
+/// check and the open cannot slip a FIFO or a device in). Its mode is set
+/// through the handle.
+///
 /// # Errors
 ///
-/// The file could not be opened or written.
+/// The file could not be opened or written, or it is not a regular file.
 pub fn append_before_start(path: &Path, lines: &[String]) -> io::Result<()> {
-    let mut file = open_with_0600_append(path)?;
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600).custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file = opts.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the log file is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
     let mut text = String::new();
     for line in lines {
         text.push_str(line);

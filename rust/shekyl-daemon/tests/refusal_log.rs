@@ -171,3 +171,70 @@ fn a_refused_verify_writes_no_log_and_a_refused_start_does() {
     let log = log.unwrap_or_else(|| panic!("no log file\nstderr:\n{stderr}"));
     assert!(log.contains(line), "log:\n{log}\nstderr:\n{stderr}");
 }
+
+/// A refused start whose log file is a FIFO with no reader exits at once,
+/// its refusal on standard error, and writes nothing into the FIFO: the
+/// refusal path opens the log non-blocking and takes only a regular file.
+/// Red edit: open the log with a plain blocking append, and the child
+/// hangs on the FIFO until this test's deadline kills it (Copilot, #1439).
+#[test]
+fn a_refused_start_with_a_fifo_for_its_log_exits_at_once() {
+    const NAME: &str = "a_refused_start_with_a_fifo_for_its_log_exits_at_once";
+    /// Far beyond a refusal's few milliseconds, far below a hang's forever.
+    const EXITS_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+    run_child_if_requested();
+    let dir = workdir();
+    let fifo = dir.path().join("shekyld.log");
+    let fifo_c = std::ffi::CString::new(fifo.to_str().expect("a UTF-8 path")).expect("no NUL");
+    // SAFETY: `fifo_c` is a NUL-terminated path; mkfifo reads it only.
+    assert_eq!(
+        unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) },
+        0,
+        "the FIFO"
+    );
+    // A data directory that is a file: the walk refuses it before the lock.
+    let data = dir.path().join("not-a-directory");
+    std::fs::write(&data, b"").expect("the file in the data directory's place");
+
+    let stderr_path = dir.path().join("stderr");
+    let stderr = File::create(&stderr_path).expect("the stderr file");
+    let mut command = Command::new(std::env::current_exe().expect("this test binary"));
+    command
+        .args(["--exact", NAME, "--nocapture"])
+        .env(CHILD_DIR, dir.path())
+        .env(
+            CHILD_ARGS,
+            ["--data-dir", data.to_str().expect("a UTF-8 path")].join("\n"),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr));
+    let mut child = shekyl_spawn::spawn_lock::with(|| command.spawn()).expect("the daemon child");
+    let deadline = std::time::Instant::now() + EXITS_WITHIN;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("the child's state") {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            drop(child.kill());
+            drop(child.wait());
+            panic!("the refused start hung on its FIFO log file");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    assert_ne!(
+        status.code(),
+        Some(0),
+        "the start refused\nstderr:\n{stderr}"
+    );
+    assert!(stderr.contains("shekyld: "), "stderr:\n{stderr}");
+    use std::os::unix::fs::FileTypeExt;
+    assert!(
+        std::fs::symlink_metadata(&fifo)
+            .expect("the FIFO")
+            .file_type()
+            .is_fifo(),
+        "the FIFO is left as it was"
+    );
+}

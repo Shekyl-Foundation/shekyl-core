@@ -110,8 +110,10 @@ impl StartEnd {
         }
     }
 
-    /// A start fault of the RPC's set-up: a file held open past the wait is
-    /// its own refusal (`config.replace.held-open`); anything else fails
+    /// A start fault of the RPC's set-up, at its open (before the node) or
+    /// its start (after it): a file held open past the wait
+    /// (`config.replace.held-open`) and a missing or exposed rendezvous key
+    /// (`config.service.rendezvous-key`) are refusals; anything else fails
     /// with `context` before its words.
     fn rpc_fault(
         &self,
@@ -480,7 +482,7 @@ fn supervise(
     // supervisor for `daemon_status`'s Tor fields; its inbox is made
     // already, so an ask before the loop starts waits for it.
     let gone: shekyl_daemon_rpc::run::OnRendezvousGone = Arc::new(signals::rendezvous_gone);
-    let rpc = match shekyl_daemon_rpc::run::start(
+    let (rpc, refused) = match shekyl_daemon_rpc::run::start(
         &config.rpc,
         options,
         node.handles(),
@@ -489,22 +491,15 @@ fn supervise(
         prepared,
         gone,
     ) {
-        Ok(rpc) => Some(rpc),
-        Err(shekyl_daemon_rpc::run::StartFault::HeldOpen(held)) => {
-            let refusal =
-                shekyl_daemon_rpc::run::held_open_refusal(&held, &config.data_dir).render();
-            tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
-            None
-        }
-        Err(shekyl_daemon_rpc::run::StartFault::Refused(refusal)) => {
-            tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
-            None
-        }
-        Err(shekyl_daemon_rpc::run::StartFault::RendezvousKey { key, found }) => {
-            let refusal = shekyl_daemon_rpc::run::rendezvous_key_refusal(&key, &found).render();
-            tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
-            None
-        }
+        Ok(rpc) => (Some(rpc), None),
+        // A start refusal like any other (IG-11): through the one path, to
+        // standard error and the log, and its status (2 for a held file or
+        // a bad rendezvous key, 1 for a failure) is the exit's, whatever
+        // the teardown reports.
+        Err(fault) => (
+            None,
+            Some(StartEnd::Logger.rpc_fault(fault, &config.data_dir, "the RPC did not start")),
+        ),
     };
     // The owner's leg is bound, served and published: the starting process
     // may call. A failed write is that process gone, which the watch reports.
@@ -540,7 +535,8 @@ fn supervise(
         note_run(&mut preserve_status, wait);
     }
     notify_driver.abort();
-    finish(pool, supervisor, rpc, preserve_status, node)
+    let status = finish(pool, supervisor, rpc, preserve_status, node);
+    refused.unwrap_or(status)
 }
 
 /// The teardown: chain sync is asked to stop, the RPC drains, the node is
