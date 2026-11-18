@@ -146,6 +146,10 @@ pub enum Durability {
 
 /// Why a wallet write that was applied is not confirmed durable. Its
 /// `Display` is the user's sentence: what happened, and the fix.
+///
+/// Each cause is its own variant, so the wallet RPC answers each with its
+/// own code and advice (Rick, 2026-11-18): a volume Windows does not
+/// confirm is a move to NTFS, a disk that failed a step is an I/O error.
 #[derive(Debug)]
 pub enum Unconfirmed {
     /// The parent directory's sync after the rename failed (Unix).
@@ -154,8 +158,18 @@ pub enum Unconfirmed {
     /// confirm a save survives a power loss: anything but NTFS (`FAT32`,
     /// `exFAT`, `ReFS`, ...).
     FileSystem(String),
-    /// The Windows replace could not confirm it otherwise.
-    Replace(private_file::Unconfirmed),
+    /// The volume is NTFS, but it refused the rename Windows confirms and
+    /// the classic rename replaced the file.
+    ClassicRename,
+    /// The flush after the rename failed (Windows).
+    Flush(io::Error),
+    /// The volume's file system could not be read (Windows).
+    FileSystemUnread(io::Error),
+    /// A file a previous process left was renamed through a handle that
+    /// does not write through (Windows). A wallet write stages a fresh file
+    /// through its creating handle every time, so it never reports this;
+    /// the variant keeps the replace's answer whole.
+    Reopened,
 }
 
 impl Unconfirmed {
@@ -164,7 +178,22 @@ impl Unconfirmed {
     pub fn file_system(&self) -> Option<&str> {
         match self {
             Self::FileSystem(name) => Some(name),
-            Self::DirectoryNotSynced(_) | Self::Replace(_) => None,
+            Self::DirectoryNotSynced(_)
+            | Self::ClassicRename
+            | Self::Flush(_)
+            | Self::FileSystemUnread(_)
+            | Self::Reopened => None,
+        }
+    }
+
+    /// The disk's error, when a step after the rename failed with one.
+    #[must_use]
+    pub fn io_error(&self) -> Option<&io::Error> {
+        match self {
+            Self::DirectoryNotSynced(error)
+            | Self::Flush(error)
+            | Self::FileSystemUnread(error) => Some(error),
+            Self::FileSystem(_) | Self::ClassicRename | Self::Reopened => None,
         }
     }
 }
@@ -182,9 +211,23 @@ impl std::fmt::Display for Unconfirmed {
                 "the wallet is on a {name} volume, where Windows cannot confirm that a save \
                  survives a power cut; move the wallet to an NTFS volume"
             ),
-            Self::Replace(why) => write!(
+            Self::ClassicRename => f.write_str(
+                "the wallet was saved, but its drive refused the rename Windows can confirm, \
+                 so the save may not survive a power cut; move the wallet to a local NTFS drive",
+            ),
+            Self::Flush(error) => write!(
                 f,
-                "the wallet was saved, but Windows could not confirm the save is on disk: {why}"
+                "the wallet was saved, but flushing it to disk failed ({error}), so the save \
+                 may not survive a power cut"
+            ),
+            Self::FileSystemUnread(error) => write!(
+                f,
+                "the wallet was saved, but its drive's file system could not be read ({error}), \
+                 so the save is not confirmed"
+            ),
+            Self::Reopened => f.write_str(
+                "the wallet was saved through a file left by an earlier start, which Windows \
+                 does not confirm survives a power cut",
             ),
         }
     }
@@ -192,14 +235,16 @@ impl std::fmt::Display for Unconfirmed {
 
 impl From<private_file::Durability> for Durability {
     fn from(durability: private_file::Durability) -> Self {
+        use private_file::Unconfirmed as Why;
         match durability {
             private_file::Durability::Durable => Self::Confirmed,
-            private_file::Durability::Unconfirmed(private_file::Unconfirmed::FileSystem(name)) => {
-                Self::Unconfirmed(Unconfirmed::FileSystem(name))
-            }
-            private_file::Durability::Unconfirmed(why) => {
-                Self::Unconfirmed(Unconfirmed::Replace(why))
-            }
+            private_file::Durability::Unconfirmed(why) => Self::Unconfirmed(match why {
+                Why::FileSystem(name) => Unconfirmed::FileSystem(name),
+                Why::ClassicRename => Unconfirmed::ClassicRename,
+                Why::Flush(error) => Unconfirmed::Flush(error),
+                Why::FileSystemUnread(error) => Unconfirmed::FileSystemUnread(error),
+                Why::Reopened => Unconfirmed::Reopened,
+            }),
         }
     }
 }
@@ -216,10 +261,11 @@ impl From<private_file::Durability> for Durability {
 ///
 /// - [`WalletFileError::Io`] for a filesystem failure while **producing**
 ///   the staged file: removing a leftover, create, write, or fsync.
+/// - [`WalletFileError::HeldOpen`] when another program held a file the
+///   Windows replace needs (a leftover staged file, or the target) past
+///   its wait: a scanner or an indexer, whose remedy is not the disk's.
 /// - [`WalletFileError::AtomicWriteRename`] specifically for failures
-///   of the rename step, including another program holding the target
-///   past the Windows replace's wait. (A leftover staged file held past
-///   the wait fails the staging, as `Io`.) The dedicated
+///   of the rename step otherwise. The dedicated
 ///   variant exists so callers can distinguish "couldn't write the bytes"
 ///   from "wrote the bytes but couldn't swap them in" — the latter means
 ///   the target is untouched, which is sometimes recoverable.
@@ -280,7 +326,7 @@ fn write_through_staged<T>(
         )));
     }
     let staged = StagedWrite::<Replace>::create_with(target, bytes, Access::Private, sharing)
-        .map_err(|error| WalletFileError::Io(io::Error::from(error)))?;
+        .map_err(staging_error)?;
 
     // The staged file is complete and durable; the caller may now attach
     // whatever must travel with it into place (the keys-file lock).
@@ -320,11 +366,19 @@ fn write_through_staged<T>(
         }
         Err(CommitError::HeldOpen(held)) => {
             drop(hooked);
-            Err(WalletFileError::rename(
-                target.to_path_buf(),
-                io::Error::other(held),
-            ))
+            Err(WalletFileError::HeldOpen(held))
         }
+    }
+}
+
+/// A staging failure in this crate's terms: another program holding a
+/// leftover staged file past the wait is [`WalletFileError::HeldOpen`], as
+/// it is at the rename; every other step's failure is the disk's
+/// [`WalletFileError::Io`].
+fn staging_error(error: CommitError) -> WalletFileError {
+    match error {
+        CommitError::HeldOpen(held) => WalletFileError::HeldOpen(held),
+        CommitError::Io(_, error) | CommitError::Unsynced(_, error) => WalletFileError::Io(error),
     }
 }
 
