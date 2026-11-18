@@ -604,10 +604,12 @@ jobs:
           # shekyl-os-account and shekyl-win-sec (Rick, 2026-11-18): the one
           # place a file is replaced, its handle-based rename and its wait
           # for a scanner that holds the staged file, which only Windows
-          # runs. Their Windows-only tests: os-account's three wait tests
-          # with its resume and crash tests (6); win-sec's two rename tests
-          # among its lib's.
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4; 'shekyl_spawn-' = 3; 'shekyl_rpc_transport-' = 40; 'local_peer_check-' = 1; 'shekyl_os_account-' = 6; 'shekyl_win_sec-' = 2 }
+          # runs. Counted on the Windows host at #1439's e7e934e5ed
+          # (2026-11-18): os-account 8 (the wait tests, the resume and crash
+          # tests); win-sec 5 (the rename and rendezvous tests; the RT-P8
+          # probe is ignored), plus the two registry-key tests that need
+          # this elevated runner (7).
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4; 'shekyl_spawn-' = 3; 'shekyl_rpc_transport-' = 40; 'local_peer_check-' = 1; 'shekyl_os_account-' = 8; 'shekyl_win_sec-' = 7 }
           $lines = Get-Content daemon-crates.out
           foreach ($binary in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber

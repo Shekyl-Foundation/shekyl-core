@@ -42,6 +42,9 @@ windows-sys = { version = "0.61", features = [
     # `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` and `_POSIX_SEMANTICS`, the flags
     # of the handle-based rename (`replace`).
     "Win32_System_WindowsProgramming",
+    # A service's rendezvous record, a value under HKLM\SOFTWARE\Shekyl
+    # (`registry`).
+    "Win32_System_Registry",
 ] }
 # The self-hosted listener (WP-W2) is built on tokio's named-pipe support, so
 # the crate that holds the `unsafe` `create_with_security_attributes_raw` call
