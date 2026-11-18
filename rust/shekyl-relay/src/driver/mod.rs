@@ -38,7 +38,8 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-use crate::graph::{Relay, TxBlob};
+use crate::graph::{NoiseDue, Relay, TxBlob};
+use crate::noise_queue::Starts;
 
 /// Work the driver produced that the caller must perform.
 ///
@@ -76,8 +77,12 @@ pub enum Effect {
         /// Rust no longer pushes an ordered slot array for C++ to bind
         /// positionally; it hands over the decision itself, already made
         /// against the map it owns. An unbound slot emits nothing (CV-2), so
-        /// this is never nil.
+        /// this is never nil. During the channel's epoch tail it is the
+        /// peer the channel was bound to before the boundary.
         peer: ConnectionId,
+        /// Whether a new message may start in this window: closed during
+        /// the epoch tail (`CVR-R4`), decided by the schedule alone.
+        starts: Starts,
     },
     /// Noise channel `channel` is due but its stem slot is unbound: clear it.
     ///
@@ -257,18 +262,20 @@ impl Driver {
         // unbind by the binding's current state. An unbound slot produces no
         // noise SEND at its index and shifts no other (CV-2); its due tick
         // carries the clear instead — see [`Effect::NoiseUnbind`].
-        if let Some(channel) = self.zone.due_noise_channel(now, rng) {
-            match self.zone.stem_slots().get(channel).copied().flatten() {
-                Some(peer) if self.zone.noise_destination(peer) => {
-                    effects.push(Effect::NoiseSend { channel, peer });
-                }
-                // A session that carries no cover (plaintext, or a connector
-                // that does not declare its timing visible) is not a noise
-                // destination. The channel stays armed for a later covered
-                // occupant. An empty slot still unbinds.
-                Some(_) => {}
-                None => effects.push(Effect::NoiseUnbind { channel }),
-            }
+        // `Relay::due_noise` resolves the binding, the epoch tail included;
+        // a slot whose session carries no cover sends nothing and stays armed.
+        match self.zone.due_noise(now, rng) {
+            Some(NoiseDue::Send {
+                channel,
+                peer,
+                starts,
+            }) => effects.push(Effect::NoiseSend {
+                channel,
+                peer,
+                starts,
+            }),
+            Some(NoiseDue::Unbind { channel }) => effects.push(Effect::NoiseUnbind { channel }),
+            None => {}
         }
 
         effects

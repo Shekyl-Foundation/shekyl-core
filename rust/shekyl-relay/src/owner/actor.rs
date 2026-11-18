@@ -645,7 +645,11 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                     self.pool.shown(tx);
                 }
             }
-            Effect::NoiseSend { channel, peer } => {
+            Effect::NoiseSend {
+                channel,
+                peer,
+                starts,
+            } => {
                 // `take_for_send` hands back the same window until a
                 // resolution: `sent` advances one fragment, `failed` restarts
                 // the channel so a partly sent message is never finished to
@@ -654,7 +658,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                     debug_assert!(false, "NoiseSend on a zone with no carrier");
                     return;
                 };
-                let Some(send) = queue.take_for_send(channel, peer) else {
+                let Some(send) = queue.take_for_send(channel, peer, starts) else {
                     return;
                 };
                 let written = self

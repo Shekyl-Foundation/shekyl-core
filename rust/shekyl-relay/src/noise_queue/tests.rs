@@ -50,13 +50,13 @@ fn the_window_is_the_dummys_length_and_nothing_else() {
 fn a_real_fragment_and_a_dummy_are_indistinguishable_by_length() {
     let mut q = queues(1);
 
-    let cover = q.take_for_send(0, id(1)).expect("channel 0");
+    let cover = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     assert_eq!(cover.bytes().len(), W, "a dummy is one window");
     cover.sent(&mut q);
 
     assert!(q.enqueue(0, striped(3), CarrierToken(1)));
     for i in 0..3u8 {
-        let real = q.take_for_send(0, id(1)).expect("channel 0");
+        let real = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
         assert_eq!(
             real.bytes().len(),
             W,
@@ -72,7 +72,7 @@ fn a_real_fragment_and_a_dummy_are_indistinguishable_by_length() {
     }
 
     // Drained: back to cover, same length.
-    let after = q.take_for_send(0, id(1)).expect("channel 0");
+    let after = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     assert_eq!(after.bytes().len(), W);
     after.sent(&mut q);
 }
@@ -97,13 +97,13 @@ fn a_message_that_is_not_a_whole_number_of_windows_is_refused() {
         "no such channel"
     );
     assert!(
-        q.take_for_send(9, id(1)).is_none(),
+        q.take_for_send(9, id(1), Starts::Open).is_none(),
         "no such channel is the only None"
     );
 
     // And a refusal must not block the message behind it.
     assert!(q.enqueue(0, vec![9u8; W], CarrierToken(6)));
-    let s = q.take_for_send(0, id(1)).expect("channel 0");
+    let s = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     assert_eq!(s.bytes(), &[9u8; W][..]);
     s.sent(&mut q);
 }
@@ -119,11 +119,11 @@ fn an_unresolved_send_restarts_rather_than_losing_or_advancing() {
     let mut q = queues(1);
     assert!(q.enqueue(0, striped(2), CarrierToken(7)));
 
-    let first = q.take_for_send(0, id(1)).expect("channel 0");
+    let first = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     let bytes = first.bytes().to_vec();
     drop(first); // forgotten, early return, lost to an error path
 
-    let again = q.take_for_send(0, id(1)).expect("channel 0");
+    let again = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     assert_eq!(
         again.bytes(),
         &bytes[..],
@@ -139,20 +139,20 @@ fn an_unresolved_send_restarts_rather_than_losing_or_advancing() {
 fn a_stale_token_cannot_advance_a_later_message() {
     let mut q = queues(1);
     assert!(q.enqueue(0, striped(2), CarrierToken(8)));
-    let stale = q.take_for_send(0, id(1)).expect("ch0");
+    let stale = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
 
     q.unbind(0);
     assert!(q.enqueue(0, vec![9u8; W * 2], CarrierToken(9)));
     stale.sent(&mut q); // must be a no-op, not a walk into the 9s
 
-    let first = q.take_for_send(0, id(1)).expect("ch0");
+    let first = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(
         first.bytes(),
         &[9u8; W][..],
         "stale sent must leave the successor at its first window"
     );
     first.sent(&mut q);
-    let second = q.take_for_send(0, id(1)).expect("ch0");
+    let second = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(second.bytes(), &[9u8; W][..]);
     second.sent(&mut q);
 }
@@ -166,28 +166,28 @@ fn cv1_a_rebind_restarts_the_message_rather_than_resuming_it() {
     let mut q = queues(1);
     assert!(q.enqueue(0, striped(3), CarrierToken(10)));
 
-    let a = q.take_for_send(0, id(1)).expect("ch0");
+    let a = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(a.bytes(), &[0u8; W][..]);
     a.sent(&mut q);
-    let b = q.take_for_send(0, id(1)).expect("ch0");
+    let b = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(b.bytes(), &[1u8; W][..], "same peer continues");
     b.sent(&mut q); // two of three windows have gone to peer 1
 
     // The slot churns. The remainder must NOT travel to the successor.
-    let after = q.take_for_send(0, id(2)).expect("ch0");
+    let after = q.take_for_send(0, id(2), Starts::Open).expect("ch0");
     assert_eq!(
         after.bytes(),
         &[0u8; W][..],
         "rebind restarts from the head; a 2-filled window would be a resume"
     );
     after.sent(&mut q);
-    let second = q.take_for_send(0, id(2)).expect("ch0");
+    let second = q.take_for_send(0, id(2), Starts::Open).expect("ch0");
     assert_eq!(second.bytes(), &[1u8; W][..]);
     second.sent(&mut q);
-    let third = q.take_for_send(0, id(2)).expect("ch0");
+    let third = q.take_for_send(0, id(2), Starts::Open).expect("ch0");
     assert_eq!(third.bytes(), &[2u8; W][..]);
     third.sent(&mut q);
-    let drained = q.take_for_send(0, id(2)).expect("ch0");
+    let drained = q.take_for_send(0, id(2), Starts::Open).expect("ch0");
     assert_eq!(
         drained.bytes(),
         &vec![0xDD; W][..],
@@ -208,35 +208,35 @@ fn failure_and_rebind_converge_in_either_order() {
     // failure, then rebind
     let mut a = queues(1);
     assert!(a.enqueue(0, vec![1u8; W * 2], CarrierToken(11)));
-    let t = a.take_for_send(0, id(1)).expect("ch0");
+    let t = a.take_for_send(0, id(1), Starts::Open).expect("ch0");
     t.sent(&mut a);
-    let t = a.take_for_send(0, id(1)).expect("ch0");
+    let t = a.take_for_send(0, id(1), Starts::Open).expect("ch0");
     t.failed(&mut a); // clears offset AND unbinds
-    let after_a = a.take_for_send(0, id(2)).expect("ch0"); // rebind on top
+    let after_a = a.take_for_send(0, id(2), Starts::Open).expect("ch0"); // rebind on top
     assert_eq!(after_a.bytes(), &[1u8; W][..], "restart from the head");
     after_a.sent(&mut a);
 
     // rebind, then failure
     let mut b = queues(1);
     assert!(b.enqueue(0, vec![1u8; W * 2], CarrierToken(12)));
-    let t = b.take_for_send(0, id(1)).expect("ch0");
+    let t = b.take_for_send(0, id(1), Starts::Open).expect("ch0");
     t.sent(&mut b);
-    let t = b.take_for_send(0, id(2)).expect("ch0"); // rebind first
+    let t = b.take_for_send(0, id(2), Starts::Open).expect("ch0"); // rebind first
     t.failed(&mut b); // then failure
-    let after_b = b.take_for_send(0, id(2)).expect("ch0");
+    let after_b = b.take_for_send(0, id(2), Starts::Open).expect("ch0");
     assert_eq!(after_b.bytes(), &[1u8; W][..], "restart from the head");
     after_b.sent(&mut b);
 
     // One full restart was in flight, one window of it has gone out, so each
     // queue still owes the second window of 1s, then cover.
-    let a_left = a.take_for_send(0, id(2)).expect("ch0");
-    let b_left = b.take_for_send(0, id(2)).expect("ch0");
+    let a_left = a.take_for_send(0, id(2), Starts::Open).expect("ch0");
+    let b_left = b.take_for_send(0, id(2), Starts::Open).expect("ch0");
     assert_eq!(a_left.bytes(), &[1u8; W][..]);
     assert_eq!(b_left.bytes(), &[1u8; W][..]);
     a_left.sent(&mut a);
     b_left.sent(&mut b);
-    let a_cover = a.take_for_send(0, id(2)).expect("ch0");
-    let b_cover = b.take_for_send(0, id(2)).expect("ch0");
+    let a_cover = a.take_for_send(0, id(2), Starts::Open).expect("ch0");
+    let b_cover = b.take_for_send(0, id(2), Starts::Open).expect("ch0");
     assert_eq!(a_cover.bytes(), &vec![0xDD; W][..]);
     assert_eq!(b_cover.bytes(), &vec![0xDD; W][..]);
 }
@@ -247,14 +247,14 @@ fn a_failed_send_keeps_the_message_and_unbinds() {
     let mut q = queues(1);
     assert!(q.enqueue(0, vec![4u8; W], CarrierToken(13)));
 
-    let t = q.take_for_send(0, id(1)).expect("ch0");
+    let t = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
     t.failed(&mut q);
 
     // Still owed — the message was not dropped.
-    let retry = q.take_for_send(0, id(1)).expect("ch0");
+    let retry = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(retry.bytes(), &[4u8; W][..]);
     retry.sent(&mut q);
-    let cover = q.take_for_send(0, id(1)).expect("ch0");
+    let cover = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(cover.bytes(), &vec![0xDD; W][..]);
     cover.sent(&mut q);
 }
@@ -264,7 +264,7 @@ fn unbind_drops_everything_the_channel_held() {
     let mut q = queues(1);
     assert!(q.enqueue(0, vec![6u8; W * 2], CarrierToken(14)));
     q.unbind(0);
-    let s = q.take_for_send(0, id(1)).expect("ch0");
+    let s = q.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(s.bytes(), &vec![0xDD; W][..], "unbind clears pending");
     s.sent(&mut q);
 }
@@ -357,14 +357,14 @@ fn cv4_the_cadence_does_not_depend_on_queue_depth() {
         full.enqueue(1, vec![i; W * 4], CarrierToken(16));
     }
     // The depths must genuinely differ, or the bait is an empty gesture.
-    let f = full.take_for_send(0, id(1)).expect("ch0");
+    let f = full.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(
         f.bytes(),
         &[0u8; W][..],
         "the full queue holds real traffic"
     );
     f.sent(&mut full);
-    let e = empty.take_for_send(0, id(1)).expect("ch0");
+    let e = empty.take_for_send(0, id(1), Starts::Open).expect("ch0");
     assert_eq!(e.bytes(), &vec![0xDD; W][..], "the empty queue emits cover");
     e.sent(&mut empty);
 
@@ -459,7 +459,7 @@ fn a_message_reports_sent_only_when_its_last_window_goes_out() {
     assert!(q.enqueue(0, striped(3), CarrierToken(7)));
 
     for window in 0..2 {
-        let send = q.take_for_send(0, id(1)).expect("channel 0");
+        let send = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
         send.sent(&mut q);
         assert!(
             q.take_resolved().is_empty(),
@@ -467,7 +467,7 @@ fn a_message_reports_sent_only_when_its_last_window_goes_out() {
         );
     }
 
-    let last = q.take_for_send(0, id(1)).expect("channel 0");
+    let last = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     last.sent(&mut q);
     assert_eq!(
         q.take_resolved(),
@@ -518,7 +518,7 @@ fn a_partially_sent_message_that_is_unbound_reports_discarded() {
     let mut q = queues(1);
     assert!(q.enqueue(0, striped(3), CarrierToken(21)));
 
-    let first = q.take_for_send(0, id(1)).expect("channel 0");
+    let first = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     first.sent(&mut q);
     assert!(
         q.take_resolved().is_empty(),
@@ -538,7 +538,7 @@ fn a_partially_sent_message_that_is_unbound_reports_discarded() {
 #[test]
 fn a_dummy_send_resolves_no_outcome() {
     let mut q = queues(1);
-    let cover = q.take_for_send(0, id(1)).expect("channel 0");
+    let cover = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     assert_eq!(cover.bytes().len(), W);
     cover.sent(&mut q);
     assert!(q.take_resolved().is_empty());
@@ -552,7 +552,7 @@ fn a_stale_send_token_cannot_complete_a_later_message() {
     let mut q = queues(1);
     assert!(q.enqueue(0, striped(1), CarrierToken(31)));
 
-    let stale = q.take_for_send(0, id(1)).expect("channel 0");
+    let stale = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     q.unbind(0); // bumps the epoch and discards 31
     assert_eq!(
         q.take_resolved(),
@@ -637,7 +637,7 @@ fn a_completion_names_the_peer_the_run_was_accepted_for() {
 
     // One window to the first peer, then rebind: CV-1 discards the partial run
     // and restarts against the new peer.
-    let first = q.take_for_send(0, id(1)).expect("channel 0");
+    let first = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
     first.sent(&mut q);
     assert!(
         q.take_resolved().is_empty(),
@@ -645,7 +645,7 @@ fn a_completion_names_the_peer_the_run_was_accepted_for() {
     );
 
     for _ in 0..2 {
-        let send = q.take_for_send(0, id(2)).expect("channel 0");
+        let send = q.take_for_send(0, id(2), Starts::Open).expect("channel 0");
         send.sent(&mut q);
     }
     assert_eq!(
@@ -656,5 +656,62 @@ fn a_completion_names_the_peer_the_run_was_accepted_for() {
         }],
         "the completion must name the peer the message was RESTARTED against \
          and accepted for, not the one it was first bound to"
+    );
+}
+
+/// [`Starts::Closed`] lets a run in flight continue and starts nothing
+/// (`CVR-R4`): with no run in flight the window is a dummy though a message
+/// waits; a run already going finishes on its peer; and a rebind under
+/// closed starts drops the run's place and sends a dummy, so a prefix never
+/// reaches the new peer.
+///
+/// Red edits: ignore `starts` (the waiting message starts in a closed
+/// window), or close starts on a run in flight (it stalls).
+#[test]
+fn closed_starts_continue_a_run_and_start_none() {
+    let mut q = queues(1);
+    assert!(q.enqueue(0, striped(3), CarrierToken(1)));
+    let idle = q
+        .take_for_send(0, id(1), Starts::Closed)
+        .expect("channel 0");
+    assert_eq!(idle.bytes(), &[0xDD; W][..], "nothing in flight: a dummy");
+    idle.sent(&mut q);
+
+    let first = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
+    assert_eq!(
+        first.bytes(),
+        &[0; W][..],
+        "starts open: the message begins"
+    );
+    first.sent(&mut q);
+    for i in 1..3u8 {
+        let next = q
+            .take_for_send(0, id(1), Starts::Closed)
+            .expect("channel 0");
+        assert_eq!(
+            next.bytes(),
+            &[i; W][..],
+            "the run continues under closed starts"
+        );
+        next.sent(&mut q);
+    }
+    assert_eq!(
+        q.take_resolved(),
+        vec![CarrierOutcome::Sent {
+            token: CarrierToken(1),
+            peer: id(1)
+        }]
+    );
+
+    assert!(q.enqueue(0, striped(2), CarrierToken(2)));
+    let start = q.take_for_send(0, id(1), Starts::Open).expect("channel 0");
+    start.sent(&mut q);
+    let moved = q
+        .take_for_send(0, id(2), Starts::Closed)
+        .expect("channel 0");
+    assert_eq!(
+        moved.bytes(),
+        &[0xDD; W][..],
+        "a rebind under closed starts sends no prefix to the new peer"
     );
 }

@@ -88,6 +88,6 @@ pub use graph::{
     ConnectorId, EmbargoWork, NodeSync, OriginPublication, OriginVerdict, PeerFluff, Relay,
     RelayCarrier, RelayDispatch, RelayNewError, RelayPlan, TxBlob, NEVER_SENT_RETRY_MS,
 };
-pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
+pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend, Starts};
 pub use shekyl_relay_privacy::{ConnectionId, SlotIndex};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};

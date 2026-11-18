@@ -148,6 +148,22 @@ impl CarrierOutcome {
     }
 }
 
+/// Whether a due window may start a new message on its channel.
+///
+/// The schedule decides it, from the epoch tail alone (`CVR-R4`): during the
+/// [`carrier::EPOCH_TAIL_WINDOWS`] windows a channel sends to its old peer
+/// after an epoch boundary, a message already in flight runs on and none
+/// starts. It is not read from the queue, so it says nothing about what the
+/// queue holds (CV-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Starts {
+    /// A new message may start in this window.
+    Open,
+    /// Only a message already in flight on this peer may continue; with none
+    /// in flight the window is a dummy.
+    Closed,
+}
+
 /// A framed message and the handle its enqueuer will recognise it by.
 #[derive(Debug)]
 struct PendingMessage {
@@ -399,18 +415,15 @@ impl NoiseQueues {
         if message.is_empty() || !message.len().is_multiple_of(self.window()) {
             return false;
         }
-        // CV-1's cap, enforced where work is ACCEPTED rather than only where a
-        // zone is CONSTRUCTED.
+        // The fragment cap, enforced where work is ACCEPTED.
         //
-        // `Relay::new` checks that an epoch affords `MAX_FRAGMENTS` windows, so
-        // a configuration is validated against that many worst-case sends. But
-        // nothing stopped a longer message being enqueued into it: the length
-        // check above admits any whole multiple of the window, so a six-window
-        // message entered a zone validated for five and could never finish:
-        // it cannot complete within one epoch, and any roll that hands its
-        // slot to a different peer restarts it from the first fragment (CV-1)
-        // — silently, since a restart is not reported. Refusing here makes the
-        // accepted work match the checked invariant.
+        // The epoch tail is `MAX_FRAGMENTS − 1` windows (`CVR-R4`), sized so a
+        // run that starts in the last window before a boundary finishes on
+        // its own peer. The length check above admits any whole multiple of
+        // the window, so a six-window message could run past the tail and
+        // restart on the next peer (CV-1) — silently, since a restart is not
+        // reported, and with a prefix left at a peer that will not see the
+        // rest. Refusing here makes the accepted work match the tail.
         //
         // This is also what bounds a BATCH. `NOTIFY_NEW_TRANSACTIONS` carries a
         // vector (`make_tx_message` takes `std::vector<blobdata>`), so a
@@ -463,8 +476,19 @@ impl NoiseQueues {
     /// the tail of a run rather than a whole window — and length is the one
     /// thing held constant (§20.5).
     ///
+    /// **[`Starts::Closed`] lets only a run in flight continue** (`CVR-R4`).
+    /// With no run in flight on this peer the window is a dummy, even when a
+    /// message waits; that message starts once the schedule opens starts
+    /// again. A run that began before the epoch boundary finishes on its own
+    /// peer, inside the tail.
+    ///
     /// Non-destructive: see [`NoiseSend`].
-    pub fn take_for_send(&mut self, channel: usize, peer: ConnectionId) -> Option<NoiseSend> {
+    pub fn take_for_send(
+        &mut self,
+        channel: usize,
+        peer: ConnectionId,
+        starts: Starts,
+    ) -> Option<NoiseSend> {
         let window = self.window();
         let q = self.channels.get_mut(channel)?;
 
@@ -475,7 +499,7 @@ impl NoiseQueues {
         q.bump();
         let epoch = q.epoch;
 
-        if q.pending.is_empty() {
+        if q.pending.is_empty() || (q.offset.is_none() && starts == Starts::Closed) {
             return Some(NoiseSend {
                 channel,
                 bytes: self.dummy.clone(),

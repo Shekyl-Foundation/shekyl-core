@@ -273,7 +273,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
                     );
                     unbinds += 1;
                 }
-                Effect::NoiseSend { channel, peer } => {
+                Effect::NoiseSend { channel, peer, .. } => {
                     assert_eq!(
                         (channel, peer),
                         (1, keep),
@@ -629,7 +629,7 @@ fn noise_sends_carry_the_slots_own_peer_at_its_own_index() {
         }
         let wake = d.next_wake();
         for e in d.poll(wake, &mut rng) {
-            if let Effect::NoiseSend { channel, peer } = e {
+            if let Effect::NoiseSend { channel, peer, .. } = e {
                 assert_eq!(
                     Some(peer),
                     truth[channel],
@@ -717,7 +717,7 @@ fn an_unbound_channel_emits_no_send_and_shifts_no_other() {
         }
         let wake = d.next_wake();
         for e in d.poll(wake, &mut rng) {
-            if let Effect::NoiseSend { channel, peer } = e {
+            if let Effect::NoiseSend { channel, peer, .. } = e {
                 emissions.push((channel, peer));
             }
         }
@@ -943,4 +943,220 @@ fn an_arrival_resolves_the_observation_as_propagated() {
         "a resolved observation is gone from the pending map — a later expire \
          must not charge the peer a silence it already answered"
     );
+}
+
+/// One carrier send as the actor makes it: take the window for the effect's
+/// peer and starts, write it, resolve it. Returns whether the window was
+/// real (a message byte, not the dummy's).
+fn carry(
+    queues: &mut crate::NoiseQueues,
+    channel: usize,
+    peer: ConnectionId,
+    starts: Starts,
+) -> bool {
+    let send = queues
+        .take_for_send(channel, peer, starts)
+        .expect("the channel exists");
+    let real = send.bytes().first() == Some(&REAL_BYTE);
+    send.sent(queues);
+    real
+}
+
+const WINDOW: usize = 8;
+const REAL_BYTE: u8 = 0xAA;
+
+/// A carrier zone over four encrypted clearnet sessions, both slots bound.
+fn carrier_driver(seed: u64) -> (Driver, SplitMix64) {
+    let mut rng = SplitMix64::new(seed);
+    let mut d = Driver::new(
+        Relay::new(
+            DandelionParams::inherited(),
+            2,
+            true,
+            &[ConnectorId::Clearnet],
+            &[ConnectorId::Clearnet],
+            0,
+            &mut rng,
+        )
+        .unwrap(),
+    );
+    for byte in 1..=4 {
+        d.zone_mut().on_session_established(
+            id(byte),
+            PeerDirection::Outbound,
+            ConnectorId::Clearnet,
+            &mut rng,
+        );
+    }
+    (d, rng)
+}
+
+/// What one channel's sends looked like, in order: the peer, whether starts
+/// were open, and whether the window was real.
+type Sends = Vec<(usize, ConnectionId, Starts, bool)>;
+
+/// Drive the zone and the queue together, as the actor does, for `polls`
+/// wakes, recording every carrier send.
+fn drive(
+    d: &mut Driver,
+    queues: &mut crate::NoiseQueues,
+    rng: &mut SplitMix64,
+    polls: usize,
+) -> Sends {
+    let mut sends = Vec::new();
+    for _ in 0..polls {
+        let wake = d.next_wake();
+        for e in d.poll(wake, rng) {
+            if let Effect::NoiseSend {
+                channel,
+                peer,
+                starts,
+            } = e
+            {
+                let real = carry(queues, channel, peer, starts);
+                sends.push((channel, peer, starts, real));
+            }
+        }
+    }
+    sends
+}
+
+/// The epoch tail (`CVR-R4`; Rick, 2026-11-18): after an epoch boundary each
+/// channel sends `EPOCH_TAIL_WINDOWS` more windows to the peer it was bound
+/// to, starting nothing, then takes its slot's new peer — and the switch
+/// comes at the same point whether or not a message was in flight.
+///
+/// Two runs from one seed differ only in the queue: in the first a
+/// full-size message is one window into channel 0 at the boundary; in the
+/// second nothing is queued. The schedule's sends — peer and starts, per
+/// channel — must be identical, and in the first run the message must
+/// finish on its own peer inside the tail.
+///
+/// Red edits: set the tail only when a run is in flight (the sequences
+/// differ); let a tail window start a message (the waiting message starts
+/// on the old peer); drop the tail (the message restarts on the new peer).
+#[test]
+fn the_epoch_tail_switches_at_one_point_whatever_was_in_flight() {
+    use shekyl_relay_privacy::params::carrier::{EPOCH_TAIL_WINDOWS, MAX_FRAGMENTS};
+    let tail = EPOCH_TAIL_WINDOWS as usize;
+    let run = |in_flight: bool| {
+        let (mut d, mut rng) = carrier_driver(0x7A11);
+        let mut queues =
+            crate::NoiseQueues::new(2, vec![0u8; WINDOW], 64).expect("a carrier queue");
+        // Bind both channels before the boundary.
+        let mut before = drive(&mut d, &mut queues, &mut rng, 6);
+        if in_flight {
+            let message = vec![REAL_BYTE; WINDOW * MAX_FRAGMENTS as usize];
+            assert!(queues.enqueue(0, message, crate::CarrierToken(1)));
+            // One window of it goes out on channel 0 before the boundary.
+            loop {
+                let step = drive(&mut d, &mut queues, &mut rng, 1);
+                let first = step.iter().any(|s| s.0 == 0 && s.3);
+                before.extend(step);
+                if first {
+                    break;
+                }
+            }
+        } else {
+            loop {
+                let step = drive(&mut d, &mut queues, &mut rng, 1);
+                let zero = step.iter().any(|s| s.0 == 0);
+                before.extend(step);
+                if zero {
+                    break;
+                }
+            }
+        }
+        let old0 = before
+            .iter()
+            .rev()
+            .find(|s| s.0 == 0)
+            .expect("channel 0 sent")
+            .1;
+        let now = d.next_wake();
+        d.zone_mut().start_epoch(now, &mut rng);
+        d.zone_mut().rebuild_stems(&mut rng);
+        // A message that arrives during the tail must wait for the switch.
+        assert!(queues.enqueue(0, vec![REAL_BYTE; WINDOW], crate::CarrierToken(2)));
+        let after = drive(&mut d, &mut queues, &mut rng, 40);
+        let channel0: Vec<_> = after.iter().filter(|s| s.0 == 0).copied().collect();
+        (old0, channel0, after, queues.take_resolved())
+    };
+    let (old_a, ch0_a, after_a, resolved_a) = run(true);
+    let (old_b, ch0_b, after_b, _) = run(false);
+
+    let schedule = |sends: &Sends| -> Vec<(usize, ConnectionId, Starts)> {
+        sends.iter().map(|s| (s.0, s.1, s.2)).collect()
+    };
+    assert_eq!(old_a, old_b, "fixture: one seed, one binding");
+    assert_eq!(
+        schedule(&after_a),
+        schedule(&after_b),
+        "the schedule after the boundary depends on what was in flight"
+    );
+    assert!(
+        ch0_a.len() > tail + 1,
+        "fixture: channel 0 ran past its tail"
+    );
+    for (i, send) in ch0_a.iter().take(tail).enumerate() {
+        assert_eq!((send.1, send.2), (old_a, Starts::Closed), "tail window {i}");
+    }
+    assert_eq!(
+        ch0_a[tail].2,
+        Starts::Open,
+        "the window after the tail opens starts on the slot's peer"
+    );
+    // The in-flight message finished on its own peer inside the tail...
+    assert!(
+        ch0_a.iter().take(tail).all(|s| s.3),
+        "the tail carried the rest of the in-flight message"
+    );
+    assert!(
+        resolved_a.contains(&crate::CarrierOutcome::Sent {
+            token: crate::CarrierToken(1),
+            peer: old_a,
+        }),
+        "the in-flight message completed on the peer it started with: {resolved_a:?}"
+    );
+    // ...and the message that arrived during the tail started only after it.
+    assert!(
+        ch0_b.iter().take(tail).all(|s| !s.3),
+        "no message starts in the tail"
+    );
+    assert!(ch0_b[tail].3, "the waiting message starts at the switch");
+}
+
+/// A peer lost during the tail ends it at once: the channel takes its slot's
+/// peer with starts open, and a half-sent message restarts there (CV-1).
+///
+/// Red edit: keep counting the tail against a gone peer; the channel sends
+/// nothing (or to a dead session) until the count runs out.
+#[test]
+fn a_peer_lost_in_the_tail_ends_it() {
+    let (mut d, mut rng) = carrier_driver(0x7A12);
+    let mut queues = crate::NoiseQueues::new(2, vec![0u8; WINDOW], 64).expect("a carrier queue");
+    let mut before = Vec::new();
+    while !before
+        .iter()
+        .any(|s: &(usize, ConnectionId, Starts, bool)| s.0 == 0)
+    {
+        before.extend(drive(&mut d, &mut queues, &mut rng, 1));
+    }
+    let old0 = before
+        .iter()
+        .rev()
+        .find(|s| s.0 == 0)
+        .expect("channel 0 sent")
+        .1;
+    let now = d.next_wake();
+    d.zone_mut().start_epoch(now, &mut rng);
+    d.zone_mut().rebuild_stems(&mut rng);
+    d.zone_mut().on_connection_close(&old0);
+    let after = drive(&mut d, &mut queues, &mut rng, 20);
+    let first = after
+        .iter()
+        .find(|s| s.0 == 0)
+        .expect("channel 0 sent again");
+    assert_ne!(first.1, old0, "a lost peer is not sent the tail");
+    assert_eq!(first.2, Starts::Open, "the tail ended with the peer");
 }
