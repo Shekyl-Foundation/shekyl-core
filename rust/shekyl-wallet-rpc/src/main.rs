@@ -70,15 +70,16 @@ struct Cli {
     disable_rpc_login: bool,
 
     /// Daemon JSON-RPC base URL (used by refresh / send; lifecycle holds it).
-    /// Default: this machine's daemon at the RPC port for --network. A daemon
-    /// that is not loopback is disclosed in the log at startup: its operator
-    /// sees what this wallet asks for.
+    /// Default: "this computer", the node this account runs for --network,
+    /// over its owner's socket or pipe; a node run as a service is named by
+    /// its view listener here. A daemon that is not loopback is disclosed in
+    /// the log at startup: its operator sees what this wallet asks for.
     #[arg(long = "daemon-address")]
     daemon_address: Option<String>,
 
     /// SOCKS5h proxy for the daemon connection (e.g. socks5h://127.0.0.1:9050).
     /// The proxy resolves the daemon hostname, so it never reaches the local
-    /// resolver. Omit for a direct connection.
+    /// resolver. Omit for a direct connection. Needs --daemon-address.
     #[arg(long = "proxy")]
     proxy: Option<String>,
 
@@ -144,18 +145,13 @@ async fn serve(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 
     let network = Network::from_str(&cli.network)
         .map_err(|e| format!("invalid --network '{}': {e}", cli.network))?;
-    // The wallet knows the daemon's ports so the operator need not: absent
-    // the flag, the loopback daemon at this network's RPC port.
-    let daemon_address = cli
-        .daemon_address
-        .unwrap_or_else(|| format!("http://127.0.0.1:{}", network.ports().rpc));
+    let daemon = shekyl_wallet_rpc::server::daemon_target(network, cli.daemon_address, cli.proxy)?;
 
     let server = ServerConfig {
         listen,
         wallet_dir: cli.wallet_dir,
         network,
-        daemon_address,
-        proxy: cli.proxy,
+        daemon,
         auth,
         kdf: KdfParams::default(),
     };

@@ -265,12 +265,12 @@ pub(crate) async fn unstake(
     // One short tenant hold for both the engine handle and the embedder's
     // daemon endpoint (the exit's record fetch rides the ① local-posture
     // transport built from it — the serving-start shape).
-    let (shared, daemon_address) = {
+    let (shared, daemon) = {
         let state = tenants.lock().await;
         let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        (shared, state.daemon.address.clone())
+        (shared, state.daemon.clone())
     };
-    let outcome = StakeFacade::unstake(shared, &daemon_address).await?;
+    let outcome = StakeFacade::unstake(shared, &daemon).await?;
     let result: UnstakeResult = match outcome {
         UnstakeOutcome::Broadcast { tx_hash } => sealed_submit_result(tx_hash.to_string(), None),
         UnstakeOutcome::AlreadyInChain { tx_hash, height } => {

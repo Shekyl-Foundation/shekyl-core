@@ -393,6 +393,22 @@ fn a_cxx_log_category_is_refused_as_a_key() {
         .contains("shekyl_dialer=debug"));
 }
 
+/// A view listener given an address alone binds at the network's view port,
+/// the RPC port plus one (Rick, 2026-11-17); a port given is kept; the file
+/// takes the same spelling; and the admin listener still needs its port.
+#[test]
+fn a_view_listener_without_a_port_takes_the_network_view_port() {
+    let c = build_from(&["--rpc-view-listen", "127.0.0.1"], "").unwrap();
+    assert_eq!(c.rpc.view_listen, vec!["127.0.0.1:11030".parse().unwrap()]);
+    let c = build_from(&["--network", "testnet", "--rpc-view-listen", "::1"], "").unwrap();
+    assert_eq!(c.rpc.view_listen, vec!["[::1]:12030".parse().unwrap()]);
+    let c = build_from(&["--rpc-view-listen", "127.0.0.1:2000"], "").unwrap();
+    assert_eq!(c.rpc.view_listen, vec!["127.0.0.1:2000".parse().unwrap()]);
+    let c = build_from(&[], "rpc-view-listen = [\"127.0.0.1\"]\n").unwrap();
+    assert_eq!(c.rpc.view_listen, vec!["127.0.0.1:11030".parse().unwrap()]);
+    assert!(build_from(&["--rpc-admin-listen", "127.0.0.1"], "").is_err());
+}
+
 #[test]
 fn an_ipv6_admin_listener_is_accepted() {
     let c = build_from(&["--rpc-admin-listen", "[::1]:11029"], "").unwrap();

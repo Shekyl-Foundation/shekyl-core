@@ -47,7 +47,27 @@ consumer writes a sentence of its own (`TSR-Q13`; Rick, 2026-11-08).
   `tor` setting of `managed` or `operator` together with the origination
   `address-hiding`. An unknown origination, or an unknown `tor` or `clearnet`
   setting, is not address-hiding, so the send flow holds the transaction.
-  No other accessor answers that question.
+  Under a managed Tor the link must also still carry the node's traffic:
+  a `carriage` of `carries` or `open-only`. `gone`, or a carriage this
+  build does not know, is not address-hiding (Rick, 2026-11-17): the
+  relay's verdict lags a Tor that ended, and such a node is holding.
+- **One classification of where the node's own transactions go** (Rick,
+  2026-11-17). `TorStatus::own_tx_fate` returns `OwnTxFate`: `Hidden`,
+  `Held`, `OpenNetwork`, `Offline` or `Unknown`. It is the only place the
+  settings, the origination and the carriage are read together for that.
+  `own_tx_hides_address` is the fate being `Hidden`. The renderer's first
+  sentence is picked from the fate, so the line and a send decision cannot
+  disagree, and a client (the GUI wallet's send review) maps the fate
+  through and reads no field. `Unknown` is everything this build cannot
+  read as one of the other four, and promises nothing. The renderer says
+  it in one of two ways: the update sentence where the reply carries a
+  keyword this build does not know, and "The node's Tor report contradicts
+  itself, so nothing can be said about where its transactions go." where
+  every keyword is known and they do not fit together (an origination that
+  needs Tor beside `tor = off`), which no update cures. A table test runs
+  every origination, carriage, `tor` and `clearnet` setting, known and
+  unknown, and asserts one fate each with the line's first sentence
+  matching it, and which of the two sentences each unknown case gets.
 
 ## 3. The shape
 

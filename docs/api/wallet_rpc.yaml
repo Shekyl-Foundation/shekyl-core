@@ -523,7 +523,16 @@ info:
   # identity: -29123 TOO_MANY_INPUTS, -29124 TOO_MANY_OUTPUTS (refused at
   # the request), -29125 INPUT_NOT_IN_TREE, -29126 INPUT_UNSPENDABLE, and
   # -29119 SIGNER_FAILED names its fault in data.fault (A16).
-  version: 0.19.0
+  # 0.20.0: RT-W10 step 5 (Rick, 2026-11-17). With no daemon-address the
+  # wallet's daemon is "this computer": the owner's socket or pipe of the
+  # node this account runs, never a plaintext listener. Any daemon
+  # operation gains -29213 DAEMON_PEER_CHECK_FAILED (something other than
+  # this account's node answers at its rendezvous: a security failure,
+  # never retried) and -29214 DAEMON_IS_A_SERVICE (this computer's node is
+  # a service, which a wallet reaches over the channel only from RT-W12;
+  # data.view is its view listener, the daemon-address to set, or null
+  # when it has none). api_version stays 1.
+  version: 0.20.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -861,6 +870,8 @@ components:
         - -29210   # CHAIN_UNSTABLE
         - -29211   # RESYNC_REQUIRED
         - -29212   # DAEMON_GRANT_REFUSED
+        - -29213   # DAEMON_PEER_CHECK_FAILED
+        - -29214   # DAEMON_IS_A_SERVICE
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -1286,6 +1297,19 @@ components:
                                           connection repeats the refusal.
                                           Connect with a key that holds the
                                           grant, or to your own node
+          -29213 DAEMON_PEER_CHECK_FAILED any daemon operation: something
+                                          other than this account's node
+                                          answers at "this computer"'s
+                                          rendezvous. A security failure:
+                                          the wallet did not connect and
+                                          does not retry
+          -29214 DAEMON_IS_A_SERVICE      any daemon operation: this
+                                          computer's node runs as a
+                                          service. data: {"view": address
+                                          or null}; view is the service's
+                                          view listener, the daemon-address
+                                          to set; null when it has none.
+                                          Nothing was dialled
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not

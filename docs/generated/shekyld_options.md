@@ -43,7 +43,7 @@
 | `rpc-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The authenticated channel's listeners: enrolled clients reach the node here over the Noise channel, from this host or another. Any address, a wildcard included; `none` is no channel listener. |
 | `rpc-socket-dir` | absolute path | — | both | no | The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
-| `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
+| `rpc-view-listen` | list of IP address, with or without a port (`address[:port]`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only; an address with no port takes the network's view port. |
 | `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
 | `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
 <!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->

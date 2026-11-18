@@ -22,31 +22,14 @@
 mod support;
 
 use std::thread;
-use std::time::Duration;
 
 use shekyl_levin::NewTransactions;
 use shekyl_p2p_session::harness::Wire;
 use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, DialFailure, Reached, Retry};
-use support::{blob, id_of, new_transactions, Build, Rig, SEND_CAP, SETTLE};
-
-/// One second: shorter than the carrier's fastest cadence, so a drive in
-/// these steps sees every window a channel emits.
-const STEP: Duration = Duration::from_secs(1);
-
-fn carrier_rig() -> Rig {
-    carrier_rig_from(Build::default())
-}
-
-fn carrier_rig_from(build: Build) -> Rig {
-    let rig = Rig::build(Build {
-        noise: true,
-        ..build
-    });
-    support::wait_until("fixture: the zone must run the carrier", || {
-        rig.relay.snapshot().noise
-    });
-    rig
-}
+use support::{
+    blob, carrier_rig, carrier_rig_from, discard_the_carrier, id_of, new_transactions, Build, Rig,
+    SEND_CAP, SETTLE, STEP,
+};
 
 /// Every 2002 the wires read, in wire order.
 fn read_all(rig: &Rig, wires: &mut [&mut Wire]) -> Vec<NewTransactions> {
@@ -56,35 +39,10 @@ fn read_all(rig: &Rig, wires: &mut [&mut Wire]) -> Vec<NewTransactions> {
         .collect()
 }
 
-/// Past the first epoch's end (600 s plus up to 30 s of jitter, from a
-/// clock at 1 ms): the roll that rebuilds the stem slots from the
-/// sessions that are left.
-const PAST_THE_FIRST_EPOCH: Duration = Duration::from_secs(640);
-
 /// A blob the carrier cannot take: its 2002 frames to more than
 /// `MAX_FRAGMENTS` (5) windows of 20,480 bytes, which the carrier refuses.
 fn oversize(tag: u8) -> Vec<u8> {
     vec![tag; 110_000]
-}
-
-/// Close every outbound session, then roll the epoch with none left. A
-/// close alone does not unbind a channel: the slot keeps the dead peer
-/// until the map is rebuilt, and only a due tick on an empty slot clears
-/// the channel's queue, reporting each message it held as discarded.
-fn discard_the_carrier(rig: &Rig, outbound: Vec<Wire>) {
-    for mut wire in outbound {
-        let id = wire.id;
-        wire.peer_closes();
-        rig.wait_closed(id);
-        drop(wire);
-    }
-    // The owner hears the closes after the board does.
-    thread::sleep(SETTLE);
-    rig.advance(PAST_THE_FIRST_EPOCH);
-    thread::sleep(SETTLE);
-    // Each channel is due within 6.7 s of the roll, one per wake.
-    rig.drive(STEP, 15, || false);
-    thread::sleep(SETTLE);
 }
 
 /// The batches that carry `blob`.

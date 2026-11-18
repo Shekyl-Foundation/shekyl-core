@@ -24,8 +24,7 @@ fn host(dir: &std::path::Path) -> RpcSession {
     RpcSession::host_in_process(
         dir.to_path_buf(),
         Network::Stagenet,
-        NO_DAEMON.into(),
-        None,
+        shekyl_wallet_rpc::tenant::DaemonTarget::address(NO_DAEMON),
         false,
     )
     .expect("host in-process wallet RPC")
