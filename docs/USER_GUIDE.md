@@ -230,12 +230,13 @@ a local group.
 # The SOCKS password for clearnet-socks.
 # clearnet-socks-password = "<secret>"
 
-# The clearnet listen endpoints; `none` is dial-only on clearnet.
+# The clearnet listen endpoints; `none` is dial-only on clearnet. Beside
+# `clearnet off`, `none` confirms it.
 # Default: 0.0.0.0 and the network's p2p port.
 # clearnet-listen = ["127.0.0.1:11029"]
 
 # The clearnet endpoints peers can reach this node at; at most one per
-# address family.
+# address family. Beside `clearnet off`, `none` confirms it.
 # clearnet-advertise = ["<public-address>:11021"]
 
 # Accept peers at private addresses, for a private test network.
@@ -343,8 +344,8 @@ whether `option_set` changes it while the daemon runs.
 | `clearnet-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS proxy for clearnet dials. |
 | `clearnet-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for clearnet-socks. |
 | `clearnet-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for clearnet-socks. |
-| `clearnet-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 0.0.0.0 and the network's p2p port | both | no | The clearnet listen endpoints; `none` is dial-only on clearnet. |
-| `clearnet-advertise` | list of IP endpoint (`address:port`) (`none` for empty) | — | both | no | The clearnet endpoints peers can reach this node at; at most one per address family. |
+| `clearnet-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 0.0.0.0 and the network's p2p port | both | no | The clearnet listen endpoints; `none` is dial-only on clearnet. Beside `clearnet off`, `none` confirms it. |
+| `clearnet-advertise` | list of IP endpoint (`address:port`) (`none` for empty) | — | both | no | The clearnet endpoints peers can reach this node at; at most one per address family. Beside `clearnet off`, `none` confirms it. |
 | `p2p-local` | switch | — | both | no | Accept peers at private addresses, for a private test network. |
 | `p2p-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | Peers to connect to, by IP or onion. |
 | `p2p-closed-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | The only peers to connect to; non-empty declares a closed network. |

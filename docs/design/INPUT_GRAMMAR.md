@@ -200,7 +200,7 @@ Two words are given one meaning each by this table, ending two collisions: **add
 
 The table, kinds, parsers, units, diagnostics and renderer live in one crate (IG-Q13). `shekyl-daemon-config` builds the daemon's table from it and owns precedence, the per-network file, permission checks, the effective-config line and the typed `DaemonConfig` (sections per subsystem; each Rust consumer takes its section at construction; the C++ that remains reads a Rust-owned snapshot until its subsystem is Rust).
 
-Cross-row constraints are types, not checks: the P2P section is built from a clearnet posture `Off | On { listen, socks, advertise }` and a Tor posture `Off | Managed | Operator { socks, onion }`, so a SOCKS endpoint for a connector that is off cannot be constructed, and a `p2p-peer` whose connector is off is refused by the section's constructor.
+Cross-row constraints are types, not checks: the P2P section is built from a clearnet posture `Off | On { listen, socks, advertise }` and a Tor posture `Off | Managed | Operator { socks, onion }`, so a SOCKS endpoint for a connector that is off cannot be constructed, and a peer on a connector that is off is refused by the section's constructor. A value that asks for nothing confirms that parent: an empty list or map, the word `none`, the word `off`, or a switch that is off (`Bearing` on the parsed value).
 
 ---
 
@@ -245,13 +245,13 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | (`tx-proxy` / `anonymous-inbound` `,N`) | — | | | |  |  | – (R5) |
 | `proxy` | `clearnet-socks` | endpoint | unset | both |  |  | R |
 | (`proxy` `user:pass@`) | `clearnet-socks-username`, `clearnet-socks-password` | secret | unset | file |  |  | N; carried on the dial as an RFC 1929 pair: given together or refused (`config.value.requires`), each half 1 to 255 bytes (`config.value.range`) |
-| `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6` | `clearnet-listen` | list of endpoint | `0.0.0.0:<row p2p port>` | both |  |  | R; `none` = dial-only on clearnet. Beside `clearnet off`, `none` says the same thing and is accepted; an endpoint there is `config.value.conflict` (Rick, 2026-11-18) |
-| `p2p-external-port` | `clearnet-advertise` | list of endpoint (global unicast; at most one per address family) | unset | both |  |  | R (Q10a; absorbs the external port; PWD-E6's capability kept) |
+| `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6` | `clearnet-listen` | list of endpoint | `0.0.0.0:<row p2p port>` | both |  |  | R; `none` = dial-only on clearnet. Beside `clearnet off`, `none` confirms it and is accepted; an endpoint there is `config.value.conflict` (Rick, 2026-11-18) |
+| `p2p-external-port` | `clearnet-advertise` | list of endpoint (global unicast; at most one per address family) | unset | both |  |  | R (Q10a; absorbs the external port; PWD-E6's capability kept). Beside `clearnet off`, `none` confirms it and is accepted; an endpoint there is `config.value.conflict` (Rick, 2026-11-18) |
 | `p2p-ignore-ipv4` | — | | | |  |  | – (the listen lists state the address families) |
 | `no-igd`, `igd` | — | | | |  |  | X `upnp`, `igd` (R4) |
 | `allow-local-ip` | `p2p-local` | switch | off | both |  |  | R |
-| `add-peer`, `seed-node` | `p2p-peer` | list of peer-endpoint | `none` | both |  | peers | R; IP and onion only (IG-Q6); seeds are ordinary peers |
-| `add-exclusive-node` | `p2p-closed-peer` | list of peer-endpoint | `none` | both |  | peers | R; non-empty declares a closed network |
+| `add-peer`, `seed-node` | `p2p-peer` | list of peer-endpoint | `none` | both |  | peers | R; IP and onion only (IG-Q6); seeds are ordinary peers. `none` beside a connector that is off confirms it; an IP peer beside `clearnet off`, or an onion beside `tor off`, is `config.value.conflict` |
+| `add-exclusive-node` | `p2p-closed-peer` | list of peer-endpoint | `none` | both |  | peers | R; non-empty declares a closed network. `none` beside a connector that is off confirms it, as `p2p-peer` does |
 | `p2p-disclose-early` `[PR-3]` | `p2p-disclose-early` | switch | off | both |  |  | K (IG-Q20); for bootstrapping or testing a network smaller than the white-diversity floor (48): this node discloses its known peers and its own address below the floor, on each connector until that connector's white count reaches the floor or the span `P2P_DISCLOSE_EARLY_SPAN_NANOS` ends it, whichever comes first; announced at start (IG-14) |
 | `add-priority-node` | — | | | |  |  | X (bypasses the identity protections; removed by PR-3) |
 | `ban-list` | `p2p-ban-file` | path | unset | both |  | peers | R; read in Rust at parse |

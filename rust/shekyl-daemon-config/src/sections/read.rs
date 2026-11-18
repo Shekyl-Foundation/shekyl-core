@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
-use shekyl_options::{Code, Diagnostic, PeerEndpoint, Secret, Source, Value};
+use shekyl_options::{Bearing, Code, Diagnostic, PeerEndpoint, Secret, Source, Value};
 
 use crate::resolve::Resolved;
 
@@ -93,10 +93,13 @@ impl<'a> Reader<'a> {
         !matches!(self.resolved.source(name), None | Some(Source::Default))
     }
 
-    /// Whether a list row was given as `none`, the empty list.
-    pub(super) fn given_none(&self, name: &str) -> bool {
-        self.given(name)
-            && matches!(self.resolved.get(name), Some(Value::List(items)) if items.is_empty())
+    /// How a row the operator set stands beside a parent that refuses it.
+    /// `None` when the operator did not set the row.
+    pub(super) fn bearing(&self, name: &str) -> Option<Bearing> {
+        if !self.given(name) {
+            return None;
+        }
+        self.resolved.get(name).map(Value::bearing)
     }
 
     pub(super) fn conflict(&mut self, name: &str, conflict: &str) {

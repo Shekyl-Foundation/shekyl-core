@@ -240,6 +240,21 @@ pub enum Value {
     Map(BTreeMap<String, Value>),
 }
 
+/// How a value the operator set stands beside a parent that refuses its row.
+///
+/// A confirmation asks for nothing and restates the parent. A request asks
+/// for something the parent forbids. A row the operator left unset is not a
+/// bearing: the reader that walks children returns `None` for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bearing {
+    /// An empty list or map (`none`), the word `none`, the word `off`, or a
+    /// switch that is off.
+    Confirmation,
+    /// Any other value. The integer `0` is a request: absence is a word or
+    /// an empty collection, not a count.
+    Request,
+}
+
 impl Value {
     /// The text that, given back on either surface, builds this value
     /// (IG-12: what `option show` prints, `option set` accepts). A secret
@@ -281,6 +296,20 @@ impl Value {
                         .join(" ")
                 }
             }
+        }
+    }
+
+    /// How this value stands beside a parent that refuses its row.
+    ///
+    /// A confirmation asks for nothing. Everything else, including the
+    /// integer `0`, is a request.
+    #[must_use]
+    pub fn bearing(&self) -> Bearing {
+        match self {
+            Self::List(items) if items.is_empty() => Bearing::Confirmation,
+            Self::Map(map) if map.is_empty() => Bearing::Confirmation,
+            Self::Word("none" | "off") | Self::Switch(false) => Bearing::Confirmation,
+            _ => Bearing::Request,
         }
     }
 }

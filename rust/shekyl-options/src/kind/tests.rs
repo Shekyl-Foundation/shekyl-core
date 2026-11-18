@@ -3,6 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use super::*;
 
 const RATE: Kind = Kind::Quantity {
@@ -259,6 +262,39 @@ fn a_path_row_may_take_none_for_no_file() {
         Ok(Value::Path(_))
     ));
     assert_eq!(code(or_none.parse_text("None")), Code::ValueSyntax);
+}
+
+/// A value the operator set either confirms a parent that refuses its row
+/// or asks for something that parent forbids. Absence is the empty
+/// collection, the word `none`, the word `off`, or a switch that is off.
+/// The integer `0` is a request. Red edit: classify an empty list as
+/// [`Bearing::Request`].
+#[test]
+fn a_value_that_asks_for_nothing_confirms() {
+    let confirm = |value: Value| assert_eq!(value.bearing(), Bearing::Confirmation, "{value:?}");
+    let request = |value: Value| assert_eq!(value.bearing(), Bearing::Request, "{value:?}");
+
+    confirm(Value::List(Vec::new()));
+    confirm(Value::Map(BTreeMap::new()));
+    confirm(Value::Word("none"));
+    confirm(Value::Word("off"));
+    confirm(Value::Switch(false));
+    confirm(
+        Kind::List(&ENDPOINT)
+            .parse_cli(&["none".to_owned()])
+            .expect("`none` is the empty list"),
+    );
+
+    request(Value::List(vec![Value::Integer(0)]));
+    request(Value::Map(BTreeMap::from([(
+        "k".into(),
+        Value::Integer(1),
+    )])));
+    request(Value::Word("on"));
+    request(Value::Word("unlimited"));
+    request(Value::Switch(true));
+    request(Value::Integer(0));
+    request(Value::Path(PathBuf::from(abs("/etc/shekyl"))));
 }
 
 #[test]

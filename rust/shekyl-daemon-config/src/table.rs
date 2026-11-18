@@ -222,8 +222,8 @@ const ROWS: &[Row] = &[
     public("clearnet-socks", ENDPOINT, Default::Unset, Surface::Both, "A SOCKS proxy for clearnet dials."),
     public("clearnet-socks-username", Kind::Secret, Default::Unset, Surface::File, "The SOCKS username for clearnet-socks."),
     public("clearnet-socks-password", Kind::Secret, Default::Unset, Surface::File, "The SOCKS password for clearnet-socks."),
-    public("clearnet-listen", Kind::List(&ENDPOINT), Default::Derived("0.0.0.0 and the network's p2p port"), Surface::Both, "The clearnet listen endpoints; `none` is dial-only on clearnet."),
-    public("clearnet-advertise", Kind::List(&GLOBAL), Default::Unset, Surface::Both, "The clearnet endpoints peers can reach this node at; at most one per address family."),
+    public("clearnet-listen", Kind::List(&ENDPOINT), Default::Derived("0.0.0.0 and the network's p2p port"), Surface::Both, "The clearnet listen endpoints; `none` is dial-only on clearnet. Beside `clearnet off`, `none` confirms it."),
+    public("clearnet-advertise", Kind::List(&GLOBAL), Default::Unset, Surface::Both, "The clearnet endpoints peers can reach this node at; at most one per address family. Beside `clearnet off`, `none` confirms it."),
     public("p2p-local", Kind::Switch, Default::Unset, Surface::Both, "Accept peers at private addresses, for a private test network."),
     Row {
         name: "p2p-peer",
