@@ -15,9 +15,11 @@ source of truth. This script:
      never re-pinned in passing);
   2. pulls `<reference>@<digest>` into a staging directory (by digest,
      never by tag: a tag can move, a digest cannot);
-  3. checks every pulled layer's size and SHA-256 against the pin, and
-     refuses on any difference, printing both values, before anything is
-     moved into place.
+  3. checks every file the pin names, at that layer's size and SHA-256,
+     and refuses a file the pin does not name, before anything is moved
+     into place. The pin's form (one entry per chain, the digest's shape,
+     each layer's media type) is shekyl-chain-forge's `hosted::Pins`.
+     This script checks bytes.
 
     fetch_test_chain.py <chain>          fetch into the chain's fetched
                                          directory (kept if it already
@@ -58,12 +60,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 FORGE = REPO / "rust" / "shekyl-chain-forge"
 PIN_FILE = FORGE / "chains" / "hosted.toml"
-LAYERS = (
-    ("corpus.e2", "application/vnd.shekyl.corpus.v4"),
-    ("trace.e2", "application/vnd.shekyl.trace.v1"),
-    ("manifest.json", "application/vnd.shekyl.manifest.v6+json"),
-)
 ORAS_URL = "https://github.com/oras-project/oras/releases/download/v{v}/oras_{v}_{p}.tar.gz"
+# What a pull needs from a chain entry. The rest of the pin's form is
+# `hosted::Pins` (`shekyl-chain-forge`).
+CHAIN_FIELDS = ("reference", "digest", "commit", "plan", "layer")
 
 
 class Refused(Exception):
@@ -75,20 +75,36 @@ def load_pins(path: Path = PIN_FILE) -> dict:
         raise Refused(f"{path} is missing: there is no pin to fetch against")
     pins = tomllib.loads(path.read_text(encoding="utf-8"))
     oras = pins.get("oras", {})
-    if not oras.get("version") or not oras.get("sha256"):
+    if not isinstance(oras, dict) or not oras.get("version") or not oras.get("sha256"):
         raise Refused(f"{path} pins no oras version or checksum")
-    for chain in pins.get("chain", []):
-        files = [(layer["file"], layer["media_type"]) for layer in chain.get("layer", [])]
-        if files != list(LAYERS):
-            raise Refused(f"chain {chain.get('name')!r}: its layers are {files}, a hosted chain's are {list(LAYERS)}")
+    raw = pins.get("chain", [])
+    if not isinstance(raw, list):
+        raise Refused(f"{path}: chain is not a list of chains")
     return pins
 
 
 def pinned(pins: dict, name: str) -> dict:
-    for chain in pins.get("chain", []):
-        if chain["name"] == name:
-            return chain
-    raise Refused(f"no hosted chain {name!r} is pinned in {PIN_FILE.relative_to(REPO)}")
+    matches = [chain for chain in pins.get("chain", []) if chain.get("name") == name]
+    if not matches:
+        raise Refused(f"no hosted chain {name!r} is pinned in {PIN_FILE.relative_to(REPO)}")
+    if len(matches) > 1:
+        raise Refused(f"chain {name!r} is pinned twice in {PIN_FILE.relative_to(REPO)}")
+    chain = matches[0]
+    missing = [field for field in CHAIN_FIELDS if field not in chain]
+    if missing:
+        raise Refused(f"chain {name!r} pins no {', '.join(missing)}")
+    layers = chain["layer"]
+    if not isinstance(layers, list) or not layers:
+        raise Refused(f"chain {name!r} pins no layers")
+    files: list[str] = []
+    for layer in layers:
+        file = layer.get("file")
+        if not file or "size" not in layer or "sha256" not in layer:
+            raise Refused(f"chain {name!r}: a layer needs a file, a size and a SHA-256")
+        files.append(file)
+    if len(files) != len(set(files)):
+        raise Refused(f"chain {name!r}: a layer file is named twice")
+    return chain
 
 
 def sha256_file(path: Path) -> tuple[int, str]:
@@ -102,7 +118,8 @@ def sha256_file(path: Path) -> tuple[int, str]:
 
 
 def check_layers(chain: dict, directory: Path) -> None:
-    """Every layer present at its pinned size and SHA-256; refuse otherwise."""
+    """Every file the pin names, at its size and SHA-256; nothing else."""
+    named = {layer["file"] for layer in chain["layer"]}
     for layer in chain["layer"]:
         path = directory / layer["file"]
         if not path.is_file():
@@ -113,7 +130,7 @@ def check_layers(chain: dict, directory: Path) -> None:
                 f"{chain['name']}: {layer['file']} is {size} bytes with SHA-256 {sha}; "
                 f"the pin says {layer['size']} bytes with SHA-256 {layer['sha256']}"
             )
-    extra = sorted(p.name for p in directory.iterdir() if p.name not in {f for f, _ in LAYERS})
+    extra = sorted(p.name for p in directory.iterdir() if p.name not in named)
     if extra:
         raise Refused(f"{chain['name']}: the artifact holds files the pin does not name: {extra}")
 
@@ -223,11 +240,10 @@ def selftest() -> int:
             "layer": [
                 {
                     "file": file,
-                    "media_type": media,
-                    "size": len(contents[file]),
-                    "sha256": hashlib.sha256(contents[file]).hexdigest(),
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
                 }
-                for file, media in LAYERS
+                for file, data in contents.items()
             ],
         }
 
@@ -263,26 +279,45 @@ def selftest() -> int:
         (extra / "other.bin").write_bytes(b"x")
         expect("a file the pin does not name is refused", refused(extra) is not None)
 
-        pin = root / "hosted.toml"
-        pin.write_text('[oras]\nversion = "1.3.6"\n[oras.sha256]\nlinux_amd64 = "00"\n', encoding="utf-8")
-        pins = load_pins(pin)
+        oras = '[oras]\nversion = "1.3.6"\n[oras.sha256]\nlinux_amd64 = "00"\n'
+        bare = root / "hosted.toml"
+        bare.write_text(oras, encoding="utf-8")
         try:
-            pinned(pins, "absent")
+            pinned(load_pins(bare), "absent")
             expect("an unpinned chain is refused", False)
         except Refused:
             expect("an unpinned chain is refused", True)
 
-        wrong = root / "wrong.toml"
-        wrong.write_text(
-            pin.read_text(encoding="utf-8")
-            + '[[chain]]\nname = "c"\n[[chain.layer]]\nfile = "corpus.e2"\nmedia_type = "x"\nsize = 1\nsha256 = "00"\n',
-            encoding="utf-8",
+        # The bytes a pull needs. Media types and digest shape are the Rust
+        # schema; a missing field here used to be a KeyError.
+        chain_toml = (
+            '[[chain]]\nname = "c"\nplan = "p"\ncommit = "aa"\n'
+            'reference = "ghcr.io/example/c"\ndigest = "sha256:00"\n'
+            '[[chain.layer]]\nfile = "corpus.e2"\nsize = 1\nsha256 = "00"\n'
         )
+        whole = root / "whole.toml"
+        whole.write_text(oras + chain_toml, encoding="utf-8")
         try:
-            load_pins(wrong)
-            expect("a pin whose layers are not the three is refused", False)
-        except Refused:
-            expect("a pin whose layers are not the three is refused", True)
+            pinned(load_pins(whole), "c")
+            expect("a chain entry with its pull fields is accepted", True)
+        except Refused as why:
+            expect(f"a chain entry with its pull fields is accepted ({why})", False)
+
+        no_digest = root / "no-digest.toml"
+        no_digest.write_text(oras + chain_toml.replace('digest = "sha256:00"\n', ""), encoding="utf-8")
+        try:
+            pinned(load_pins(no_digest), "c")
+            expect("a chain that pins no digest is refused", False)
+        except Refused as why:
+            expect("a chain that pins no digest is refused", "digest" in str(why))
+
+        twice = root / "twice.toml"
+        twice.write_text(oras + chain_toml + chain_toml, encoding="utf-8")
+        try:
+            pinned(load_pins(twice), "c")
+            expect("a chain pinned twice is refused", False)
+        except Refused as why:
+            expect("a chain pinned twice is refused", "twice" in str(why))
 
     real = load_pins()
     expect("the committed pin file parses and pins oras", bool(real["oras"]["sha256"]))
