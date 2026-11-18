@@ -575,7 +575,14 @@ jobs:
         working-directory: rust
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport --no-fail-fast *> daemon-crates.out
+          # One pipe for both streams. Cargo's "Running" lines go to stderr
+          # and each test binary's lines to stdout; through `*>` PowerShell
+          # reads them from two pipes and writes whichever arrives first, so
+          # a binary's "Running" line could land inside the previous binary's
+          # output and the floors below read the wrong block (#1419, run
+          # 44236954460: daemon-rpc read as 2 with 209 passed). cmd's `2>&1`
+          # gives both one handle, so the file is in the order written.
+          cmd /c "cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport --no-fail-fast > daemon-crates.out 2>&1"
           $rc = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
