@@ -21,29 +21,55 @@ use crate::resolve::{choosers, resolve, Resolved};
 use crate::sections::{build, DaemonConfig};
 use crate::{file, paths, Platform, TABLE};
 
-/// The configuration file the command line chose.
+/// What the file step did with the configuration file. The startup line is
+/// this match. A file that was opened, a missing default, and `none` are
+/// three values, so a caller cannot pair a read path with the wrong choice.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ConfigFileChoice {
-    /// A file the command line named. It must exist.
-    Named(PathBuf),
-    /// The run mode's default for the network. Absent, it means the
-    /// defaults.
-    Default(PathBuf),
-    /// `config-file none`: no file is read, whatever exists at the default
-    /// path. The command line and the defaults alone, as a program that
-    /// starts its own daemon asks for: a node that means the same on every
-    /// machine, whatever another install keeps in the shared file.
+pub enum ConfigFileFate {
+    /// A file was opened. The command line named it, or it was the run
+    /// mode's default and it was present. The startup line is
+    /// `config-file={path} (cli)`.
+    Read(PathBuf),
+    /// The run mode's default path, and no file there. The startup line is
+    /// `config-file=none-at:{path} (default)`.
+    DefaultAbsent(PathBuf),
+    /// `config-file none`. No file was opened, whatever is at the default
+    /// path. The startup line is `config-file=none (cli)`.
     None,
 }
 
-/// The file, the resolved values and the sections. `config_file` is the
-/// choice the announcements name, including when the default file was
-/// absent. `file_read` is set only when a file was read.
+/// The file the command line chose, before the opener runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ChosenFile {
+    /// A file the command line named. It must exist.
+    Named(PathBuf),
+    /// The run mode's default for the network.
+    Default(PathBuf),
+    /// `config-file none`.
+    None,
+}
+
+impl ChosenFile {
+    /// The fate of this choice once the opener has run. `opened` is whether
+    /// the opener returned a file. A named file that is absent never reaches
+    /// here: the opener refuses it.
+    fn fate(self, opened: bool) -> ConfigFileFate {
+        match (self, opened) {
+            (Self::None, _) => ConfigFileFate::None,
+            (Self::Named(path) | Self::Default(path), true) => ConfigFileFate::Read(path),
+            (Self::Default(path), false) => ConfigFileFate::DefaultAbsent(path),
+            (Self::Named(path), false) => unreachable!(
+                "a named configuration file that is absent is refused by the opener ({})",
+                path.display()
+            ),
+        }
+    }
+}
+
+/// The file step's fate, the resolved values and the sections.
 pub struct Loaded {
-    /// The configuration file named, defaulted, or none.
-    pub config_file: ConfigFileChoice,
-    /// The file actually read, when one was.
-    pub file_read: Option<PathBuf>,
+    /// What the file step did. The announcements print this.
+    pub config_file: ConfigFileFate,
     /// Every value and its source.
     pub resolved: Resolved,
     /// The typed configuration, by section.
@@ -51,8 +77,8 @@ pub struct Loaded {
 }
 
 /// What [`load`] makes of a command line once its file step is done: the
-/// resolved values and the sections. [`Loaded`] is this and the path the
-/// file step named.
+/// resolved values and the sections. [`Loaded`] is this and the file
+/// step's fate.
 pub struct AfterFile {
     /// The file the values were read from, when one was opened.
     pub file_read: Option<PathBuf>,
@@ -103,14 +129,12 @@ fn load_with(
     default_file: DefaultFile,
 ) -> Result<Loaded, Vec<Diagnostic>> {
     let (choice, opened) = config_file(&cli, platform, default_file).map_err(|d| vec![d])?;
+    let config_file = choice.fate(opened.is_some());
     let AfterFile {
-        file_read,
-        resolved,
-        config,
+        resolved, config, ..
     } = after_file(cli, platform, opened)?;
     Ok(Loaded {
-        config_file: choice,
-        file_read,
+        config_file,
         resolved,
         config,
     })
@@ -124,7 +148,7 @@ fn config_file(
     cli: &Cli,
     platform: &Platform,
     default_file: DefaultFile,
-) -> Result<(ConfigFileChoice, Option<ConfigFile>), Diagnostic> {
+) -> Result<(ChosenFile, Option<ConfigFile>), Diagnostic> {
     let choice = choose_file(cli, platform)?;
     let opened = open_chosen(&choice, default_file, file::open)?;
     Ok((choice, opened))
@@ -132,19 +156,21 @@ fn config_file(
 
 /// Which configuration file `cli` chose: the one it names, none, or the run
 /// mode's default for the chosen network. Reads nothing.
-fn choose_file(cli: &Cli, platform: &Platform) -> Result<ConfigFileChoice, Diagnostic> {
+fn choose_file(cli: &Cli, platform: &Platform) -> Result<ChosenFile, Diagnostic> {
     let (network, mode) = choosers(cli);
     Ok(
         match cli.given.iter().find(|g| g.row.name == "config-file") {
             Some(g) => match &g.value {
-                Value::Path(p) => ConfigFileChoice::Named(p.clone()),
-                // The row's one word (`Kind::PATH_OR_NONE`).
-                Value::Word(_) => ConfigFileChoice::None,
+                Value::Path(path) => ChosenFile::Named(path.clone()),
+                Value::Word("none") => ChosenFile::None,
+                Value::Word(other) => {
+                    unreachable!("config-file admits one word, `none`, not {other}")
+                }
                 other => {
                     unreachable!("the config-file row's kind is a path or none, not {other:?}")
                 }
             },
-            None => ConfigFileChoice::Default(paths::config_file_default(platform, mode, network)?),
+            None => ChosenFile::Default(paths::config_file_default(platform, mode, network)?),
         },
     )
 }
@@ -154,16 +180,14 @@ fn choose_file(cli: &Cli, platform: &Platform) -> Result<ConfigFileChoice, Diagn
 /// is no file and no call: the opener is never reached for it, whatever is
 /// at the default path.
 fn open_chosen(
-    choice: &ConfigFileChoice,
+    choice: &ChosenFile,
     default_file: DefaultFile,
     open: impl FnOnce(&Path, bool) -> Result<Option<ConfigFile>, Diagnostic>,
 ) -> Result<Option<ConfigFile>, Diagnostic> {
     match (choice, default_file) {
-        (ConfigFileChoice::None, _) | (ConfigFileChoice::Default(_), DefaultFile::Unread) => {
-            Ok(None)
-        }
-        (ConfigFileChoice::Named(path), _) => open(path, true),
-        (ConfigFileChoice::Default(path), DefaultFile::Read) => open(path, false),
+        (ChosenFile::None, _) | (ChosenFile::Default(_), DefaultFile::Unread) => Ok(None),
+        (ChosenFile::Named(path), _) => open(path, true),
+        (ChosenFile::Default(path), DefaultFile::Read) => open(path, false),
     }
 }
 
@@ -224,7 +248,7 @@ mod tests {
             panic!("`none` opened {}", path.display())
         };
         for mode in [DefaultFile::Read, DefaultFile::Unread] {
-            assert!(open_chosen(&ConfigFileChoice::None, mode, never)
+            assert!(open_chosen(&ChosenFile::None, mode, never)
                 .expect("no file")
                 .is_none());
         }
@@ -235,7 +259,7 @@ mod tests {
             Ok(None)
         };
         open_chosen(
-            &ConfigFileChoice::Default("/etc/shekyl/shekyld-regtest.toml".into()),
+            &ChosenFile::Default("/etc/shekyl/shekyld-regtest.toml".into()),
             DefaultFile::Read,
             record,
         )
@@ -251,7 +275,7 @@ mod tests {
             Ok(None)
         };
         open_chosen(
-            &ConfigFileChoice::Named("/srv/shekyld.toml".into()),
+            &ChosenFile::Named("/srv/shekyld.toml".into()),
             DefaultFile::Unread,
             record,
         )

@@ -360,14 +360,9 @@ fn keyword(text: &str, keywords: &'static [&'static str]) -> Option<&'static str
 }
 
 impl Kind {
-    /// An absolute path.
+    /// An absolute path. A row that also takes a word names it itself
+    /// (`Path { keywords: &["none"] }` on the daemon's `config-file`).
     pub const PATH: Self = Self::Path { keywords: &[] };
-
-    /// An absolute path, or `none`: for a row with a default file, no file
-    /// at all (the daemon's `config-file`).
-    pub const PATH_OR_NONE: Self = Self::Path {
-        keywords: &["none"],
-    };
 
     /// Whether the kind may be given on the command line at all.
     #[must_use]

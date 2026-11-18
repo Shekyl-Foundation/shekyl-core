@@ -38,7 +38,7 @@ pub mod resolve;
 pub mod sections;
 pub mod table;
 
-pub use load::{after_file, load, load_default_file_unread, AfterFile, ConfigFileChoice, Loaded};
+pub use load::{after_file, load, load_default_file_unread, AfterFile, ConfigFileFate, Loaded};
 pub use lock::Lock;
 pub use marker::{MarkerOutcome, MarkerRead, NetworkId};
 pub use network::Network;

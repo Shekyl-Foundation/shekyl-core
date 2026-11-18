@@ -12,7 +12,6 @@
 //! stay beside those effects; this module is the order and the printing.
 
 use std::num::NonZeroUsize;
-use std::path::Path;
 
 use shekyl_daemon_config::sections::{log_location_creatable, DaemonConfig, Tor};
 use shekyl_daemon_config::{
@@ -143,12 +142,11 @@ fn one(d: Diagnostic) -> Vec<Diagnostic> {
 /// that root's account was certified (IG-Q60). Exit 0.
 pub(crate) fn accept(
     resolved: &resolve::Resolved,
-    read_path: Option<&Path>,
-    config_file: &shekyl_daemon_config::ConfigFileChoice,
+    config_file: &shekyl_daemon_config::ConfigFileFate,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> i32 {
-    let (out, err) = accepted_lines(resolved, read_path, config_file, config, warnings);
+    let (out, err) = accepted_lines(resolved, config_file, config, warnings);
     for line in &out {
         tell(&mut std::io::stdout(), line);
     }
@@ -165,13 +163,11 @@ pub(crate) fn accept(
 /// output, and the rest on standard error, and adds the root warning there.
 fn accepted_lines(
     resolved: &resolve::Resolved,
-    read_path: Option<&Path>,
-    config_file: &shekyl_daemon_config::ConfigFileChoice,
+    config_file: &shekyl_daemon_config::ConfigFileFate,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> (Vec<String>, Vec<String>) {
-    let mut announced =
-        announce::announcements(&TABLE, resolved, read_path, config_file, config, warnings);
+    let mut announced = announce::announcements(&TABLE, resolved, config_file, config, warnings);
     announced.rest.extend(crate::run::mining_notice(config));
     let out = vec![
         format!("shekyld: configuration verified for {}", account::current()),
@@ -399,8 +395,7 @@ mod tests {
         // an absent file, as a host with no default file has.
         let (out, err) = accepted_lines(
             &loaded.resolved,
-            loaded.file_read.as_deref(),
-            &shekyl_daemon_config::ConfigFileChoice::Default(d.path().join("shekyld.toml")),
+            &shekyl_daemon_config::ConfigFileFate::DefaultAbsent(d.path().join("shekyld.toml")),
             &loaded.config,
             &walked.warnings,
         );
@@ -455,8 +450,7 @@ mod tests {
             let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
             let (_, err) = accepted_lines(
                 &loaded.resolved,
-                loaded.file_read.as_deref(),
-                &shekyl_daemon_config::ConfigFileChoice::Default(d.path().join("shekyld.toml")),
+                &shekyl_daemon_config::ConfigFileFate::DefaultAbsent(d.path().join("shekyld.toml")),
                 &loaded.config,
                 &walked.warnings,
             );

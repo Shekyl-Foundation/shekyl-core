@@ -65,6 +65,10 @@ const INSTANCE: Kind = Kind::Name(NameRule {
     },
 });
 const ORIGIN: Kind = Kind::Origin;
+/// `config-file`: an absolute path, or `none` so no file is read.
+const CONFIG_FILE: Kind = Kind::Path {
+    keywords: &["none"],
+};
 const RATE: Kind = Kind::Quantity {
     dimension: Dimension::Rate,
     min: 1,
@@ -195,7 +199,7 @@ const ROWS: &[Row] = &[
     // command line is its one surface; 0 to 2 are the standard streams.
     public("owning-connection", Kind::Integer { min: 3, keywords: &[] }, Default::Unset, Surface::Cli, "The descriptor (a socket handle on Windows) of one end of a connected stream socket pair the starting process created for this daemon. The daemon writes a ready line on it once its owner's socket is served, and stops when the other end closes. For a wallet that starts its own daemon; not with service."),
     public("instance", INSTANCE, Default::Unset, Surface::Both, "This node's name, for a second node of the same network on this machine: 1 to 16 lower-case letters, digits or hyphens. Unset is the default instance. A named instance needs its own data-dir."),
-    public("config-file", Kind::PATH_OR_NONE, Default::Derived("/etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused; `none` reads no file, for a program that starts its own daemon on the command line alone."),
+    public("config-file", CONFIG_FILE, Default::Derived("/etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused; `none` reads no file, for a program that starts its own daemon on the command line alone."),
     public("data-dir", Kind::PATH, Default::Derived("the daemon's root and the network's subdirectory"), Surface::Both, "The data directory. An explicit path is used as given."),
     public("log-file", Kind::PATH, Default::Derived("the daemon's root, logs/shekyld-<network>.log"), Surface::Both, "The log file."),
     runtime("log-level", LEVEL, "warn", "The log level: error, warn, info, debug or trace."),

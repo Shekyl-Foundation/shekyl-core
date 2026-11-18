@@ -245,11 +245,14 @@ fn a_path_is_absolute_only() {
 }
 
 /// A path row that names a default file may take `none`: no file at all.
-/// The word is never read as a path. Red edit: drop the keyword check in
-/// `Kind::Path`'s parse (`none` is refused as a relative path).
+/// The word is never read as a path. The row names the word; [`Kind::PATH`]
+/// does not. Red edit: drop the keyword check in `Kind::Path`'s parse
+/// (`none` is refused as a relative path).
 #[test]
 fn a_path_row_may_take_none_for_no_file() {
-    let or_none = Kind::PATH_OR_NONE;
+    let or_none = Kind::Path {
+        keywords: &["none"],
+    };
     assert_eq!(or_none.parse_text("none"), Ok(Value::Word("none")));
     assert!(matches!(
         or_none.parse_text(&abs("/etc/shekyl/shekyld-mainnet.toml")),
