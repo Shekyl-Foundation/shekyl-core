@@ -213,23 +213,28 @@ jobs:
             # the pinned files, each with its digest.
             python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$root$install_dir"
           }
-          # The daemon's slice unit, beside the service unit fpm installs
-          # from --deb-systemd: the package's after-install hook reloads
-          # systemd so the service can join it (ruled 2026-10-12).
+          # What the daemon's service needs beside its unit, in both
+          # packages: its slice (ruled 2026-10-12), and the account and
+          # /etc/shekyl it runs with, declared for systemd-sysusers and
+          # systemd-tmpfiles (INPUT_GRAMMAR.md IG-Q64). post-install.sh
+          # applies the two declarations and reloads systemd.
           #
-          # stage_slice <stage-root>
-          stage_slice() {
+          # stage_service <stage-root>
+          stage_service() {
             local root="$1"
-            mkdir -p "$root/lib/systemd/system"
+            mkdir -p "$root/lib/systemd/system" "$root/usr/lib/sysusers.d" "$root/usr/lib/tmpfiles.d"
             cp contrib/packaging/linux/shekyl.slice "$root/lib/systemd/system/"
+            cp contrib/packaging/linux/shekyl.sysusers "$root/usr/lib/sysusers.d/shekyl.conf"
+            cp contrib/packaging/linux/shekyl.tmpfiles "$root/usr/lib/tmpfiles.d/shekyl.conf"
           }
           # The RPC tunnel (RPC_CHANNEL.md §8; Rick, 2026-11-16): its binary
-          # beside shekyl-cli, and its unit installed but not enabled. fpm's
-          # systemd hook (fpm 1.18) only reloads systemd on install and, on
-          # upgrade, restarts the unit --deb-systemd names when it is
-          # already enabled; it enables and starts nothing. The tunnel needs
-          # a configuration, a key and its own account before its first
-          # start, so its unit is a plain file the operator enables.
+          # beside shekyl-cli, and its unit installed but not enabled. Neither
+          # package enables, starts or restarts a unit: fpm's systemd hook
+          # (fpm 1.18) only reloads systemd for the unit --deb-systemd names,
+          # and stops and disables it on removal; its restart on upgrade is
+          # turned off. The tunnel needs a configuration, a key and its own
+          # account before its first start, so its unit is a plain file the
+          # operator enables.
           #
           # stage_tunnel <bin-dir> <stage-root>
           stage_tunnel() {
@@ -310,7 +315,7 @@ jobs:
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             stage_tunnel "$BIN_X86" "$STAGE"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE"
-            stage_slice "$STAGE"
+            stage_service "$STAGE"
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_amd64.deb" \
               --name shekyl --version "$VERSION" \
@@ -319,9 +324,13 @@ jobs:
               --license "$PKG_LICENSE" --architecture amd64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib1g \
+              --depends systemd \
               --deb-systemd contrib/packaging/linux/shekyld.service \
-              --after-install contrib/packaging/linux/deb-after-install.sh \
-              --after-upgrade contrib/packaging/linux/deb-after-install.sh \
+              --no-deb-systemd-restart-after-upgrade \
+              --before-install contrib/packaging/linux/pre-install.sh \
+              --before-upgrade contrib/packaging/linux/pre-install.sh \
+              --after-install contrib/packaging/linux/post-install.sh \
+              --after-upgrade contrib/packaging/linux/post-install.sh \
               --deb-no-default-config-files \
               -C "$STAGE" .
             check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_amd64.deb"
@@ -333,6 +342,8 @@ jobs:
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
             stage_tunnel "$BIN_X86" "$STAGE_RPM"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE_RPM"
+            stage_service "$STAGE_RPM"
+            cp contrib/packaging/linux/shekyld.service "$STAGE_RPM/lib/systemd/system/"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
               --name shekyl --version "$VERSION" \
@@ -341,6 +352,12 @@ jobs:
               --license "$PKG_LICENSE" --architecture x86_64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib \
+              --depends systemd \
+              --before-install contrib/packaging/linux/pre-install.sh \
+              --before-upgrade contrib/packaging/linux/pre-install.sh \
+              --after-install contrib/packaging/linux/post-install.sh \
+              --after-upgrade contrib/packaging/linux/post-install.sh \
+              --before-remove contrib/packaging/linux/rpm-pre-remove.sh \
               -C "$STAGE_RPM" .
             check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.x86_64.rpm"
 
@@ -362,7 +379,7 @@ jobs:
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             stage_tunnel "$BIN_ARM" "$STAGE"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE"
-            stage_slice "$STAGE"
+            stage_service "$STAGE"
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_arm64.deb" \
               --name shekyl --version "$VERSION" \
@@ -371,9 +388,13 @@ jobs:
               --license "$PKG_LICENSE" --architecture arm64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib1g \
+              --depends systemd \
               --deb-systemd contrib/packaging/linux/shekyld.service \
-              --after-install contrib/packaging/linux/deb-after-install.sh \
-              --after-upgrade contrib/packaging/linux/deb-after-install.sh \
+              --no-deb-systemd-restart-after-upgrade \
+              --before-install contrib/packaging/linux/pre-install.sh \
+              --before-upgrade contrib/packaging/linux/pre-install.sh \
+              --after-install contrib/packaging/linux/post-install.sh \
+              --after-upgrade contrib/packaging/linux/post-install.sh \
               --deb-no-default-config-files \
               -C "$STAGE" .
             check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_arm64.deb"
@@ -385,6 +406,8 @@ jobs:
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
             stage_tunnel "$BIN_ARM" "$STAGE_RPM"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE_RPM"
+            stage_service "$STAGE_RPM"
+            cp contrib/packaging/linux/shekyld.service "$STAGE_RPM/lib/systemd/system/"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \
               --name shekyl --version "$VERSION" \
@@ -393,6 +416,12 @@ jobs:
               --license "$PKG_LICENSE" --architecture aarch64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib \
+              --depends systemd \
+              --before-install contrib/packaging/linux/pre-install.sh \
+              --before-upgrade contrib/packaging/linux/pre-install.sh \
+              --after-install contrib/packaging/linux/post-install.sh \
+              --after-upgrade contrib/packaging/linux/post-install.sh \
+              --before-remove contrib/packaging/linux/rpm-pre-remove.sh \
               -C "$STAGE_RPM" .
             check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.aarch64.rpm"
 

@@ -239,21 +239,28 @@ Run the daemon in the background via your platform's service manager
 (systemd on Linux, rc.d on FreeBSD, launchd on macOS, Task Scheduler on
 Windows). A shipped systemd unit lives at
 `contrib/packaging/linux/shekyld.service`, with `shekyl.slice` beside
-it. The `.deb` installs both and creates the `shekyl` account the unit
-runs as; it does not start the daemon. Put any settings in
+it. The `.deb` and the `.rpm` install both and create the `shekyl` system
+account the unit runs as, and `/etc/shekyl`. They refuse to install where
+an account named `shekyl` is already someone's login, because the daemon
+would run with that login's rights, and say how to rename it. They do not
+start the daemon. Put any settings in
 `/etc/shekyl/shekyld-<network>.toml`, then enable and start it:
 
 ```bash
 sudo systemctl enable --now shekyld
 ```
 
-Without the `.deb`, create the account first, because systemd refuses to
-start a unit whose account does not exist. Then install both units and
-enable the daemon; the unit runs `/usr/local/bin/shekyld`:
+Without a package, apply the same two declarations first, because
+systemd refuses to start a unit whose account does not exist. Check first
+that no login is named `shekyl` (`getent passwd shekyl`): the declaration
+keeps an account that already exists, and the daemon would run as it. Then install
+both units and enable the daemon; the unit runs `/usr/local/bin/shekyld`:
 
 ```bash
-sudo useradd --system --user-group --home-dir /nonexistent \
-  --no-create-home --shell /usr/sbin/nologin shekyl
+sudo cp contrib/packaging/linux/shekyl.sysusers /usr/lib/sysusers.d/shekyl.conf
+sudo cp contrib/packaging/linux/shekyl.tmpfiles /usr/lib/tmpfiles.d/shekyl.conf
+sudo systemd-sysusers shekyl.conf
+sudo systemd-tmpfiles --create shekyl.conf
 sudo cp contrib/packaging/linux/shekyld.service \
   contrib/packaging/linux/shekyl.slice /etc/systemd/system/
 sudo systemctl daemon-reload

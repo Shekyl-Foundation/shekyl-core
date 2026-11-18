@@ -208,25 +208,32 @@ Platforms"); nothing is produced for it.
 ## Linux Package Details
 
 The `.deb` and `.rpm` packages are available for both x86_64 and ARM64.
-Both install `shekyld`, `shekyl-cli`, `shekyl-wallet-rpc` and
-`shekyl-rpc-tunnel` to `/usr/local/bin/`, the pinned Tor under
-`/opt/shekyl/`, and the tunnel's unit, installed and not enabled.
-
-The `.deb` also:
-- Installs `shekyld.service` and `shekyl.slice` under `/lib/systemd/system/`
-- Creates the `shekyl` system account the unit runs as, once, with no home
-  and no login shell (`contrib/packaging/linux/deb-after-install.sh`); an
-  existing account is left as it is, and removal keeps it
-- Does not enable or start the daemon. Put any settings in
+Both packages, the same way:
+- Install `shekyld`, `shekyl-cli`, `shekyl-wallet-rpc` and `shekyl-rpc-tunnel`
+  to `/usr/local/bin/` and the pinned Tor under `/opt/shekyl/`
+- Install `shekyld.service`, `shekyl.slice` and the tunnel's unit under
+  `/lib/systemd/system/`; the tunnel's is not enabled
+- Declare the daemon's account and its configuration directory
+  (`INPUT_GRAMMAR.md` IG-Q64): `/usr/lib/sysusers.d/shekyl.conf`, the system
+  account `shekyl` with no home and no login shell, and
+  `/usr/lib/tmpfiles.d/shekyl.conf`, `/etc/shekyl` as `root:shekyl` `0750`.
+  `post-install.sh` applies both
+- Refuse to install, before any file is unpacked, when an account or group
+  named `shekyl` already exists and is a login (a shell, an administrators'
+  group, a sudo rule) or another account's group (`pre-install.sh`). The
+  daemon would run with that login's rights. The refusal names the rename
+  that frees the name
+- Do not enable, start or restart the daemon. Put any settings in
   `/etc/shekyl/shekyld-<network>.toml`, then run
-  `sudo systemctl enable --now shekyld`
-- Restarts an enabled daemon on upgrade
+  `sudo systemctl enable --now shekyld`; after an upgrade,
+  `sudo systemctl restart shekyld`
+- On removal, stop and disable the daemon and keep the account, `/etc/shekyl`
+  and the chain data
 - Data directory: `/var/lib/shekyl` (the unit's `StateDirectory`)
 - Log: `/var/log/shekyl/shekyld.log`
 
-The `.rpm` carries no daemon unit, slice or account: an operator installs
-`contrib/packaging/linux/shekyld.service` and `shekyl.slice` and creates the
-account as `INSTALLATION_GUIDE.md` §8 says.
+The unit runs mainnet unless a drop-in passes `--network`
+(`INPUT_GRAMMAR.md` IG-F16).
 
 ## Windows Installer Details
 
