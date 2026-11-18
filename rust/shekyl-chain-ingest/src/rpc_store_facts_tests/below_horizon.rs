@@ -126,9 +126,8 @@ fn first_fill_block(chain: &[Mined]) -> &Mined {
 #[ignore = "closes a real shard: a few hundred proofs; live lane"]
 async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
     // Shard 0 closed by the forged shard-fill chain (`forged_fill`).
-    let (mut scenario, mut mined, rules) =
-        forged_fill::open("sb-below-horizon", levered_epoch()).await;
-    let filled = forged_fill::load(&mut scenario, &mut mined, 1).await;
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect("sb-below-horizon", levered_epoch(), 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed: {:?}", filled.closed);
     };

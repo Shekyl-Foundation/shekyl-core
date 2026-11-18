@@ -127,10 +127,9 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // The shard is closed by the forged shard-fill chain (`forged_fill`):
     // its spends were proved once, and every rule judges them as they
     // connect.
-    let (mut scenario, mut mined, rules) =
-        forged_fill::open("scenario-emission-claim", settled_epoch()).await;
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect("scenario-emission-claim", settled_epoch(), 1).await;
     let network = scenario.network_id();
-    let filled = forged_fill::load(&mut scenario, &mut mined, 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
@@ -631,10 +630,9 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     // The shard is closed by the forged shard-fill chain (`forged_fill`):
     // its spends were proved once, and every rule judges them as they
     // connect.
-    let (mut scenario, mut mined, rules) =
-        forged_fill::open("scenario-emission-support-trees", settled_epoch()).await;
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect("scenario-emission-support-trees", settled_epoch(), 1).await;
     let network = scenario.network_id();
-    let filled = forged_fill::load(&mut scenario, &mut mined, 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };

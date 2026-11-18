@@ -8,23 +8,28 @@
 //! `shekyl-chain-forge/plans/shard-fill.toml`, hosted, and pinned by digest
 //! (§10.4).
 //!
-//! Every block is connected verbatim through the scenario's own door
-//! (`next_template`, then the forged block in the template,
-//! `connect_template`), so every rule still judges it under the scenario's
-//! own schedule. The forged chain is regtest's: block 0 is the table's
-//! genesis, every coinbase from 1 pays `MinerWallet::harness_regtest()`,
-//! and the fill spends coinbases from [`FILL_FROM_COINBASE`] up, so
-//! coinbases 1 to 9 are the scenario's for its own posts.
+//! [`connect`] is the one entry: a regtest scenario under the caller's
+//! schedule, the forged prefix through shard `shards − 1`'s close, and the
+//! closes the manifest names. Every block is connected verbatim through the
+//! scenario's own door (`next_template`, then the forged block in the
+//! template, `connect_template`), so every rule still judges it under the
+//! scenario's own schedule. The forged chain is regtest's: block 0 is the
+//! table's genesis, every coinbase from 1 pays
+//! `MinerWallet::harness_regtest()`, and the fill spends coinbases from
+//! [`FILL_FROM_COINBASE`] up, so coinbases 1 to 9 are the scenario's for
+//! its own posts.
 //!
 //! The close heights are the manifest's (`shard-<k>-closed`), never
 //! numbers written here: a re-forge moves them, and a reader that took
-//! them from the manifest moves with it.
+//! them from the manifest moves with it. The pin is opened once per
+//! [`connect`].
 
 use std::fs::File;
 use std::io::BufReader;
 use std::num::NonZeroU128;
 
-use shekyl_chain_forge::{close_event, hosted};
+use shekyl_chain_forge::hosted::{self, Fetched};
+use shekyl_chain_forge::{close_event, Manifest};
 use shekyl_chain_rules::CappedEpoch;
 use shekyl_network::Network;
 use shekyl_types::{BlockHeight, ShardId};
@@ -48,29 +53,41 @@ const _: () = assert!(
     "the forged fill leaves coinbases below it to the scenario's posts"
 );
 
-/// A scenario with the forged chain's identity under `epoch`: regtest's
-/// rules at fixed difficulty one, its table genesis connected as block 0.
-/// The chain comes back as block 0 alone, for [`load`] to extend; the rules
-/// are the scenario's, for the admission heights a reader works out.
-pub async fn open(name: &str, epoch: CappedEpoch) -> (Scenario<FreeHash>, Vec<Mined>, ChainRules) {
-    let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), epoch)
-        .unwrap_or_else(|refused| panic!("regtest's row permits every lever: {refused}"));
-    let (scenario, genesis) = Scenario::open_regtest_mined(name, FreeHash, epoch).await;
-    (scenario, vec![genesis], rules)
-}
-
-/// The forged chain's close height of each of its first `want` shards, from
-/// its manifest.
+/// The forged chain under `epoch`, connected from block 0 through the block
+/// that closes shard `shards − 1`.
+///
+/// The scenario is regtest at fixed difficulty one. Block 0 is the table's
+/// genesis. The rules are the scenario's, for the admission heights a reader
+/// works out. The closes are the manifest's first `shards` `shard-<k>-closed`
+/// events.
 ///
 /// # Panics
 ///
 /// If the chain is not fetched or does not match its pin (the message names
-/// the fetch command), or its manifest records fewer than `want` closes.
-#[must_use]
-pub fn close_heights(want: u64) -> Vec<ClosedShard> {
+/// the fetch command), if its manifest records fewer than `shards` closes,
+/// if a block does not connect under the scenario's rules, or if the
+/// producer's count of closed shards after the prefix is not `shards`.
+pub async fn connect(
+    name: &str,
+    epoch: CappedEpoch,
+    shards: u64,
+) -> (Scenario<FreeHash>, Vec<Mined>, ChainRules, Filled) {
+    assert!(shards > 0, "a fill closes at least one shard");
+    let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), epoch)
+        .unwrap_or_else(|refused| panic!("regtest's row permits every lever: {refused}"));
+    let (mut scenario, genesis) = Scenario::open_regtest_mined(name, FreeHash, epoch).await;
+    let mut chain = vec![genesis];
     let fetched = hosted::open(CHAIN).unwrap_or_else(|fault| panic!("{fault}"));
     let manifest = fetched.manifest().unwrap_or_else(|fault| panic!("{fault}"));
-    (0..want)
+    let closed = closes_through(&manifest, shards);
+    extend(&mut scenario, &mut chain, &fetched, &closed).await;
+    (scenario, chain, rules, Filled { closed })
+}
+
+/// The forged chain's close height of each of its first `shards` shards,
+/// from a manifest already read.
+fn closes_through(manifest: &Manifest, shards: u64) -> Vec<ClosedShard> {
+    (0..shards)
         .map(|k| {
             let name = close_event(k);
             let event = manifest
@@ -86,21 +103,23 @@ pub fn close_heights(want: u64) -> Vec<ClosedShard> {
         .collect()
 }
 
-/// Connect the forged chain into `scenario`, from block 1 through the block
-/// that closes shard `want − 1`, extending `chain` (which holds block 0, as
-/// `Scenario::open_regtest_mined` leaves it).
-///
-/// # Panics
-///
-/// If `chain` is not block 0 alone or block 0 is not the forged chain's, if
-/// a block does not connect under the scenario's rules, or if the producer's
-/// count of closed shards after the prefix is not `want`.
-pub async fn load(scenario: &mut Scenario<FreeHash>, chain: &mut Vec<Mined>, want: u64) -> Filled {
-    assert!(want > 0, "a fill closes at least one shard");
-    assert_eq!(chain.len(), 1, "the forged chain loads onto block 0 alone");
-    let closed = close_heights(want);
-    let last = closed.last().expect("want > 0").close_height;
+/// The same closes, opening the pin. The capture-rule test reads them
+/// without connecting.
+fn close_heights(shards: u64) -> Vec<ClosedShard> {
     let fetched = hosted::open(CHAIN).unwrap_or_else(|fault| panic!("{fault}"));
+    let manifest = fetched.manifest().unwrap_or_else(|fault| panic!("{fault}"));
+    closes_through(&manifest, shards)
+}
+
+/// Connect the forged prefix into `scenario`, from block 1 through the last
+/// of `closed`, extending `chain` (block 0, as `open_regtest_mined` left it).
+async fn extend(
+    scenario: &mut Scenario<FreeHash>,
+    chain: &mut Vec<Mined>,
+    fetched: &Fetched,
+    closed: &[ClosedShard],
+) {
+    let last = closed.last().expect("shards > 0").close_height;
     let mut corpus = CorpusReader::open(BufReader::new(
         File::open(fetched.corpus()).expect("the fetched corpus opens"),
     ))
@@ -148,18 +167,18 @@ pub async fn load(scenario: &mut Scenario<FreeHash>, chain: &mut Vec<Mined>, wan
                 }),
         );
     }
+    let shards = u64::try_from(closed.len()).expect("a fill's shard count fits u64");
     assert_eq!(
         chain.last().expect("block 0 at least").height,
         last,
         "the forged chain reaches shard {}'s close",
-        want - 1
+        shards - 1
     );
     assert_eq!(
         closed_shards(scenario).await,
-        want,
-        "the prefix closes {want} shards"
+        shards,
+        "the prefix closes {shards} shards"
     );
-    Filled { closed }
 }
 
 #[cfg(test)]
@@ -236,14 +255,20 @@ mod tests {
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )
         .expect("the cap sits inside the epoch");
+        let mut agreed = None;
         for (name, epoch) in [
             ("levered", levered_epoch()),
             ("settled", settled_epoch()),
             ("producer", producer),
         ] {
-            let (mut scenario, mut chain, _) = open(&format!("forged-fill-{name}"), epoch).await;
-            let filled = load(&mut scenario, &mut chain, 3).await;
-            assert_eq!(filled.closed, close_heights(3), "{name}");
+            let (_, _, _, filled) = connect(&format!("forged-fill-{name}"), epoch, 3).await;
+            match &agreed {
+                None => {
+                    assert_eq!(filled.closed, close_heights(3), "{name}");
+                    agreed = Some(filled.closed);
+                }
+                Some(first) => assert_eq!(&filled.closed, first, "{name}"),
+            }
         }
     }
 }

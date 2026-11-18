@@ -248,8 +248,8 @@ async fn closed_shards_lane(
     };
 
     // Shards 0 and 1 closed by the forged shard-fill chain (`forged_fill`).
-    let (mut scenario, mut mined, rules) = forged_fill::open(name, levered_epoch()).await;
-    let filled = forged_fill::load(&mut scenario, &mut mined, 2).await;
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect(name, levered_epoch(), 2).await;
     let shards: Vec<u64> = filled.closed.iter().map(|c| c.shard.to_raw()).collect();
     let connecting = inside_one_epoch(
         filled

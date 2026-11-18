@@ -101,8 +101,7 @@ impl SlashChain {
     /// this returns.
     async fn open(name: &str) -> Self {
         let schedule = settled_schedule();
-        let (mut scenario, mut chain, rules) = forged_fill::open(name, settled_epoch()).await;
-        let filled = forged_fill::load(&mut scenario, &mut chain, 2).await;
+        let (scenario, chain, rules, filled) = forged_fill::connect(name, settled_epoch(), 2).await;
         let drive = Driven::begin(scenario, chain);
         assert_eq!(
             filled

@@ -319,13 +319,13 @@ async fn step(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs and mines three long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_bundle_is_admitted"]
 async fn a_produced_bundle_is_admitted_and_connects() {
-    let (mut scenario, mut chain, rules) = forged_fill::open("bundle-producer-gate", epoch()).await;
+    let (mut scenario, mut chain, rules, filled) =
+        forged_fill::connect("bundle-producer-gate", epoch(), 1).await;
     let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
     let network = scenario.network_id();
 
     // 1. Shard 0 closes (the forged shard-fill chain, `forged_fill`); P
     // joins it.
-    let filled = forged_fill::load(&mut scenario, &mut chain, 1).await;
     let close = filled.closed[0];
     let shard = close.shard;
     let admissible = first_admissible_compact_join(&rules, close);
@@ -529,14 +529,13 @@ async fn a_produced_bundle_is_admitted_and_connects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs and mines two long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_support_bundle_is_admitted"]
 async fn a_produced_support_bundle_is_admitted_and_connects() {
-    let (mut scenario, mut chain, rules) =
-        forged_fill::open("bundle-producer-support", epoch()).await;
+    let (mut scenario, mut chain, rules, filled) =
+        forged_fill::connect("bundle-producer-support", epoch(), 1).await;
     let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
     let network = scenario.network_id();
 
     // 1. Shard 0 closes and is final (the forged shard-fill chain,
     // `forged_fill`); T joins as a complete tree.
-    let filled = forged_fill::load(&mut scenario, &mut chain, 1).await;
     let close = filled.closed[0];
     let shard = close.shard;
     mine_to(

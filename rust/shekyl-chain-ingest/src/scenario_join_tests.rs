@@ -55,9 +55,8 @@ fn levered_epoch_at(height: BlockHeight) -> SettlementEpoch {
 #[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     // Shards 0 and 1 closed by the forged shard-fill chain (`forged_fill`).
-    let (mut scenario, mut mined, rules) =
-        forged_fill::open("scenario-archival-join", levered_epoch()).await;
-    let filled = forged_fill::load(&mut scenario, &mut mined, 2).await;
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect("scenario-archival-join", levered_epoch(), 2).await;
     let shards: Vec<u64> = filled.closed.iter().map(|c| c.shard.to_raw()).collect();
     assert_eq!(shards, vec![0, 1]);
     // The join connects at the first height J15 admits both shards; the

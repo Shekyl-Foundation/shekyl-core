@@ -93,9 +93,8 @@ async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
     // The shard is closed by the forged shard-fill chain (`forged_fill`):
     // its spends were proved once, and every rule judges them as they
     // connect.
-    let (mut scenario, mut mined, rules) =
-        forged_fill::open("archival-pop-claim", settled_epoch()).await;
-    let filled = forged_fill::load(&mut scenario, &mut mined, 1).await;
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect("archival-pop-claim", settled_epoch(), 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
@@ -322,9 +321,8 @@ async fn claim_of(
 async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused() {
     let schedule = settled_schedule();
     let window = MAX_CLAIM_AGE_W;
-    let (mut scenario, mut mined, rules) =
-        forged_fill::open("archival-pop-straddle", settled_epoch()).await;
-    let filled = forged_fill::load(&mut scenario, &mut mined, 1).await;
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect("archival-pop-straddle", settled_epoch(), 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
