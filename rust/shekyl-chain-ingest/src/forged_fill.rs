@@ -103,6 +103,25 @@ fn closes_through(manifest: &Manifest, shards: u64) -> Vec<ClosedShard> {
         .collect()
 }
 
+/// How many of `closed` name a height strictly below `height`.
+fn closes_before(closed: &[ClosedShard], height: u64) -> u64 {
+    let count = closed
+        .iter()
+        .filter(|close| close.close_height.to_raw() < height)
+        .count();
+    u64::try_from(count).expect("a fill's shard count fits u64")
+}
+
+/// How many of `closed` name `height` itself. One block can close more
+/// than one shard.
+fn closes_at(closed: &[ClosedShard], height: u64) -> u64 {
+    let count = closed
+        .iter()
+        .filter(|close| close.close_height.to_raw() == height)
+        .count();
+    u64::try_from(count).expect("a fill's shard count fits u64")
+}
+
 /// The same closes, opening the pin. The capture-rule test reads them
 /// without connecting.
 fn close_heights(shards: u64) -> Vec<ClosedShard> {
@@ -145,6 +164,19 @@ async fn extend(
         if height > last.to_raw() {
             break;
         }
+        // The manifest's close is this block, or it is not a close. The
+        // count just before the block, and the count once it is connected,
+        // are the producer's own, not a second reading of the manifest.
+        let closes_here = closed
+            .iter()
+            .any(|close| close.close_height.to_raw() == height);
+        if closes_here {
+            assert_eq!(
+                closed_shards(scenario).await,
+                closes_before(closed, height),
+                "before block {height} the producer has not counted this close"
+            );
+        }
         let mut next = scenario
             .next_template(candidate.transactions.clone())
             .await
@@ -166,6 +198,13 @@ async fn extend(
                     )
                 }),
         );
+        if closes_here {
+            assert_eq!(
+                closed_shards(scenario).await,
+                closes_before(closed, height) + closes_at(closed, height),
+                "block {height} is where the manifest says these shards closed"
+            );
+        }
     }
     let shards = u64::try_from(closed.len()).expect("a fill's shard count fits u64");
     assert_eq!(
@@ -188,6 +227,23 @@ mod tests {
     use shekyl_chain_rules::SettlementEpochBlocks;
     use shekyl_types::archival::SHARD_LENGTH;
     use shekyl_types::BlockCount;
+
+    #[test]
+    fn a_block_closes_every_shard_the_manifest_names_at_its_height() {
+        let closed = [close(0, 10), close(1, 10), close(2, 12)];
+        assert_eq!(closes_before(&closed, 10), 0);
+        assert_eq!(closes_at(&closed, 10), 2);
+        assert_eq!(closes_before(&closed, 12), 2);
+        assert_eq!(closes_at(&closed, 12), 1);
+        assert_eq!(closes_at(&closed, 11), 0);
+    }
+
+    fn close(shard: u64, height: u64) -> ClosedShard {
+        ClosedShard {
+            shard: ShardId::from_raw(shard),
+            close_height: BlockHeight::from_raw(height),
+        }
+    }
 
     /// Every listed body's archival length, by height, read off the forged
     /// corpus.
