@@ -464,12 +464,15 @@ dalek-ff-group = "0.5"
 rand_core = "0.6"
 
 # `client_requests` builds `valgrind-requests`, whose build script refuses
-# a target Valgrind does not support, Windows among them, so it is
-# Unix-only: every `--all-targets` lane on the Windows runner failed on it
-# (feature unification carries it to every crate in a workspace build).
-# The benches' Callgrind start/stop calls are `cfg(unix)` to match; the
-# benches compile on Windows and run only where Valgrind does.
-[target.'cfg(unix)'.dev-dependencies]
+# a target Valgrind does not support and runs bindgen, so libclang must be
+# installed wherever it builds. It is Linux-only, the one OS the Callgrind
+# benches measure on (`ci/benchmarks`): every `--all-targets` lane on the
+# Windows runner failed on it, and a FreeBSD test build needed libclang,
+# which base FreeBSD does not ship (Rick, 2026-11-18). Feature
+# unification carries it to every crate in a workspace build. The
+# benches' Callgrind start/stop calls are `cfg(target_os = "linux")` to
+# match; the benches compile everywhere and measure only on Linux.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { version = "0.19", features = ["client_requests"] }
 
 [[bench]]
