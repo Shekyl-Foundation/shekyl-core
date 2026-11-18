@@ -149,21 +149,39 @@ impl Rpc for PRpc {
 // applies. The DQ-T2.3 posture selector will add the scan-loop consumer.
 #[derive(Clone, Debug)]
 pub(crate) struct LocalNodeRpc {
-    inner: HttpRpc,
+    inner: shekyl_rpc_transport::DaemonTransport,
 }
 
 impl PersonaIsolatedTransport for LocalNodeRpc {}
 
 impl LocalNodeRpc {
-    /// Open a loopback transport against `url`, refusing non-loopback hosts.
+    /// Open the local-posture transport for the wallet's daemon target.
     ///
-    /// `url` must be `http://` + a loopback host (`127.0.0.1`, `localhost`,
-    /// or `[::1]`) + port. `https` is pointless on loopback and rejected to
-    /// keep the accepted-input surface minimal; credentials (`user:pass@`)
-    /// are rejected because the underlying digest-auth path would issue a
-    /// pre-flight request from inside a constructor documented as
-    /// side-effect-bounded.
-    pub(crate) async fn new(url: String, request_timeout: Duration) -> Result<Self, RpcError> {
+    /// "This computer" is the owner's leg of the node this account runs
+    /// (RT-W10 step 5): local by construction. A named address must be
+    /// `http://` + a loopback host (`127.0.0.1`, `localhost`, or `[::1]`) +
+    /// port, through no proxy. `https` is pointless on loopback and rejected
+    /// to keep the accepted-input surface minimal; credentials
+    /// (`user:pass@`) are rejected because the underlying digest-auth path
+    /// would issue a pre-flight request from inside a constructor documented
+    /// as side-effect-bounded.
+    pub(crate) async fn new(
+        daemon: &shekyl_rpc_transport::DaemonTarget,
+        request_timeout: Duration,
+    ) -> Result<Self, RpcError> {
+        let url = match daemon {
+            shekyl_rpc_transport::DaemonTarget::ThisComputer { .. } => {
+                return Ok(Self {
+                    inner: daemon.connect(Some(request_timeout)).await?,
+                })
+            }
+            shekyl_rpc_transport::DaemonTarget::Address { proxy: Some(_), .. } => {
+                return Err(RpcError::ConnectionError(
+                    "local-posture transport refuses a proxied daemon address".to_string(),
+                ))
+            }
+            shekyl_rpc_transport::DaemonTarget::Address { url, proxy: None } => url.as_str(),
+        };
         let Some(host_port) = url.strip_prefix("http://") else {
             return Err(RpcError::ConnectionError(
                 "local-posture transport requires an http:// loopback URL".to_string(),
@@ -201,8 +219,11 @@ impl LocalNodeRpc {
                  wallet's own node)"
             )));
         }
-        let inner = HttpRpc::with_custom_timeout(url, request_timeout).await?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner: HttpRpc::with_custom_timeout(url.to_owned(), request_timeout)
+                .await?
+                .into(),
+        })
     }
 }
 
@@ -302,9 +323,12 @@ mod tests {
             // Loopback is the /8, not one literal address.
             "http://127.0.0.2:48081",
         ] {
-            LocalNodeRpc::new(ok.to_string(), Duration::from_secs(1))
-                .await
-                .unwrap_or_else(|e| panic!("loopback URL {ok} must construct: {e}"));
+            LocalNodeRpc::new(
+                &shekyl_rpc_transport::DaemonTarget::address(ok),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("loopback URL {ok} must construct: {e}"));
         }
 
         // '@' beyond the authority is URL content, not credentials — the
@@ -318,9 +342,12 @@ mod tests {
             "http://127.0.0.1:48081?tag=user@host",
             "http://localhost:48081#frag@ment",
         ] {
-            let err = LocalNodeRpc::new(not_credentials.to_string(), Duration::from_secs(1))
-                .await
-                .expect_err("a query/fragment URL is not a joinable base");
+            let err = LocalNodeRpc::new(
+                &shekyl_rpc_transport::DaemonTarget::address(not_credentials),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("a query/fragment URL is not a joinable base");
             let rendered = format!("{err}");
             assert!(
                 rendered.contains("query or fragment"),
@@ -339,9 +366,12 @@ mod tests {
             ("http://[::1:48081", "malformed IPv6 bracket"),
             ("http://127.0.0.1.evil.test:48081", "loopback-prefixed host"),
         ] {
-            let err = LocalNodeRpc::new(bad.to_string(), Duration::from_secs(1))
-                .await
-                .expect_err(why);
+            let err = LocalNodeRpc::new(
+                &shekyl_rpc_transport::DaemonTarget::address(bad),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err(why);
             assert!(
                 matches!(err, RpcError::ConnectionError(_)),
                 "{why}: {err:?}"
@@ -349,7 +379,7 @@ mod tests {
         }
 
         let err = LocalNodeRpc::new(
-            "http://user:hunter2@127.0.0.1:48081".to_string(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://user:hunter2@127.0.0.1:48081"),
             Duration::from_secs(1),
         )
         .await
@@ -365,9 +395,12 @@ mod tests {
     /// the failure — exercising the [`Rpc`] impl without a live daemon.
     #[tokio::test(flavor = "multi_thread")]
     async fn local_node_rpc_post_delegates_to_inner_transport() {
-        let rpc = LocalNodeRpc::new("http://127.0.0.1:1".to_string(), Duration::from_secs(1))
-            .await
-            .expect("constructor performs no connect attempt");
+        let rpc = LocalNodeRpc::new(
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("constructor performs no connect attempt");
         rpc.post("json_rpc", b"{}".to_vec())
             .await
             .expect_err("port 1 refuses; the delegated post must surface it");

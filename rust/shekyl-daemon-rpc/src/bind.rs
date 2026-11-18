@@ -61,12 +61,13 @@ pub fn listen_addrs(
     Ok(addrs)
 }
 
-/// RT-1 / RT-2 for the daemon RPC. Loopback (v4 or v6, mapped forms
-/// included) is the only accepted class: the daemon has no authentication,
-/// so a wildcard or a network address would be an unauthenticated control
-/// surface. The daemon's remote leg is the onion service (RT-8) or a
-/// reverse proxy outside the daemon — not a cleartext bind, and not RT-4,
-/// which governs the wallet-RPC leg (L1), not this one.
+/// RT-1 / RT-2 for the daemon's plaintext listeners. Loopback (v4 or v6,
+/// mapped forms included) is the only accepted class: a plaintext listener
+/// authenticates no one, so a wildcard or a network address would be an
+/// unauthenticated control surface. The daemon's remote leg is the
+/// authenticated channel (`rpc-listen`, `RPC_CHANNEL.md` §7), which binds
+/// any address because every connection on it proves an enrolled key
+/// (RT-14) — not a cleartext bind.
 pub fn refuse_non_loopback(addr: SocketAddr) -> Result<(), String> {
     match classify_listen(addr) {
         ListenClass::Loopback => Ok(()),
@@ -76,10 +77,10 @@ pub fn refuse_non_loopback(addr: SocketAddr) -> Result<(), String> {
         )),
         ListenClass::Addressed => Err(format!(
             "refusing to serve the daemon RPC on {addr}: the address is reachable from the \
-             network and the daemon RPC has no authentication, so every request would be \
-             honoured. Bind 127.0.0.1 or [::1]; to reach this node from another machine \
-             of yours, put the crossing outside the daemon — its onion service, a reverse \
-             proxy, or a forward of this loopback port (docs/DAEMON_RPC_RUST.md)."
+             network and a plaintext listener has no authentication, so every request would \
+             be honoured. Bind 127.0.0.1 or [::1]; to reach this node from another machine \
+             of yours, give it a channel listener (rpc-listen), which accepts only keys you \
+             enroll, and enroll that machine's key (rpc client add)."
         )),
     }
 }
@@ -244,8 +245,8 @@ mod tests {
     }
 
     /// RT-2 as policy: a specific network address is refused, v4 and v6 the
-    /// same reason (no authentication) and the same remedy (loopback; the
-    /// onion).
+    /// same reason (no authentication) and the same remedy (loopback here;
+    /// the authenticated channel for another machine).
     #[test]
     fn network_binds_are_refused() {
         for addr in ["192.0.2.1:0", "[2001:db8::1]:0", "[::ffff:192.0.2.1]:0"] {
@@ -253,7 +254,7 @@ mod tests {
                 refuse_non_loopback(self::addr(addr)).expect_err("a network bind must be refused");
             assert!(err.contains("no authentication"), "{addr}: {err}");
             assert!(
-                err.contains("onion"),
+                err.contains("rpc-listen") && err.contains("rpc client add"),
                 "{addr}: must name the remote leg: {err}"
             );
         }

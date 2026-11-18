@@ -276,6 +276,33 @@ fn collect_resolves_lowest_exited_slot_with_rows_and_completes_on_empty() {
     );
 }
 
+/// A failed peer check and a service at this computer stay that fault
+/// through the exit, on the fee query and on the record fetch. Red edit:
+/// map either to `DaemonUnreachable`, and unstake reports a retry.
+#[test]
+fn a_target_refusal_is_not_an_unreachable_daemon() {
+    use shekyl_rpc_client::{DaemonFault, RpcError};
+
+    let peer = flatten_unstake_error(ReleaseRequestError::Fetch(EmissionSourceError::Rpc(
+        RpcError::PeerCheck("not a socket".into()),
+    )));
+    assert!(
+        matches!(peer, UnstakeError::DaemonTarget(DaemonFault::PeerCheck)),
+        "{peer:?}"
+    );
+    let view = "127.0.0.1:11030".parse().unwrap();
+    let service = flatten_unstake_error(ReleaseRequestError::Fee(FeeEstimatorError::Daemon(
+        DaemonFault::Service(Some(view)),
+    )));
+    assert!(
+        matches!(
+            service,
+            UnstakeError::DaemonTarget(DaemonFault::Service(Some(got))) if got == view
+        ),
+        "{service:?}"
+    );
+}
+
 /// This bites against the seam's two pending refusals collapsing onto
 /// one façade arm (`BondPostPending` mapped to
 /// `ExitInProgress` sent a just-bonded wallet to `collect_unstaked`,
@@ -446,9 +473,12 @@ async fn a_non_staker_reads_not_staker_never_nothing_staked() {
     let arc = StdArc::new(TokioRwLock::new(engine));
 
     // The daemon address is never dialed — the gate returns before transport.
-    let err = StakeFacade::unstake(arc.clone(), "http://127.0.0.1:1")
-        .await
-        .expect_err("a non-staker cannot unstake");
+    let err = StakeFacade::unstake(
+        arc.clone(),
+        &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+    )
+    .await
+    .expect_err("a non-staker cannot unstake");
     assert!(
         matches!(err, UnstakeError::NotStaker),
         "no stake engine is NotStaker (-29513), not NothingStaked: {err:?}"
@@ -494,9 +524,12 @@ async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
     );
     let arc = StdArc::new(TokioRwLock::new(opened));
 
-    let err = StakeFacade::unstake(arc.clone(), "http://127.0.0.1:1")
-        .await
-        .expect_err("nothing is bonded to exit");
+    let err = StakeFacade::unstake(
+        arc.clone(),
+        &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+    )
+    .await
+    .expect_err("nothing is bonded to exit");
     assert!(
         matches!(err, UnstakeError::NothingStaked),
         "actor present, nothing bonded is NothingStaked, not NotStaker: {err:?}"

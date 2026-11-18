@@ -305,8 +305,8 @@ fn target(dir: &Path) -> LocalTarget {
         Network::Regtest,
         &Instance::Default,
         Some(&rendezvous_dir(dir)),
+        None,
     )
-    .expect("a named directory")
 }
 
 fn log(dir: &Path, data: &str) -> String {
@@ -372,9 +372,9 @@ fn ready_then_owner_calls_and_the_close_stops_it() {
     let ours = ready_or_panic(&mut daemon, ours, dir.path(), "data");
     let target = target(dir.path());
     assert!(
-        target.path().exists(),
+        target.path().expect("a named directory").exists(),
         "the ready line came before the rendezvous {}",
-        target.path().display()
+        target.path().expect("a named directory").display()
     );
     let status = target
         .call::<shekyl_rpc_client::wire::MineStatus>(&shekyl_rpc_types::kinds::NoParams)
@@ -401,7 +401,7 @@ fn ready_then_owner_calls_and_the_close_stops_it() {
         evidence(dir.path(), "data")
     );
     assert!(
-        !target.path().exists(),
+        !target.path().expect("a named directory").exists(),
         "a clean stop removes the rendezvous"
     );
     assert!(
@@ -524,7 +524,7 @@ fn assert_stopped_after_the_parent(dir: &Path) {
     let target = target(dir);
     let stopped = holds_within(STOP_ARRIVES, || {
         log(dir, "data").contains(CLOSED)
-            && !target.path().exists()
+            && !target.path().expect("a named directory").exists()
             && shekyl_daemon_config::Lock::take(&dir.join("data")).is_ok()
     });
     assert!(

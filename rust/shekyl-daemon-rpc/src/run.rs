@@ -195,46 +195,36 @@ pub fn start(
         }
         None => None,
     };
-    // A service that listens on the channel publishes its machine-wide
-    // rendezvous record once its listeners are bound; one that does not
-    // publishes nothing (`RPC_CHANNEL.md` §7.1; Rick, 2026-11-14).
-    let service_rendezvous = match (&channel, channel_listen.is_empty()) {
-        (Some(channel), true) => {
-            // Not listening: a record a crash left would still name the
-            // previous endpoint. The path is this instance's.
-            if let Some(path) = &channel.service_rendezvous {
-                crate::channel::rendezvous::retire(path).map_err(|e| {
+    // A service publishes its machine-wide rendezvous record once its
+    // listeners are bound, whatever it listens on: the channel's address
+    // and bundle when the channel is on, the view listener when that is on
+    // (`RPC_CHANNEL.md` §7.1; Rick, 2026-11-17).
+    let service_rendezvous = match channel
+        .as_ref()
+        .and_then(|channel| Some((channel, channel.service_rendezvous.as_ref()?)))
+    {
+        Some((channel, path)) => {
+            let bound: Vec<SocketAddr> = channel_listen
+                .iter()
+                .map(BoundListener::local_addr)
+                .collect();
+            let bundle = crate::channel::bundle(&channel.key);
+            let views: Vec<SocketAddr> = view.iter().map(BoundListener::local_addr).collect();
+            Some(
+                crate::channel::rendezvous::ServiceRendezvous::publish(
+                    path,
+                    (!bound.is_empty()).then_some((bound.as_slice(), bundle.as_slice())),
+                    &views,
+                )
+                .map_err(|e| {
                     format!(
-                        "the service's rendezvous {} could not be removed: {e}",
+                        "the service's rendezvous {} could not be published: {e}",
                         path.display()
                     )
-                })?;
-            }
-            None
+                })?,
+            )
         }
-        (Some(channel), false) => match &channel.service_rendezvous {
-            Some(path) => {
-                let bound: Vec<SocketAddr> = channel_listen
-                    .iter()
-                    .map(BoundListener::local_addr)
-                    .collect();
-                Some(
-                    crate::channel::rendezvous::ServiceRendezvous::publish(
-                        path,
-                        &bound,
-                        &crate::channel::bundle(&channel.key),
-                    )
-                    .map_err(|e| {
-                        format!(
-                            "the service's rendezvous {} could not be published: {e}",
-                            path.display()
-                        )
-                    })?,
-                )
-            }
-            None => None,
-        },
-        _ => None,
+        None => None,
     };
     crate::handles::publish_live(&handles);
     let config = ServerConfig {

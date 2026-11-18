@@ -679,16 +679,24 @@ impl VouchedClaimSource {
 ///
 /// # Errors
 ///
-/// [`EmissionSourceError`] only for the record read. A failed *facts* read
-/// is not an error here: it is [`Vouching::Broken`],
-/// because the record may still be worth describing even when it cannot be
-/// acted on.
+/// [`EmissionSourceError`] for the record read, and for a witness whose
+/// fault is a target refusal ([`shekyl_rpc_client::DaemonFault::is_target_refusal`]):
+/// a failed peer check or a service at "this computer". Those are not a
+/// [`Vouching::Broken`] the record might still describe — nothing answered,
+/// and the record request is not issued. Every other failed facts read is
+/// not an error here: it is [`Vouching::Broken`], because the record may
+/// still be worth describing even when it cannot be acted on.
 pub(crate) async fn fetch_vouched_claim_source<R: Rpc>(
     rpc: &R,
     p_id: &[u8; 32],
 ) -> Result<VouchedClaimSource, EmissionSourceError> {
     // Witness first, and awaited, before the record request is issued.
     let witness = fetch_synced_chain_facts(rpc).await;
+    if let Err(error) = &witness {
+        if error.fault().is_target_refusal() {
+            return Err(EmissionSourceError::Rpc(error.clone()));
+        }
+    }
     let source = fetch_emission_claim_source(rpc, p_id).await?;
     // The record names its own block, so it needs no re-read after it: the
     // witness is the sync gate and the height a record must not fall below.

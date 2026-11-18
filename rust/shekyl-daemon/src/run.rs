@@ -239,6 +239,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
                 config.rpc.instance.label(),
                 &shekyl_rpc_rendezvous::service_record_path(dir, &network_id, &config.rpc.instance),
                 !config.rpc.channel_listen.is_empty(),
+                !config.rpc.view_listen.is_empty(),
             )
         }));
     let lines = announced.into_lines();
@@ -684,33 +685,29 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
     )
 }
 
-/// The announcements, on standard error and in the log, whatever the level.
-///
-/// Each line is queued on the installed sinks, so the call does not wait
-/// on one and does not open the log beside the rolling writer. Standard
-/// error is prefixed `shekyld:`; the log line is the line alone. The
-/// closing [`shekyl_logging::flush`] delivers a line queued before it.
-/// What a service says at start about its machine-wide rendezvous (§7.1):
-/// where it publishes the record when it listens on the channel, and that
-/// it publishes none when it does not.
+/// The line a start announces about a service's rendezvous record
+/// (`RPC_CHANNEL.md` §7.1): where it is, and what it names, which is what a
+/// client on this machine can reach.
 fn service_rendezvous_line(
     network: &str,
     instance: &str,
     path: &std::path::Path,
-    listens: bool,
+    channel: bool,
+    view: bool,
 ) -> String {
-    if listens {
-        format!(
-            "service rendezvous: network {network}, instance {instance}, at {}",
-            path.display()
-        )
-    } else {
-        format!(
-            "service rendezvous: none for network {network}, instance {instance}: rpc-listen is none, \
-             so no client finds this service by its rendezvous; local tools reach it on the \
-             plaintext admin listener"
-        )
-    }
+    let names = match (channel, view) {
+        (true, true) => "the channel and the view listener",
+        (true, false) => "the channel",
+        (false, true) => "the view listener",
+        (false, false) => {
+            "no listener: rpc-listen and rpc-view-listen are none, so a wallet on this \
+             computer is told the node serves no wallet leg"
+        }
+    };
+    format!(
+        "service rendezvous: network {network}, instance {instance}, at {}, naming {names}",
+        path.display()
+    )
 }
 
 /// The line a start announces about its owner's socket (`RPC_CHANNEL.md`
