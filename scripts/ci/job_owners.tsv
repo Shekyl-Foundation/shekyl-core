@@ -36,6 +36,7 @@ scripts/ci/check_daemon_option_docs.py	docs-gates:check-doc-links
 scripts/ci/check_debit_auth_single_source.sh	depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates
 scripts/ci/check_dev_push_runs_finish.py	grep-gates:grep-gates
 scripts/ci/check_dev_red_reporter.py	grep-gates:grep-gates
+scripts/ci/check_depends_mirror.py	grep-gates:grep-gates
 scripts/ci/check_dialer_no_tor.sh	rust-audit-test:rust-audit-and-test
 scripts/ci/check_doc_claims.py	doc-claims:doc-claims
 scripts/ci/check_doc_claims_falsification.py	doc-claims:doc-claims
