@@ -1190,7 +1190,16 @@ check runs once standing down clears.
 **Values** (each an `Assumption` until the floor device measures it,
 `DAEMON_RELAY_PRIVACY.md` §97):
 - **`CHECK_SPACING`, 15 minutes** (Rick, 2026-11-15), "On-demand check
-  spacing". Tor itself imposes no spacing on the check. At the pin, tor
+  spacing". It spaces the start of one check and the start of the next
+  check run on demand, not the directory requests. A check's requests go
+  out when its probe does, up to `CHECK_LONGEST` after the check starts,
+  so one directory can be asked about this onion again after about
+  `CHECK_SPACING` less `CHECK_LONGEST`: sooner than Tor's own client would
+  ask it again (15 minutes, below). Within one check it is sooner still: a
+  check whose first probe misses asks every directory again with its
+  second probe, at most `PROBE_LONGEST` later. That is accepted because the
+  spacing is an estimate of cost and courtesy, and Tor places no limit of
+  its own on these requests (Rick, 2026-11-17). At the pin, tor
   0.4.9.14, the client does not ask one directory for one onion again
   within 15 minutes (`REND_HID_SERV_DIR_REQUERY_PERIOD`,
   `hs_common.h:263`), but a fetch that names its directory,
@@ -1205,8 +1214,7 @@ check runs once standing down clears.
   (`hs_client.c:486-489`). The basis is the check's cost: each check asks
   every directory its round reached, and builds the probe's introduction
   and rendezvous circuits and one circuit per directory through this node's
-  guard. At the spacing, no directory is asked for this onion more often
-  than Tor's own client would ask it.
+  guard.
 - **`CHECK_LONGEST`, 300 s**: one check from its schedule to its verdict.
   The probe's delay is armed when the check is scheduled. A round still
   young when that delay ends holds the launch for up to `ROUND_WAIT`

@@ -33,19 +33,27 @@ use std::time::Duration;
 use super::super::posture::Cause;
 use super::{duration_ns, Action, Core, Phase, HELD_PROBE_LONGEST, PROBE_LONGEST};
 
-/// The least time between the start of one check and the start of a check
-/// run on demand, 15 minutes (Rick, 2026-11-15). **Assumption** (§97,
-/// "On-demand check spacing"). Basis: tor 0.4.9.14's own client does not
-/// ask one directory for one onion again within 15 minutes
-/// (`REND_HID_SERV_DIR_REQUERY_PERIOD`, `src/feature/hs/hs_common.h:263`),
-/// and each check asks every directory of its round, so a check run no
-/// sooner asks none of them more often than Tor's own client would. Tor
-/// imposes no spacing of its own on the check: a fetch that names its
-/// directory skips that memory and is not recorded in it
-/// (`hs_client_launch_v3_desc_fetch`, `src/feature/hs/hs_client.c:499`), a
-/// successful connection clears it (`hs_client.c:384`), and tor never
-/// emits `QUERY_RATE_LIMITED`. Each check costs the probe's introduction
-/// and rendezvous circuits and one circuit per directory, all through this
+/// The least time between the start of one check and the start of the next
+/// check run on demand, 15 minutes (Rick, 2026-11-15). **Assumption**
+/// (§97, "On-demand check spacing").
+///
+/// What it spaces is the starts, not the directory requests. A check's
+/// requests to the directories of its round go out when its probe does, up
+/// to [`CHECK_LONGEST`] after the check starts. So one directory can be
+/// asked about this onion again after about `CHECK_SPACING` less
+/// `CHECK_LONGEST`, sooner than tor 0.4.9.14's own client would ask it
+/// again (15 minutes, `REND_HID_SERV_DIR_REQUERY_PERIOD`,
+/// `src/feature/hs/hs_common.h:263`). Within one check it is sooner still:
+/// a check whose first probe misses asks every directory again with its
+/// second probe, at most `PROBE_LONGEST` later.
+///
+/// That is accepted because the spacing is an estimate of cost and
+/// courtesy, and Tor places no limit of its own on these requests: a fetch
+/// that names its directory skips that 15-minute memory and is not recorded
+/// in it (`hs_client_launch_v3_desc_fetch`, `src/feature/hs/hs_client.c:499`),
+/// a successful connection clears it (`hs_client.c:384`), and tor never
+/// emits `QUERY_RATE_LIMITED`. Each check costs the probe's introduction and
+/// rendezvous circuits and one circuit per directory, all through this
 /// node's guard. Re-checked at every Tor re-pin.
 pub const CHECK_SPACING: Duration = Duration::from_secs(15 * 60);
 
