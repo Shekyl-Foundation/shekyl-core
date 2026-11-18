@@ -84,6 +84,8 @@
 //! The network the blocks came from, as its code ([`Network::code`]): a
 //! replay resolves that network's schedule and genesis from it.
 
+#![deny(unsafe_code)]
+
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 
 use shekyl_archival_retention::{BundleBody, BundleRef};
@@ -678,8 +680,8 @@ impl<R: BufRead> CorpusReader<R> {
         let first = BlockHeight::from_raw(read_u64(&mut input)?);
         // `declared` is a record count, not a height span (rewinds occupy
         // no height), so it says nothing about whether the heights fit;
-        // `next_record` refuses the first `extend` that would need a height
-        // past `u64::MAX`, before anything of it is read.
+        // `next_record` refuses an `extend` that would need a height past
+        // `u64::MAX` once its tag is read, before its height.
         let declared = read_u64(&mut input)?;
         Ok(Self {
             input,
@@ -761,10 +763,13 @@ impl<R: BufRead> CorpusReader<R> {
             }
             other => return Err(CorpusFault::UnknownTag(other)),
         }
-        let height = BlockHeight::from_raw(read_u64(&mut self.input)?);
+        // The tag named an extend. There is no height past the last one, so
+        // the record's height is not read: a wrapped height cannot be a gap,
+        // and a file that ends on the tag is this fault, not a short read.
         let expected = self.next.ok_or(CorpusFault::HeightExhausted {
             after: BlockHeight::from_raw(u64::MAX),
         })?;
+        let height = BlockHeight::from_raw(read_u64(&mut self.input)?);
         if height != expected {
             return Err(CorpusFault::HeightGap {
                 expected,

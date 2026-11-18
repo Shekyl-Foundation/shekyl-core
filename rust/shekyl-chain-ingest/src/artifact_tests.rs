@@ -5,8 +5,9 @@
 
 //! The trace artifact (§3.9): round trips, pinned layout facts, every
 //! refusal observed; and `fetch_corpus` against a scripted transport — in
-//! particular RD-F15's pruned answer. The corpus's own tests live in
-//! `corpus_tests.rs`.
+//! particular RD-F15's pruned answer. The codec's laws live in
+//! `shekyl-corpus`. `corpus_tests.rs` is the replay adapter: sequenced
+//! events, the rewind, and the bundle section on the candidate.
 
 use std::io::Cursor;
 

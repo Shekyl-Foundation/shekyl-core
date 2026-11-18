@@ -364,8 +364,8 @@ fn a_record_must_carry_the_next_height() {
 fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
     // A corpus may legitimately hold height u64::MAX. What it cannot do is
     // carry an `extend` after it: the writer refuses the append, and the
-    // reader refuses the record that would need the height before reading
-    // any of it. (The header's count cannot say this at `open` — a `rewind`
+    // reader refuses that extend once its tag is read, before its height.
+    // (The header's count cannot say this at `open` — a `rewind`
     // occupies no height, so the count is not a span.)
     let last = BlockHeight::from_raw(u64::MAX);
     let (_, b_last, t_last) = blobs(last, 0);
@@ -390,11 +390,12 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
     assert!(reader.next_record().expect("clean end").is_none());
     // The same bytes with a second `extend` record spliced in and the
     // header claiming two: the first reads, the second is refused before
-    // its height is consulted — as HeightExhausted, not as a gap at some
+    // its height is read — as HeightExhausted, not as a gap at some
     // wrapped height.
     let mut crafted = bytes.clone();
     crafted.extend_from_slice(&bytes[HEADER_LEN..]);
-    crafted[21..29].copy_from_slice(&2u64.to_le_bytes());
+    let count_at = usize::try_from(super::COUNT_OFFSET).expect("the count sits in the header");
+    crafted[count_at..count_at + core::mem::size_of::<u64>()].copy_from_slice(&2u64.to_le_bytes());
     let mut reader = CorpusReader::open(Cursor::new(crafted)).expect("open");
     reader.next_record().expect("first").expect("present");
     let refused = reader.next_record().expect_err("no height follows");
@@ -402,6 +403,17 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
         matches!(refused, CorpusFault::HeightExhausted { after } if after == last),
         "{refused}"
     );
+    // The tag alone is enough. No height follows it, and the fault is still
+    // exhaustion: the reader does not need those bytes to refuse.
+    let mut tag_only = bytes;
+    tag_only.push(tag::EXTEND);
+    tag_only[count_at..count_at + core::mem::size_of::<u64>()].copy_from_slice(&2u64.to_le_bytes());
+    let mut reader = CorpusReader::open(Cursor::new(tag_only)).expect("open");
+    reader.next_record().expect("first").expect("present");
+    assert!(matches!(
+        reader.next_record(),
+        Err(CorpusFault::HeightExhausted { after }) if after == last
+    ));
     // A writer near the top with a rewind: three records over two heights,
     // and the reader takes them — the count is records, not a span.
     let (_, b_prev, t_prev) = blobs(BlockHeight::from_raw(u64::MAX - 1), 0);
