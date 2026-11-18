@@ -323,95 +323,109 @@ pub enum SubmitError {
     },
 }
 
+/// Where a reservation stands after a failed submit, as the engine holds
+/// it. Three states, because a consumer acts differently on each: what it
+/// still holds it may submit again or discard; what is in flight it must
+/// leave to the engine; what is gone it forgets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReservationAfterSubmit {
+    /// `consumer_held`, with its `output_locks`: nothing was sent. The
+    /// caller still holds it, to submit again once the cause is fixed, or
+    /// to discard. A consumer that forgets it leaves its inputs locked
+    /// with no handle to release them.
+    Held,
+    /// `in_flight`: the daemon may have it. The engine holds it until the
+    /// daemon's verdict or the R8 TTL; the caller's discard is refused
+    /// meanwhile (F2), and a second submit is refused as pending.
+    InFlight,
+    /// Dropped, its locks released, or never issued.
+    Gone,
+}
+
 impl SubmitError {
-    /// Whether the engine still holds the reservation after this failure:
-    /// `consumer_held` or `in_flight`, with its `output_locks`. `true`: the
-    /// caller keeps tracking it and releases it only by an explicit
-    /// discard (refused while the daemon's verdict is pending, F2); a
-    /// consumer that discards on its own after a held reservation throws
-    /// away a send the person may retry, or one that may already be on the
-    /// network. `false`: the engine has dropped it, or never had it.
-    ///
-    /// Answered here, once, from each arm's documented lifecycle, so no
-    /// consumer re-derives it over this `#[non_exhaustive]` enum: a match
-    /// outside the crate cannot be exhaustive, and its wildcard would read
-    /// every variant added later as "gone". This match is exhaustive, so a
+    /// Where the reservation stands after this failure, answered once,
+    /// here, from each arm's documented lifecycle. No consumer re-derives
+    /// it over this `#[non_exhaustive]` enum: a match outside the crate
+    /// cannot be exhaustive, and its wildcard would read every variant
+    /// added later as one answer for all. This match is exhaustive, so a
     /// new variant does not compile until its answer is written.
     #[must_use]
-    pub const fn keeps_reservation(&self) -> bool {
+    pub const fn reservation_after(&self) -> ReservationAfterSubmit {
         match self {
-            // Lazy R5: the locks stay until an explicit discard.
+            // Lazy R5: never sent; the locks stay until an explicit discard.
             Self::SnapshotInvalidated { .. }
-            // Ambiguous: `in_flight` until the daemon resolves or the TTL.
-            | Self::DaemonAmbiguous { .. }
-            // A definite rejection whose remedy keeps it `consumer_held`.
+            // A definite rejection whose remedy returns it to `consumer_held`.
             | Self::DaemonRejectedRetryable { .. }
             // Nothing sent; `consumer_held`, kept for a retry (A19).
             | Self::DispatchNotSaved { .. }
-            // The first submit is still `in_flight`.
-            | Self::SubmitAlreadyPending { .. }
             // Withheld for re-confirmation; `consumer_held`.
             | Self::ContentChanged { .. }
             // Preserved for a retry.
             | Self::ReanchorUnavailable { .. }
             // Preserved for review before the consumer discards it.
-            | Self::ReselectionRequired { .. } => true,
+            | Self::ReselectionRequired { .. } => ReservationAfterSubmit::Held,
+            // Ambiguous: `in_flight` until the daemon resolves or the TTL.
+            Self::DaemonAmbiguous { .. }
+            // The first submit is still `in_flight`.
+            | Self::SubmitAlreadyPending { .. } => ReservationAfterSubmit::InFlight,
             // Dropped from `in_flight`, its locks released.
             Self::DaemonRejectedTerminal { .. }
             // Never issued, or already resolved.
-            | Self::ReservationNotFound { .. } => false,
+            | Self::ReservationNotFound { .. } => ReservationAfterSubmit::Gone,
         }
     }
 }
 
 #[cfg(test)]
-mod keeps_reservation_tests {
+mod reservation_after_tests {
     use super::*;
     use crate::engine::error::PersistenceError;
 
-    /// **Every arm answers whether the reservation is kept, as its own
+    /// **Every arm says where its reservation stands, as its own
     /// documentation says.** One row per variant; the match in
-    /// `keeps_reservation` is exhaustive, so a variant added later fails
-    /// to compile there, and this table names its answer. Red edits: move
-    /// `DispatchNotSaved` to the `false` arm (a consumer would discard a
-    /// send the engine kept for a retry); move `DaemonRejectedTerminal` to
-    /// the `true` arm (a consumer would track a reservation that is gone).
+    /// `reservation_after` is exhaustive, so a variant added later fails to
+    /// compile there, and this table names its answer. Red edits: move
+    /// `DispatchNotSaved` to `InFlight` (a consumer would drop the handle
+    /// of a send it still holds, its inputs locked with no way to release
+    /// them); move `DaemonAmbiguous` to `Held` (a consumer would try to
+    /// discard, or resubmit, a send that may be on the network).
     #[test]
-    fn every_arm_says_whether_the_reservation_is_kept() {
+    fn every_arm_says_where_its_reservation_stands() {
+        use ReservationAfterSubmit::{Gone, Held, InFlight};
         let rid = ReservationId::from_raw(7);
-        let cases: [(SubmitError, bool); 10] = [
+        let cases: [(SubmitError, ReservationAfterSubmit); 10] = [
             (
                 SubmitError::SnapshotInvalidated {
                     reservation_snapshot: SnapshotId([1; 16]),
                     current_snapshot: SnapshotId([2; 16]),
                 },
-                true,
+                Held,
             ),
             (
                 SubmitError::DaemonRejectedTerminal {
                     kind: TerminalErrorKind::DoubleSpend,
                 },
-                false,
+                Gone,
             ),
             (
                 SubmitError::DaemonAmbiguous {
                     kind: AmbiguousErrorKind::DaemonTimeout,
                     reservation_id: rid,
                 },
-                true,
+                InFlight,
             ),
             (
                 SubmitError::DaemonRejectedRetryable {
                     cause: RetryableRejectCause::StaleRoot,
                     reservation_id: rid,
                 },
-                true,
+                Held,
             ),
             (
                 SubmitError::ReservationNotFound {
                     reservation_id: rid,
                 },
-                false,
+                Gone,
             ),
             (
                 SubmitError::DispatchNotSaved {
@@ -423,36 +437,36 @@ mod keeps_reservation_tests {
                         },
                     ),
                 },
-                true,
+                Held,
             ),
             (
                 SubmitError::SubmitAlreadyPending {
                     reservation_id: rid,
                 },
-                true,
+                InFlight,
             ),
             (
                 SubmitError::ContentChanged {
                     reservation_id: rid,
                     content_gen: 3,
                 },
-                true,
+                Held,
             ),
             (
                 SubmitError::ReanchorUnavailable {
                     reservation_id: rid,
                 },
-                true,
+                Held,
             ),
             (
                 SubmitError::ReselectionRequired {
                     reservation_id: rid,
                 },
-                true,
+                Held,
             ),
         ];
-        for (error, kept) in cases {
-            assert_eq!(error.keeps_reservation(), kept, "{error:?}");
+        for (error, after) in cases {
+            assert_eq!(error.reservation_after(), after, "{error:?}");
         }
     }
 }
