@@ -222,14 +222,13 @@ impl<
     /// without a corresponding design win for the sync entry point.
     ///
     /// Instead, the synchronous entry point takes a
-    /// [`tokio::runtime::Handle`] and runs the producer's async work
-    /// via [`Handle::block_on`]. This means **`refresh` must not be
-    /// called from inside an async context on the same runtime** —
-    /// `block_on` panics in that case. Async callers
-    /// (`tokio::spawn_blocking`, dedicated worker thread,
-    /// branch-2's `RefreshHandle`) drive `refresh` from a sync
-    /// context; the JSON-RPC server's RPC handler is the typical
-    /// example via `spawn_blocking`.
+    /// [`tokio::runtime::Handle`] and runs the producer's async work via
+    /// [`Handle::block_on`](tokio::runtime::Handle::block_on). This means
+    /// **`refresh` must not be called from inside an async context on the
+    /// same runtime** — `block_on` panics in that case. Async callers
+    /// (`tokio::spawn_blocking`, dedicated worker thread, branch-2's
+    /// `RefreshHandle`) drive `refresh` from a sync context; the JSON-RPC
+    /// server's RPC handler is the typical example via `spawn_blocking`.
     ///
     /// Branch 2 lands `RefreshHandle`, which spawns a producer-driven
     /// loop on the caller's runtime and exposes cancellation +

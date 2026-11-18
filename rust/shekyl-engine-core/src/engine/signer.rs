@@ -221,7 +221,7 @@ impl TransferSigningContext {
 pub struct SignedTransfer {
     /// Serialized signed-transaction bytes. Phase 1 stub
     /// matches the existing
-    /// [`build_pending_tx_in_state`](super::pending::build_pending_tx_in_state)
+    /// `build_pending_tx_in_state`
     /// behavior (`tx_bytes: Vec::new()`); Phase 2a's tx-builder
     /// integration replaces this with the actual on-wire body.
     pub(crate) tx_bytes: Vec<u8>,

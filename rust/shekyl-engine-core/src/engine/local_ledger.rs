@@ -137,7 +137,7 @@ impl LedgerState {
 ///
 /// `LocalLedger` ships `pub` rather than the originally-planned
 /// `pub(crate)`: the type appears as the default for the third
-/// generic parameter of [`Engine`], a `pub` item, so external
+/// generic parameter of [`Engine`](crate::engine::Engine), a `pub` item, so external
 /// compilation units (benches, doctests, downstream Rust callers
 /// that name `Engine<SoloSigner>`) must be able to resolve the
 /// default. The design doc §3.4 originally framed the default as

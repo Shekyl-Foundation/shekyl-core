@@ -749,6 +749,8 @@ pub(crate) enum StakeEngineError {
     /// closed and loud rather than scan with a silently-weakened key (DQ7). The
     /// concrete cause (scanner build vs canonical-id encode) is preserved in the
     /// wrapped [`ScanSetupError`], including its `source()` chain.
+    ///
+    /// [`ScanStep`]: crate::engine::pscan::scan_step::ScanStep
     #[error("persona scan setup failed: {0}")]
     ScanSetup(#[from] ScanSetupError),
 
@@ -815,12 +817,16 @@ pub(crate) enum StakeEngineError {
 /// persona for GF-4b lineage classification,
 /// `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Built per [`ScanStep`] and
 /// dropped with it (DQ5).
+///
+/// [`ScanStep`]: crate::engine::pscan::scan_step::ScanStep
 pub(crate) type BondedScanInputs = (Vec<(u32, GuaranteedScanner)>, BTreeMap<PCanonicalId, u32>);
 
 /// Why building a [`ScanStep`]'s bonded-union scan inputs failed. Both arms are a
 /// **malformed resident persona key** (corrupted in-memory state) — fail closed,
 /// concrete cause preserved (vs a stringified loss). Wrapped by
 /// [`StakeEngineError::ScanSetup`].
+///
+/// [`ScanStep`]: crate::engine::pscan::scan_step::ScanStep
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ScanSetupError {
     /// Building a persona's guaranteed scanner failed (SP-1 fail-closed rejection

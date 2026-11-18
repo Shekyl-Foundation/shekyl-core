@@ -51,7 +51,7 @@
 //! - [`crate::mode_adversarial_ratio::run`] amortizes via an
 //!   identical `Vec<([u8; 32], Vec<u8>)>` keyed by `base.bytes`
 //!   during T6 per-recipe-ratio measurement.
-//! - [`crate::bin::gen_canonical_outputs`] amortizes the same way
+//! - The `gen_canonical_outputs` binary amortizes the same way
 //!   during the canonical-regeneration helper run.
 //! - The T2 integration test
 //!   (`tests/adversarial_corpus_byte_equality.rs`) amortizes

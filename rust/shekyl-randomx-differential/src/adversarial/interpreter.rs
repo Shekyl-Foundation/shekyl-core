@@ -26,7 +26,7 @@
 //! The R1-D3 close enumerates three mitigations against this
 //! failure mode, all of which apply here:
 //!
-//! 1. **Dedicated [`tests`] coverage** in this module. The
+//! 1. **Dedicated `tests` coverage** in this module. The
 //!    `tests::evaluate_no_op_returns_base_cache_bytes` (no-op
 //!    identity), `tests::evaluate_idempotent` (idempotence),
 //!    `tests::evaluate_applies_modifications_in_order` (sequential
@@ -47,7 +47,7 @@
 //! Per the Phase 2h Round 2 R2-D1 close, T-A13 (recipe evaluator
 //! divergence — silent mis-construction of the corpus via an
 //! evaluator bug) is mitigated primarily by *the evaluator's own
-//! test surface* (this module's [`tests`] block) with the M1
+//! test surface* (this module's `tests` block) with the M1
 //! canonical-output discipline as the backstop. T-A13's mitigation
 //! chain is structurally distinct from T-A12 (recipe substrate
 //! tamper, mitigated by M1 + M3 PR-template review of recipe data

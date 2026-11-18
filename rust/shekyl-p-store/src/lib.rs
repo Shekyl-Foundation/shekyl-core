@@ -6,7 +6,7 @@
 //! `P`'s serving body store (`WALLET_SIDE_STORE.md` `WSS-Q1`(a)).
 //!
 //! One redb file, owned by one actor (the wallet's body-store actor),
-//! holding whole-shard [`shekyl_wire::shard_frame`] bodies. The store never
+//! holding whole-shard `shekyl_wire::shard_frame` bodies. The store never
 //! talks to the daemon (`WSS-17`). It answers only "is this shard present,
 //! and what are its bytes", one storage chunk at a time, with servability
 //! settled at open (`WSS-Q7`). Its handle is not shared: the owner hands out

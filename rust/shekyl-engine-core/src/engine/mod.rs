@@ -885,7 +885,7 @@ pub struct Engine<
     #[allow(dead_code)]
     pub(crate) economics: E,
 
-    /// Handle to the wallet's [`StakeEngine`](super::stake_engine::StakeEngine),
+    /// Handle to the wallet's [`StakeEngine`](stake_engine::StakeEngine),
     /// the archival-staking actor that holds the Model-D pre-derived persona
     /// bundles (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2). `Some` only for a wallet
     /// that has staked (`StakingBlock::staking_enabled`); `None` for the
@@ -906,7 +906,7 @@ pub struct Engine<
     pub(crate) stake: Option<StakeEngineHandle>,
 
     /// Compile-time signer-kind dispatch. The actual key material lives
-    /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
+    /// behind [`Engine::key`] (for `SoloSigner`); this marker exists so
     /// the V3.1 multisig type can name distinct method signatures via
     /// associated items on [`EngineSignerKind`] without the V3.0 build
     /// paying a runtime branch on every send.

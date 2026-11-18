@@ -22,9 +22,7 @@
 //! the load-bearing trait-dispatch commit (§7.X C5). At C4 the
 //! aggregate sits in the crate unconsumed except by future
 //! trait-dispatch sites and by the C7 property tests
-//! (`AssertionSink` / `PanickingSink` / coherence-pair). The
-//! legacy free-function [`super::refresh::produce_scan_result`]
-//! continues to drive production refresh until C5 deletes it.
+//! (`AssertionSink` / `PanickingSink` / coherence-pair).
 //!
 //! # Implementation outline
 //!
@@ -33,7 +31,7 @@
 //!
 //! 1. **Cancellation checkpoint 2** (pre-fetch) — observed at
 //!    method entry, before the daemon-tip read.
-//! 2. **Daemon tip read** — [`DaemonEngine::get_height`] for the
+//! 2. **Daemon tip read** — [`get_height`](shekyl_rpc_client::Rpc::get_height) for the
 //!    attempt's scan ceiling. RPC failure surfaces as
 //!    [`LocalRefreshError::DaemonUnreachable`] or
 //!    [`LocalRefreshError::DaemonProtocol`]; the
@@ -43,7 +41,7 @@
 //!    classification").
 //! 3. **Scanner construction** — a fresh
 //!    [`shekyl_scanner::Scanner`] is built from
-//!    [`Self::view_material`] per attempt (the view-material
+//!    [`LocalRefresh::view_material`] per attempt (the view-material
 //!    bytes are copied into [`Zeroizing<…>`](Zeroizing) wrappers
 //!    the scanner takes ownership of; the scanner's
 //!    [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop) chain wipes them

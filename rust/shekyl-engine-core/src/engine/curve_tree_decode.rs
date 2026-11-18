@@ -185,7 +185,7 @@ fn decode_tx(
 /// Classify an output's curve-tree target.
 ///
 /// `GENESIS_TX_WIRE_FORMAT.md` §9.5: `txout_to_tagged_key`
-/// ([`TAG_OUTPUT_TAGGED_KEY`](shekyl_wire::TAG_OUTPUT_TAGGED_KEY)) is the
+/// ([`TAG_OUTPUT_TAGGED_KEY`](shekyl_wire::transaction::TAG_OUTPUT_TAGGED_KEY)) is the
 /// **sole** genesis output type, so every parsed [`Output`] classifies as a
 /// tagged key. [`TargetKind::Key`] and [`TargetKind::Other`] remain in
 /// [`shekyl_curve_tree`] only for daemon leaf-set parity.

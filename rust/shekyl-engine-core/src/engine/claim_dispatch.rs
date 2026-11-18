@@ -258,7 +258,7 @@ where
     /// reward is fully consumed by the loud vout). Go-live remains
     /// compile-blocked on a production [`SpentRecordsDurablyPruned`] mint
     /// (SP-R0), exactly as the bond path; tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`].
+    /// `SpentRecordsDurablyPruned::for_test`.
     ///
     /// The production caller is the cadence driver's epoch-claim leg
     /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 3) — the `claim` RPC method

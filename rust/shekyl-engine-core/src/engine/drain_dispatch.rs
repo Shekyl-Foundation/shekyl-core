@@ -144,7 +144,8 @@ pub(crate) enum DrainRequestError {
     /// A **local** sealed-state read failed (the P-scan seal or the
     /// pending-post seal) — fail-closed, never an invented-empty set over a
     /// bad seal. Our own store, so a failure here is internal corruption, not
-    /// a reachable-daemon condition: distinct from [`DaemonUnreachable`].
+    /// a reachable-daemon condition: distinct from
+    /// [`DaemonUnreachable`](DrainRequestError::DaemonUnreachable).
     #[error("engine state read ({context}): {detail}")]
     State {
         /// Which read refused.
@@ -155,8 +156,9 @@ pub(crate) enum DrainRequestError {
     /// A daemon query needed to *prepare* the sweep failed transiently — the
     /// dispatch-tip clock read. It is **before** the seal, so nothing was
     /// assembled or propagated and the caller may retry at will. Kept distinct
-    /// from [`State`] so wallet-RPC can name a reachable daemon outage as
-    /// retryable rather than an opaque internal fault.
+    /// from [`State`](DrainRequestError::State) so wallet-RPC can name a
+    /// reachable daemon outage as retryable rather than an opaque internal
+    /// fault.
     #[error("daemon unreachable ({context}): {detail}")]
     DaemonUnreachable {
         /// Which daemon query failed.
@@ -251,7 +253,7 @@ where
     /// claim): go-live stays compile-blocked on its production mint (SP-R0)
     /// until durable pruning of spent funding outputs lands, so a confirmed-but-
     /// unpruned output can never be re-swept into a double-spend; tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`].
+    /// `SpentRecordsDurablyPruned::for_test`.
     // The `dead_code` staging allow retired with WI-RPC-5: the production
     // caller the rule-21 note reserved (the RPC drain entry) landed as
     // [`Engine::drain_to_principal`](super::drain_facade), which calls this

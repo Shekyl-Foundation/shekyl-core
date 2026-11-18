@@ -2434,7 +2434,7 @@ pub(crate) fn compute_hash_inner(
 }
 
 /// Feed the 256-byte register-file (`r[0..8] || f[0..4] || e[0..4] ||
-/// a[0..4]`) to a [`Digest`] hasher, matching the C reference's
+/// a[0..4]`) to a [`Digest`](blake2::Digest) hasher, matching the C reference's
 /// `blake2b(..., &reg, sizeof(RegisterFile), ...)` byte-for-byte.
 ///
 /// The C `RegisterFile` struct layout per

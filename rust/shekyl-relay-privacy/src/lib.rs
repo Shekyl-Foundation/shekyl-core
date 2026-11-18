@@ -66,7 +66,7 @@
 //!    fixed offset pins receipt time to within ±0.5 s 42% of the time — and
 //!    for a transaction arriving *late* in a flush window, 93%.
 //! 5. **The fluff flood is ~7x slower than it needs to be**, as a direct
-//!    consequence of (4). [`conformance::simulate_fluff_return`] measures first
+//!    consequence of (4). `conformance::simulate_fluff_return` measures first
 //!    passage to an arbitrary node at 13.75 s (p90) under the inherited draw
 //!    versus 2.25 s memoryless. First passage is a minimum over parallel paths,
 //!    and a minimum only helps when the paths differ.
@@ -90,7 +90,7 @@
 //! golden vector is possible and two nodes on different standard libraries
 //! already draw different sequences. A port therefore cannot be validated by
 //! differential replay the way the consensus port is; only a statistical grade
-//! is available, and [`conformance`] is that grade. See [`poisson`] for how the
+//! is available, and `conformance` is that grade. See [`poisson`] for how the
 //! draw is made reviewable and reproducible instead.
 //!
 //! # Relationship to Cuprate

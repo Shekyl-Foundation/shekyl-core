@@ -80,8 +80,8 @@
 //!
 //! `pub` so that the binary (separate crate per Cargo convention)
 //! and integration tests under [`tests/`](../../tests/) can
-//! consume the helpers. Per [`crate::lib`]'s `#[doc(hidden)]`
-//! attribute, this surface is not exported as a production API;
+//! consume the helpers. Per the `#![doc(hidden)]` attribute on the
+//! [crate root](crate), this surface is not exported as a production API;
 //! the harness is the sole consumer.
 
 use sha2::{Digest, Sha256};

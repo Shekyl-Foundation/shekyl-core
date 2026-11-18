@@ -8,7 +8,7 @@
 //! [`predict_weight`] mirrors `shekyl_wire::Transaction::write` byte-for-byte
 //! (and adds the same Bp+ clawback), so it equals the post-build
 //! `Transaction::weight()` **without constructing a transaction** — pinned by
-//! [`predict_weight_matches_wire_weight`](crate::tests) (the single-source
+//! `predict_weight_matches_wire_weight` (the single-source
 //! guarantee). The `fcmp_proof_size` term reads the measured 2a-3 KAT table.
 //!
 //! **Two parity tests, different jobs.** The one named above builds a wire

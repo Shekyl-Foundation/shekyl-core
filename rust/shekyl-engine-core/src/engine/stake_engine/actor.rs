@@ -396,6 +396,8 @@ impl StakeEngine {
     /// bonded personas are few) at the cost of a stale-cache invalidation surface
     /// on a firewall-critical set — a missed invalidation would silently drop a
     /// newly-bonded persona's bond-post matches. Recompute is the safe trade.
+    ///
+    /// [`ScanStep`]: crate::engine::pscan::scan_step::ScanStep
     pub(crate) fn bonded_scan_inputs(&self) -> Result<BondedScanInputs, ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_personas = BTreeMap::new();

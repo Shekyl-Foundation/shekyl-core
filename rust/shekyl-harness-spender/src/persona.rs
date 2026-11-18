@@ -60,7 +60,7 @@ const MASTER: [u8; MASTER_SEED_BYTES] = [0x51; MASTER_SEED_BYTES];
 pub struct Persona {
     keys: ArchivalPKeys,
     /// Where this persona's signatures draw ML-DSA's randomness: the OS, or
-    /// a signing seed ([`Self::with_signing_seed`], `seeded-rng`).
+    /// a signing seed (`Self::with_signing_seed`, `seeded-rng`).
     draw: MlDsaDraw,
 }
 

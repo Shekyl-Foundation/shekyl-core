@@ -150,7 +150,8 @@ impl<
     /// returns the wallet's stores are closed either way and the wallet can
     /// be reopened at once. Then the drop sequence runs:
     ///
-    /// 1. `self.persistence` — when the default [`WalletFile`] implementor is
+    /// 1. `self.persistence` — when the default
+    ///    [`WalletFile`](shekyl_engine_file::WalletFile) implementor is
     ///    used, `Drop` releases the advisory lock on the keys file (`<base>.keys`,
     ///    where `base` is the `.wallet` path; see
     ///    `shekyl_engine_file::handle::WalletFile::drop`).

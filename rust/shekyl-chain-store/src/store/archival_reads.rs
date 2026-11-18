@@ -100,6 +100,8 @@
 //! question is a fold over recorded state, not a read the store composes).
 //! No composed "emission source" read (`SAR-Q4`): the rule that needs
 //! A1, A7 and A8 composes them at its call site.
+//!
+//! [`last_settled_slash_epoch`]: super::ReadSnapshot::last_settled_slash_epoch
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -412,7 +414,7 @@ pub(super) fn bond_records<T: ReadTables>(
 }
 
 /// **A12.** Whether `archival_slash_applied` holds `(persona, shard,
-/// epoch)`. A set table ([`Present`](crate::schema::Present)): the row's
+/// epoch)`. A set table ([`Present`](crate::codec::Present)): the row's
 /// existence is the whole fact, so there is nothing to decode and nothing
 /// to be `Option` about.
 pub(super) fn slash_applied<T: ReadTables>(

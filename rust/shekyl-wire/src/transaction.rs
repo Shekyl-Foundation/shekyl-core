@@ -943,7 +943,7 @@ impl PqcAuth {
     /// varint(pk_len) ‖ hybrid_public_key`: what identifies the signer and the
     /// scheme, and nothing of the signature. It is the input's own component of
     /// the PQC signing preimage (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.5,
-    /// [`PqcSigningPreimage::payload`]); a signature is not over itself, so the
+    /// [`PqcSigningPreimage::signed_hash`]); a signature is not over itself, so the
     /// header is [`Self::write`] stopped before the signature.
     fn write_header<W: Write>(&self, w: &mut W) -> io::Result<()> {
         w.write_all(&[self.auth_version, self.scheme_id])?;

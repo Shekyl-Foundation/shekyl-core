@@ -57,7 +57,8 @@
 //! (`shekyl-difficulty/tests/check_hash_vectors.rs`, 116 C++-oracle vectors).
 //! Bucket 4: sealed by vectors, not ratified; ported as-is with them. It is
 //! a definition — *what "satisfies" means* — evaluated once at
-//! [`D1b::satisfies`] and recorded there.
+//! [`Target::is_satisfied_by`](crate::Target::is_satisfied_by) and
+//! recorded at [`D1b::record`].
 //!
 //! **D1** is the predicate: the longhash must satisfy the target. `form`
 //! judges it against the caller's claimed target ([`D1::judge`]) and
@@ -191,8 +192,9 @@ impl D3 {
 /// CEN-D1b: the acceptance comparison is `hash · difficulty < 2^256`, the
 /// hash read as a 256-bit little-endian integer — `check_hash`, KAT-ported.
 ///
-/// A definition of *satisfies*, evaluated once at [`D1b::satisfies`] and
-/// recorded there; D1 acts on the answer.
+/// A definition of *satisfies*, evaluated once at
+/// [`Target::is_satisfied_by`](crate::Target::is_satisfied_by) and recorded
+/// at [`D1b::record`]; D1 acts on the answer.
 pub(crate) struct D1b;
 
 impl Rule for D1b {

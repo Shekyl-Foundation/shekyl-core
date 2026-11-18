@@ -534,7 +534,7 @@ fn build_report(
 }
 
 /// Time one Rust-subject `compute_hash` invocation. Mirrors
-/// [`crate::mode_latency::time_rust`]'s `black_box` discipline;
+/// [`mode_latency`](crate::mode_latency)'s `time_rust` `black_box` discipline;
 /// duplicated here (rather than reusing the public surface) to keep
 /// `mode_latency`'s helpers `pub(super)` per the Phase 2g §5.7
 /// drift-prevention boundary.
@@ -566,7 +566,7 @@ fn duration_to_ns(d: std::time::Duration) -> u64 {
 
 /// `(median, p95, max)` over a `u64` sample slice using the same
 /// upper-median + integer-percentile convention as
-/// [`crate::mode_latency::median_p95_max`].
+/// [`mode_latency`](crate::mode_latency)'s `median_p95_max`.
 fn median_p95_max(samples: &mut [u64]) -> (u64, u64, u64) {
     debug_assert!(!samples.is_empty());
     samples.sort_unstable_by(|a, b| a.cmp(b).then(Ordering::Equal));

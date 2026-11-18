@@ -48,8 +48,9 @@ pub(super) fn map_wallet_file_error(err: WalletFileError, expected: Network) -> 
 /// # Tokio embedding
 ///
 /// Callers may invoke these sync methods from a thread that already runs a
-/// Tokio runtime (typical wallet-RPC path). A naïve [`Handle::block_on`] on a
-/// worker thread panics (nested `block_on`). This helper:
+/// Tokio runtime (typical wallet-RPC path). A naïve
+/// [`Handle::block_on`](tokio::runtime::Handle::block_on) on a worker thread
+/// panics (nested `block_on`). This helper:
 ///
 /// - On a **multi-thread** runtime: [`tokio::task::block_in_place`] then
 ///   `block_on` on the active handle (same class of fix as JSON-RPC handlers

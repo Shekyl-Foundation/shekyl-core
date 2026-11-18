@@ -138,7 +138,7 @@ impl Canonical for LeafCount {
 
 /// The tree's summary — `curve_tree_meta`'s one row (module docs).
 ///
-/// Layout (41 bytes): `root`[32] ‖ `depth` u8 ‖ `leaf_count` u64 LE.
+/// Layout (41 bytes): `root`\[32\] ‖ `depth` u8 ‖ `leaf_count` u64 LE.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CurveTreeState {
     /// The root stored with this summary — **the live root**,

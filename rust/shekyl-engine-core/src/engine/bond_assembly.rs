@@ -100,7 +100,7 @@ impl std::fmt::Debug for LoadedSeal {
 ///   assemble/finalize path, from the transaction it just encoded. The only
 ///   other production path is [`Self::from_pending`], which re-lifts a
 ///   [`PendingBondPost`] this module previously sealed. Tests use
-///   [`Self::bind_for_test`].
+///   `Self::bind_for_test`.
 /// - **P-2 — retries re-send the stored value.** The pending record persists
 ///   the pairing's fields (`persona`, `tx_bytes`); F31/watchdog resubmits
 ///   re-lift and re-send the stored bytes through the same `submit_bound`

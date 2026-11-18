@@ -104,10 +104,11 @@
 //!
 //! # Faults are not verdicts
 //!
-//! A view's substrate can fail to answer. That is [`ChainView::Fault`], an
-//! associated type the crate never inspects, returned as the *outer* `Err`
-//! of [`tx_against`] and — wrapped in [`Fault::View`] — of [`fn@validate`].
-//! [`fn@validate`] has two more outer arms of its own ([`Fault::Stale`],
+//! A view's substrate can fail to answer. That is
+//! [`ChainView::Fault`](HeaderView::Fault), an associated type the crate
+//! never inspects, returned as the *outer* `Err` of [`tx_against`] and —
+//! wrapped in [`Fault::View`] — of [`fn@validate`]. [`fn@validate`] has two
+//! more outer arms of its own ([`Fault::Stale`],
 //! [`Fault::Corrupt`]; `fault.rs`): a claim the stateless stage was given
 //! that the committing view refutes, and view data no conforming store
 //! holds. [`form`]'s outer position is the [`Substrate`]'s fault; [`tx_form`]

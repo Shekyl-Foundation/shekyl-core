@@ -55,7 +55,7 @@
 //!   (`CHAIN_RULES_SLICE_6.md` §5.3). It has no feature flag of its own and
 //!   nothing outside this crate's tests can reach it — by design: a driver
 //!   that shipped would be a second producer.
-//! - [`emission_assembly`] — the one exception to that sentence, and a
+//! - `emission_assembly` — the one exception to that sentence, and a
 //!   narrow one: the driver's emission-claim assembly (E6 slice 8 row 7,
 //!   Q3), compiled under `cfg(test)` **or** the `harness` feature. The
 //!   feature exists for one consumer — `shekyl-engine-core`'s byte-identity

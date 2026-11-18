@@ -40,7 +40,7 @@ use crate::provenance::Provenance;
 ///
 /// [`Unpinned`](Self::Unpinned) verifies the header and does not read the
 /// body. [`Pinned`](Self::Pinned) admits `genesis` on that same read.
-/// [`GenesisPin::NONE`] pins nothing: the comparison still runs, and a tip
+/// `GenesisPin::NONE` pins nothing: the comparison still runs, and a tip
 /// the snapshot cannot read is a fault.
 #[derive(Clone, Copy)]
 pub(super) enum GenesisAdmission<'a> {

@@ -375,12 +375,11 @@ impl DaemonEngine for DaemonClient {
     /// §5.3 escape ladder's health gate.
     ///
     /// The response decode lives in
-    /// [`health_from_get_info`](synced_chain_facts::health_from_get_info)
+    /// [`health_from_daemon_status`](synced_chain_facts::health_from_daemon_status)
     /// — one parse for this reply, because `SyncedChainFacts` (`WSS-Q14`)
     /// reads the same fields over a bare [`Rpc`] for callers that do not
     /// hold this trait, and two decoders over one wire response with no
-    /// cross-check is how a field's meaning drifts on one side only. The
-    /// defensive-parsing rationale moved with it.
+    /// cross-check is how a field's meaning drifts on one side only.
     fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
         async move {
             let status = self.call::<wire::DaemonStatus>(NoParams).await?;

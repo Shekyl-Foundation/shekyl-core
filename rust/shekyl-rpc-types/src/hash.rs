@@ -127,10 +127,10 @@ impl core::error::Error for HashHexError {}
 
 /// What serde completes "expected …" with.
 ///
-/// A bare noun phrase, deliberately not the [`Display`] sentence: serde's
+/// A bare noun phrase, deliberately not the [`Display`](fmt::Display) sentence: serde's
 /// message already echoes the offending value, so repeating what was seen
 /// would render as "invalid value: string \"beef\", expected expected 64 hex
-/// characters …". [`Display`] stands alone and does say what it saw.
+/// characters …". [`Display`](fmt::Display) stands alone and does say what it saw.
 impl serde::de::Expected for HashHexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("64 hex characters (32 bytes)")

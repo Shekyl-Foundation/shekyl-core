@@ -92,7 +92,7 @@ pub struct OutputInfo {
     /// Pre-derived by `shekyl_construct_output` via HKDF from the shared secret.
     #[zeroize]
     pub commitment_mask: [u8; 32],
-    /// Encrypted amount (9 bytes): [0..8] = amount XOR k_amount, [8] =
+    /// Encrypted amount (9 bytes): `[0..8]` = amount XOR k_amount, `[8]` =
     /// amount_tag. In process, obtainable only from
     /// `OutputData::enc_amount_wire()`; the type's `Deserialize` impl is the
     /// one other route, and it exists for the FFI JSON boundary where the far
@@ -103,7 +103,7 @@ pub struct OutputInfo {
     /// (`k_amount`) is wiped by `OutputData`'s own `ZeroizeOnDrop`.
     #[zeroize(skip)]
     pub enc_amount: EncryptedOutputField,
-    /// Encrypted label (9 bytes): [0..8] = plaintext XOR k_label, [8] =
+    /// Encrypted label (9 bytes): `[0..8]` = plaintext XOR k_label, `[8]` =
     /// label_tag; sentinel plaintext at V3.0 launch. In process, obtainable
     /// only from `OutputData::enc_label_wire()`, so an unencrypted label
     /// cannot be constructed on this path. The type's `Deserialize` impl is
@@ -170,7 +170,7 @@ pub struct SignedProofs {
     /// not be `8*C`. The Bulletproof+ `V` vector carries the cofactored `C/8`
     /// form internally; the two are reconciled inside the BP+ verifier.
     pub commitments: Vec<[u8; 32]>,
-    /// Per-output encrypted amounts (9 bytes each: [0..8] = XOR-encrypted, [8] = HKDF tag).
+    /// Per-output encrypted amounts (9 bytes each: `[0..8]` = XOR-encrypted, `[8]` = HKDF tag).
     pub enc_amounts: Vec<EncryptedOutputField>,
     /// Per-output encrypted labels (9 bytes each).
     pub enc_labels: Vec<EncryptedOutputField>,

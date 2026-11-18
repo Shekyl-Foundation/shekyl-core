@@ -39,7 +39,7 @@ use super::local_ledger::LedgerState;
 /// "`LedgerReadGuard` field type leaks crate-private `LedgerState`".
 ///
 /// Hold the guard for the minimum span necessary; concurrent writers
-/// (`apply_scan_result` and the [`pending`]-module mutators) cannot
+/// (`apply_scan_result` and the [`pending`](mod@super::pending)-module mutators) cannot
 /// acquire the write lock while any reader is live.
 ///
 /// [`Deref`]: std::ops::Deref

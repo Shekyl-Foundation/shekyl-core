@@ -207,7 +207,7 @@ pub(crate) fn run_form<R: FormRule>(
 /// root key). Production takes it from
 /// [`derive`](crate::header_ladder::derive)'s
 /// [`Derived`](crate::header_ladder::Derived), so the height has one
-/// source. [`Self::new`] recomputes it from the tip for a test that has
+/// source. `Self::new` recomputes it from the tip for a test that has
 /// no `Derived`. A rule does not re-read `view.tip()`, and C1 does not
 /// infer genesis from `mtp_window.is_none()`. The view stays beside the
 /// context for per-rule lookups that are not shared (`root_at`, further

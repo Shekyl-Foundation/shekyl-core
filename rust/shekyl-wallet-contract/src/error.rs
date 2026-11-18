@@ -875,7 +875,8 @@ pub enum WalletRpcError {
     /// Submit: definite daemon rejection.
     #[error("submit rejected")]
     SubmitRejected {
-        /// OpenAPI `error.data`: serde-tagged [`SubmitVerdict`] projection.
+        /// OpenAPI `error.data`: the `rejected` verdict with its [`RejectCause`]
+        /// (and `row` when a chain row refused it).
         data: Value,
     },
     /// Submit: transport-level ambiguity.
