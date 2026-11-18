@@ -1587,21 +1587,11 @@ impl From<OpenError> for WalletRpcError {
             OpenError::Io(io) => from_io_error(io),
             OpenError::Key(e) => from_key_error(&e),
             OpenError::Persistence(e) => e.into(),
-            // Constructed by the `conformance` build only; the default
-            // build's payload type has no values, so this arm is in every
-            // build and needs no feature here.
-            OpenError::StakeRngSelfCertFailed(failure) => from_self_cert_failure(&failure),
+            // The grade was logged where the check ran. The wire carries the
+            // remedy only.
+            OpenError::StakeRngSelfCertFailed => Self::RandomSourceCheckFailed,
         }
     }
-}
-
-/// The stake RNG self-cert's refusal (`OpenError::StakeRngSelfCertFailed`):
-/// its own code, never `-32603` — a random-number source that fails the
-/// check is this computer's fault, not a wallet bug, and the remedy differs.
-/// The grade stays in the server log; the wire carries the remedy only.
-fn from_self_cert_failure(failure: &impl std::fmt::Display) -> WalletRpcError {
-    tracing::error!(%failure, "the stake RNG self-cert refused the open");
-    WalletRpcError::RandomSourceCheckFailed
 }
 
 impl From<ChangePasswordError> for WalletRpcError {
@@ -3536,13 +3526,12 @@ mod tests {
         assert_ne!(data["wallet"], data["expected"]);
     }
 
-    /// The stake RNG self-cert's refusal reaches `-29017` with its remedy,
-    /// and the grade stays off the wire. Only engine-core's `conformance`
-    /// build constructs the failure, so this drives the mapping the open arm
-    /// calls; CI lints the arm itself with that feature on.
+    /// The stake random-number check's refusal is `-29017`, with the remedy
+    /// and no grade on the wire. The variant is a unit, so this build can
+    /// construct it and the conversion is the real `From` arm.
     #[test]
     fn a_failed_random_source_check_names_its_remedy() {
-        let err = from_self_cert_failure(&"chi-square 912.4 over 255 bins");
+        let err: WalletRpcError = OpenError::StakeRngSelfCertFailed.into();
         assert_eq!(err.code(), WalletRpcErrorCode::RandomSourceCheckFailed);
         assert_eq!(err.code().as_i32(), -29017);
         assert_eq!(err.data(), None);

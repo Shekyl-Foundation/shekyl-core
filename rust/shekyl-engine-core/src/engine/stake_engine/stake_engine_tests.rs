@@ -1304,8 +1304,8 @@ mod s6_self_cert {
     /// failure (the actor never enters its message loop), the eager
     /// observation (`wait_for_self_cert`) surfaces it as `Err`, and the actor
     /// is dead — any later op collapses to the terminal `StakeActorUnavailable`.
-    /// (At the wallet-open path this same `Err` becomes
-    /// `OpenError::StakeRngSelfCertFailed`.)
+    /// (At the wallet-open path this same failure is logged, and the open
+    /// returns the unit `OpenError::StakeRngSelfCertFailed`.)
     #[tokio::test(flavor = "multi_thread")]
     async fn degenerate_self_cert_fail_stops_spawn() {
         // Force a degenerate source so `on_start` returns Err and the actor

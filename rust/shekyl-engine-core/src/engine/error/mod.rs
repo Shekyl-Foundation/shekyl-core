@@ -70,7 +70,9 @@ pub(crate) use economics::EconomicsError;
 pub use io::IoError;
 pub(crate) use key::KeyEngineError;
 pub use key::KeyError;
-pub use lifecycle::{ChangePasswordError, OpenError, PersistenceError, StakeSelfCertFailure};
+#[cfg(feature = "conformance")]
+pub(crate) use lifecycle::StakeSelfCertFailure;
+pub use lifecycle::{ChangePasswordError, OpenError, PersistenceError};
 pub(crate) use refresh::LedgerError;
 pub use refresh::{CurveTreeIngestFault, FinalityBreach, FinalityStop, RefreshError};
 pub use send::{PendingTxError, SendError};

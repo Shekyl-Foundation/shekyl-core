@@ -716,17 +716,6 @@ jobs:
         # executes that wait. `--lib --tests` leaves out the doctests, which
         # the feature does not change and the workspace step already ran.
         run: cargo test --locked -p shekyl-engine-core --features conformance --lib --tests
-      - name: shekyl-wallet-contract with engine-core's conformance — the open refusal it maps (x86_64 only)
-        working-directory: rust
-        # Only the `conformance` build constructs
-        # `OpenError::StakeRngSelfCertFailed`, which the contract maps to
-        # -29017. No other lane builds the contract with that feature on, so
-        # an arm that stopped compiling or linting under it would pass them
-        # all; that is how the contract's open match broke while the
-        # variant was cfg-gated. The feature on the command line adds no
-        # dependency edge, so check_test_only_features.py's census does not
-        # move. x86_64 only, as the step above.
-        run: cargo clippy --locked -p shekyl-wallet-contract --all-targets --features shekyl-engine-core/conformance -- -D warnings
       - name: "FN-DSA vectors with the AVX2 paths compiled out"
         working-directory: rust
         # The pinned `fn-dsa` crate dispatches to AVX2 at run time on x86_64,
