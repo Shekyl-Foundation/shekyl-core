@@ -281,15 +281,16 @@ fn the_default_file_unread_load_still_reads_a_named_file() {
     assert_ne!(unnamed.config.logging.level, "debug");
 }
 
-/// **`config-file none` reads no file, wherever one is** (Rick,
-/// 2026-11-18). A program that starts its own daemon asks for the command
-/// line and the defaults alone, so its node means the same on every
+/// **`config-file none` is the choice the production loader makes**
+/// (Rick, 2026-11-18). A program that starts its own daemon asks for the
+/// command line and the defaults alone, so its node means the same on every
 /// machine, whatever another install keeps in the shared file. `load` (the
-/// production loader, which reads the default file) is given `none`: no
-/// file is read, not even a default one present on the host, and the
-/// choice is `None`. Red edit: in `config_file`, read the default file for
-/// `Value::Word` (`file_read` is the host's default file where it has one,
-/// and the choice is `Default`).
+/// production loader, which reads the default file) is given `none`: the
+/// choice is `None` and no file is read. That `None` reaches no opener at
+/// all, a default file present or not, is the unit test
+/// `load::tests::config_file_none_reaches_no_opener`, which does not touch
+/// the host's `/etc`. Red edit: in `choose_file`, make `Value::Word` the
+/// default choice (the choice is then `Default`).
 #[test]
 fn config_file_none_reads_no_file() {
     let place = private_place();

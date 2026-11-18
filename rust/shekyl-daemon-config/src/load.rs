@@ -12,7 +12,7 @@
 //! same arguments. It takes no lock, writes no marker and starts no logging;
 //! those are the daemon's steps after it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use shekyl_options::{read_file, Cli, Diagnostic, Kind, Value};
 
@@ -125,22 +125,46 @@ fn config_file(
     platform: &Platform,
     default_file: DefaultFile,
 ) -> Result<(ConfigFileChoice, Option<ConfigFile>), Diagnostic> {
-    let (network, mode) = choosers(cli);
-    let choice = match cli.given.iter().find(|g| g.row.name == "config-file") {
-        Some(g) => match &g.value {
-            Value::Path(p) => ConfigFileChoice::Named(p.clone()),
-            // The row's one word (`Kind::PATH_OR_NONE`).
-            Value::Word(_) => ConfigFileChoice::None,
-            other => unreachable!("the config-file row's kind is a path or none, not {other:?}"),
-        },
-        None => ConfigFileChoice::Default(paths::config_file_default(platform, mode, network)?),
-    };
-    let opened = match (&choice, default_file) {
-        (ConfigFileChoice::None, _) | (ConfigFileChoice::Default(_), DefaultFile::Unread) => None,
-        (ConfigFileChoice::Named(path), _) => file::open(path, true)?,
-        (ConfigFileChoice::Default(path), DefaultFile::Read) => file::open(path, false)?,
-    };
+    let choice = choose_file(cli, platform)?;
+    let opened = open_chosen(&choice, default_file, file::open)?;
     Ok((choice, opened))
+}
+
+/// Which configuration file `cli` chose: the one it names, none, or the run
+/// mode's default for the chosen network. Reads nothing.
+fn choose_file(cli: &Cli, platform: &Platform) -> Result<ConfigFileChoice, Diagnostic> {
+    let (network, mode) = choosers(cli);
+    Ok(
+        match cli.given.iter().find(|g| g.row.name == "config-file") {
+            Some(g) => match &g.value {
+                Value::Path(p) => ConfigFileChoice::Named(p.clone()),
+                // The row's one word (`Kind::PATH_OR_NONE`).
+                Value::Word(_) => ConfigFileChoice::None,
+                other => {
+                    unreachable!("the config-file row's kind is a path or none, not {other:?}")
+                }
+            },
+            None => ConfigFileChoice::Default(paths::config_file_default(platform, mode, network)?),
+        },
+    )
+}
+
+/// Open the file `choice` names with `open` (production's is
+/// [`file::open`], which takes the path and whether it was named). `None`
+/// is no file and no call: the opener is never reached for it, whatever is
+/// at the default path.
+fn open_chosen(
+    choice: &ConfigFileChoice,
+    default_file: DefaultFile,
+    open: impl FnOnce(&Path, bool) -> Result<Option<ConfigFile>, Diagnostic>,
+) -> Result<Option<ConfigFile>, Diagnostic> {
+    match (choice, default_file) {
+        (ConfigFileChoice::None, _) | (ConfigFileChoice::Default(_), DefaultFile::Unread) => {
+            Ok(None)
+        }
+        (ConfigFileChoice::Named(path), _) => open(path, true),
+        (ConfigFileChoice::Default(path), DefaultFile::Read) => open(path, false),
+    }
 }
 
 /// Everything [`load`] does after its file step: read `opened`'s rows,
@@ -182,4 +206,56 @@ pub fn after_file(
         resolved,
         config,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **`config-file none` reaches no opener, whatever is at the default
+    /// path.** The file step's opener is the seam: under `None` it is never
+    /// called, read mode or not, while a default and a named choice each
+    /// call it once with their own path. The host's `/etc` is never
+    /// touched. Red edit: in `open_chosen`, open the run mode's default for
+    /// `None` (the opener is called, and the test fails at its panic).
+    #[test]
+    fn config_file_none_reaches_no_opener() {
+        let never = |path: &Path, _named: bool| -> Result<Option<ConfigFile>, Diagnostic> {
+            panic!("`none` opened {}", path.display())
+        };
+        for mode in [DefaultFile::Read, DefaultFile::Unread] {
+            assert!(open_chosen(&ConfigFileChoice::None, mode, never)
+                .expect("no file")
+                .is_none());
+        }
+
+        let mut seen = Vec::new();
+        let record = |path: &Path, named: bool| -> Result<Option<ConfigFile>, Diagnostic> {
+            seen.push((path.to_path_buf(), named));
+            Ok(None)
+        };
+        open_chosen(
+            &ConfigFileChoice::Default("/etc/shekyl/shekyld-regtest.toml".into()),
+            DefaultFile::Read,
+            record,
+        )
+        .unwrap();
+        assert_eq!(
+            seen,
+            [(PathBuf::from("/etc/shekyl/shekyld-regtest.toml"), false)]
+        );
+
+        let mut seen = Vec::new();
+        let record = |path: &Path, named: bool| -> Result<Option<ConfigFile>, Diagnostic> {
+            seen.push((path.to_path_buf(), named));
+            Ok(None)
+        };
+        open_chosen(
+            &ConfigFileChoice::Named("/srv/shekyld.toml".into()),
+            DefaultFile::Unread,
+            record,
+        )
+        .unwrap();
+        assert_eq!(seen, [(PathBuf::from("/srv/shekyld.toml"), true)]);
+    }
 }
