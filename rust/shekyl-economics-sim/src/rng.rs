@@ -47,11 +47,13 @@ pub(crate) const HONEST_SEEDS: [u64; 3] = [1, 2, 3];
 /// samples. The assert fires before that.
 const POISSON_MEAN_LIMIT: f64 = 700.0;
 
-/// The largest mean one Knuth draw of standard traffic takes, under
-/// [`POISSON_MEAN_LIMIT`]. A larger mean is split into equal chunks no
-/// larger, each drawn and the draws summed: a sum of Poissons is Poisson,
-/// so the draw stays exact at any demand (§5.35).
-pub(crate) const POISSON_CHUNK_MEAN: f64 = 500.0;
+/// The mean from which standard traffic's count is drawn by Hörmann's
+/// transformed rejection ([`ptrs_poisson`]) instead of Knuth's product
+/// ([`knuth_poisson`]). Knuth's costs one uniform draw per arrival, so it
+/// cannot follow the growth schedule's demand (two million a block by its
+/// sixtieth year); the rejection's cost does not grow with the mean.
+/// Hörmann states his method for means of 10 and above (§5.35).
+pub(crate) const PTRS_MEAN: f64 = 10.0;
 
 /// The lane of a block's honest stream its interval draws from. Each fee
 /// rung draws from its own lane after it ([`rung_lane`]).
@@ -147,20 +149,116 @@ pub(crate) fn block_interval(seed: u64, height: u64) -> f64 {
 /// block's interval: Poisson with mean `mean` (§5.35). The caller passes
 /// the rung's demand per target spacing times [`block_interval`].
 ///
-/// A mean above [`POISSON_CHUNK_MEAN`] is drawn as equal chunks no larger,
-/// summed. `libm`'s `exp` keeps the bits the same on every host.
+/// A mean under [`PTRS_MEAN`] is drawn by Knuth's product, a larger one by
+/// transformed rejection; both are exact. `libm`'s `exp` and `log` keep
+/// the bits the same on every host.
 pub(crate) fn rung_arrivals(seed: u64, height: u64, rung: FeePriority, mean: f64) -> u64 {
     if mean <= 0.0 {
         return 0;
     }
     let mut rng = honest_stream(seed, height, rung_lane(rung));
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let chunks = (mean / POISSON_CHUNK_MEAN).ceil() as u64;
-    #[allow(clippy::cast_precision_loss)]
-    let chunk = mean / chunks as f64;
-    (0..chunks)
-        .map(|_| knuth_poisson(chunk, libm::exp, || rng.unit()))
-        .sum()
+    if mean < PTRS_MEAN {
+        knuth_poisson(mean, libm::exp, || rng.unit())
+    } else {
+        ptrs_poisson(mean, || rng.unit())
+    }
+}
+
+/// Poisson at mean `mean` (at least [`PTRS_MEAN`]) by W. Hörmann's
+/// transformed rejection with squeeze, PTRS ("The transformed rejection
+/// method for generating Poisson random variables", Insurance: Mathematics
+/// and Economics 12, 39–45, 1993), with his constants, in the order numpy's
+/// `random_poisson_ptrs` evaluates them. A trial takes two uniform draws,
+/// and a count takes 1.13 to 1.33 trials on average over the means from
+/// 10 to 1 900. The squeeze ends about half the counts at a mean of 10 and
+/// most of them at large means; the rest compare against the exact
+/// log-probability, so the count is exactly Poisson. Every logarithm
+/// is `libm`'s; `sqrt`, `floor` and `abs` are exact in IEEE arithmetic.
+fn ptrs_poisson(mean: f64, mut unit: impl FnMut() -> f64) -> u64 {
+    assert!(
+        mean >= PTRS_MEAN,
+        "PTRS is stated for means of 10 and above"
+    );
+    let root = mean.sqrt();
+    let log_mean = libm::log(mean);
+    let b = 0.931 + 2.53 * root;
+    let a = -0.059 + 0.02483 * b;
+    let inv_alpha = 1.1239 + 1.1328 / (b - 3.4);
+    let v_r = 0.9277 - 3.6224 / (b - 2.0);
+    loop {
+        let u = unit() - 0.5;
+        let v = unit();
+        let us = 0.5 - u.abs();
+        let k = ((2.0 * a / us + b) * u + mean + 0.43).floor();
+        // A negative candidate is rejected before it is ever returned; the
+        // squeeze cannot produce one at these means (its least `k` at mean
+        // 10 is 4), and the cast below asserts it.
+        if us >= 0.07 && v <= v_r {
+            return count(k);
+        }
+        if k < 0.0 || (us < 0.013 && v > us) {
+            continue;
+        }
+        if libm::log(v) + libm::log(inv_alpha) - libm::log(a / (us * us) + b)
+            <= -mean + k * log_mean - log_gamma(k + 1.0)
+        {
+            return count(k);
+        }
+    }
+}
+
+/// A sampler's candidate as a count: a whole, non-negative `f64` below
+/// 2^53, so the conversion is exact.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn count(k: f64) -> u64 {
+    assert!(
+        (0.0..9_007_199_254_740_992.0).contains(&k),
+        "a Poisson count is a non-negative whole number: {k}"
+    );
+    k as u64
+}
+
+/// The Stirling-series coefficients of `ln Γ`, from S. Zhang and J. Jin,
+/// "Computation of Special Functions" (Wiley, 1996), as numpy's
+/// `random_loggam` carries them.
+const LOG_GAMMA_SERIES: [f64; 10] = [
+    8.333_333_333_333_333e-2,
+    -2.777_777_777_777_778e-3,
+    7.936_507_936_507_937e-4,
+    -5.952_380_952_380_952e-4,
+    8.417_508_417_508_418e-4,
+    -1.917_526_917_526_918e-3,
+    6.410_256_410_256_41e-3,
+    -2.955_065_359_477_124e-2,
+    1.796_443_723_688_307e-1,
+    -1.392_432_216_905_90,
+];
+
+/// `ln(2π)`.
+const LN_TWO_PI: f64 = 1.837_877_066_409_345_3;
+
+/// `ln Γ(x)` for `x ≥ 1` by Zhang and Jin's series, in numpy's order: the
+/// series at `x` raised to at least 7, then the steps back down. On
+/// `libm`'s `log`, so the bits are the same on every host.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn log_gamma(x: f64) -> f64 {
+    if x == 1.0 || x == 2.0 {
+        return 0.0;
+    }
+    let steps = if x < 7.0 { (7.0 - x) as u32 } else { 0 };
+    let mut x0 = x + f64::from(steps);
+    let x2 = (1.0 / x0) * (1.0 / x0);
+    let mut series = LOG_GAMMA_SERIES[9];
+    for coefficient in LOG_GAMMA_SERIES[..9].iter().rev() {
+        series *= x2;
+        series += coefficient;
+    }
+    let mut gl = series / x0 + 0.5 * LN_TWO_PI + (x0 - 0.5) * libm::log(x0) - x0;
+    for _ in 0..steps {
+        gl -= libm::log(x0 - 1.0);
+        x0 -= 1.0;
+    }
+    gl
 }
 
 /// Knuth's Poisson sampler at mean `mean`, from uniform draws in `[0, 1)`:
@@ -276,14 +374,38 @@ mod tests {
             let got = block_interval(1, height);
             assert!((got - expected).abs() < 1e-12, "height {height}: {got}");
         }
-        let standard: Vec<u64> = (0..6)
-            .map(|h| rung_arrivals(1, h, FeePriority::Standard, 40.0))
-            .collect();
-        assert_eq!(standard, [35, 35, 62, 41, 44, 40]);
-        let chunked: Vec<u64> = (0..3)
-            .map(|h| rung_arrivals(1, h, FeePriority::High, 1_900.0))
-            .collect();
-        assert_eq!(chunked, [1_890, 1_896, 1_881], "four chunks of 475, summed");
+        let at = |rung, mean, blocks: u64| -> Vec<u64> {
+            (0..blocks)
+                .map(|h| rung_arrivals(1, h, rung, mean))
+                .collect()
+        };
+        let standard = FeePriority::Standard;
+        assert_eq!(at(standard, 4.0, 6), [5, 0, 7, 3, 3, 1], "Knuth");
+        assert_eq!(at(standard, 9.99, 6), [12, 4, 19, 10, 13, 8], "Knuth");
+        assert_eq!(at(standard, 10.0, 6), [8, 12, 10, 9, 9, 10], "PTRS");
+        assert_eq!(at(standard, 40.0, 6), [36, 28, 40, 37, 39, 40]);
+        assert_eq!(at(FeePriority::High, 1_900.0, 3), [1_863, 1_849, 1_858]);
+        assert_eq!(
+            at(standard, 2_347_813.0, 3),
+            [2_346_888, 2_344_864, 2_347_803],
+            "the growth schedule's sixtieth year"
+        );
+    }
+
+    /// The series `ln Γ` against known values: `ln Γ(n) = ln (n−1)!`, and
+    /// Γ(6.5) = 10395√π / 64, below 7, where the series steps back down.
+    #[test]
+    fn the_log_gamma_series_is_ln_factorial() {
+        let ln_factorial = |n: u32| (1..n).map(|i| f64::from(i).ln()).sum::<f64>();
+        for n in [1u32, 2, 3, 5, 7, 10, 100] {
+            let got = log_gamma(f64::from(n));
+            assert!(
+                (got - ln_factorial(n)).abs() < 1e-12 * got.max(1.0),
+                "n {n}: {got}"
+            );
+        }
+        let half = (10_395.0 * std::f64::consts::PI.sqrt() / 64.0).ln();
+        assert!((log_gamma(6.5) - half).abs() < 1e-12, "{}", log_gamma(6.5));
     }
 
     /// The draw is keyed (the same block draws the same traffic, each seed
@@ -358,19 +480,83 @@ mod tests {
         }
     }
 
-    /// STD-1's chunked draw: a mean past Knuth's limit (the growth
-    /// scenario's year 20 is about 1 900 a block) draws in chunks and stays
-    /// exact, mean within 1 %; a mean at the chunk itself takes one draw.
+    /// The draw is Poisson in shape, not only in mean, on both sides of
+    /// [`PTRS_MEAN`]: over 200 000 heights at seed 2, every count's share
+    /// is within five standard errors of the Poisson probability (plus
+    /// 10^-4 for the far tail), and the variance is within 2 % of the mean.
+    /// A wrong constant in the rejection's squeeze would bend the shape
+    /// while the mean held.
     #[test]
-    fn a_mean_past_the_limit_draws_in_chunks() {
-        for mean in [POISSON_CHUNK_MEAN, POISSON_CHUNK_MEAN + 1.0, 1_900.0] {
-            let blocks = 20_000u64;
-            let total: u64 = (0..blocks)
+    fn the_draw_is_poisson_on_both_sides_of_the_cutover() {
+        const BLOCKS: u64 = 200_000;
+        for mean in [9.99, PTRS_MEAN, 12.0, 40.0] {
+            let draws: Vec<u64> = (0..BLOCKS)
                 .map(|h| rung_arrivals(2, h, FeePriority::Standard, mean))
-                .sum();
-            let got = total as f64 / blocks as f64;
-            assert!((got - mean).abs() < mean * 0.01, "mean {mean}: {got}");
+                .collect();
+            let n = BLOCKS as f64;
+            let average = draws.iter().sum::<u64>() as f64 / n;
+            let variance = draws
+                .iter()
+                .map(|&d| (d as f64 - average).powi(2))
+                .sum::<f64>()
+                / n;
+            assert!(
+                (average - mean).abs() < mean * 0.01,
+                "mean {mean}: {average}"
+            );
+            assert!(
+                (variance - mean).abs() < mean * 0.02,
+                "mean {mean}: var {variance}"
+            );
+            let top = draws.iter().copied().max().expect("draws");
+            let mut probability = (-mean).exp();
+            for k in 0..=top {
+                if k > 0 {
+                    probability *= mean / k as f64;
+                }
+                let share = draws.iter().filter(|&&d| d == k).count() as f64 / n;
+                let error = (probability * (1.0 - probability) / n).sqrt();
+                assert!(
+                    (share - probability).abs() <= 5.0 * error + 1e-4,
+                    "mean {mean}, count {k}: share {share}, Poisson {probability}"
+                );
+            }
         }
+    }
+
+    /// The rejection's cost does not grow with the mean: from the
+    /// cutover to the growth schedule's sixtieth year (2.35 million a
+    /// block), a count takes under three uniform draws on average, and the
+    /// mean of the counts is within five standard errors of its target.
+    #[test]
+    fn the_rejection_costs_the_same_at_any_mean() {
+        const COUNTS: u64 = 10_000;
+        for mean in [PTRS_MEAN, 1_900.0, 2_347_813.0] {
+            let mut rng = SplitMix64::seeded(5);
+            let mut draws = 0u64;
+            let total: u64 = (0..COUNTS)
+                .map(|_| {
+                    ptrs_poisson(mean, || {
+                        draws += 1;
+                        rng.unit()
+                    })
+                })
+                .sum();
+            let per_count = draws as f64 / COUNTS as f64;
+            assert!(per_count < 3.0, "mean {mean}: {per_count} draws a count");
+            let average = total as f64 / COUNTS as f64;
+            let error = (mean / COUNTS as f64).sqrt();
+            assert!(
+                (average - mean).abs() < 5.0 * error,
+                "mean {mean}: {average}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "non-negative whole number")]
+    fn a_negative_candidate_is_never_a_count() {
+        let _ = count(-1.0);
     }
 
     /// The restated baseline's derivation (§5.34): at mean 50 the median is

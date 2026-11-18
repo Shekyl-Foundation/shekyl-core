@@ -4438,18 +4438,25 @@ result.
     Each rung's draw is keyed on the seed, the height and the rung, so a
     stuffed fold, its counterfactual and every thread of a parallel map
     see the same honest blocks.
-  - Knuth's sampler underflows near a mean of 745. A mean above one named
-    chunk under that limit is split into equal chunks, each drawn and the
-    draws summed. A sum of Poissons is Poisson, so the draw stays exact at
-    any demand the schedules reach (about 1 900 a block in the growth
-    scenario's year 20).
+  - Below a mean of 10, the count is Knuth's product. From 10, it is
+    W. Hörmann's transformed rejection with squeeze, PTRS (Insurance:
+    Mathematics and Economics 12, 39–45, 1993), with his constants and the
+    `ln Γ` series of Zhang and Jin, in the order numpy's sampler evaluates
+    them. Both are exact. Knuth's costs one uniform draw per arrival, and
+    the growth schedule reaches about 1 900 a block in year 20 and 2.35
+    million in year 60. The rejection takes 1.13 to 1.33 trials of two
+    draws a count at every mean, so a fold costs the same at any demand.
+    The cutover is one named constant, at the least mean Hörmann states
+    the method for.
   - The rungs' arrivals sum to the geometric count of §5.34: Poisson
     arrivals over one exponential interval. So the restated median, 35 at
     a mean of 50, stays as derived.
   - `exp` and `ln` come from the `libm` crate (0.2.16, already in the
     lockfile through `num-traits`). Its double-precision `exp` and `log`
     are pure Rust with no hardware dispatch on x86_64 or aarch64, so a pin
-    made on one host holds on every host, as the integer draw's did.
+    made on one host holds on every host, as the integer draw's did. The
+    rejection's other operations, `sqrt`, `floor` and `abs`, are exact in
+    IEEE arithmetic.
   - Steady traffic keeps the rung split of today, so the control arm is
     the current arithmetic unchanged.
   - `rng::honest_count` loses its last reader and is deleted.

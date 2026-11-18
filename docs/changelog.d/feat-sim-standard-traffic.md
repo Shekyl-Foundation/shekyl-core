@@ -1,5 +1,6 @@
 - **The economics sim runs every scenario on standard traffic.** This implements Rick's ruling of 2026-11-15 that realistic traffic is the sim's standard scenario.
-  - **The draw.** Each block's interval is drawn exponential around the target spacing. Each fee rung's arrivals over that interval are Poisson, keyed on the seed, the height and the rung. A mean above Knuth's limit is drawn in chunks and summed.
+  - **The draw.** Each block's interval is drawn exponential around the target spacing. Each fee rung's arrivals over that interval are Poisson, keyed on the seed, the height and the rung.
+    - A mean under 10 is drawn by Knuth's product. From 10 it is drawn by Hörmann's transformed rejection (PTRS), whose cost does not grow with the mean: a count of the growth schedule's millions a block costs what one of the baseline's fifty does.
     - `exp` and `log` come from `libm`, so a pin holds on every host.
     - The rungs' sum is §5.34's geometric count, so the restated median, 35, stands.
   - **The default.** One named constant, `STANDARD_TRAFFIC`, at the canonical seed 1. Every `SimParams` constructor starts there, and the narration pins carry it.
