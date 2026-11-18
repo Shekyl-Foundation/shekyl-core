@@ -155,7 +155,7 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ruby ruby-dev rubygems rpm rpm2cpio cpio nsis
+          sudo apt-get install -y ruby ruby-dev rubygems rpm rpm2cpio cpio nsis p7zip-full
           sudo gem install --no-document fpm
           python3 -m pip install git-archive-all
 
@@ -217,9 +217,11 @@ jobs:
           }
           # The RPC tunnel (RPC_CHANNEL.md §8; Rick, 2026-11-16): its binary
           # beside shekyl-cli, and its unit installed but not enabled. fpm's
-          # systemd hook enables and starts what --deb-systemd names; the
-          # tunnel needs a configuration and a key before its first start,
-          # so its unit is a plain file the operator enables.
+          # systemd hook (fpm 1.18) only reloads systemd on install and, on
+          # upgrade, restarts the unit --deb-systemd names when it is
+          # already enabled; it enables and starts nothing. The tunnel needs
+          # a configuration, a key and its own account before its first
+          # start, so its unit is a plain file the operator enables.
           #
           # stage_tunnel <bin-dir> <stage-root>
           stage_tunnel() {
@@ -245,9 +247,18 @@ jobs:
                      # fails as the runner or inspects a directory it did not unpack.
                      (cd "$unpacked" && cpio -idm --quiet --no-absolute-filenames < "$unpacked.cpio")
                      rm -f "$unpacked.cpio" ;;
+              # The Windows installer lays the bundle in `tor\` beside
+              # shekyld.exe, where the daemon looks on Windows
+              # (shekyl-tor-control-client BESIDE_TOR_DIR), not under a system
+              # directory. 7-Zip reads an NSIS installer. Windows has no
+              # executable bit, so the extract is given one for the check.
+              *.exe) 7z x -y -o"$unpacked" "$pkg" >/dev/null || return 1
+                     install_dir=/tor
+                     chmod +x "$unpacked$install_dir"/*.exe || return 1 ;;
               *) echo "check_packed_tor: unknown package type: $pkg" >&2; return 1 ;;
             esac
-            python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$unpacked$install_dir"
+            python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$unpacked$install_dir" \
+              || { rm -rf "$unpacked"; return 1; }
             rm -rf "$unpacked"
           }
 
@@ -393,6 +404,7 @@ jobs:
               -DLICENSE_FILE="$(pwd)/LICENSE" \
               -DOUTPUT_FILE="$(pwd)/$RELEASE/shekyl-${TAG}-win-x64-setup.exe" \
               contrib/packaging/windows/shekyl.nsi
+            check_packed_tor x86_64-w64-mingw32 "$(pwd)/$RELEASE/shekyl-${TAG}-win-x64-setup.exe"
             rm -rf "$TMPDIR_WIN"
           fi
 

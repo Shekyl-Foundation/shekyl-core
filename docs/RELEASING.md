@@ -207,20 +207,38 @@ Platforms"); nothing is produced for it.
 
 ## Linux Package Details
 
-The `.deb` and `.rpm` packages are available for both x86_64 and ARM64:
-- Install `shekyld`, `shekyl-cli`, and `shekyl-wallet-rpc` to `/usr/local/bin/`
-- Include a systemd service unit for `shekyld`
-- After install: `sudo systemctl enable --now shekyld`
-- Data directory: `/var/lib/shekyl`
-- Logs: systemd journal (`journalctl -u shekyld`)
+The `.deb` and `.rpm` packages are available for both x86_64 and ARM64.
+Both install `shekyld`, `shekyl-cli`, `shekyl-wallet-rpc` and
+`shekyl-rpc-tunnel` to `/usr/local/bin/`, the pinned Tor under
+`/opt/shekyl/`, and the tunnel's unit, installed and not enabled.
+
+The `.deb` also:
+- Installs `shekyld.service` and `shekyl.slice` under `/lib/systemd/system/`
+- Creates the `shekyl` system account the unit runs as, once, with no home
+  and no login shell (`contrib/packaging/linux/deb-after-install.sh`); an
+  existing account is left as it is, and removal keeps it
+- Does not enable or start the daemon: with any settings in
+  `/etc/shekyl/shekyld-<network>.toml`, `sudo systemctl enable --now shekyld`
+- Restarts an enabled daemon on upgrade
+- Data directory: `/var/lib/shekyl` (the unit's `StateDirectory`)
+- Log: `/var/log/shekyl/shekyld.log`
+
+The `.rpm` carries no daemon unit, slice or account: an operator installs
+`contrib/packaging/linux/shekyld.service` and `shekyl.slice` and creates the
+account as `INSTALLATION_GUIDE.md` §8 says.
 
 ## Windows Installer Details
 
 The NSIS installer:
-- Installs binaries to `Program Files\Shekyl`
+- Installs `shekyld.exe` and `shekyl-rpc-tunnel.exe` to `Program Files\Shekyl`,
+  and the pinned Tor in `tor\` beside them, where the daemon looks for it on
+  Windows; the package job checks that Tor against its pin. Windows ships no
+  `shekyl-cli` or `shekyl-wallet-rpc`
 - Optionally adds to system PATH
-- Creates Start Menu shortcuts
+- Creates Start Menu shortcuts for the daemon and the uninstaller
 - Registers a standard Windows uninstaller
+- Does not install a service: on Windows the daemon runs as the user until
+  RT-W14
 
 ## Gitian Deterministic Builds
 
