@@ -80,8 +80,21 @@ impl Persona {
     /// `CHAIN_FORGE.md` §6).
     #[must_use]
     pub fn on(network: Network, p_slot: u32) -> Self {
-        let keys = derive_archival_p_keys(&MASTER, network, p_slot)
-            .expect("the harness's seed derives a persona");
+        Self::from_master(&MASTER, network, p_slot)
+    }
+
+    /// Derive the persona at `p_slot` from `master` under `network`'s name:
+    /// a chain's own personas, keyed by its plan rather than by the master
+    /// every fixture shares (`CHAIN_FORGE.md` §6: the forge's personas
+    /// derive from `seed_for(plan_seed, role, index)`).
+    ///
+    /// # Panics
+    ///
+    /// If the derivation fails, which a 64-byte master never makes it do.
+    #[must_use]
+    pub fn from_master(master: &[u8; MASTER_SEED_BYTES], network: Network, p_slot: u32) -> Self {
+        let keys = derive_archival_p_keys(master, network, p_slot)
+            .expect("a master seed derives a persona");
         Self {
             keys,
             draw: MlDsaDraw::default(),

@@ -386,37 +386,23 @@ Shekyl package naming may differ by distro and is not yet standardized.
 
 ### On OpenBSD:
 
-You will need to add a few packages to your system. `pkg_add cmake gmake git rust`.
-
-Build Shekyl: `gmake release-static`
-
-Note: you may encounter the following error when compiling the latest version as a normal user:
-
-```
-LLVM ERROR: out of memory
-c++: error: unable to execute command: Abort trap (core dumped)
-```
-
-Then you need to increase the data ulimit size to 2GB and try again: `ulimit -d 2000000`
+OpenBSD is not a supported target: no CI or gitian job builds it, and a OpenBSD build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
 ### On NetBSD:
 
-Check that the dependencies are present: `pkg_info -c git-base gmake cmake rust | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.
+NetBSD is not a supported target: no CI or gitian job builds it, and a NetBSD build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
-Clone the Shekyl repository recursively and checkout the most recent release as described above. Then build: `gmake release`. The resulting executables can be found in `build/NetBSD/[Release version]/Release/bin/`.
+### On DragonFly BSD:
+
+DragonFly BSD is not a supported target: no CI or gitian job builds it, and a DragonFly BSD build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
+
+### On illumos:
+
+illumos is not a supported target: no CI or gitian job builds it, and a illumos build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
 ### On Solaris:
 
-The default Solaris linker can't be used, you have to install GNU ld, then run cmake manually with the path to your copy of GNU ld:
-
-```bash
-mkdir -p build/release
-cd build/release
-cmake -DCMAKE_LINKER=/path/to/ld -D CMAKE_BUILD_TYPE=Release ../..
-cd ../..
-```
-
-Then you can run make as usual.
+Solaris is not a supported target: no CI or gitian job builds it, and a Solaris build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
 ### Building portable statically linked binaries
 

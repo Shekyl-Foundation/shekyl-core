@@ -3,12 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The account walk's next entry by `getpwent_r` (glibc, FreeBSD, DragonFly,
-//! NetBSD), into a buffer the walk keeps.
+//! The account walk's next entry by `getpwent_r` (glibc and FreeBSD), into
+//! a buffer the walk keeps.
 //!
 //! glibc re-reads an entry that did not fit, so it starts small and grows.
-//! The BSDs move past it, so they start at the largest buffer. A `Grow` on
-//! those targets meets the ceiling and refuses without another `getpwent_r`
+//! FreeBSD moves past it, so it starts at the largest buffer. A `Grow` there
+//! meets the ceiling and refuses without another `getpwent_r`
 //! call, which is what keeps a retry from skipping an account.
 
 use super::super::step::{
@@ -28,20 +28,15 @@ const POLICY: Policy = Policy {
     start: super::LOOKUP_BUFFER_START,
 };
 
-#[cfg(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd"))]
+#[cfg(target_os = "freebsd")]
 const POLICY: Policy = Policy {
-    convention: ReentrantConvention::Bsd,
+    convention: ReentrantConvention::FreeBsd,
     // The ceiling. A short buffer is not retried: the library has already
     // moved past the entry.
     start: LOOKUP_BUFFER_MAX,
 };
 
-#[cfg(not(any(
-    all(target_os = "linux", target_env = "gnu"),
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "netbsd"
-)))]
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "freebsd")))]
 compile_error!("group: name this target's getpwent_r convention and starting buffer");
 
 pub(in crate::group) struct Reader {

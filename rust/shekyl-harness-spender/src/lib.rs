@@ -77,7 +77,7 @@ use shekyl_wire::{Block, Input, Transaction};
 
 pub use bond::PostedBond;
 #[cfg(feature = "seeded-rng")]
-pub use draw::SpendPlan;
+pub use draw::{SpendPlan, SpendSeeds};
 #[cfg(feature = "seeded-rng")]
 pub use drawn::Drawn;
 pub use persona::{complete_tree, shard_set, Persona};
