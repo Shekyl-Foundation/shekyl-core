@@ -36,7 +36,7 @@ impl<
     /// parameters of the on-disk envelope wrap.
     ///
     /// The handle's cached envelope bytes are updated in place; no
-    /// re-derivation of [`AllKeysBlob`] runs. `.wallet` (region 2) is
+    /// re-derivation of [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) runs. `.wallet` (region 2) is
     /// untouched — the rotation rewraps `file_kek` only.
     ///
     /// # Errors

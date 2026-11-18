@@ -105,7 +105,7 @@ impl StakeEngine {
         Ok(())
     }
 
-    /// Steps 1–5 shared verbatim by the [`PlanBondPost`] and [`AssembleBond`]
+    /// Steps 1–5 shared verbatim by the [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost) and [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond)
     /// handlers: validate the handle, cross-check it against the ticket's slot,
     /// preflight the OS entropy source, draw the guarded entry gap, plan the
     /// entry seam, and emit the GF-7 hooks. Returns the validated handle slot and
@@ -333,7 +333,7 @@ impl StakeEngine {
     /// permanently wedge the scan pipeline on one bad record — frontier
     /// frozen, balances, bond-post matches, and release processing all
     /// stalled. Skipping only this record keeps the wallet syncing, and is
-    /// sound for the [`SpentRecordsDurablyPruned`] attestation: assemble
+    /// sound for the [`SpentRecordsDurablyPruned`](crate::engine::bond_assembly::SpentRecordsDurablyPruned) attestation: assemble
     /// re-derives the same bundle (`derive_spend_parts`) and fails the same
     /// way, so a record the watch cannot derive can never be swept into a
     /// bond post — the duplicate-key-image poison the witness precludes
@@ -375,7 +375,7 @@ impl StakeEngine {
     }
 
     /// Build the bonded union's transient scan inputs for a [`ScanStep`]: a
-    /// [`GuaranteedScanner`] per bonded persona (SP-1, burning-bug-immune) plus
+    /// [`GuaranteedScanner`](shekyl_scanner::scan::GuaranteedScanner) per bonded persona (SP-1, burning-bug-immune) plus
     /// their cleartext `p_canonical_id` set (the public half of the SP-3 dual
     /// extractor).
     ///
@@ -588,7 +588,7 @@ impl Actor for StakeEngine {
     /// Fail-stop on panic. The kameo default, locked explicitly so the
     /// secret-owner's no-restart posture is pinned at the type layer rather than
     /// inherited from a framework default that could change under a dependency
-    /// bump (mirrors [`KeyActor`](super::key_actor::KeyActor)).
+    /// bump (mirrors [`KeyActor`](crate::engine::key_actor::KeyActor)).
     async fn on_panic(
         &mut self,
         _actor_ref: WeakActorRef<Self>,

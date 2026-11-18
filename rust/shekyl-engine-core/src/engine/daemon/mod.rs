@@ -34,25 +34,25 @@
 //! to this build on first request, gated at [`Rpc::post`]. A mismatch is
 //! [`RpcError::IdentityMismatch`]. [`DaemonClient::new`] performs no check
 //! and exists for harnesses whose fake daemons serve no `version`.
-//! Wallet-file vs caller network remains [`OpenError::NetworkMismatch`]
+//! Wallet-file vs caller network remains [`OpenError::NetworkMismatch`](crate::engine::error::OpenError::NetworkMismatch)
 //! (`{ wallet, expected }`); that is a different fact.
 
-/// `WALLET_SIDE_STORE.md` `WSS-Q14` (ruled 2026-09-19): [`SyncedChainFacts`],
-/// the one wallet-side type that says a chain reading came from a daemon
-/// reporting itself synchronized. Steering's `R-B` — while the daemon reports
-/// syncing the answer is **unknown**, so do not erase, post or sign — is made
-/// structural: a consumer takes the type, and there is no constructor from an
-/// unsynchronized reading. Closes `WSS-25`.
-///
-/// It lives **inside** this module rather than beside it because the design
-/// record's `R1` seam says the type is *built from the engine's daemon
-/// client*: the `daemon_status` decode it shares with [`DaemonEngine::get_health`]
-/// has exactly one other caller, in this file. Keeping the response vocabulary
-/// in one directory is what makes "a DRS response-shape change touches the
-/// constructor and nothing else" a property of the tree rather than a promise
-/// in a comment.
-///
-/// [`SyncedChainFacts`]: synced_chain_facts::SyncedChainFacts
+// `WALLET_SIDE_STORE.md` `WSS-Q14` (ruled 2026-09-19): [`SyncedChainFacts`],
+// the one wallet-side type that says a chain reading came from a daemon
+// reporting itself synchronized. Steering's `R-B` — while the daemon reports
+// syncing the answer is **unknown**, so do not erase, post or sign — is made
+// structural: a consumer takes the type, and there is no constructor from an
+// unsynchronized reading. Closes `WSS-25`.
+//
+// It lives **inside** this module rather than beside it because the design
+// record's `R1` seam says the type is *built from the engine's daemon
+// client*: the `daemon_status` decode it shares with [`DaemonEngine::get_health`]
+// has exactly one other caller, in this file. Keeping the response vocabulary
+// in one directory is what makes "a DRS response-shape change touches the
+// constructor and nothing else" a property of the tree rather than a promise
+// in a comment.
+//
+// [`SyncedChainFacts`]: synced_chain_facts::SyncedChainFacts
 pub(crate) mod synced_chain_facts;
 
 pub mod methods;

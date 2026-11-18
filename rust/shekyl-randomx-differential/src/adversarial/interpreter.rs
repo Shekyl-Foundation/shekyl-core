@@ -27,11 +27,11 @@
 //! failure mode, all of which apply here:
 //!
 //! 1. **Dedicated [`tests`] coverage** in this module. The
-//!    [`tests::evaluate_no_op_returns_base_cache_bytes`] (no-op
-//!    identity), [`tests::evaluate_idempotent`] (idempotence),
-//!    [`tests::evaluate_applies_modifications_in_order`] (sequential
+//!    `tests::evaluate_no_op_returns_base_cache_bytes` (no-op
+//!    identity), `tests::evaluate_idempotent` (idempotence),
+//!    `tests::evaluate_applies_modifications_in_order` (sequential
 //!    overrides), and
-//!    [`tests::evaluate_panics_on_out_of_range_offset`]
+//!    `tests::evaluate_panics_on_out_of_range_offset`
 //!    (bounds-check) tests pin the invariants.
 //! 2. **Canonical-output cross-check** via the M1 substrate at
 //!    `adversarial_canonical_outputs::FAMILY_1_RECIPE_OUTPUTS`
@@ -66,7 +66,7 @@ use shekyl_pow_randomx::Seedhash;
 /// `RANDOMX_CACHE_SIZE_BYTES` (which is itself derived from the
 /// C reference's `RANDOMX_ARGON_MEMORY * ArgonBlockSize` at pin
 /// `aaafe71`). The
-/// [`tests::cache_size_matches_verifier_constant`] test pins the
+/// `tests::cache_size_matches_verifier_constant` test pins the
 /// equality at runtime via the existing
 /// [`shekyl_pow_randomx::PreparedCache::cache_block_bytes_for_testing`]
 /// accessor's byte count.

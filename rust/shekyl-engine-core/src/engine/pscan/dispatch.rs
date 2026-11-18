@@ -366,7 +366,7 @@ pub(crate) struct TickEvidence<'a> {
 
 /// The sweep-facing seam for the end-of-sweep dispatch tick: the driving
 /// task (`run_pscan_task`) is generic over it, so the loop tests run with
-/// the [`()`](impl@DispatchTick) no-op and never build a driver.
+/// the `impl DispatchTick for ()` no-op and never build a driver.
 /// [`DispatchDriver`] is the production impl.
 pub(crate) trait DispatchTick: Send + 'static {
     /// Run one dispatch tick at the end of a pscan sweep — see the

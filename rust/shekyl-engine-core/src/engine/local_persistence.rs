@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Stage 1 [`PersistenceEngine`](super::traits::PersistenceEngine) implementor:
+//! Stage 1 [`PersistenceEngine`] implementor:
 //! [`shekyl_engine_file::WalletFile`].
 
 use shekyl_engine_file::WalletFile;

@@ -47,9 +47,9 @@
 //!
 //! # Skip-and-widen (`ARW-9`)
 //!
-//! A family this session's [`ApplyPolicy`](crate::ApplyPolicy) stubs is
+//! A family this session's [`ApplyPolicy`](crate::apply_policy::ApplyPolicy) stubs is
 //! **skipped**, not refused: the phase body asks
-//! [`ApplyPolicy::applies`](crate::ApplyPolicy::applies) before opening
+//! [`ApplyPolicy::applies`](crate::apply_policy::ApplyPolicy::applies) before opening
 //! the family's table, and the commit widens the file's provenance with
 //! the stubbed set exactly as it would have had the body run into
 //! `admit`'s refusal. This is what makes a sufficiency red attributable —
@@ -345,7 +345,7 @@ impl<'id> WriteBatch<'_, 'id> {
 
     /// 9d. `archival_block_draws[h] = row` at every connecting height,
     /// insert-once: a block records its count once, and a row already
-    /// there is SI-33 ([`DrawRowFault::Rewritten`]) before any journal
+    /// there is SI-33 ([`DrawRowFault::Rewritten`](crate::store::DrawRowFault::Rewritten)) before any journal
     /// entry. Written after the digest, which the count at later heights
     /// compares a rebuild against. No archival family governs it: every
     /// connect writes the row, as every opening block writes the digest.

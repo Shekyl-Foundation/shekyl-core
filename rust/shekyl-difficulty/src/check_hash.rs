@@ -26,7 +26,7 @@
 //! ```
 //!
 //! i.e. the (at most 384-bit) product fits without overflow into the
-//! least-significant 256 bits. A [`Difficulty`](crate::Difficulty) is
+//! least-significant 256 bits. A [`Difficulty`] is
 //! never zero, so the inherited C++ escape (`difficulty == 0` always
 //! passes) has no input here: at the least difficulty, one, every hash
 //! passes because `hash * 1 < 2^256`.

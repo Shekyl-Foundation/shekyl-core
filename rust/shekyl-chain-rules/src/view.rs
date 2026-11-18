@@ -734,7 +734,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// its seed has been revealed (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3,
     /// §10). `None` for a block the rule has not run for.
     ///
-    /// `floor`: the draw rows' ([`BlockDrawsFloor`]; SI-34). A read below
+    /// `floor`: the draw rows' ([`BlockDrawsFloor`](crate::BlockDrawsFloor); SI-34). A read below
     /// it is refused. The count asks for every height it folds, and the
     /// store compares.
     fn block_draws(
@@ -749,7 +749,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// row was written for. [`SupportRow::EMPTY`] is a block that seated
     /// nobody and left nothing owed: absence is not that empty row.
     ///
-    /// `floor`: the draw rows' ([`BlockDrawsFloor`]; SI-34), the same
+    /// `floor`: the draw rows' ([`BlockDrawsFloor`](crate::BlockDrawsFloor); SI-34), the same
     /// window as [`Self::block_draws`]. A read below it is refused.
     fn support_row(
         &self,

@@ -34,7 +34,7 @@ pub(crate) type OutputId = usize;
 /// Semantic, canonically-ordered fingerprint of a built tx's *authorized
 /// content* — the `(fee, who-gets-how-much, change)` the consumer reviewed.
 ///
-/// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4, F-G/F-G′): a re-anchor advances
+/// CT-5d (`docs/design/CT5D_REANCHOR.md` §4, F-G/F-G′): a re-anchor advances
 /// [`ConsumerHeldEntry::content_gen`] **iff this fingerprint changes**, so it
 /// must capture exactly what consent is over and nothing else:
 ///
@@ -126,7 +126,7 @@ impl ContentFingerprint {
 /// CT-5d adds the substrate a submit-time re-anchor needs: a `consumer_held`
 /// entry must carry enough to *rebuild* (the `request`), the anchor it was built
 /// against (`reference`), and the consent state (`content_gen` + `fingerprint`).
-/// `PendingTxState` is a runtime `Mutex` (not persisted — F-F, [`docs/design/CT5D_REANCHOR.md`]
+/// `PendingTxState` is a runtime `Mutex` (not persisted — F-F, `docs/design/CT5D_REANCHOR.md`
 /// §7), so these are runtime-only fields with no schema-migration cost.
 ///
 /// **Not `Clone`** (WI-RPC-3 retention): `tx_key` is
@@ -281,7 +281,7 @@ where
 /// [`LocalPendingTx::state`](super::engine::LocalPendingTx::state).
 ///
 /// Segment-2h (γ) lean shape per
-/// [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`] §5.6.8 (γ):
+/// `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.6.8 (γ):
 /// three collections, no `ReservationState` enum, collection
 /// membership as ground truth.
 ///
@@ -473,7 +473,7 @@ impl SubmitLoopBreaker {
     }
 }
 
-/// Bounded retries for the re-anchor lock₂ TOCTOU (CT-5d [`docs/design/CT5D_REANCHOR.md`]
+/// Bounded retries for the re-anchor lock₂ TOCTOU (CT-5d `docs/design/CT5D_REANCHOR.md`
 /// §3a): the tip/tree can move during the lock-free prover run, re-staling the
 /// freshly-anchored reference. Retry the whole pre-phase→prover→commit loop a
 /// few times; a tip moving faster than this is better surfaced as a clean

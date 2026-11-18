@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Sync and async [`Engine`](crate::engine::Engine) refresh entry points.
+//! Sync and async [`Engine`] refresh entry points.
 //!
 //! One `impl` — `start_refresh` / `spawn_refresh_producer` and
 //! `refresh` / `refresh_with` share the `LocalLedger` specialization

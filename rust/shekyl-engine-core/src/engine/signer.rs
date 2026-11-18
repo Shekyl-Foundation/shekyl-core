@@ -203,7 +203,7 @@ pub struct TransferSigningContext {
 }
 
 impl TransferSigningContext {
-    /// Construct from an assembled [`TxToSign`]. Crate-internal only.
+    /// Construct from an assembled [`TxToSign`](crate::engine::traits::key::TxToSign). Crate-internal only.
     pub(crate) fn from_tx(tx: super::traits::key::TxToSign) -> Self {
         Self { tx }
     }

@@ -50,10 +50,10 @@
 //!    means is nearly deterministic (`CV ≈ 0.16` at λ = 39). Measured, the
 //!    backstop **never fires**: full-travel 1.0000 at both 39 s and a
 //!    corrected 17 s, against a stem completing in ~700 ms.
-//! 3. **The closed form under-provisions.** [`derive`] has the detail. It
+//! 3. **The closed form under-provisions.** [`mod@derive`] has the detail. It
 //!    substitutes `E[K]` into an expression in `K(K-1)`, and stem length is
 //!    geometric, where `E[K(K-1)] = 2·E[K](E[K]-1)` exactly. No constant
-//!    correction factor recovers it; the exact solve in [`derive`] does. On an
+//!    correction factor recovers it; the exact solve in [`mod@derive`] does. On an
 //!    emission-terminated model that gives 31 s — see finding 5 (the return
 //!    trip) and RD-4 (the origin always stems) for why the adopted value is
 //!    190 s (144 s before F-7 corrected `fluff_return_ms`).
@@ -77,7 +77,7 @@
 //!
 //! Finding 5 feeds straight back into the embargo: a stem node's embargo is
 //! disarmed when the fluff *reaches* it, so the flood's return time is part of
-//! every node's exposure window. [`derive`] counts it, which is why the adopted
+//! every node's exposure window. [`mod@derive`] counts it, which is why the adopted
 //! embargo is 190 s (RD-4-corrected, then F-7-corrected) rather than the 31 s an
 //! emission-terminated,
 //! origin-may-fluff model gives.

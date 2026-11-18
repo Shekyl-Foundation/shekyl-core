@@ -200,7 +200,7 @@ impl Rule for D1b {
 }
 
 impl D1b {
-    /// Record this row: the comparison form is [`Target::is_satisfied_by`]
+    /// Record this row: the comparison form is [`Target::is_satisfied_by`](crate::Target::is_satisfied_by)
     /// (`check_hash`). D1 acts on the answer; the definition records here
     /// so a forgotten predicate cannot mint without naming the form.
     pub(crate) fn record(coverage: &mut RuleCoverage) {
@@ -229,7 +229,7 @@ impl D1b {
 /// headers below the connecting height, which the caller runs ahead of
 /// connect as it reads the seed). `validate` and `alt_against` verify the
 /// claim against their view; a mismatch is
-/// [`Stale::Target`](crate::Stale::Target), so no block is admitted on a
+/// [`Stale::Target`], so no block is admitted on a
 /// target its chain does not derive.
 pub(crate) struct D1;
 
@@ -239,7 +239,7 @@ impl Rule for D1 {
 
 impl D1 {
     /// Whether the proven longhash satisfies the claimed target, recording
-    /// this row on a pass. The argument is [`HeaderFacts<Proven>`]: an
+    /// this row on a pass. The argument is [`HeaderFacts<Proven>`](crate::header_facts::HeaderFacts): an
     /// unproven header does not have the field, so it cannot be passed.
     pub(crate) fn judge(
         facts: &crate::header_facts::HeaderFacts<crate::header_facts::Proven>,

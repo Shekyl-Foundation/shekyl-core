@@ -16,7 +16,7 @@
 //! table; none of it crosses the trait boundary. The orchestrator
 //! interacts with claimed outputs through opaque [`OutputHandle`]
 //! references whose unforgeability is rooted in a deterministic cSHAKE256
-//! derivation per [`derive_output_handle`].
+//! derivation per [`derive_output_handle`](shekyl_crypto_pq::handle::derive_output_handle).
 //!
 //! # Round 4a visibility
 //!

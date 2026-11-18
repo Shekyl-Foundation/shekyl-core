@@ -14,7 +14,7 @@
 //! the depth both routes stamp. A registered batch reads its branches from
 //! the capture table and the frontier snapshot. An unregistered batch
 //! rebuilds layers from replay-held `CurveTreeClient::entries` via
-//! [`assemble_leaf_stream`] (CT-4). Pruned frozen segments may not retain a
+//! [`assemble_leaf_stream`](crate::recon::assemble_leaf_stream) (CT-4). Pruned frozen segments may not retain a
 //! complete drained byte stream, and the engine registrant is not yet the
 //! caller of registration, so that rebuild is the route production batches
 //! take. The gate does not see those branches.
@@ -476,9 +476,9 @@ impl CurveTreeClient {
     /// comparison the capture key, the rollback and the backfill share — and
     /// then its contents are fixed and come from the table. Otherwise it is
     /// the rightmost chunk at its layer, still open, and its children are the
-    /// snapshot's [`Frontier::open_branches`] entry for that layer. Layer 0
+    /// snapshot's [`Frontier::open_branches`](crate::frontier::Frontier::open_branches) entry for that layer. Layer 0
     /// is the exception in the open case. The snapshot persists that chunk's
-    /// scalars and [`Frontier::open_branches`] does not return them: it hashes
+    /// scalars and [`Frontier::open_branches`](crate::frontier::Frontier::open_branches) does not return them: it hashes
     /// them into the parent. The path types take sibling *points*, so the
     /// identities come from a ranged read of the chunk's own positions — at
     /// most `SELENE_CHUNK_WIDTH - 1` rows. That read is the open-leaf-chunk

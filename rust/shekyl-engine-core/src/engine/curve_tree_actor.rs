@@ -22,7 +22,7 @@
 //! The curve tree is reconstructed from **public on-chain material only** — no
 //! wallet secret enters [`shekyl_curve_tree`] (`35-secure-memory.mdc`,
 //! `36-secret-locality.mdc`; see the crate-level docs). So, unlike
-//! [`KeyActor`], this actor has **no `on_stop` zeroization** and its messages
+//! [`KeyActor`](crate::engine::key_actor::KeyActor), this actor has **no `on_stop` zeroization** and its messages
 //! and replies carry no secret bytes. The mirror is structural (actor +
 //! `Clone` handle + `ask`-dispatched messages), not cryptographic.
 //!
@@ -39,7 +39,7 @@
 //!    engine-lock reference** of any kind. A field addition that reaches back
 //!    for engine state fails review **on this rule** — not on someone
 //!    re-deriving the deadlock analysis. This is mechanically guarded by
-//!    [`tests::actor_constructed_from_only_the_client`]: the actor's
+//!    `tests::actor_constructed_from_only_the_client`: the actor's
 //!    [`Actor::Args`] is pinned to `CurveTreeClient`, and `on_start` receives
 //!    only `Args` plus a [`WeakActorRef`] (no engine state), so any field that
 //!    needed engine state would have to enter through `Args` and break that
@@ -71,7 +71,7 @@
 //! [`ControlFlow::Break`] so the actor stops rather than restarts. After a
 //! stop, every [`CurveTreeHandle`] call collapses the kameo transport failure
 //! into [`CurveTreeHandleError::Unavailable`], terminal for the session, as
-//! [`KeyActor`]'s is. The workspace builds with `panic = "abort"`, so in a
+//! [`KeyActor`](crate::engine::key_actor::KeyActor)'s is. The workspace builds with `panic = "abort"`, so in a
 //! release a handler panic ends the process. The recoverable fault is a
 //! poisoned client, which [`Recover`] heals in place.
 //!
@@ -109,7 +109,7 @@ pub(crate) struct CurveTreeActor {
     /// **Lock-ordering clause 1 (§3.1 / E2): this is the actor's ONLY field.**
     /// It holds no `Engine` / `EngineHandle` / engine-lock reference. See the
     /// module docs; the invariant is mechanically guarded by
-    /// [`tests::actor_constructed_from_only_the_client`].
+    /// `tests::actor_constructed_from_only_the_client`.
     ///
     /// `Some` for the actor's whole life; [`Actor::on_stop`] takes it, so the
     /// store closes before the stop can be observed (module docs).
@@ -351,7 +351,7 @@ pub(crate) struct ScanPrunedFrozenSegments;
 /// production root operations (`RootAndDepthAt` returns the reconstructed root
 /// and depth, `VerifyRoot` compares the root against an expected value). It is
 /// keyed by `(height, expected_root)` rather than a full
-/// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) because ingest has no
+/// [`ReferenceBlock`] because ingest has no
 /// `block_hash` to anchor — the header root is the only field
 /// [`CurveTreeClient::verify_root`] consults, so this mirrors its compare
 /// without fabricating the unused field.
@@ -1016,7 +1016,7 @@ impl CurveTreeHandle {
     /// Read the reconstructed root **and** depth at `height`
     /// ([`CurveTreeClient::root_and_depth_at`]) through the actor (CT-5c Q1).
     /// The send path binds the root into the
-    /// [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock) and uses the depth
+    /// [`ReferenceBlock`] and uses the depth
     /// to size the FCMP++ proof weight for fee estimation *before* assembling
     /// any path. Both are pinned to one drained leaf count, so they describe the
     /// same tree state. On a stopped actor returns

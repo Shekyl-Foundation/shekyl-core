@@ -15,7 +15,7 @@
 //! The write is crash-atomic under a single ledger write guard, the same
 //! discipline as `abandon_tx_persisted` and through the same owner
 //! ([`Engine::save_or_rollback`]): mutate the map via
-//! [`TxMetaBlock::set_note`], save, and on save failure restore the prior
+//! [`TxMetaBlock::set_note`](shekyl_engine_state::tx_meta_block::TxMetaBlock::set_note), save, and on save failure restore the prior
 //! entry (fail closed) so a retry starts from the pre-write state. An empty
 //! note **clears** the entry rather than storing an empty string, so there is
 //! no separate delete method.
@@ -37,7 +37,7 @@
 //! # Size bound
 //!
 //! [`shekyl_engine_state::TX_NOTE_MAX_BYTES`] bounds one note, and
-//! [`TxMetaBlock::set_note`] is the only door into the map — the field behind
+//! [`TxMetaBlock::set_note`](shekyl_engine_state::tx_meta_block::TxMetaBlock::set_note) is the only door into the map — the field behind
 //! it is private — so the bound holds structurally rather than by agreement.
 //! Callers may pre-check the same constant (e.g. RPC before taking a lock),
 //! but that is a fast-fail, never the enforcement. Note *count* is not

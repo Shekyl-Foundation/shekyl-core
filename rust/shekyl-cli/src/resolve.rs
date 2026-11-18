@@ -460,7 +460,7 @@ pub enum ResolvedCommand {
 
     // -- Unknown --
     /// An unrecognized command token (the `other` catch-all). Rendered as
-    /// "Unknown command: <cmd>. Type help ...".
+    /// `"Unknown command: <cmd>. Type help ..."`.
     Unknown {
         cmd: String,
     },

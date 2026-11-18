@@ -479,7 +479,7 @@ pub(crate) fn run_coinbase<'id, R: CoinbaseRule, H: HeaderView<'id>>(
 /// pool on its own, is coinbase-*shaped* and must be refused (CEN-H5) by
 /// the rules that are stated for non-coinbase transactions, which a
 /// bytes-derived kind would exempt (slice 5 Q2 as amended). The pool holds
-/// one slot, [`TxSlot::Lone`](crate::verdict::TxSlot::Lone), so it cannot
+/// one slot, [`TxSlot::Lone`], so it cannot
 /// mis-declare; only `validate` names the miner, for the block's own miner
 /// field.
 ///

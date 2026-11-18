@@ -411,7 +411,7 @@ fn quarantine_and_default(
 }
 
 /// Rename any existing `toml_path` / `hmac_path` into a
-/// tampered-<ts> quarantine variant, disambiguating collisions with
+/// `tampered-<ts>` quarantine variant, disambiguating collisions with
 /// a `.N` counter.
 fn quarantine_if_present(toml_path: &Path, hmac_path: &Path) -> io::Result<Vec<PathBuf>> {
     let ts = SystemTime::now()

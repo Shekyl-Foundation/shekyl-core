@@ -130,7 +130,7 @@ pub(crate) const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_00
 /// `snapshot_id` against the engine's current `snapshot_id`. The bytes
 /// are an engine-internal projection, never accepted from a caller
 /// (the trait surface always derives `SnapshotId` from a freshly-read
-/// [`LedgerSnapshot`] inside the engine).
+/// [`LedgerSnapshot`](crate::engine::refresh::LedgerSnapshot) inside the engine).
 ///
 /// Derived by [`derive_snapshot_id`](super::refresh::derive_snapshot_id):
 /// cSHAKE256 ([`shekyl_crypto_hash::cshake256_32`]) with customization
@@ -180,7 +180,7 @@ impl ReservationId {
     /// Values are meaningful only within the issuing `Engine` handle's
     /// lifetime; unknown ids surface as
     /// [`PendingTxError::ReservationNotFound`] /
-    /// [`SubmitError::ReservationNotFound`] on submit.
+    /// [`SubmitError::ReservationNotFound`](crate::engine::error::SubmitError::ReservationNotFound) on submit.
     pub fn from_raw(v: u64) -> Self {
         Self(v)
     }
@@ -626,7 +626,7 @@ pub struct PendingTx {
     pub tx_bytes: Vec<u8>,
     /// Recipient summary for display.
     pub recipients: Vec<TxRecipientSummary>,
-    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): consumer-visible content
+    /// CT-5d (`docs/design/CT5D_REANCHOR.md` §4): consumer-visible content
     /// generation. A fresh build is `0`; a submit-time re-anchor that changes the
     /// realized `(fee, recipients, change)` advances it and **withholds
     /// broadcast** — `submit` returns [`SubmitError::ContentChanged`] carrying the
@@ -747,7 +747,7 @@ impl Default for ReservationTTLConfig {
 /// `submitted_at` has no reader until C5β wires the `in_flight` collection,
 /// which is what the `dead_code` allow below covers.
 ///
-/// # Why the full [`ConsumerHeldEntry`] rides along
+/// # Why the full [`ConsumerHeldEntry`](crate::engine::transfer::ConsumerHeldEntry) rides along
 ///
 /// The `consumer_held → in_flight` move preserves the **entire** held
 /// entry (not a `tx_bytes`/`snapshot_id`/`created_at` projection):

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! How a path becomes a [`ChainStore`](super::ChainStore).
+//! How a path becomes a [`ChainStore`].
 //!
 //! Fresh-vs-existing is one syscall: `create_new` either claims the path
 //! or fails with `AlreadyExists`. An existing file is screened on a

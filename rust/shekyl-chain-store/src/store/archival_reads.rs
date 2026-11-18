@@ -563,7 +563,7 @@ pub(super) fn issued_digest<T: ReadTables>(
 /// seek to the next shard, never walk the shard ids between — and
 /// point-reads each requested epoch. An
 /// epoch with no Served shard is absent from the map. Empty `epochs` reads
-/// nothing. The set names each epoch once ([`ChainView::served_at`]). Only
+/// nothing. The set names each epoch once ([`ChainView::served_at`](shekyl_chain_rules::ChainView::served_at)). Only
 /// a requested epoch is decoded; a row that does not decode is SI-7.
 pub(super) fn served_at<T: ReadTables>(
     txn: &T,

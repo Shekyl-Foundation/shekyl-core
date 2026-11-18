@@ -30,7 +30,7 @@
 //! - [`lwma1_next`] — the difficulty-adjustment algorithm. Inputs are
 //!   `(chain_height, timestamps, cumulative_difficulties)`; the
 //!   output is the difficulty target for the next block.
-//! - [`check_hash`] — the PoW-target predicate: does a 256-bit hash
+//! - [`fn@check_hash`] — the PoW-target predicate: does a 256-bit hash
 //!   satisfy a 128-bit difficulty? (`hash * difficulty < 2^256`.)
 //!   Ported from the inherited C++ `check_hash`/`_64`/`_128` family
 //!   into a single unified path.

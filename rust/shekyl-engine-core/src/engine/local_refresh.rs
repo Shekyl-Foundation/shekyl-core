@@ -143,7 +143,7 @@
 //!
 //! [`LocalRefreshError`] carries no attacker-controlled `String`
 //! (§2.3 + §5.4.7 R6, pinned on
-//! [`RefreshEngine::Error`](super::traits::refresh::RefreshEngine::Error)).
+//! [`RefreshEngine::Error`]).
 //! Per-event detail flows through the [`DiagnosticSink`] channel.
 //! [`LocalRefreshError::PastFinality`] is the exception with fields,
 //! and they are a [`FinalityStop`](super::error::FinalityStop): two
@@ -264,7 +264,7 @@ const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
 /// `LocalRefresh` is `pub` so external callers can name the type
 /// in the orchestrator's `Engine<S, D, L, R = LocalRefresh>`
 /// default (C5). The
-/// [`RefreshEngine`](super::traits::refresh::RefreshEngine) trait
+/// [`RefreshEngine`] trait
 /// it implements is itself `pub(crate)` per
 /// `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.4, so external callers can
 /// name `LocalRefresh` but cannot reach its trait surface
@@ -345,7 +345,7 @@ impl LocalRefresh {
         !self.bond_watch.is_empty()
     }
 
-    /// Build a fresh [`Scanner`](shekyl_scanner::Scanner) from
+    /// Build a fresh [`Scanner`] from
     /// [`Self::view_material`]. Called once per
     /// [`Self::produce_scan_result`] attempt; the scanner's
     /// secret-bearing internal copies are wiped via

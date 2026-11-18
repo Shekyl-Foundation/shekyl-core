@@ -9,7 +9,7 @@
 //! Public half only: pending gate, daemon-claimed-tip `anchor_t0`, anchored
 //! [`ReferenceBlock`], funding sweep, curve-tree paths, `AssembleBond` ask,
 //! persist-before-return via an independently constructed
-//! [`PendingPostStore`](super::pscan::dispatch::PendingPostStore). Secrets stay
+//! [`PendingPostStore`]. Secrets stay
 //! inside the stake actor (rule 36).
 
 use std::sync::Arc;

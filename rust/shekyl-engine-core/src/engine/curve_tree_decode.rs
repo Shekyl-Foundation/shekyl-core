@@ -8,7 +8,7 @@
 //! The curve tree contains **every** on-chain output, not just the
 //! wallet-owned ones the scanner recovers. This module decodes a parsed
 //! [`ScannableBlock`] into the full per-block leaf set
-//! ([`OwnedTxLeaves`](crate::scan::OwnedTxLeaves)) that the producer carries
+//! ([`OwnedTxLeaves`]) that the producer carries
 //! on [`ScanResult`](crate::scan::ScanResult) and the merge feeds to the
 //! [`CurveTreeActor`](super::curve_tree_actor) for ingest.
 //!
@@ -30,8 +30,8 @@
 //!   diverge from the daemon (`CT2_DRAIN_ORDER.md` §3.2).
 //! - **`commitment`** is `base.commitments[o]`. The committed base
 //!   ([`CtBase`](shekyl_wire::CtBase)) is present for **both** the coinbase
-//!   ([`Ct::Null`](shekyl_wire::Ct::Null)) and spends
-//!   ([`Ct::Fcmp`](shekyl_wire::Ct::Fcmp)) — the coinbase `Null` ct carries a
+//!   ([`Ct::Null`]) and spends
+//!   ([`Ct::Fcmp`]) — the coinbase `Null` ct carries a
 //!   real committed base (`enc_amounts`/`enc_labels`/`outPk`, GENESIS §9.6/§9.9),
 //!   which the legacy parse dropped — so commitment access is uniform. `None`
 //!   per output (slot absent) makes that output leaf-ineligible (the C++ skip

@@ -22,7 +22,7 @@
 //!    canonical values committed to
 //!    [`super::super::adversarial_canonical_outputs::FAMILY_1_RECIPE_OUTPUTS`].
 //! 2. **Runtime self-check (T-A12 / T-A13 backstop).** The
-//!    [`tests::family_1_committed_canonicals_match_runtime_recomputation`]
+//!    `tests::family_1_committed_canonicals_match_runtime_recomputation`
 //!    integration test re-derives the canonical values at runtime
 //!    via these functions and asserts byte-equality with the
 //!    committed array. Per Round 2 R2-D1 + §4.5.1 close, this is
@@ -118,7 +118,7 @@ pub fn compute_recipe_canonical(recipe: &CacheRecipe, base_cache_bytes: &[u8]) -
 ///
 /// The bytes are concatenated in the iterator's emission order
 /// (block 0, block 1, …, block 262_143) per the
-/// [`cache_block_bytes_for_testing`] contract; the resulting
+/// [`cache_block_bytes_for_testing`](shekyl_pow_randomx::PreparedCache::cache_block_bytes_for_testing) contract; the resulting
 /// 268_435_456-byte buffer is the canonical Rust-subject view of
 /// the cache memory.
 ///

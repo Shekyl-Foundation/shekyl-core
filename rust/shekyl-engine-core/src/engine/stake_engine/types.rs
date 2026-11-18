@@ -325,7 +325,7 @@ pub(crate) fn wipe_ephemeral(persona: EphemeralPersona) {
 ///
 /// Takes a [`BondedPersona`] by value. It is the *only* path that wipes a bonded
 /// persona, and it is reached only through the witness-gated retire handler
-/// ([`RetireBondedPersona`]) — so a bonded persona is wiped **only** on
+/// ([`RetireBondedPersona`](crate::engine::stake_engine::retire::RetireBondedPersona)) — so a bonded persona is wiped **only** on
 /// positively-confirmed terminal evidence (`Release` + `W`-lapse + finality-deep),
 /// never on absence. The bundle's per-field `ZeroizeOnDrop` runs at the drop.
 pub(crate) fn wipe_bonded(persona: BondedPersona) {
@@ -382,7 +382,7 @@ impl RetirementWitness {
     }
 }
 
-/// What the witness-gated retire ([`RetireBondedPersona`]) did. All outcomes are
+/// What the witness-gated retire ([`RetireBondedPersona`](crate::engine::stake_engine::retire::RetireBondedPersona)) did. All outcomes are
 /// valid (no error): the retire is **idempotent** — re-handing the same witness
 /// after the persona is gone is a no-op ([`Self::NotHeld`]).
 #[derive(Debug, PartialEq, Eq)]
@@ -442,11 +442,11 @@ impl std::fmt::Debug for FundedSlots {
 /// An operation-scoped capability to **activate** a held persona (typed
 /// contract #2).
 ///
-/// Minted only by [`MintPersonaHandle`] for a slot actually in the held set, so
+/// Minted only by [`MintPersonaHandle`](crate::engine::stake_engine::persona::MintPersonaHandle) for a slot actually in the held set, so
 /// "activate an unheld persona" has no expressible form — the membership check
 /// lives at the single slot→handle boundary, not at every use site. The handle
-/// carries the actor's activation [`generation`](StakeEngine::generation) at mint
-/// time, and [`ActivatePersona`] consumes it **by value**: a handle authorizes
+/// carries the actor's activation [`generation`](crate::engine::stake_engine::actor::StakeEngine::generation) at mint
+/// time, and [`ActivatePersona`](crate::engine::stake_engine::persona::ActivatePersona) consumes it **by value**: a handle authorizes
 /// exactly one activation.
 ///
 /// **Operation-scoped, two ways.** An activation (an activation that changes the
@@ -688,7 +688,7 @@ pub(crate) enum StakeEngineError {
     )]
     RngDegeneracy,
 
-    /// The [`PersonaHandle`] and [`PersistedBondTicket`] passed to [`PlanBondPost`]
+    /// The [`PersonaHandle`] and [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) passed to [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost)
     /// name different persona slots. A ticket witnesses the durable persist for a
     /// *specific* slot; it cannot authorize a bond operation for any other slot.
     /// Non-terminal: ensure both are obtained for the same `p_slot`.
@@ -730,13 +730,13 @@ pub(crate) enum StakeEngineError {
 
     /// Bond construction failed after the actor validated the handle and ticket
     /// (`PlanBondPost`, S2). The persona bundle was available but
-    /// [`build_join_market_vin`] returned an error — see the wrapped
+    /// [`build_join_market_vin`](shekyl_archival_bond_builder::build_join_market_vin) returned an error — see the wrapped
     /// [`BondBuildError`] for the specific cause (`BondFloorZero`,
     /// `IdentityEncode`, or `BondSpendEncode`).
     #[error("bond construction failed: {0}")]
     BondBuild(#[from] BondBuildError),
 
-    /// A WI-2 [`AssembleBond`] pipeline step failed — funding arithmetic,
+    /// A WI-2 [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond) pipeline step failed — funding arithmetic,
     /// spend-bundle derivation, output construction, proving, PQC auth
     /// signing, or wire encoding. The wrapped [`BondAssemblyError`] names the
     /// §3.6 failure mode; in every arm nothing was persisted and no funding
@@ -766,7 +766,7 @@ pub(crate) enum StakeEngineError {
     #[error("scan-step task failed to join: {0}")]
     ScanJoin(#[from] tokio::task::JoinError),
 
-    /// An [`AssembleEmissionClaim`] claim-side step refused or failed —
+    /// An [`AssembleEmissionClaim`](crate::engine::stake_engine::claim::AssembleEmissionClaim) claim-side step refused or failed —
     /// derivation boundaries, size bounding, or the step-7 self-check. The
     /// wrapped [`EmissionClaimError`] keeps the CB-5 taxonomy (including the
     /// cause-blind `SelfCheckFailed` arm). Nothing was persisted and no
@@ -774,7 +774,7 @@ pub(crate) enum StakeEngineError {
     #[error("emission claim: {0}")]
     EmissionClaim(#[from] EmissionClaimError),
 
-    /// An [`AssembleDrain`] (F-D2 DS-PR-1) pipeline step refused or failed —
+    /// An [`AssembleDrain`](crate::engine::drain_assembly::AssembleDrain) (F-D2 DS-PR-1) pipeline step refused or failed —
     /// payment-parameter validation, funding arithmetic, output construction,
     /// proving, PQC auth signing, or wire encoding. The wrapped
     /// [`DrainAssemblyError`] names the failure; the drain path owns its own

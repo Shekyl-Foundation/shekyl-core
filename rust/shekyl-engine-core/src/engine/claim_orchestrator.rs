@@ -32,7 +32,7 @@
 //!    the sole backing exit, the claimant slot's records only, anchored at
 //!    the gather **tip** (`source.chain_height − 1`) so the handler's
 //!    same-tip check holds by construction.
-//! 4. **Fee-sweep** ([`DesignatedBacking::fee_sweep`]) — the Q11-excluding
+//! 4. **Fee-sweep** ([`DesignatedBacking::fee_sweep`](crate::engine::backing_set::DesignatedBacking::fee_sweep)) — the Q11-excluding
 //!    sole fee entry, over the same provable record set; consumes the
 //!    designation and the source into the sealed
 //!    [`SweptFeeInputs`](super::backing_set::SweptFeeInputs) witness.
@@ -52,7 +52,7 @@
 //! `chain_height − 1`), but a membership proof exists only for outputs
 //! already **drained into the tree at the reference height** — which sits
 //! [`REF_ANCHOR_AGE`](shekyl_curve_tree::REF_ANCHOR_AGE) blocks behind that
-//! tip ([`select_reference_height`]). Records not yet in the tree at the
+//! tip ([`select_reference_height`](shekyl_curve_tree::reference::select_reference_height)). Records not yet in the tree at the
 //! reference ([`in_tree_at_reference`](shekyl_curve_tree::in_tree_at_reference)
 //! is false: `spendable_height >= reference_height`) are spendable
 //! but not yet provable — selecting one would assemble a claim the daemon

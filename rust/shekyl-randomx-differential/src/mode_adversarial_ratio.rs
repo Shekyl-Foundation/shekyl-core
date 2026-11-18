@@ -347,7 +347,7 @@ impl From<COracleError> for AdversarialRatioError {
 /// recipe's `rationale` prefix.
 ///
 /// Per
-/// [`crate::adversarial::tests::corpus_recipes_are_well_formed`],
+/// `crate::adversarial::tests::corpus_recipes_are_well_formed`,
 /// every corpus recipe's `rationale` starts with `"Category N: "`
 /// where N ∈ {1, 2, 3}. This function parses the prefix and
 /// returns the category number; a malformed rationale (which the

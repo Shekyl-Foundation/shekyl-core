@@ -127,7 +127,7 @@ impl LedgerState {
     }
 }
 
-/// Stage 1 implementor of [`LedgerEngine`](super::traits::LedgerEngine).
+/// Stage 1 implementor of [`LedgerEngine`].
 ///
 /// Wraps [`LedgerState`] in a synchronous [`RwLock`] so the existing
 /// `Engine<S, D>` call sites can read and write the wallet ledger
@@ -146,7 +146,7 @@ impl LedgerState {
 /// `private_interfaces`. Same discipline as PR 1's `DaemonClient`
 /// (also `pub` for the same reason it serves as `D`'s default).
 ///
-/// The trait [`LedgerEngine`](super::traits::LedgerEngine) itself
+/// The trait [`LedgerEngine`] itself
 /// stays `pub(crate)` per the design doc §2 visibility pin
 /// (re-anchored 2026-09-02): the JSON-RPC cutover that was the
 /// original promotion trigger landed; reopen when a second in-tree

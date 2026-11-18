@@ -1205,10 +1205,10 @@ impl VmState {
     /// # Allocation breakdown
     ///
     /// - One [`RANDOMX_SCRATCHPAD_L3`]-sized heap allocation
-    ///   (2 MiB) for [`scratchpad`], zero-initialized via the
+    ///   (2 MiB) for [`scratchpad`](crate::vm::VmState::scratchpad), zero-initialized via the
     ///   [`alloc_zeroed_scratchpad`] carve-out.
     /// - One `size_of::<Program>()`-sized heap allocation (3 KiB)
-    ///   for [`program`], constructed via [`Program::default`]
+    ///   for [`program`](crate::vm::VmState::program), constructed via [`Program::default`]
     ///   ([`core::array::from_fn`] of [`Instruction::default`]) and
     ///   moved into a [`Box`].
     /// - All other fields are inlined into the [`VmState`] struct

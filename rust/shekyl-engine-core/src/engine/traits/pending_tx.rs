@@ -217,7 +217,7 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// drops from `in_flight` on accept (and the engine emits
     /// `SubmitSucceeded { rid, tx_hash }`).
     ///
-    /// **Staleness + re-anchor (CT-5d, [`docs/design/CT5D_REANCHOR.md`]).** The
+    /// **Staleness + re-anchor (CT-5d, `docs/design/CT5D_REANCHOR.md`).** The
     /// *reference block* the proof is anchored to is the staleness authority
     /// (this replaces the older `SnapshotId` check, which invalidated on every
     /// tip advance). Before dispatch the handler tests `should_reanchor(tip,

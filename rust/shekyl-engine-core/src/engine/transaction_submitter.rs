@@ -479,7 +479,7 @@ pub(crate) enum BroadcastSubmitError {
     SealUnconfirmed,
 }
 
-/// A [`PBoundBytes`](super::bond_assembly::PBoundBytes) whose record is
+/// A [`PBoundBytes`] whose record is
 /// durable enough to broadcast.
 ///
 /// [`Self::Fresh`] carries the durability the pending-store save just

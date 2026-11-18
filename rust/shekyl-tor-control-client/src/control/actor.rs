@@ -504,13 +504,13 @@ impl Signal {
 /// status vanguard selection draws from.
 ///
 /// Named here because it is the **whole** justification for
-/// [`BULK_REPLY_BYTES`]: the wide framer allowance is granted for this key's
+/// [`BULK_REPLY_BYTES`](crate::control::framing::BULK_REPLY_BYTES): the wide framer allowance is granted for this key's
 /// round trip and withdrawn again, so adding a second bulk command is a
 /// deliberate edit to this list rather than a cap everybody already pays for.
 const BULK_REPLY_KEYS: [&str; 1] = ["ns/all"];
 
 impl Command {
-    /// Does this command's reply need the [`BULK_REPLY_BYTES`] allowance?
+    /// Does this command's reply need the [`BULK_REPLY_BYTES`](crate::control::framing::BULK_REPLY_BYTES) allowance?
     fn needs_bulk_reply(&self) -> bool {
         match self {
             Self::GetInfo(keys) => keys.iter().any(|k| BULK_REPLY_KEYS.contains(&k.as_str())),

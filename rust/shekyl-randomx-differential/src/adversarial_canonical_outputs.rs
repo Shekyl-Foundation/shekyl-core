@@ -79,7 +79,7 @@
 //!
 //! - **Compile-time meta-pin tamper guard.** [`FAMILY_1_RECIPE_SHA256`]
 //!   is asserted byte-equal against `SHA-256(FAMILY_1_RECIPE_OUTPUTS)`
-//!   by the [`tests::family_1_recipe_sha256_meta_pin`] unit test;
+//!   by the `tests::family_1_recipe_sha256_meta_pin` unit test;
 //!   the cheap unit test runs on default `cargo test` and catches
 //!   any tamper of the canonical array's contents.
 //! - **In-module shape backstop.** The `#[ignore]`-gated
@@ -106,8 +106,8 @@
 //! ### Population substrate (cache-equivalence reuse)
 //!
 //! The C5 canonical values were computed via the Rust subject's
-//! [`PreparedCache::derive`] +
-//! [`PreparedCache::cache_block_bytes_for_testing`] path through
+//! [`PreparedCache::derive`](shekyl_pow_randomx::PreparedCache::derive) +
+//! [`PreparedCache::cache_block_bytes_for_testing`](shekyl_pow_randomx::PreparedCache::cache_block_bytes_for_testing) path through
 //! [`adversarial::canonical::compute_corpus_canonicals`](super::adversarial::canonical::compute_corpus_canonicals).
 //! Per the Phase 2g R1-D14 cache-equivalence precondition, the
 //! Rust-subject path produces byte-identical cache memory to the C
@@ -246,8 +246,8 @@ pub const MEASUREMENT_OBSERVED_VARIANCE: f64 = 0.0;
 /// [`adversarial::get_corpus`](super::adversarial::get_corpus)'s
 /// emission ordering: the *i*-th entry corresponds to the *i*-th
 /// recipe in `get_corpus()`. The ordering invariant is asserted by
-/// [`tests::family_1_array_length_matches_corpus_length`] +
-/// [`tests::family_1_array_recipe_names_in_get_corpus`].
+/// `tests::family_1_array_length_matches_corpus_length` +
+/// `tests::family_1_array_recipe_names_in_get_corpus`.
 ///
 /// Per Round 2 R2-D1 + §4.5.1 close, the canonical-output array
 /// extends M1's scope to T-A12 (recipe substrate tamper) and
@@ -308,7 +308,7 @@ pub const FAMILY_1_RECIPE_COUNT: usize = FAMILY_1_RECIPE_OUTPUTS.len();
 /// population helper's run-time output (per the
 /// [`adversarial::canonical::tests::print_c5_family_1_canonical_values`](super::adversarial::canonical)
 /// substrate-producer); pinned here and asserted by
-/// [`tests::family_1_meta_sha_matches_array_contents`].
+/// `tests::family_1_meta_sha_matches_array_contents`.
 ///
 /// # Regeneration
 ///

@@ -45,7 +45,7 @@
 //! id **before** assembly, and the id is derivable only from the persona's
 //! public identity key — actor-held state. The seam derives it from the
 //! actor's read-only projection
-//! ([`StakeEngineHandle::persona_identity`]) rather than a caller-supplied
+//! ([`StakeEngineHandle::persona_identity`](crate::engine::stake_engine::StakeEngineHandle::persona_identity)) rather than a caller-supplied
 //! id that could disagree with the slot (a mismatch would fetch one
 //! persona's epochs and sign with another's keys — a claim the daemon
 //! rejects, but a foot-gun the seam can simply not have). Deliberately

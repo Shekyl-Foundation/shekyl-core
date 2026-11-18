@@ -337,7 +337,7 @@ impl DaemonTorControl {
 
     /// Publish the onion for `identity`, which stays with the caller.
     /// `local_target` (loopback only, enforced structurally by
-    /// [`OnionPort::loopback`]). Runs after the caller has bound its inbound
+    /// [`OnionPort::loopback`](shekyl_tor_control_client::control::onion::OnionPort::loopback)). Runs after the caller has bound its inbound
     /// listener, so the target names a port the OS actually granted.
     ///
     /// The caller keeps `identity` for the boot. This call mints one

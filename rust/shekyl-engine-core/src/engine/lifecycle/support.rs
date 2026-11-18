@@ -40,10 +40,10 @@ pub(super) fn map_wallet_file_error(err: WalletFileError, expected: Network) -> 
     }
 }
 
-/// Run a [`PersistenceEngine`] future from sync lifecycle steps
-/// ([`Engine::persist_for_close`](super::Engine::persist_for_close), which
-/// [`Engine::close`](super::Engine::close) runs, and
-/// [`Engine::change_password`](super::Engine::change_password)).
+/// Run a [`PersistenceEngine`](crate::engine::traits::persistence::PersistenceEngine) future from sync lifecycle steps
+/// ([`Engine::persist_for_close`](crate::engine::Engine::persist_for_close), which
+/// [`Engine::close`](crate::engine::Engine::close) runs, and
+/// [`Engine::change_password`](crate::engine::Engine::change_password)).
 ///
 /// # Tokio embedding
 ///
@@ -53,7 +53,7 @@ pub(super) fn map_wallet_file_error(err: WalletFileError, expected: Network) -> 
 ///
 /// - On a **multi-thread** runtime: [`tokio::task::block_in_place`] then
 ///   `block_on` on the active handle (same class of fix as JSON-RPC handlers
-///   driving [`Engine::refresh`](super::Engine::refresh) via `spawn_blocking`).
+///   driving [`Engine::refresh`](crate::engine::Engine::refresh) via `spawn_blocking`).
 /// - Otherwise (no runtime, or **current-thread** runtime): runs the future on
 ///   a short-lived current-thread runtime in a [`std::thread::scope`] thread so
 ///   nested-runtime panics are avoided.
@@ -83,7 +83,7 @@ where
 }
 
 /// Render a `shekyl-crypto-pq::CryptoError` into the static-string
-/// detail expected by [`KeyError::Primitive`]. The message shape is
+/// detail expected by [`KeyError::Primitive`](crate::engine::error::KeyError::Primitive). The message shape is
 /// stable across the `shekyl-crypto-pq` API; we list the primitives
 /// the lifecycle paths can plausibly hit.
 pub(super) fn rederivation_failure_detail(_err: &shekyl_crypto_pq::CryptoError) -> &'static str {

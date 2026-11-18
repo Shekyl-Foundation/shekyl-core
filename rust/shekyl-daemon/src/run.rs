@@ -51,7 +51,7 @@ pub(crate) fn tell(out: &mut impl Write, line: &str) {
     drop(writeln!(out, "{line}"));
 }
 
-/// The load step of the sequence: [`load`] in the daemon.
+/// The load step of the sequence: [`fn@load`] in the daemon.
 pub type LoadStep = fn(Cli, &Platform) -> Result<Loaded, Vec<Diagnostic>>;
 
 /// The whole sequence, returning the exit status. `platform` is the
@@ -62,7 +62,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     main_loading(args, platform, load)
 }
 
-/// [`main`], with its load step named. The daemon's is [`load`]. A test
+/// [`main`], with its load step named. The daemon's is [`fn@load`]. A test
 /// that names no configuration file passes
 /// [`shekyl_daemon_config::load_default_file_unread`]: `platform` gives it
 /// its own roots, but on Unix the default file's path is the machine's, and

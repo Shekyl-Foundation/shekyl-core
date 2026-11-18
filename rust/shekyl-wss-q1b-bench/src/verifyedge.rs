@@ -30,7 +30,7 @@
 //! the field it grades is the measured advance (`CT6_PROVING_STATE.md`
 //! §10.4); the pinned-rig grade is increment 6's. This module is the
 //! **naive** cost that advance replaces. So the record reports
-//! [`VerifyEdgeRecord::grading`] as prose and
+//! [`VerifyEdgeRecord::grading`](crate::report::VerifyEdgeRecord::grading) as prose and
 //! emits **no `Verdict`**: reusing [`crate::report::Verdict::Ungraded`] — whose
 //! meaning is *"measured off the pinned rig"* — for *"no ruled threshold
 //! exists"* would be one value standing in for two meanings, which is the
