@@ -45,13 +45,17 @@ enum Piece<'a> {
 }
 
 /// A line cut into words and figures. A figure is an optional `-`, digits,
-/// and an optional `.` with digits after it.
+/// and an optional `.` with digits after it. A `-` straight after a digit
+/// joins two figures (a printed range, `0.10-1.08`), so it is a word, not
+/// a sign.
 fn pieces(line: &str) -> Vec<Piece<'_>> {
     let bytes = line.as_bytes();
     let mut out = Vec::new();
     let (mut start, mut i) = (0, 0);
     while i < bytes.len() {
-        let signed = bytes[i] == b'-' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit);
+        let after_digit = i > 0 && bytes[i - 1].is_ascii_digit();
+        let signed =
+            bytes[i] == b'-' && !after_digit && bytes.get(i + 1).is_some_and(u8::is_ascii_digit);
         if bytes[i].is_ascii_digit() || signed {
             if start < i {
                 out.push(Piece::Words(&line[start..i]));
@@ -123,7 +127,15 @@ fn merge(seeds: &[u64], runs: &[String]) -> String {
             cut.iter().all(|p| {
                 p.len() == cut[0].len()
                     && p.iter().zip(&cut[0]).all(|(a, b)| match (a, b) {
-                        (Piece::Words(a), Piece::Words(b)) => a == b,
+                        // A column's padding follows its figure's width, so
+                        // words that differ only in spacing are alike.
+                        (Piece::Words(a), Piece::Words(b)) => {
+                            a.split_whitespace().eq(b.split_whitespace())
+                                && a.starts_with(char::is_whitespace)
+                                    == b.starts_with(char::is_whitespace)
+                                && a.ends_with(char::is_whitespace)
+                                    == b.ends_with(char::is_whitespace)
+                        }
                         (Piece::Figure(_), Piece::Figure(_)) => true,
                         _ => false,
                     })
@@ -191,6 +203,42 @@ mod tests {
         assert_eq!(
             merge(&[1, 2, 3], &runs),
             "a\n[seed 1] b\n[seed 2] (no line)\n[seed 3] b\n"
+        );
+    }
+
+    /// A printed range keeps its two ends; the dash between them is a word.
+    #[test]
+    fn a_dash_after_a_digit_joins_a_range() {
+        assert_eq!(
+            pieces("range 0.10-1.08 x"),
+            [
+                Piece::Words("range "),
+                Piece::Figure("0.10"),
+                Piece::Words("-"),
+                Piece::Figure("1.08"),
+                Piece::Words(" x"),
+            ]
+        );
+        let runs = [
+            "r 0.10-1.08".to_string(),
+            "r 0.10-1.07".to_string(),
+            "r 0.10-1.08".to_string(),
+        ];
+        assert_eq!(merge(&[1, 2, 3], &runs), "r 0.10-1.08 [1.07, 1.08]\n");
+    }
+
+    /// A column padded to its figure's width at one seed and not another
+    /// merges; the first seed's spacing is printed.
+    #[test]
+    fn padding_that_follows_a_figure_is_alike() {
+        let runs = [
+            "10%   3019   1120  4423.73".to_string(),
+            "10%   2830    799  4151.77".to_string(),
+            "10%   2418    896  3556.14".to_string(),
+        ];
+        assert_eq!(
+            merge(&[1, 2, 3], &runs),
+            "10%   2830 [2418, 3019]   896 [799, 1120]  4151.77 [3556.14, 4423.73]\n"
         );
     }
 
