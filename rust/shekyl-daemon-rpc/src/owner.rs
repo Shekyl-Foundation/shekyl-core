@@ -85,23 +85,26 @@ pub async fn watch(
 /// - **The pipe** is created with `first_pipe_instance`, so its name does
 ///   not exist until this daemon creates it, and nobody can have squatted a
 ///   name that was drawn at random a moment ago.
-/// - **The record** is published after the pipe exists, atomically: written
-///   to a fresh labelled file beside it and renamed over the path, so a
-///   reader sees the old record or the new one.
+/// - **The record** is published after the pipe exists, atomically: staged
+///   beside it as a labelled file and renamed over the path
+///   ([`shekyl_os_account::private_file::StagedWrite`], a `Replace`), so a
+///   reader sees the old record or the new one. A staged record a crash
+///   left is replaced at the next start, and a failed publish removes its
+///   own. A scanner that holds the staged record is waited for; one that
+///   outstays the wait is `config.replace.held-open`.
 /// - **Clean exit** removes the record before the pipe closes, so the name
 ///   is never free while a record still points at it.
 #[cfg(not(unix))]
 mod windows {
-    use std::io::{self, Write};
+    use std::io;
     use std::path::{Path, PathBuf};
 
     use rand_core::{OsRng, RngCore};
     use shekyl_daemon_config::OwnerSocketPlan;
     use shekyl_options::{Code, Diagnostic, Source};
+    use shekyl_os_account::private_file::{Access, CommitError, Replace, StagedWrite};
     use shekyl_rpc_rendezvous::{Record, PIPE_PREFIX};
-    use shekyl_win_sec::rendezvous::{
-        create_rendezvous_file, ensure_data_home, ensure_rendezvous_dir,
-    };
+    use shekyl_win_sec::rendezvous::{ensure_data_home, ensure_rendezvous_dir};
     use shekyl_win_sec::{current_logon_sid, open_verified, DialError, OwnerOnlyPipeListener};
 
     /// The bound owner's pipe and its published record, not yet served.
@@ -152,7 +155,9 @@ mod windows {
         /// - `config.socket.impostor`: the record or its pipe is not this
         ///   account's;
         /// - `config.socket-dir.unusable`: a directory fails its check or a
-        ///   create failed.
+        ///   create failed;
+        /// - `config.replace.held-open`: another program held the staged
+        ///   record open past the wait.
         pub fn bind(plan: &OwnerSocketPlan, network: &str) -> Result<Self, Diagnostic> {
             let unusable = |found: String| {
                 Diagnostic::new(Code::SocketDirUnusable, Source::Machine)
@@ -180,8 +185,12 @@ mod windows {
                 session: session.as_str().to_owned(),
             }
             .bytes();
-            publish(&plan.path, &record)
-                .map_err(|e| unusable(format!("the rendezvous cannot be published: {e}")))?;
+            publish(plan, &record).map_err(|fault| match fault {
+                CommitError::HeldOpen(held) => crate::run::held_open_refusal(&held, &plan.dir),
+                CommitError::Io(_, e) => {
+                    unusable(format!("the rendezvous cannot be published: {e}"))
+                }
+            })?;
             Ok(Self {
                 listener,
                 rendezvous: Rendezvous(Place {
@@ -205,22 +214,13 @@ mod windows {
         }
     }
 
-    /// Write `record` to a fresh labelled file beside `path` and rename it
-    /// over `path`: a reader sees the old record or the new one.
-    fn publish(path: &Path, record: &[u8]) -> io::Result<()> {
-        let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(format!(".{}.new", std::process::id()));
-        let fresh = path.with_file_name(name);
-        match std::fs::remove_file(&fresh) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-        }
-        let mut file = create_rendezvous_file(&fresh).map_err(io::Error::other)?;
-        file.write_all(record)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&fresh, path)
+    /// Stage `record` beside the rendezvous as a labelled, owner-only file
+    /// and rename it over the path: a reader sees the old record or the new
+    /// one.
+    fn publish(plan: &OwnerSocketPlan, record: &[u8]) -> Result<(), CommitError> {
+        StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)
+            .map_err(|e| CommitError::Io(plan.path.clone(), e))?
+            .commit()
     }
 
     /// The start-up dial (`RPC_CHANNEL.md` §7.1).

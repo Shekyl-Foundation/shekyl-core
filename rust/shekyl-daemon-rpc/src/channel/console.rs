@@ -29,7 +29,7 @@ use shekyl_rpc_channel::handshake::StaticKeypair;
 
 use super::files::{self, FileRefused};
 use super::store::{Store, StoreError};
-use shekyl_os_account::private_file::{self, Access, StagedWrite};
+use shekyl_os_account::private_file::{self, Access, Journal, StagedWrite};
 
 /// What [`reconcile`] found.
 #[derive(Debug, PartialEq, Eq)]
@@ -72,6 +72,15 @@ impl From<FileRefused> for ConsoleFault {
     }
 }
 
+impl From<ConsoleFault> for crate::run::StartFault {
+    fn from(fault: ConsoleFault) -> Self {
+        match fault {
+            ConsoleFault::File(file) => file.into(),
+            other => Self::Refused(other.to_string()),
+        }
+    }
+}
+
 impl From<StoreError> for ConsoleFault {
     fn from(error: StoreError) -> Self {
         Self::Store(error)
@@ -82,8 +91,9 @@ impl From<StoreError> for ConsoleFault {
 ///
 /// `reset_at` is the reset note, committed in the same transaction as the
 /// fingerprint. `None` is a first key, which leaves the note untouched.
-/// A failure before the commit discards the journal. A failure of the
-/// rename leaves it for [`reconcile`].
+/// A failure leaves the journal for [`reconcile`], which places it when the
+/// store names it and sets it aside when the store does not: a journal is
+/// never discarded on a failure (Rick, 2026-11-18).
 ///
 /// # Errors
 ///
@@ -97,16 +107,12 @@ pub(crate) fn install(
         StaticKeypair::generate().map_err(|error| ConsoleFault::Generate(error.to_string()))?;
     let fingerprint = fingerprint_of(&key);
     let live = dir.join(files::CONSOLE_KEY_FILE);
-    let journal = StagedWrite::create(&live, &key.to_key_file(), Access::Console)
+    let journal = StagedWrite::<Journal>::create(&live, &key.to_key_file(), Access::Console)
         .map_err(|error| FileRefused::Io(private_file::staged_path(&live), error))?;
-    if let Err(error) = store.commit_console(&fingerprint, reset_at) {
-        // The cell was not moved. The journal is not a key of record.
-        drop(journal.discard());
-        return Err(error.into());
-    }
-    journal
-        .commit()
-        .map_err(|error| FileRefused::Io(live.clone(), error))?;
+    // A store failure leaves the journal unnamed; the next start's
+    // reconcile sets it aside.
+    store.commit_console(&fingerprint, reset_at)?;
+    journal.commit().map_err(FileRefused::from)?;
     Ok(live)
 }
 
@@ -128,14 +134,14 @@ pub(crate) fn reconcile(dir: &Path, store: &Store) -> Result<Reconcile, ConsoleF
             // The same rename the install commits, directory sync included.
             // A crash after the rename and before the directory is durable
             // leaves the journal, and the next start places it again.
-            StagedWrite::resume(&live)
+            StagedWrite::<Journal>::resume(&live)
                 .map_err(|error| FileRefused::Io(journal.clone(), error))?
                 .commit()
-                .map_err(|error| FileRefused::Io(live, error))?;
+                .map_err(FileRefused::from)?;
             Ok(Reconcile::Placed)
         }
         Step::DiscardStaged => {
-            StagedWrite::resume(&live)
+            StagedWrite::<Journal>::resume(&live)
                 .map_err(|error| FileRefused::Io(journal.clone(), error))?
                 .discard()
                 .map_err(|error| FileRefused::Io(journal, error))?;
@@ -197,7 +203,8 @@ fn seen(path: &Path) -> Seen {
             material: KeyMaterial::Bad(BadKey::NotAKey),
             fault: Some(error),
         },
-        Err(error @ FileRefused::Io(..)) => Seen {
+        // A read waits on nothing; only a commit is held open.
+        Err(error @ (FileRefused::Io(..) | FileRefused::HeldOpen(..))) => Seen {
             material: KeyMaterial::Bad(BadKey::Unreadable),
             fault: Some(error),
         },

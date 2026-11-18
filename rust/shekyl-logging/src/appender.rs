@@ -485,6 +485,26 @@ impl Write for SizeRollingWriter {
     }
 }
 
+/// Append `lines` to the log file at `path` before the logger runs: the
+/// lines of a daemon start that ends before logging starts (Rick,
+/// 2026-11-18). The file is the logger's own live file, opened as the
+/// logger opens it (created at mode `0600`, appended to); its directory is
+/// never created, so a log that cannot be opened is left unwritten.
+///
+/// # Errors
+///
+/// The file could not be opened or written.
+pub fn append_before_start(path: &Path, lines: &[String]) -> io::Result<()> {
+    let mut file = open_with_0600_append(path)?;
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(line);
+        text.push('\n');
+    }
+    file.write_all(text.as_bytes())?;
+    file.sync_data()
+}
+
 /// Open `path` for appending, creating it at mode `0600` and
 /// re-enforcing `0600` if the file already existed.
 fn open_with_0600_append(path: &Path) -> io::Result<File> {

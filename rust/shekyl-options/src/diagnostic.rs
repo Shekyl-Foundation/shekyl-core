@@ -102,6 +102,10 @@ pub enum Code {
     SocketDirUnusable,
     /// The owner's socket path is longer than the platform's socket limit.
     SocketPathLong,
+    /// A file the daemon replaces at its start was held open by another
+    /// program (an antivirus scanner, a search indexer) for longer than the
+    /// daemon waits (Rick, 2026-11-18).
+    ReplaceHeldOpen,
     /// An operator-named socket directory on a platform whose owner's leg
     /// has no socket directory: Windows, whose rendezvous directory is
     /// fixed (Rick, 2026-11-14).
@@ -160,6 +164,7 @@ impl Code {
             Self::SocketDirNone => "config.socket-dir.none",
             Self::SocketDirUnusable => "config.socket-dir.unusable",
             Self::SocketPathLong => "config.socket-dir.path-long",
+            Self::ReplaceHeldOpen => "config.replace.held-open",
             Self::SocketDirPlatform => "config.socket-dir.platform",
             Self::SocketRunning => "config.socket.running",
             Self::SocketImpostor => "config.socket.impostor",
@@ -417,6 +422,12 @@ impl Diagnostic {
                 "`{opt}` is not available on this platform: {}",
                 p("reason")
             ),
+            Code::ReplaceHeldOpen => format!(
+                "{} could not be written: another program held it open for more than {} s, most likely an antivirus scanner or a search indexer; exclude {} from scanning and start the daemon again",
+                p("path"),
+                p("wait"),
+                p("dir")
+            ),
             Code::SocketPathLong => format!(
                 "the owner's socket path {} is {} bytes and this platform allows {}; name a shorter `--rpc-socket-dir`",
                 p("path"),
@@ -540,6 +551,7 @@ mod tests {
             Code::SocketDirUnusable,
             Code::SocketPathLong,
             Code::SocketDirPlatform,
+            Code::ReplaceHeldOpen,
             Code::SocketRunning,
             Code::SocketImpostor,
             Code::OwningConnectionUnusable,

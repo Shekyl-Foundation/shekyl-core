@@ -25,7 +25,9 @@ use std::path::{Path, PathBuf};
 
 use shekyl_rpc_rendezvous::{ServiceChannel, ServiceRecord};
 
-use shekyl_os_account::private_file::{Access, StagedWrite};
+use shekyl_os_account::private_file::{self, Access, Replace, StagedWrite};
+
+use super::files::FileRefused;
 
 /// The published record. Dropping it removes the file, if the file is
 /// still this daemon's record.
@@ -40,16 +42,18 @@ impl ServiceRendezvous {
     /// listeners and the daemon's bundle, when the channel is on: the record
     /// names the address a local client dials ([`local_address`]). `view` is
     /// the bound view listeners: the record names the first. A previous
-    /// run's record, which a crash left, is replaced.
+    /// run's record, which a crash left, is replaced; so is its staged file
+    /// (a [`Replace`]).
     ///
     /// # Errors
     ///
-    /// The write or the rename failed.
+    /// The write or the rename failed; [`FileRefused::HeldOpen`] when
+    /// another program held the staged record open past the wait.
     pub fn publish(
         path: &Path,
         channel: Option<(&[SocketAddr], &[u8])>,
         view: &[SocketAddr],
-    ) -> std::io::Result<Self> {
+    ) -> Result<Self, FileRefused> {
         let record = ServiceRecord {
             channel: channel.and_then(|(bound, bundle)| {
                 local_address(bound).map(|address| ServiceChannel {
@@ -60,8 +64,9 @@ impl ServiceRendezvous {
             view: view.first().copied(),
         }
         .bytes();
-        let journal = StagedWrite::create(path, &record, Access::WorldReadable)?;
-        journal.commit()?;
+        StagedWrite::<Replace>::create(path, &record, Access::WorldReadable)
+            .map_err(|error| FileRefused::Io(private_file::staged_path(path), error))?
+            .commit()?;
         Ok(Self {
             path: path.to_path_buf(),
             record,

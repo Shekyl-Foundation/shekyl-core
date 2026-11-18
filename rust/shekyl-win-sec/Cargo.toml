@@ -39,6 +39,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     # `SIO_TCP_INITIAL_RTO` on the clearnet dial socket (`cap_syn_retransmissions`).
     "Win32_Networking_WinSock",
+    # `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` and `_POSIX_SEMANTICS`, the flags
+    # of the handle-based rename (`replace`).
+    "Win32_System_WindowsProgramming",
 ] }
 # The self-hosted listener (WP-W2) is built on tokio's named-pipe support, so
 # the crate that holds the `unsafe` `create_with_security_attributes_raw` call

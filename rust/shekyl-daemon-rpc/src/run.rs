@@ -75,9 +75,78 @@ pub enum PrepareError {
     Runtime(String),
     /// The owner's leg refused, as a typed refusal.
     Owner(shekyl_options::Diagnostic),
-    /// The RPC channel's key or enrolled set could not be used, in the
-    /// operator's words.
-    Channel(String),
+    /// The RPC channel's key or enrolled set could not be used.
+    Channel(StartFault),
+}
+
+/// Why the RPC's files or listeners could not be set up.
+#[derive(Debug)]
+pub enum StartFault {
+    /// A file could not be replaced: another program held its staged file
+    /// open past the wait ([`shekyl_os_account::private_file::REPLACE_WAIT`]).
+    /// The daemon names it with its own refusal code.
+    HeldOpen(shekyl_os_account::private_file::HeldOpen),
+    /// The refusal, in the operator's words.
+    Refused(String),
+}
+
+impl std::fmt::Display for StartFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HeldOpen(held) => held.fmt(f),
+            Self::Refused(why) => f.write_str(why),
+        }
+    }
+}
+
+impl From<String> for StartFault {
+    fn from(why: String) -> Self {
+        Self::Refused(why)
+    }
+}
+
+impl From<crate::channel::files::FileRefused> for StartFault {
+    fn from(error: crate::channel::files::FileRefused) -> Self {
+        match error {
+            crate::channel::files::FileRefused::HeldOpen(held) => Self::HeldOpen(held),
+            other => Self::Refused(other.to_string()),
+        }
+    }
+}
+
+/// The refusal for a file another program held open past the wait
+/// (`config.replace.held-open`): the file, the wait, and `dir`, the
+/// directory to exclude from scanning (the data directory, or the
+/// rendezvous directory for the owner's record).
+#[must_use]
+pub fn held_open_refusal(
+    held: &shekyl_os_account::private_file::HeldOpen,
+    dir: &std::path::Path,
+) -> shekyl_options::Diagnostic {
+    shekyl_options::Diagnostic::new(
+        shekyl_options::Code::ReplaceHeldOpen,
+        shekyl_options::Source::Machine,
+    )
+    .param("path", held.live.display().to_string())
+    .param(
+        "wait",
+        shekyl_os_account::private_file::REPLACE_WAIT
+            .as_secs()
+            .to_string(),
+    )
+    .param("dir", dir.display().to_string())
+}
+
+impl StartFault {
+    /// The refusal with `context` before its words; a held file is named
+    /// by its own code, so it keeps its own words.
+    #[must_use]
+    pub fn context(self, context: impl FnOnce() -> String) -> Self {
+        match self {
+            Self::HeldOpen(held) => Self::HeldOpen(held),
+            Self::Refused(why) => Self::Refused(format!("{}: {why}", context())),
+        }
+    }
 }
 
 /// Start the server's runtime and bind the owner's leg on it: the start-up
@@ -155,7 +224,7 @@ pub fn start(
     armed: bool,
     prepared: Prepared,
     gone: OnRendezvousGone,
-) -> Result<Running, String> {
+) -> Result<Running, StartFault> {
     let Prepared { rt, owner, channel } = prepared;
     // The section's one cap; the listeners are loopback only, so the
     // per-address caps the C++ options carried had no population.
@@ -187,10 +256,7 @@ pub fn start(
         Some(dir) => {
             let _runtime = rt.enter();
             Some(crate::channel::console_leg::bind(dir).map_err(|e| {
-                format!(
-                    "the console's leg in {} could not be bound: {e}",
-                    dir.display()
-                )
+                e.context(|| format!("the console's leg in {} could not be bound", dir.display()))
             })?)
         }
         None => None,
@@ -217,10 +283,12 @@ pub fn start(
                     &views,
                 )
                 .map_err(|e| {
-                    format!(
-                        "the service's rendezvous {} could not be published: {e}",
-                        path.display()
-                    )
+                    StartFault::from(e).context(|| {
+                        format!(
+                            "the service's rendezvous {} could not be published",
+                            path.display()
+                        )
+                    })
                 })?,
             )
         }
@@ -238,7 +306,9 @@ pub fn start(
         ..Default::default()
     };
     let Some(shim) = crate::submit::production() else {
-        return Err("the node's pool is not installed for submit".to_owned());
+        return Err("the node's pool is not installed for submit"
+            .to_owned()
+            .into());
     };
     let submit_engine = Arc::new(crate::submit::SubmitEngine::new(
         shim,

@@ -78,6 +78,9 @@ mod peer;
 mod pipe;
 #[cfg(windows)]
 pub mod rendezvous;
+/// Replacing a file by renaming another over it, through the handle.
+#[cfg(windows)]
+pub mod replace;
 #[cfg(windows)]
 mod sddl;
 #[cfg(windows)]
