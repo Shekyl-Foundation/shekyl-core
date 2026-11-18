@@ -489,7 +489,8 @@ impl<K: Kind> StagedWrite<K> {
             }
             return Err(error);
         }
-        sync_dir(parent(&self.live)).map_err(|error| CommitError::Unsynced(self.live.clone(), error))
+        sync_dir(parent(&self.live))
+            .map_err(|error| CommitError::Unsynced(self.live.clone(), error))
     }
 }
 
