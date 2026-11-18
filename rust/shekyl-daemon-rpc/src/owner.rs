@@ -376,8 +376,11 @@ mod windows {
 
     #[cfg(test)]
     mod tests {
+        use std::io::Write;
+
         use super::*;
         use shekyl_rpc_rendezvous::Instance;
+        use shekyl_win_sec::rendezvous::create_rendezvous_file;
 
         /// A plan in a fresh directory the bind creates, labelled.
         fn plan(base: &Path) -> OwnerSocketPlan {
