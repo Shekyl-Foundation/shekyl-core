@@ -233,9 +233,21 @@ pub fn derive_embargo(
     );
     assert!(tick_millis > 0, "embargo tick must be non-zero");
 
+    solve_embargo(tick_millis, target, |mean_ticks| {
+        full_travel_probability(params, mean_ticks, tick_millis)
+    })
+}
+
+/// The smallest mean, in ticks, at which `probability` reaches `target`:
+/// bisection over a function monotone increasing in the mean.
+fn solve_embargo(
+    tick_millis: u64,
+    target: f64,
+    probability: impl Fn(u32) -> f64,
+) -> Option<EmbargoDerivation> {
     // Expand until the target is bracketed.
     let mut hi = 1_u32;
-    while full_travel_probability(params, hi, tick_millis) < target {
+    while probability(hi) < target {
         hi = hi.checked_mul(2)?;
         if hi > 1 << 28 {
             return None;
@@ -245,7 +257,7 @@ pub fn derive_embargo(
 
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        if full_travel_probability(params, mid, tick_millis) < target {
+        if probability(mid) < target {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -255,8 +267,168 @@ pub fn derive_embargo(
     Some(EmbargoDerivation {
         mean_ticks: hi,
         tick_millis,
-        achieved: full_travel_probability(params, hi, tick_millis),
+        achieved: probability(hi),
         target,
+    })
+}
+
+/// How the cover carrier paces a stem (`CVR-R4`, `CVR-R5`, `CVR-R10`; Rick,
+/// 2026-11-18): the waits [`full_travel_probability_paced`] adds to every
+/// hop and to the stem's end.
+///
+/// Each wait is a sum of memoryless cadence draws, so a Gamma variable of
+/// whole shape:
+///
+/// - **every hop** waits for `hop_windows` windows on its channel: its own,
+///   behind whatever backlog is queued ahead of it;
+/// - **a hop in an epoch tail** waits `tail_windows` more, since no message
+///   starts during the tail; `tail_share` is the share of hops that land in
+///   one;
+/// - **the stem's end** holds the transaction `hold_windows` draws before
+///   its broadcast, and every stem node's embargo waits for that broadcast
+///   to come back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CarrierPacing {
+    /// The mean of one cadence draw, in milliseconds.
+    pub cadence_mean_ms: u64,
+    /// Windows an ordinary hop waits for: one plus the backlog ahead of it.
+    pub hop_windows: u32,
+    /// Windows more a hop waits when it lands in an epoch tail.
+    pub tail_windows: u32,
+    /// The share of hops that land in an epoch tail, in `[0, 1]`.
+    pub tail_share: f64,
+    /// Cadence draws in the hold before the broadcast.
+    pub hold_windows: u32,
+}
+
+impl CarrierPacing {
+    /// The shipped carrier's pacing with `backlog` windows queued ahead of
+    /// every hop, over epochs of at least `min_epoch_secs`.
+    ///
+    /// The tail share is the tail's mean span over the shortest epoch: a hop
+    /// lands in a tail when its message becomes ready during one, and that is
+    /// at most this often.
+    #[must_use]
+    pub fn shipped(backlog: u32, min_epoch_secs: u32) -> Self {
+        use crate::params::carrier;
+        let cadence_mean_ms = u64::from(carrier::MEAN_CADENCE_MS);
+        let tail_ms = u64::from(carrier::EPOCH_TAIL_WINDOWS) * cadence_mean_ms;
+        let epoch_ms = u64::from(min_epoch_secs).saturating_mul(1_000).max(1);
+        #[allow(clippy::cast_precision_loss)]
+        let tail_share = (tail_ms.min(epoch_ms) as f64) / (epoch_ms as f64);
+        Self {
+            cadence_mean_ms,
+            hop_windows: 1 + backlog,
+            tail_windows: carrier::EPOCH_TAIL_WINDOWS,
+            tail_share,
+            hold_windows: carrier::BROADCAST_HOLD_WINDOWS,
+        }
+    }
+}
+
+/// `−ln(1 − p)` by its series `Σ pᵏ/k`: multiplication and division only, so
+/// the result is bit-identical across architectures. `p` is a geometric
+/// timer's per-tick firing chance, at most one half.
+fn neg_ln_one_minus(p: f64) -> f64 {
+    let mut sum = 0.0_f64;
+    let mut power = p;
+    let mut k = 1.0_f64;
+    while power / k > sum * 1e-18 && k < 10_000.0 {
+        sum += power / k;
+        power *= p;
+        k += 1.0;
+    }
+    sum
+}
+
+/// [`full_travel_probability`] with every stem hop paced by the cover
+/// carrier and the stem's end held before its broadcast ([`CarrierPacing`]).
+///
+/// The fixed per-hop and return terms are as in
+/// [`full_travel_probability`]. The carrier's waits are random and memoryless:
+/// a node at distance `k` from the stem's end outlasts the `k` hop waits
+/// below it and the shared hold, so over a stem of length `h` the exponent
+/// gains `Σ j·Wⱼ` over its hops and `h·H` for the hold. With the hops
+/// independent, the survival factor is a product of Gamma moment generating
+/// functions, `(1 + j·λ·θ)^(−shape)` with `λ = −ln(1 − p)` per tick and `θ`
+/// the cadence mean in ticks: powers of a reciprocal, no transcendental call
+/// but the series for `λ`.
+///
+/// # Panics
+///
+/// As [`full_travel_probability`].
+#[must_use]
+pub fn full_travel_probability_paced(
+    params: &DandelionParams,
+    mean_ticks: u32,
+    tick_millis: u64,
+    pacing: &CarrierPacing,
+) -> f64 {
+    assert!(mean_ticks > 0, "embargo mean must be non-zero");
+    assert!(tick_millis > 0, "embargo tick must be non-zero");
+    assert!(
+        params.fluff_probability_pct > 0 && params.fluff_probability_pct <= 100,
+        "fluff probability must be a percentage in 1..=100"
+    );
+
+    let q = f64::from(params.fluff_probability_pct) / 100.0;
+    let stem_survives = 1.0 - q;
+    let p = 1.0 / (f64::from(mean_ticks) + 1.0);
+    let timer_survives = 1.0 - p;
+    let rate = neg_ln_one_minus(p);
+    #[allow(clippy::cast_precision_loss)]
+    let theta = pacing.cadence_mean_ms as f64 / tick_millis as f64;
+    let gamma = |multiplier: u32, shape: u32| {
+        pow_exact(
+            1.0 / (1.0 + f64::from(multiplier) * rate * theta),
+            u64::from(shape),
+        )
+    };
+
+    let hop_ms = u64::from(params.time_between_hop_ms.ms());
+    let return_ms = u64::from(params.fluff_return_ms.ms());
+
+    let mut total = 0.0_f64;
+    let mut stem_mass = 1.0_f64;
+    let mut timer_mass = 1.0_f64;
+    let mut wait_mass = 1.0_f64;
+
+    for h in 1..=MAX_STEM_TERMS {
+        let slack_ticks = div_ceil(u64::from(h) * hop_ms + return_ms, tick_millis);
+        timer_mass *= pow_exact(timer_survives, slack_ticks);
+        wait_mass *= (1.0 - pacing.tail_share) * gamma(h, pacing.hop_windows)
+            + pacing.tail_share * gamma(h, pacing.hop_windows + pacing.tail_windows);
+        let hold = gamma(h, pacing.hold_windows);
+        total += stem_mass * q * timer_mass * wait_mass * hold;
+        if stem_mass < TAIL_MASS_CUTOFF {
+            break;
+        }
+        stem_mass *= stem_survives;
+    }
+
+    total
+}
+
+/// [`derive_embargo`] with every hop carrier-paced
+/// ([`full_travel_probability_paced`]).
+///
+/// # Panics
+///
+/// As [`derive_embargo`].
+#[must_use]
+pub fn derive_embargo_paced(
+    params: &DandelionParams,
+    tick_millis: u64,
+    target: f64,
+    pacing: &CarrierPacing,
+) -> Option<EmbargoDerivation> {
+    assert!(
+        target > 0.0 && target < 1.0,
+        "target must be a probability strictly inside (0, 1)"
+    );
+    assert!(tick_millis > 0, "embargo tick must be non-zero");
+    solve_embargo(tick_millis, target, |mean_ticks| {
+        full_travel_probability_paced(params, mean_ticks, tick_millis, pacing)
     })
 }
 

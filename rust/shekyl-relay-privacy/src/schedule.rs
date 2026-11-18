@@ -526,6 +526,25 @@ impl EmbargoTimer {
         Self::geometric_from_ticks(d.mean_ticks, d.tick_millis)
     }
 
+    /// [`Self::adopted`] with every stem hop paced by the cover carrier
+    /// ([`crate::derive_embargo_paced`]): the embargo a node draws for a
+    /// stem it sends on a covered session (`CVR-R5`).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::adopted`].
+    #[must_use]
+    pub fn adopted_paced(params: &DandelionParams, pacing: &crate::derive::CarrierPacing) -> Self {
+        let d = crate::derive::derive_embargo_paced(
+            params,
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            crate::params::EMBARGO_FULL_TRAVEL_PROBABILITY,
+            pacing,
+        )
+        .expect("full-travel target reachable below 1");
+        Self::geometric_from_ticks(d.mean_ticks, d.tick_millis)
+    }
+
     /// Closed-form mean + Poisson — measurement isolation only.
     ///
     /// Same distribution family as the daemon ships, mean corrected to what the

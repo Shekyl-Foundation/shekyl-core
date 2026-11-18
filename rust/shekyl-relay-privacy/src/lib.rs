@@ -182,7 +182,8 @@ pub mod conformance;
 
 pub use basis::{AdmissibleBasis, DerivationMs};
 pub use derive::{
-    derive_embargo, full_travel_probability, marginal_preemption_profile, EmbargoDerivation,
+    derive_embargo, derive_embargo_paced, full_travel_probability, full_travel_probability_paced,
+    marginal_preemption_profile, CarrierPacing, EmbargoDerivation,
 };
 pub use geometric::GeometricTable;
 pub use params::{
