@@ -29,9 +29,9 @@ use zeroize::Zeroizing;
 use ciphersuite::group::GroupEncoding;
 use common::{found_group, load_keys, pay_group_twice, random_scalar};
 use shekyl_crypto_pq::key_image::KeyImage;
+use shekyl_crypto_pq::multisig_intent::{IntentSeed, INTENT_SEED_LEN};
 use shekyl_fcmp::frost_sal::{
-    complete, preprocess, sign, Ed25519T, Participant, SalSigningParams, SpentOutput,
-    ThresholdKeys, RERANDOMIZATION_SEED_LEN,
+    complete, preprocess, sign, Ed25519T, Participant, SalSigningParams, SpentOutput, ThresholdKeys,
 };
 use shekyl_fcmp::proof::{prove_with_sal, verify};
 use shekyl_fcmp::{PqcKeyScalar, SpendAuthAndLinkability};
@@ -96,13 +96,17 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
         .iter()
         .map(|_| Zeroizing::new(random_scalar().to_bytes()))
         .collect();
+    // Each input's rerandomization seed, from one intent's seed in input
+    // order, as the derivation gives it.
+    let mut intent_seed = [0u8; INTENT_SEED_LEN];
+    OsRng.fill_bytes(&mut intent_seed);
+    let intent_seed = IntentSeed::new(&intent_seed);
     let params: Vec<SalSigningParams> = outputs
         .iter()
         .zip(scans)
         .zip(&blinds)
-        .map(|(((out, _, _), s), a)| {
-            let mut seed = [0u8; RERANDOMIZATION_SEED_LEN];
-            OsRng.fill_bytes(&mut seed);
+        .enumerate()
+        .map(|(input, (((out, _, _), s), a))| {
             let spent = SpentOutput {
                 output_key: &out.output_key,
                 commitment: &out.commitment,
@@ -110,6 +114,7 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
                 y_kem: &s.y_kem,
                 commitment_mask: &s.z,
             };
+            let seed = intent_seed.rerandomization_seed(input);
             SalSigningParams::new(&seed, &spent, a, SIGNABLE).unwrap()
         })
         .collect();

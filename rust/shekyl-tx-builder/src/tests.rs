@@ -14,6 +14,7 @@ use crate::types::*;
 use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 
@@ -67,11 +68,19 @@ pub(crate) fn enc_fields() -> (EncryptedOutputField, EncryptedOutputField) {
     (out.enc_amount_wire(), out.enc_label_wire())
 }
 
+/// A canonical derived mask whose low byte is `low`. Validation tests never
+/// open it; a non-canonical byte pattern is not a mask.
+fn fixture_mask(low: u8) -> OutputMask {
+    let mut bytes = [0u8; 32];
+    bytes[0] = low;
+    OutputMask::from_derived(&bytes)
+}
+
 fn dummy_output(amount: u64) -> OutputInfo {
     OutputInfo {
         dest_key: [20u8; 32],
         amount: AtomicUnits::from_raw(amount),
-        commitment_mask: [21u8; 32],
+        commitment_mask: fixture_mask(21),
         enc_amount: enc_fields().0,
         enc_label: enc_fields().1,
     }
@@ -404,7 +413,7 @@ fn seeded_pqc_auths_are_byte_identical_per_seed_and_verify() {
 // So C2 (Helios) gets the even branch indices and C1 (Selene) the odd ones:
 // c2 = ceil(B/2), c1 = floor(B/2). This matches the prover's
 // "curve_2_layers is populated before curve_1_layers" and
-// `shekyl_curve_tree::assemble_path`.
+// `shekyl_curve_tree`'s assembler.
 
 /// Build a `SpendInput` with the spec-correct c1/c2 split for a given depth.
 fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {

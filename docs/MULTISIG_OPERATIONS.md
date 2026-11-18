@@ -250,9 +250,16 @@ only then signs it, writing a `HybridSig`. A signer never signs bytes its
 own wallet did not build or check.
 
 A 2-of-N spend is four files: `Proposal`, `ResponderShare`, `FinalTx`,
-`HybridSig`. Each holder adds four files and two visits. A wallet that
-restarts during a session picks up where it left off from the files it
-received.
+`HybridSig`. Each holder adds four files and two visits.
+
+Keep your wallet open from the moment it commits to a proposal until it
+has written its share: the proposer until its `FinalTx`, a holder until
+its `SignatureShare`. The secret it signs with is never written to disk,
+so a wallet closed in between gives up its part of that proposal. No
+funds are at risk: the group starts a new proposal for the same spend. A
+proposer that has written its `FinalTx` can close its wallet and finish
+later from that file, and a signer's second-round answer needs nothing
+kept.
 
 ### 5.4 Assembly
 

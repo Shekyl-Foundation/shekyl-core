@@ -3,7 +3,10 @@
 
 //! Adversarial test matrix: tests for attack vectors against V3.1 multisig.
 
-use crate::intent::{IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION};
+use crate::intent::{
+    IntentPayee, IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION,
+};
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_units::AtomicUnits;
 
 #[test]
@@ -19,23 +22,21 @@ fn replay_detection_via_kem_seed() {
         reference_block_height: 900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
-            address: vec![1],
+            payee: IntentPayee::Group { address: vec![1] },
             amount: AtomicUnits::from_raw(100),
         }],
         fee: AtomicUnits::from_raw(10),
         input_global_indices: vec![42],
-        kem_randomness_seed: [0xDD; 32],
+        kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
         chain_state_fingerprint: [0; 32],
     };
 
     let mut intent2 = intent1.clone();
     intent2.intent_id = [0x22; 32];
 
-    assert_eq!(intent1.kem_randomness_seed, intent2.kem_randomness_seed);
-
     let mut seen = std::collections::HashSet::new();
-    seen.insert(intent1.kem_randomness_seed);
-    assert!(seen.contains(&intent2.kem_randomness_seed));
+    seen.insert(intent1.kem_randomness_seed.fingerprint());
+    assert!(seen.contains(&intent2.kem_randomness_seed.fingerprint()));
 }
 
 #[test]
@@ -51,12 +52,12 @@ fn structural_validation_rejects_all_bad_inputs() {
         reference_block_height: 900,
         reference_block_hash: [0; 32],
         recipients: vec![IntentRecipient {
-            address: vec![1],
+            payee: IntentPayee::Group { address: vec![1] },
             amount: AtomicUnits::from_raw(100),
         }],
         fee: AtomicUnits::from_raw(10),
         input_global_indices: vec![42],
-        kem_randomness_seed: [0; 32],
+        kem_randomness_seed: IntentSeed::new(&[0; 32]),
         chain_state_fingerprint: [0; 32],
     };
 

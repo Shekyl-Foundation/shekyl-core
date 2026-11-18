@@ -17,11 +17,14 @@
 //! signs is one it assembled itself from its context and those verified
 //! proofs (`crate::ceremony`).
 
+use shekyl_crypto_pq::multisig_intent::IntentSeedFingerprint;
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 
+use shekyl_address::Network;
 use shekyl_units::AtomicUnits;
 
-use crate::intent::{SpendIntent, SpendIntentError};
+use crate::intent::{ResolvedRecipient, SpendIntent, SpendIntentError};
 
 /// What a member's own wallet knows that an intent is checked against.
 pub struct LedgerView<'a> {
@@ -31,6 +34,8 @@ pub struct LedgerView<'a> {
     pub n_total: u8,
     /// The group's threshold.
     pub m_required: u8,
+    /// The group's network: every recipient must be payable on it.
+    pub network: Network,
     /// This member's chain tip height.
     pub chain_tip_height: u64,
     /// The block hash at the intent's reference height, in this member's
@@ -39,10 +44,14 @@ pub struct LedgerView<'a> {
     /// The chain state fingerprint this member computes over the intent's
     /// inputs.
     pub local_chain_state_fingerprint: &'a [u8; 32],
-    /// The amounts of the intent's inputs, in this member's ledger.
+    /// The amounts of the intent's inputs, in this member's ledger, one per
+    /// input in the intent's input order. The balance is checked against
+    /// them, and the derivation checks each against its coin's commitment
+    /// (R-27).
     pub input_amounts: &'a [AtomicUnits],
-    /// Every `kem_randomness_seed` this member has seen in an intent.
-    pub seen_kem_seeds: &'a HashSet<[u8; 32]>,
+    /// The fingerprint of every `kem_randomness_seed` this member has seen
+    /// in an intent: never the seeds (`PQC_MULTISIG.md` §9.5).
+    pub seen_seeds: &'a HashSet<IntentSeedFingerprint>,
 }
 
 /// Why a member will not sign an intent. Each names one check.
@@ -57,6 +66,13 @@ pub enum IntentRefusal {
     /// I1: the reference block (§9.2 items 7–8).
     #[error("the intent's reference block does not hold here: {0}")]
     ReferenceBlock(SpendIntentError),
+    /// I1: a recipient cannot be paid on the group's network (§9.2 item 10).
+    #[error("the intent pays a recipient this group cannot: {0}")]
+    Recipient(SpendIntentError),
+    /// This member's ledger names a different number of amounts than the
+    /// intent has inputs: the amounts cannot be paired with the inputs.
+    #[error("the ledger names {amounts} amounts for the intent's {inputs} inputs")]
+    InputAmounts { inputs: usize, amounts: usize },
     /// I1: the amounts do not balance (§9.2 item 11).
     #[error("the intent does not balance: {0}")]
     Balance(SpendIntentError),
@@ -68,10 +84,14 @@ pub enum IntentRefusal {
     ChainState,
 }
 
-/// An intent that passed I1 and I2 against one member's ledger.
+/// An intent that passed I1 and I2 against one member's ledger, its
+/// recipients resolved on the group's network.
 #[derive(Debug, Clone)]
 pub struct ValidatedIntent {
     intent: SpendIntent,
+    recipients: Vec<ResolvedRecipient>,
+    input_count: NonZeroUsize,
+    input_amounts: Vec<AtomicUnits>,
     hash: [u8; 32],
 }
 
@@ -85,29 +105,67 @@ impl ValidatedIntent {
         if intent.address_fingerprint != *ledger.our_address_fingerprint {
             return Err(IntentRefusal::OtherGroup);
         }
-        intent
+        let input_count = intent
             .validate_structural(ledger.n_total, ledger.m_required)
             .map_err(IntentRefusal::Structure)?;
+        let recipients = intent
+            .resolve_recipients(ledger.network)
+            .map_err(IntentRefusal::Recipient)?;
         intent
             .validate_temporal(ledger.chain_tip_height, ledger.local_ref_block_hash)
             .map_err(IntentRefusal::ReferenceBlock)?;
+        if ledger.input_amounts.len() != intent.input_global_indices.len() {
+            return Err(IntentRefusal::InputAmounts {
+                inputs: intent.input_global_indices.len(),
+                amounts: ledger.input_amounts.len(),
+            });
+        }
         intent
             .validate_balance(ledger.input_amounts)
             .map_err(IntentRefusal::Balance)?;
-        if ledger.seen_kem_seeds.contains(&intent.kem_randomness_seed) {
+        if ledger
+            .seen_seeds
+            .contains(&intent.kem_randomness_seed.fingerprint())
+        {
             return Err(IntentRefusal::KemSeedReplay);
         }
         if intent.chain_state_fingerprint != *ledger.local_chain_state_fingerprint {
             return Err(IntentRefusal::ChainState);
         }
         let hash = intent.intent_hash().map_err(IntentRefusal::Structure)?;
-        Ok(Self { intent, hash })
+        Ok(Self {
+            intent,
+            recipients,
+            input_count,
+            input_amounts: ledger.input_amounts.to_vec(),
+            hash,
+        })
     }
 
     /// The intent.
     #[must_use]
     pub fn intent(&self) -> &SpendIntent {
         &self.intent
+    }
+
+    /// The amount of each of the intent's inputs, in the intent's input
+    /// order, as this member's ledger named it and the balance was checked
+    /// against.
+    #[must_use]
+    pub fn input_amounts(&self) -> &[AtomicUnits] {
+        &self.input_amounts
+    }
+
+    /// The number of inputs it spends, at least one.
+    #[must_use]
+    pub fn input_count(&self) -> NonZeroUsize {
+        self.input_count
+    }
+
+    /// Its recipients, resolved, in output order.
+    #[must_use]
+    pub fn recipients(&self) -> &[ResolvedRecipient] {
+        &self.recipients
     }
 
     /// Its hash, which every file of its ceremony carries.
@@ -120,7 +178,11 @@ impl ValidatedIntent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intent::{ChainStateFingerprint, IntentRecipient, SPEND_INTENT_VERSION};
+    use crate::intent::{
+        ChainStateFingerprint, IntentPayee, IntentRecipient, SPEND_INTENT_VERSION,
+    };
+    use crate::tests::group_payload;
+    use shekyl_crypto_pq::multisig_intent::IntentSeed;
 
     fn chain_fingerprint() -> [u8; 32] {
         ChainStateFingerprint {
@@ -144,19 +206,21 @@ mod tests {
             reference_block_height: 900,
             reference_block_hash: [0xCC; 32],
             recipients: vec![IntentRecipient {
-                address: vec![1, 2, 3],
+                payee: IntentPayee::Group {
+                    address: group_payload(Network::Testnet, 0x60).to_canonical_bytes(),
+                },
                 amount: AtomicUnits::from_raw(300),
             }],
             fee: AtomicUnits::from_raw(10),
             input_global_indices: vec![42],
-            kem_randomness_seed: [0xDD; 32],
+            kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
             chain_state_fingerprint: chain_fingerprint(),
         }
     }
 
     fn check(
         intent: SpendIntent,
-        seen: &HashSet<[u8; 32]>,
+        seen: &HashSet<IntentSeedFingerprint>,
     ) -> Result<ValidatedIntent, IntentRefusal> {
         ValidatedIntent::validate(
             intent,
@@ -164,11 +228,12 @@ mod tests {
                 our_address_fingerprint: &[0xBB; 32],
                 n_total: 3,
                 m_required: 2,
+                network: Network::Testnet,
                 chain_tip_height: 950,
                 local_ref_block_hash: &[0xCC; 32],
                 local_chain_state_fingerprint: &chain_fingerprint(),
                 input_amounts: &[AtomicUnits::from_raw(310)],
-                seen_kem_seeds: seen,
+                seen_seeds: seen,
             },
         )
     }
@@ -177,6 +242,14 @@ mod tests {
     fn a_valid_intent_validates_and_carries_its_hash() {
         let validated = check(intent(), &HashSet::new()).unwrap();
         assert_eq!(*validated.hash(), intent().intent_hash().unwrap());
+        assert_eq!(validated.input_amounts(), &[AtomicUnits::from_raw(310)]);
+        assert!(matches!(
+            validated.recipients(),
+            [ResolvedRecipient {
+                payee: crate::intent::ResolvedPayee::Group(_),
+                ..
+            }]
+        ));
     }
 
     /// Each refusal by name.
@@ -197,8 +270,26 @@ mod tests {
             Some(IntentRefusal::Structure(_))
         ));
         assert!(matches!(
+            refused(&|i| {
+                i.recipients[0].payee = IntentPayee::Group {
+                    address: group_payload(Network::Mainnet, 0x60).to_canonical_bytes(),
+                };
+            }),
+            Some(IntentRefusal::Recipient(SpendIntentError::Recipient {
+                index: 0,
+                ..
+            }))
+        ));
+        assert!(matches!(
             refused(&|i| i.reference_block_hash = [0xCD; 32]),
             Some(IntentRefusal::ReferenceBlock(_))
+        ));
+        assert!(matches!(
+            refused(&|i| i.input_global_indices.push(43)),
+            Some(IntentRefusal::InputAmounts {
+                inputs: 2,
+                amounts: 1
+            })
         ));
         assert!(matches!(
             refused(&|i| i.fee = AtomicUnits::from_raw(11)),
@@ -208,10 +299,14 @@ mod tests {
             refused(&|i| i.chain_state_fingerprint = [0; 32]),
             Some(IntentRefusal::ChainState)
         ));
-        let seen = HashSet::from([[0xDD; 32]]);
+        // The replay set holds fingerprints: the intent's own seed's is
+        // refused, and the seed's bytes as a fingerprint are not one.
+        let seed = intent().kem_randomness_seed;
+        let seen = HashSet::from([seed.fingerprint()]);
         assert!(matches!(
             check(intent(), &seen).err(),
             Some(IntentRefusal::KemSeedReplay)
         ));
+        assert_ne!(seed.fingerprint().as_bytes(), &[0xDD; 32]);
     }
 }
