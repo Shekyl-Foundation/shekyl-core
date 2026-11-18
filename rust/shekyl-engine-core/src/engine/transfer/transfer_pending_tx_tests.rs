@@ -2537,10 +2537,7 @@ async fn join_market_bond_post_verifies_over_real_tree() {
     };
     use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_curve_io::CompressedPoint;
-    use shekyl_curve_primitives::Commitment;
     use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
-
-    use curve25519_dalek::scalar::Scalar;
 
     // Shared real-tree setup: assemble the real depth-2 membership path and
     // sign the bond post (`bond_credit` as the sole cleartext term). The
@@ -2570,9 +2567,7 @@ async fn join_market_bond_post_verifies_over_real_tree() {
     let bp_commitments: Vec<CompressedPoint> = outputs
         .iter()
         .map(|out| {
-            let mask = Scalar::from_canonical_bytes(out.commitment_mask)
-                .expect("commitment_mask canonical");
-            let c = Commitment::new(mask, out.amount.to_raw());
+            let c = out.commitment_mask.opening(out.amount.to_raw());
             CompressedPoint::from(c.calculate().compress().to_bytes())
         })
         .collect();
@@ -2830,7 +2825,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let outputs = vec![OutputInfo {
         dest_key: change_out.output_key,
         amount: AtomicUnits::from_raw(change),
-        commitment_mask: change_out.z,
+        commitment_mask: change_out.commitment_mask(),
         enc_amount: change_out.enc_amount_wire(),
         enc_label: change_out.enc_label_wire(),
     }];

@@ -8,6 +8,7 @@
 //! FFI's contract, deleted with it (the wallet is Rust).
 
 use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_types::{BlockHash, CurveTreeRoot, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -88,10 +89,10 @@ pub struct OutputInfo {
     pub dest_key: [u8; 32],
     /// Amount in atomic units. Must be non-zero.
     pub amount: AtomicUnits,
-    /// HKDF-derived commitment mask z where C = z*G + amount*H.
-    /// Pre-derived by `shekyl_construct_output` via HKDF from the shared secret.
-    #[zeroize]
-    pub commitment_mask: [u8; 32],
+    /// Commitment mask `z` where `C = z·G + amount·H`, the scalar the
+    /// output derivation produced ([`OutputMask`]). The signer opens it;
+    /// it does not read the mask's bytes.
+    pub commitment_mask: OutputMask,
     /// Encrypted amount (9 bytes): `[0..8]` = amount XOR k_amount, `[8]` =
     /// amount_tag. In process, obtainable only from
     /// `OutputData::enc_amount_wire()`; the type's `Deserialize` impl is the

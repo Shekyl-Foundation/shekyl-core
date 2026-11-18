@@ -378,7 +378,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         OutputInfo {
             dest_key: out.output_key,
             amount: AtomicUnits::from_raw(amount),
-            commitment_mask: out.z,
+            commitment_mask: out.commitment_mask(),
             enc_amount: out.enc_amount_wire(),
             enc_label: out.enc_label_wire(),
         }

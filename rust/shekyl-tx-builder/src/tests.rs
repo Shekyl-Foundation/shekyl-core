@@ -14,6 +14,7 @@ use crate::types::*;
 use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 
@@ -67,11 +68,19 @@ pub(crate) fn enc_fields() -> (EncryptedOutputField, EncryptedOutputField) {
     (out.enc_amount_wire(), out.enc_label_wire())
 }
 
+/// A canonical derived mask whose low byte is `low`. Validation tests never
+/// open it; a non-canonical byte pattern is not a mask.
+fn fixture_mask(low: u8) -> OutputMask {
+    let mut bytes = [0u8; 32];
+    bytes[0] = low;
+    OutputMask::from_derived(&bytes)
+}
+
 fn dummy_output(amount: u64) -> OutputInfo {
     OutputInfo {
         dest_key: [20u8; 32],
         amount: AtomicUnits::from_raw(amount),
-        commitment_mask: [21u8; 32],
+        commitment_mask: fixture_mask(21),
         enc_amount: enc_fields().0,
         enc_label: enc_fields().1,
     }

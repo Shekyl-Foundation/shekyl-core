@@ -182,16 +182,14 @@ pub struct BuiltOutput {
     pub pqc_leaf: [u8; 64],
     /// The output's `0x0D` entry, when it pays a group.
     multisig_entry: Option<MultisigEntry>,
-    /// The output's commitment mask `z`, as the scalar it was derived as.
-    mask: OutputMask,
 }
 
 impl BuiltOutput {
-    /// The output's commitment mask `z`, as the scalar it was derived as:
-    /// its opening at the output's amount cannot fail.
+    /// The output's commitment mask `z`: the scalar [`OutputInfo`] carries.
+    /// Its opening at the output's amount cannot fail.
     #[must_use]
     pub fn commitment_mask(&self) -> &OutputMask {
-        &self.mask
+        &self.info.commitment_mask
     }
 }
 
@@ -204,7 +202,7 @@ macro_rules! built_output {
             info: OutputInfo {
                 dest_key: constructed.output_key,
                 amount: AtomicUnits::from_raw($amount),
-                commitment_mask: constructed.z,
+                commitment_mask: constructed.commitment_mask(),
                 enc_amount: constructed.enc_amount_wire(),
                 enc_label: constructed.enc_label_wire(),
             },
@@ -218,7 +216,6 @@ macro_rules! built_output {
             .concat(),
             pqc_leaf: constructed.pqc_leaf.entry_bytes(),
             multisig_entry: $multisig_entry,
-            mask: constructed.commitment_mask(),
         }
     }};
 }

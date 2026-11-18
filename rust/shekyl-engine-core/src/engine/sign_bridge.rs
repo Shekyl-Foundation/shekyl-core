@@ -577,9 +577,11 @@ mod tests {
     /// The bytes a transfer's outputs and `tx_extra` are made of, pinned for
     /// a fixed transaction key: a payment and a change output built by the
     /// builder `sign_tx` uses, in the order the key derives (R-24), and
-    /// their `tx_extra`. Output construction and order are deterministic
-    /// given the transaction key, so a change to the builder that moves any
-    /// byte of a solo transfer fails here.
+    /// their `tx_extra`. Each output contributes its key, view tag,
+    /// commitment and encrypted fields. The commitment is the point the
+    /// chain carries; the mask stays a scalar. Output construction and
+    /// order are deterministic given the transaction key, so a change to
+    /// the builder that moves any byte of a solo transfer fails here.
     #[test]
     fn a_transfers_outputs_and_extra_are_pinned_for_a_fixed_tx_key() {
         const SEED: [u8; 32] = [21u8; 32];
@@ -604,13 +606,19 @@ mod tests {
         for out in built.outputs() {
             transcript.extend_from_slice(&out.output_key);
             transcript.push(out.view_tag);
-            transcript.extend_from_slice(&out.info.commitment_mask);
+            transcript.extend_from_slice(
+                &out.commitment_mask()
+                    .opening(out.info.amount.to_raw())
+                    .calculate()
+                    .compress()
+                    .to_bytes(),
+            );
             transcript.extend_from_slice(&out.info.enc_amount.to_bytes());
             transcript.extend_from_slice(&out.info.enc_label.to_bytes());
         }
         assert_eq!(
             hex::encode(shekyl_crypto_hash::keccak256(&transcript)),
-            "9fdebca0b5b99d71f261db870a2ac067ed1a79d5df7fe8bcc687a54159555218"
+            "47afa9549cb26dd7d1fbaf3107f86ee64cebf0828377922c3acc016ceef4984e"
         );
     }
 
@@ -637,11 +645,12 @@ mod tests {
 
         let recover = |built: &shekyl_tx_builder::outputs::BuiltOutput, position: usize| {
             let (ct_x25519, ct_ml_kem) = built.kem_blob.split_at(32);
-            let mask = Scalar::from_bytes_mod_order(built.info.commitment_mask);
-            let commitment = ((&mask * ED25519_BASEPOINT_TABLE)
-                + (*shekyl_curve_generators::H * Scalar::from(AMOUNT)))
-            .compress()
-            .to_bytes();
+            let commitment = built
+                .commitment_mask()
+                .opening(AMOUNT)
+                .calculate()
+                .compress()
+                .to_bytes();
             scan_output_recover(
                 recipient_keys.keys.view_sk.as_canonical_bytes(),
                 recipient_keys.keys.ml_kem_dk.as_canonical_bytes(),
@@ -721,11 +730,12 @@ mod tests {
         let position = spend.position_of(0).expect("the persona's position");
         let built = &spend.outputs()[position];
         let (ct_x25519, ct_ml_kem) = built.kem_blob.split_at(32);
-        let mask = Scalar::from_bytes_mod_order(built.info.commitment_mask);
-        let commitment = ((&mask * ED25519_BASEPOINT_TABLE)
-            + (*shekyl_curve_generators::H * Scalar::from(AMOUNT)))
-        .compress()
-        .to_bytes();
+        let commitment = built
+            .commitment_mask()
+            .opening(AMOUNT)
+            .calculate()
+            .compress()
+            .to_bytes();
         let recovered = scan_output_recover(
             persona.view_sk.as_canonical_bytes(),
             persona.ml_kem_dk.as_canonical_bytes(),

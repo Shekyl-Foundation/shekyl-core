@@ -134,7 +134,7 @@ impl OutputData {
     /// The output's commitment mask `z`, as the scalar it was derived as.
     #[must_use]
     pub fn commitment_mask(&self) -> OutputMask {
-        OutputMask::of_derived(&self.z)
+        OutputMask::from_derived(&self.z)
     }
 
     /// The raw `enc_label` ciphertext, without its tag.

@@ -17,7 +17,6 @@
 //! This two-phase design avoids a circular dependency: the PQC payload hash
 //! includes the serialized proofs, so the proofs must exist before signing.
 
-use curve25519_dalek::scalar::Scalar;
 use std::num::NonZeroUsize;
 
 use rand_core::{CryptoRng, OsRng, RngCore};
@@ -241,13 +240,11 @@ fn sign_with<R: RngCore + CryptoRng>(
     let input_count = validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
 
     // ── 2. Bulletproofs+ range proof ─────────────────────────────────
-    // Use HKDF-derived commitment masks from OutputInfo (pre-derived by construct_output).
+    // Each output's opening is its derived mask at its amount. The mask is
+    // already a scalar; nothing here reads its bytes.
     let commitments_for_bp: Vec<Commitment> = outputs
         .iter()
-        .map(|out| {
-            Commitment::from_canonical_mask(&out.commitment_mask, out.amount.to_raw())
-                .expect("commitment_mask is not a valid scalar")
-        })
+        .map(|out| out.commitment_mask.opening(out.amount.to_raw()))
         .collect();
     // The pseudo-out blinds balance these openings (step 5); the range
     // proof consumes them.
@@ -280,13 +277,7 @@ fn sign_with<R: RngCore + CryptoRng>(
     let enc_amounts: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_amount).collect();
     let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_label).collect();
 
-    // ── 5. Pseudo-output balancing ───────────────────────────────────
-    // Made in step 2 as `PseudoOutBlinds`: every input's blind but the
-    // last drawn, the last balancing the outputs' masks (the fee is
-    // committed with mask 0, fee*H), as every spend's are, a multisig one
-    // included.
-
-    // ── 6. Build ProveInput for FCMP++ ───────────────────────────────
+    // ── 5. Build ProveInput for FCMP++ ───────────────────────────────
     let prove_inputs: Vec<ProveInput> = inputs
         .iter()
         .zip(&pseudo_out_blinds)
@@ -294,7 +285,7 @@ fn sign_with<R: RngCore + CryptoRng>(
         .map(|(i, (inp, blind))| prove_input_from_spend(i, inp, **blind))
         .collect::<Result<_, _>>()?;
 
-    // ── 7. FCMP++ prove ──────────────────────────────────────────────
+    // ── 6. FCMP++ prove ──────────────────────────────────────────────
     // Over `tx_signable`: the prefix and the base just built (the outputs'
     // commitments, encrypted amounts and labels, the fee and the reference
     // block), framed under the network's id (the signing envelope §2.2).
@@ -310,7 +301,7 @@ fn sign_with<R: RngCore + CryptoRng>(
     let prove_result = prove(&prove_inputs, &tree.tree_root, tree.tree_depth, tx_signable)
         .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
-    // ── 8. Construct-side balance self-verify ────────────────────────
+    // ── 7. Construct-side balance self-verify ────────────────────────
     // Run the *same* commitment-sum balance equation the daemon runs, over the
     // commitments we just built, under the identical single-home code
     // (`shekyl_ct_balance::verify_ct_balance`) with the identical terms construct
@@ -333,7 +324,7 @@ fn sign_with<R: RngCore + CryptoRng>(
         extra_outputs,
     )?;
 
-    // ── 9. Assemble SignedProofs ──────────────────────────────────────
+    // ── 8. Assemble SignedProofs ──────────────────────────────────────
     Ok(SignedProofs {
         bulletproof_plus: bp_bytes,
         commitments: out_commitments,
@@ -352,11 +343,8 @@ fn sign_with<R: RngCore + CryptoRng>(
 /// cofactor scaling): the form [`sign_transaction_with_terms`] writes into
 /// the base and [`tx_signable_for`] frames.
 fn output_commitment(out: &OutputInfo) -> [u8; 32] {
-    let mask = Zeroizing::new(
-        Scalar::from_canonical_bytes(out.commitment_mask)
-            .expect("commitment_mask is not a valid scalar"),
-    );
-    Commitment::new(*mask, out.amount.to_raw())
+    out.commitment_mask
+        .opening(out.amount.to_raw())
         .calculate()
         .compress()
         .to_bytes()
