@@ -21,6 +21,7 @@ const THREADS: Kind = Kind::Integer {
 };
 const ENDPOINT: Kind = Kind::Endpoint(EndpointRule::Any);
 const LOOPBACK: Kind = Kind::Endpoint(EndpointRule::Loopback);
+const LISTEN: Kind = Kind::Listen(EndpointRule::Loopback);
 const ENDPOINTS: Kind = Kind::List(&ENDPOINT);
 
 fn code(r: Result<Value, Fault>) -> Code {
@@ -345,4 +346,32 @@ fn a_name_is_kept_as_given_when_its_owners_rule_holds() {
         code(SHORT.parse_file(&toml::Value::Integer(1))),
         Code::ValueSyntax
     );
+}
+
+/// A listener takes an endpoint, or an address alone whose port its owner
+/// names; the address rule holds either way, and a bracket without a port,
+/// a hostname or a zero port is refused.
+#[test]
+fn a_listener_is_an_endpoint_or_an_address_alone() {
+    assert_eq!(
+        LISTEN.parse_text("127.0.0.1").unwrap(),
+        Value::Host("127.0.0.1".parse().unwrap())
+    );
+    assert_eq!(
+        LISTEN.parse_text("::1").unwrap(),
+        Value::Host("::1".parse().unwrap())
+    );
+    assert_eq!(
+        LISTEN.parse_text("127.0.0.1:11030").unwrap(),
+        Value::Endpoint("127.0.0.1:11030".parse().unwrap())
+    );
+    assert_eq!(
+        LISTEN.parse_text("127.0.0.1").unwrap().render(),
+        "127.0.0.1"
+    );
+    assert_eq!(code(LISTEN.parse_text("0.0.0.0")), Code::ValueRange);
+    assert_eq!(code(LISTEN.parse_text("0.0.0.0:11030")), Code::ValueRange);
+    assert_eq!(code(LISTEN.parse_text("127.0.0.1:0")), Code::ValueRange);
+    assert_eq!(code(LISTEN.parse_text("[::1]")), Code::ValueSyntax);
+    assert_eq!(code(LISTEN.parse_text("localhost")), Code::ValueSyntax);
 }

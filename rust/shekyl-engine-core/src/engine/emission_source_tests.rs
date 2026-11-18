@@ -656,3 +656,61 @@ async fn a_record_below_its_witness_is_not_actionable() {
         TimelineBreak::ChainRolledBack
     );
 }
+
+/// A target refusal stops the fetch. The record request is not issued:
+/// nothing answered, so there is no record to describe. An unreachable
+/// witness still asks for the record. Red edit: drop the early return in
+/// `fetch_vouched_claim_source`, and the peer check dials twice.
+#[tokio::test]
+async fn a_target_refusal_does_not_ask_for_the_record() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct Counting {
+        calls: Arc<AtomicUsize>,
+        error: RpcError,
+    }
+
+    impl Rpc for Counting {
+        fn post(
+            &self,
+            _route: &str,
+            _body: Vec<u8>,
+        ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let error = self.error.clone();
+            async move { Err(error) }
+        }
+    }
+
+    let peer = Counting {
+        calls: Arc::new(AtomicUsize::new(0)),
+        error: RpcError::PeerCheck("not a socket".into()),
+    };
+    let err = fetch_vouched_claim_source(&peer, &[7; 32])
+        .await
+        .expect_err("the peer check is the fetch's error");
+    assert!(
+        matches!(err, EmissionSourceError::Rpc(ref error) if error.fault().is_target_refusal())
+    );
+    assert_eq!(
+        peer.calls.load(Ordering::SeqCst),
+        1,
+        "the record was requested"
+    );
+
+    let down = Counting {
+        calls: Arc::new(AtomicUsize::new(0)),
+        error: RpcError::ConnectionError("refused".into()),
+    };
+    let err = fetch_vouched_claim_source(&down, &[7; 32])
+        .await
+        .expect_err("an unreachable record is still an error");
+    assert!(matches!(err, EmissionSourceError::Rpc(_)));
+    assert_eq!(
+        down.calls.load(Ordering::SeqCst),
+        2,
+        "a retryable witness still asks for the record"
+    );
+}

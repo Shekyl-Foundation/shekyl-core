@@ -806,8 +806,13 @@ where
         block_reward = produced.block_reward.to_raw(),
         "posted the template"
     );
+    // A count, never the hashes: an evicted entry may still be in its stem
+    // phase, which the log never records (`RPC_CHANNEL.md` §6.4).
     if !produced.evicted.is_empty() {
-        tracing::debug!("CEN-M10 evicted {:?}", produced.evicted);
+        tracing::debug!(
+            evicted = produced.evicted.len(),
+            "CEN-M10 evicted pool entries"
+        );
     }
     // The sink reads the body list by generation, and a reader of what was
     // posted reads the job, from this one insert. It happens before
