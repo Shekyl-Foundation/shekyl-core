@@ -1483,6 +1483,11 @@ stream of the key under `shekyl/tx-output-order-v1`, with pinned vectors
 | Emission claim | one loud reward vout and two change vouts | no: CEN-J24's reward set is the loud vouts in vout order, wherever they sit | `π` over all; the claim reads its reward's position back for the cross-check and the wire amounts |
 | Group spend | the intent's recipients, change among them | no | `π` over all |
 
+- **The test producers build the same way.** The harness spender (the
+  spends of every forged chain and scenario) and the driver's emission
+  assembly place their outputs through `BuiltSpend::build` too, so a
+  forged chain's spends are the transactions a wallet makes, `R` in
+  `tx_extra` included.
 - **Not wallet-built.** The coinbase and the genesis transaction, whose
   outputs are public by construction, take no order.
 - **An exact spend** (two outputs, no change) pads nothing here; that

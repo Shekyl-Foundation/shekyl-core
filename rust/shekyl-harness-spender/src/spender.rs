@@ -11,9 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::newest_admissible_reference;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
-use shekyl_crypto_pq::output::{
-    compute_output_key_image, construct_output, recover_combined_ss, scan_output, OutputData,
-};
+use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
+use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss, scan_output};
 #[cfg(feature = "seeded-rng")]
 use shekyl_crypto_pq::tx_key::TX_KEY_LEN;
 use shekyl_crypto_pq::TxKey;
@@ -23,16 +22,14 @@ use shekyl_curve_tree::{
 };
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
+use shekyl_tx_builder::outputs::{BuiltSpend, Payee, Recipient as Payment};
 use shekyl_tx_builder::{
     open_spend, sign_pqc_auths, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra,
     AuthSlots, InputTerm, LeafEntry, OutputInfo, OutputTerm, SpendInput, SpendLayout, TreeContext,
 };
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::tx_extra::{
-    admitted_leaf_blob, parse, pqc_kem_per_output, pqc_leaf_entries_per_output, serialize,
-    TxExtraField,
-};
+use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_kem_per_output, TxExtraField};
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::bond::PostedBond;
@@ -1086,55 +1083,29 @@ impl SpendShape<'_> {
         let tx_key = spend_tx_key(seeds.as_ref(), connecting, &key_images[0]);
         #[cfg(not(feature = "seeded-rng"))]
         let tx_key = spend_tx_key();
-        let pay = |amount: u64, index: u64| -> OutputData {
-            construct_output(
-                &tx_key,
-                &recipient.x25519_pk,
-                &recipient.ml_kem_ek,
-                &recipient.spend_public,
+        // The outputs come from the one placer every wallet-built spend
+        // uses, so the forge's spends are the transactions a wallet makes:
+        // recipient `i` lands at position `π(i)`, the order the transaction
+        // key derives (R-24), and `tx_extra` carries `R`, the KEM
+        // ciphertexts and the leaf entries in that order.
+        let payments: Vec<Payment<'_>> = amounts
+            .iter()
+            .map(|&amount| Payment {
+                payee: Payee::Single {
+                    spend_key: &recipient.spend_public,
+                    view_x25519: &recipient.x25519_pk,
+                    ml_kem_ek: &recipient.ml_kem_ek,
+                    label_plaintext: &SENTINEL_PLAINTEXT,
+                },
                 amount,
-                index,
-            )
-            .expect("construct output")
-        };
-        let paid: Vec<OutputData> = amounts
-            .iter()
-            .zip(0u64..)
-            .map(|(amount, index)| pay(*amount, index))
+            })
             .collect();
-        let mut kem_blob = Vec::new();
-        let mut leaf_blob = Vec::new();
-        for od in &paid {
-            kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
-            kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
-            leaf_blob.extend_from_slice(&od.pqc_leaf.entry_bytes());
-        }
-        assert_eq!(
-            pqc_leaf_entries_per_output(&leaf_blob)
-                .expect("whole entries")
-                .len(),
-            outputs
-        );
-        let extra = serialize(&[
-            TxExtraField::PqcKemCiphertext(kem_blob),
-            TxExtraField::PqcLeafEntries(leaf_blob),
-        ])
-        .expect("extra serializes");
-        let info = |od: &OutputData, amount: u64| OutputInfo {
-            dest_key: od.output_key,
-            amount: AtomicUnits::from_raw(amount),
-            commitment_mask: od.z,
-            enc_amount: od.enc_amount_wire(),
-            enc_label: od.enc_label_wire(),
-        };
-        let output_infos: Vec<OutputInfo> = paid
-            .iter()
-            .zip(&amounts)
-            .map(|(od, amount)| info(od, *amount))
-            .collect();
-        let output_keys: Vec<[u8; 32]> = paid.iter().map(|od| od.output_key).collect();
-        let view_tags: Vec<Option<u8>> =
-            paid.iter().map(|od| Some(od.view_tag_prefilter)).collect();
+        let built = BuiltSpend::build(&tx_key, &payments).expect("the outputs build");
+        let extra = built.extra().to_vec();
+        let output_infos: Vec<OutputInfo> =
+            built.outputs().iter().map(|o| o.info.clone()).collect();
+        let output_keys: Vec<[u8; 32]> = built.outputs().iter().map(|o| o.output_key).collect();
+        let view_tags: Vec<Option<u8>> = built.outputs().iter().map(|o| Some(o.view_tag)).collect();
 
         // Sign, then encode through the production encoder and read back.
         let extra_inputs: Vec<shekyl_wire::Input> =
