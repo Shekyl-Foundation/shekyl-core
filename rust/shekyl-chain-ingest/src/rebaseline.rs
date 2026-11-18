@@ -336,13 +336,18 @@ mod tests {
         std::fs::create_dir(&path).expect("destination is a directory");
         std::fs::write(path.path().join("occupied"), b"").expect("no rename replaces it");
         let error = publish_bytes(path.path(), b"next").expect_err("a directory is not replaced");
-        assert!(
-            matches!(
-                error.kind(),
-                std::io::ErrorKind::IsADirectory | std::io::ErrorKind::DirectoryNotEmpty
-            ),
-            "{error}"
-        );
+        // A rename over a directory with an entry is refused: on Unix as
+        // that directory; on Windows as an access denial (ERROR_ACCESS_DENIED,
+        // measured on Windows 11 23H2).
+        let refused_kinds: &[std::io::ErrorKind] = if cfg!(windows) {
+            &[std::io::ErrorKind::PermissionDenied]
+        } else {
+            &[
+                std::io::ErrorKind::IsADirectory,
+                std::io::ErrorKind::DirectoryNotEmpty,
+            ]
+        };
+        assert!(refused_kinds.contains(&error.kind()), "{error}");
         assert!(path.path().is_dir(), "the destination is untouched");
         assert!(
             siblings_of(&path).is_empty(),
