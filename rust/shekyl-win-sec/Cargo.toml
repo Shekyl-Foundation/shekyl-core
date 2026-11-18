@@ -78,7 +78,13 @@ required-features = ["test-utils"]
 # The probe suite drives real pipes under a runtime; the runtime features are
 # test-only, the `net` half is the transport's own dependency above.
 tokio = { version = "1", features = ["net", "rt", "macros"] }
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+# `NtQueryInformationFile` and `FileModeInformation`, which read a staged
+# handle's write-through mode back in a test (`replace`).
+windows-sys = { version = "0.61", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Wdk_Storage_FileSystem",
+] }
 # The rendezvous tests make their directories under a fresh temporary one.
 tempfile = "3"
 
