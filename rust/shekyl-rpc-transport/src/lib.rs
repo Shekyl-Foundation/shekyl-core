@@ -182,15 +182,13 @@ impl Rpc for DaemonTransport {
 /// Exactly one; [`Self::connect`] makes its one [`DaemonTransport`].
 #[derive(Clone)]
 pub enum DaemonTarget {
-    /// The node this account runs on this computer, over its owner's leg.
-    /// `service_rendezvous` is the service's fixed rendezvous directory
-    /// (`shekyl_process::platform::service_rendezvous`), read only to say
-    /// that this computer's node is a service.
+    /// The node this account runs on this computer, over its owner's leg
+    /// ([`local::LocalTarget::this_computer`]). The network is all a wallet
+    /// names: where this account's node and the machine's service keep
+    /// their rendezvous is this platform's to say, never the wallet's.
     ThisComputer {
         /// The wallet's network: which node's rendezvous.
         network: shekyl_network::Network,
-        /// The service's rendezvous directory, where the platform has one.
-        service_rendezvous: Option<std::path::PathBuf>,
     },
     /// A named daemon address (plaintext HTTP until RT-W12), and the SOCKS5h
     /// proxy its connections go through.
@@ -207,13 +205,9 @@ pub enum DaemonTarget {
 impl std::fmt::Debug for DaemonTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ThisComputer {
-                network,
-                service_rendezvous,
-            } => f
+            Self::ThisComputer { network } => f
                 .debug_struct("ThisComputer")
                 .field("network", network)
-                .field("service_rendezvous", service_rendezvous)
                 .finish(),
             Self::Address { url, proxy } => f
                 .debug_struct("Address")
@@ -245,12 +239,8 @@ impl DaemonTarget {
     /// call's error.
     pub async fn connect(&self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
         match self {
-            Self::ThisComputer {
-                network,
-                service_rendezvous,
-            } => {
-                let target =
-                    local::LocalTarget::this_computer(*network, service_rendezvous.as_deref());
+            Self::ThisComputer { network } => {
+                let target = local::LocalTarget::this_computer(*network);
                 Ok(DaemonTransport::ThisComputer(match timeout {
                     Some(within) => local::LocalRpc::within(target, within),
                     None => local::LocalRpc::new(target),

@@ -53,6 +53,79 @@ pub const SERVICE_RECORD_FORMAT: &str = "shekyl-service-rendezvous 2";
 /// (`%ProgramData%\shekyl\rendezvous`; Rick, 2026-11-14).
 pub const RENDEZVOUS_DIR: &str = "rendezvous";
 
+/// The service's data home's name under the platform's service parent:
+/// `/var/lib/shekyl`, `/var/db/shekyl`, `%ProgramData%\shekyl`; on Windows
+/// the service's rendezvous directory is inside it. The launch-recipe gate
+/// (`scripts/ci/check_launch_recipes.py`) reads this constant, so the
+/// packaged unit's `StateDirectory` and the FreeBSD script's prestart name
+/// the directory the daemon checks.
+pub const SERVICE_DATA_HOME: &str = "shekyl";
+
+/// Linux (`RuntimeDirectory=shekyl`). The launch-recipe gate does not
+/// read this one; the unit's `RuntimeDirectory` is that check.
+const LINUX_SERVICE_RENDEZVOUS: &str = "/run/shekyl";
+
+/// FreeBSD (`contrib/packaging/freebsd/shekyld`). `/var/run` is FreeBSD's;
+/// the base system has no `/run`. The launch-recipe gate reads this
+/// constant and requires the rc.d script to create it.
+const FREEBSD_SERVICE_RENDEZVOUS: &str = "/var/run/shekyl";
+
+/// macOS, created by the installer.
+const MACOS_SERVICE_RENDEZVOUS: &str = "/Library/Application Support/Shekyl";
+
+/// The fixed rendezvous directory for `os` (`std::env::consts::OS`), or
+/// `None` when that operating system has no fixed directory. Windows is
+/// `None` here: its directory is [`windows_service_rendezvous`].
+fn fixed_service_rendezvous(os: &str) -> Option<&'static str> {
+    match os {
+        "linux" => Some(LINUX_SERVICE_RENDEZVOUS),
+        "freebsd" => Some(FREEBSD_SERVICE_RENDEZVOUS),
+        "macos" => Some(MACOS_SERVICE_RENDEZVOUS),
+        _ => None,
+    }
+}
+
+/// Windows: `%ProgramData%\shekyl\rendezvous`, the rendezvous directory
+/// inside the service's data home (Rick, 2026-11-14): users read it, the
+/// service account alone writes it, it carries the no-read-up label and
+/// holds rendezvous files only. Unlike the other rows, the daemon creates
+/// it, with its owner, its DACL and its label set in the creating call, and
+/// refuses an existing one that differs in any of the three; that dispatcher
+/// is RT-W14's, still unbuilt, and the path is named now so the row is not
+/// a special case added later. `program_data` is the known-folder root.
+fn windows_service_rendezvous(program_data: &Path) -> PathBuf {
+    program_data.join(SERVICE_DATA_HOME).join(RENDEZVOUS_DIR)
+}
+
+/// `%ProgramData%` on Windows; `None` elsewhere.
+fn program_data() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        shekyl_win_sec::known_folder::program_data()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// The service's rendezvous directory, fixed per platform (`RPC_CHANNEL.md`
+/// §7.1): what the installer or the service manager creates on Unix, and
+/// what the daemon creates on Windows. A platform with no row has no
+/// directory, and a service start there is refused. Windows is the one
+/// derived row, in flight until RT-W14.
+///
+/// The one definition (Rick, 2026-11-18): the daemon that publishes a
+/// service's record and every client that resolves "this computer" read
+/// the directory here, so no client assembles it and none can leave it out.
+#[must_use]
+pub fn service_rendezvous() -> Option<PathBuf> {
+    if let Some(directory) = fixed_service_rendezvous(std::env::consts::OS) {
+        return Some(PathBuf::from(directory));
+    }
+    program_data().map(|dir| windows_service_rendezvous(&dir))
+}
+
 /// The rendezvous file's name in its directory: the socket on Unix, the
 /// record on Windows.
 #[must_use]
@@ -395,5 +468,45 @@ mod tests {
         } else {
             assert_eq!(account_dir(root), root);
         }
+    }
+}
+
+/// The service rendezvous rows, on every host. A `cfg!` ladder would leave
+/// FreeBSD's path unexecuted on the Linux runners, and a second copy of that
+/// ladder would stay green when both copies moved together.
+#[cfg(test)]
+mod service_directories {
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        fixed_service_rendezvous, program_data, service_rendezvous, windows_service_rendezvous,
+    };
+
+    /// Every platform's directory is the ruled one (`RPC_CHANNEL.md`
+    /// §7.1). Red edit: return another FreeBSD path from
+    /// `fixed_service_rendezvous` and this fails on a Linux runner.
+    /// Windows' row, `%ProgramData%\shekyl\rendezvous` (Rick, 2026-11-14),
+    /// is joined here without a Windows host: the dispatcher that creates
+    /// the directory is RT-W14's, still unbuilt, and the path is not dead.
+    #[test]
+    fn every_platforms_service_rendezvous_directory_is_the_ruled_one() {
+        assert_eq!(fixed_service_rendezvous("linux"), Some("/run/shekyl"));
+        assert_eq!(fixed_service_rendezvous("freebsd"), Some("/var/run/shekyl"));
+        assert_eq!(
+            fixed_service_rendezvous("macos"),
+            Some("/Library/Application Support/Shekyl")
+        );
+        assert_eq!(fixed_service_rendezvous("windows"), None);
+        assert_eq!(fixed_service_rendezvous("openbsd"), None);
+        assert_eq!(
+            windows_service_rendezvous(Path::new(r"C:\ProgramData")),
+            PathBuf::from(r"C:\ProgramData")
+                .join("shekyl")
+                .join("rendezvous")
+        );
+        let expected = fixed_service_rendezvous(std::env::consts::OS)
+            .map(PathBuf::from)
+            .or_else(|| program_data().map(|dir| windows_service_rendezvous(&dir)));
+        assert_eq!(service_rendezvous(), expected);
     }
 }

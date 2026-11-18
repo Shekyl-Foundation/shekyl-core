@@ -173,6 +173,16 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
+        "shekyl-rpc-transport",
+        "test-override",
+    ): "LocalTarget::test_override: a test node's own rendezvous directory "
+    "and service directory in place of this account's and this platform's. "
+    "Production names \"this computer\" by its network alone "
+    "(LocalTarget::this_computer, DaemonTarget::ThisComputer), so no client "
+    "can name a wrong directory or leave the service's out (Rick, "
+    "2026-11-18). Enabled from the transport's own, the CLI's, the tunnel's "
+    "and the daemon's dev edges",
+    (
         "shekyl-curve-tree",
         "test-tamper",
     ): "LeafStore::test_tamper_clear_prune_disabled and "
@@ -564,6 +574,7 @@ PERMANENT: dict[tuple[str, str], str] = {
 # the trigger is a different, nearly free thing, and it is what landed.)
 GOVERNED_OWNERS: frozenset[str] = frozenset(
     {
+        "shekyl-rpc-transport",
         "shekyl-wire",
         "shekyl-archival-retention",
         "shekyl-chain-store",

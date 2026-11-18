@@ -247,7 +247,7 @@ impl Drop for Node {
 /// "This computer"'s client, told the child's rendezvous directory: the
 /// rendezvous by the daemon's own naming (`RPC_CHANNEL.md` RT-15, §7.1).
 fn target(dir: &Path) -> LocalTarget {
-    LocalTarget::resolve(
+    LocalTarget::test_override(
         Network::Regtest,
         &Instance::Default,
         Some(&rendezvous_dir(dir)),
@@ -259,7 +259,7 @@ fn target(dir: &Path) -> LocalTarget {
 /// client resolved in the rendezvous's own directory; the reply's body, or
 /// `None` while nothing serves it.
 fn post(rendezvous: &Path, method: &str) -> Option<String> {
-    let target = LocalTarget::resolve(
+    let target = LocalTarget::test_override(
         Network::Regtest,
         &Instance::Default,
         rendezvous.parent(),

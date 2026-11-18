@@ -12,11 +12,18 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
-# One dependency (Rick, 2026-11-14): the daemon, its configuration and every
+# One dependency on every platform (Rick, 2026-11-14), and one more on
+# Windows (2026-11-18): the daemon, its configuration and every
 # client that resolves "this computer" read the names here without the RPC
 # channel's handshake stack.
 [dependencies]
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+
+[target.'cfg(windows)'.dependencies]
+# `%ProgramData%`, the root of the service's rendezvous directory on
+# Windows (`place::service_rendezvous`). A leaf: it has no workspace
+# dependency of its own, so there is no cycle (Rick, 2026-11-18).
+shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
 # The known-answer vectors are JSON with hex fields.
