@@ -35,6 +35,7 @@ shekyl-rpc-types = {}
 shekyl-rpc-transport = {}
 shekyl-spawn = {}
 shekyl-tor-status = {}
+shekyl-process = {}
 shekyl-engine-core = {}
 shekyl-engine-file = {}
 shekyl-engine-prefs = {}
