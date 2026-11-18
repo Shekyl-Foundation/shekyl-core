@@ -6,7 +6,7 @@
 
 `docs/test_vectors/MULTISIG_INTENT_V3.json` pins, for fixed intents, the
 canonical bytes and `intent_hash = Keccak-256(canonical bytes)`
-(`rust/shekyl-multisig/src/intent.rs`, `SpendIntent::to_canonical_bytes`):
+(`rust/shekyl-multisig/src/intent/mod.rs`, `SpendIntent::to_canonical_bytes`):
 
     version(1) || intent_id(32) || address_fingerprint(32) || proposer_index(1) ||
     u32(len) || signers || responder_index(1) || created_at(8) ||
