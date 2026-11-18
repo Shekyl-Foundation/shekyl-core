@@ -322,7 +322,14 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     assert_eq!(status.threads, 2);
     assert_eq!(status.address, address.encoded());
     assert_eq!(status.per_thread.len(), 2);
-    assert_eq!(status.not_lowered, 0);
+    // Where the platform has no per-thread lowering (the BSDs), every
+    // worker is counted as not lowered and still mines.
+    let refused = if shekyl_thread_priority::LOWERS_THREADS {
+        0
+    } else {
+        status.threads
+    };
+    assert_eq!(status.not_lowered, refused);
     assert!(status.rate.window <= RATE_WINDOW);
     assert_eq!(
         status.rate.hashes,

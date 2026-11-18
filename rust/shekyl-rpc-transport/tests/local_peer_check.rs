@@ -92,7 +92,8 @@ impl Drop for LowLabelled {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pipe_failing_the_peer_check_is_a_security_failure_dialled_once() {
     let dir = tempfile::tempdir().expect("a directory");
-    let target = LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path()), None);
+    let target =
+        LocalTarget::test_override(Network::Regtest, &Instance::Default, Some(dir.path()), None);
     let pipe = format!("{PIPE_PREFIX}{:032x}", u128::from(std::process::id()));
     let session = shekyl_win_sec::current_logon_sid().expect("this sign-in session");
     std::fs::write(
