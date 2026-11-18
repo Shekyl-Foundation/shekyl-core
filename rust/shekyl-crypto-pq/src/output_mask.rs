@@ -8,9 +8,9 @@
 //! The mask `z` of an output's commitment `C = z·G + amount·H` is derived in
 //! this crate ([`crate::derivation::derive_output_secrets`], a wide HKDF
 //! expansion reduced mod `ℓ`), so it is a scalar from the moment it exists.
-//! [`OutputMask`] is that scalar. [`Self::from_derived`] is the one place
-//! its bytes are read, and [`Self::opening`] is how every other crate uses
-//! it. A reader does not convert the bytes back.
+//! [`OutputMask`] is that scalar. [`OutputMask::from_derived`] is the one
+//! place its bytes are read, and [`OutputMask::opening`] is how every other
+//! crate uses it. A reader does not convert the bytes back.
 
 use std::fmt;
 

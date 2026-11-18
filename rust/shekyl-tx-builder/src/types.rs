@@ -94,10 +94,9 @@ pub struct OutputInfo {
     /// it does not read the mask's bytes.
     pub commitment_mask: OutputMask,
     /// Encrypted amount (9 bytes): `[0..8]` = amount XOR k_amount, `[8]` =
-    /// amount_tag. In process, obtainable only from
-    /// `OutputData::enc_amount_wire()`; the type's `Deserialize` impl is the
-    /// one other route, and it exists for the FFI JSON boundary where the far
-    /// side computed the encryption — see [`EncryptedOutputField`].
+    /// amount_tag. Obtainable only from an output derivation's
+    /// `enc_amount_wire()` (solo or group), so it is always a ciphertext —
+    /// see [`EncryptedOutputField`], which lists every route.
     ///
     /// Not zeroized, deliberately: this is ciphertext bound for the chain, so
     /// wiping the local copy protects nothing. The secret it was derived under
@@ -105,11 +104,10 @@ pub struct OutputInfo {
     #[zeroize(skip)]
     pub enc_amount: EncryptedOutputField,
     /// Encrypted label (9 bytes): `[0..8]` = plaintext XOR k_label, `[8]` =
-    /// label_tag; sentinel plaintext at V3.0 launch. In process, obtainable
-    /// only from `OutputData::enc_label_wire()`, so an unencrypted label
-    /// cannot be constructed on this path. The type's `Deserialize` impl is
-    /// the one other route, and it exists for the FFI JSON boundary where the
-    /// far side computed the encryption — see [`EncryptedOutputField`].
+    /// label_tag; sentinel plaintext at V3.0 launch. Obtainable only from an
+    /// output derivation's `enc_label_wire()` (solo or group), so an
+    /// unencrypted label cannot be constructed — see
+    /// [`EncryptedOutputField`], which lists every route.
     #[zeroize(skip)]
     pub enc_label: EncryptedOutputField,
 }

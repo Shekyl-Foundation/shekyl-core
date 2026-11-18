@@ -10,8 +10,7 @@
 //!
 //! The type has no public byte constructor. `OutputData` stores it (not an
 //! 8+1 pair a late accessor could re-wrap), and those fields are `pub(crate)`
-//! so a deserialized FFI-boundary value cannot be written onto a derived
-//! output. If a future edit opens any of those, every existing runtime test
+//! so a field taken from one output cannot be written onto another. If a future edit opens any of those, every existing runtime test
 //! still passes and the guarantee silently evaporates: a comment cannot fail.
 //! This test can.
 //!

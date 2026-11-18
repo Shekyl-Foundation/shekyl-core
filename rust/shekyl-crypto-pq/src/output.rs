@@ -93,8 +93,8 @@ pub struct OutputData {
     /// **`pub(crate)` is load-bearing, not stylistic.** The field *is* an
     /// [`EncryptedOutputField`], so there is no 8+1 pair a late accessor
     /// could re-wrap after a constant overwrite. Keeping it crate-private
-    /// additionally stops a deserialized (FFI-boundary) value being written
-    /// onto a derived output, and makes `OutputData` non-literal-constructible
+    /// additionally stops a field taken from one output being written onto
+    /// another, and makes `OutputData` non-literal-constructible
     /// from outside the crate (`E0451`). Read access is unaffected: see the
     /// `*_bytes()` / `*_tag()` / `*_wire()` accessors. `tests/trybuild/`
     /// attempts the remaining forgeries from outside the crate.
@@ -140,8 +140,8 @@ impl OutputData {
     /// The raw `enc_label` ciphertext, without its tag.
     ///
     /// Read-only by construction: the field behind it is `pub(crate)` so that
-    /// no code outside this crate can overwrite it with a deserialized
-    /// (FFI-boundary) value. Reading was never the hazard. Returned by value
+    /// no code outside this crate can overwrite it with another output's
+    /// field. Reading was never the hazard. Returned by value
     /// because `[u8; 8]` is `Copy` and eight bytes; assignment sites take
     /// the array, scan sites take `&` of the temporary.
     #[must_use]
@@ -169,12 +169,10 @@ impl OutputData {
 
     /// The `enc_label` wire field, assembled at construction.
     ///
-    /// This is the only way to *derive* an [`EncryptedOutputField`] for a
-    /// label, which is what makes an unencrypted one unrepresentable on the
-    /// in-process path. It is not the only way to obtain one — the type's
-    /// `Deserialize` impl rebuilds a field whose encryption the far side of
-    /// the FFI JSON boundary computed — and saying "only way to obtain" here
-    /// would repeat the incomplete enumeration this PR twice had to correct.
+    /// With the group output's own `enc_label_wire`, the only way to obtain
+    /// an [`EncryptedOutputField`] for a label, which is what makes an
+    /// unencrypted one unrepresentable; the type's own documentation lists
+    /// every route.
     #[must_use]
     pub const fn enc_label_wire(&self) -> EncryptedOutputField {
         self.enc_label
@@ -1088,7 +1086,7 @@ pub fn scan_output_recover_with_ml_kem_dk(
 ///
 /// Contains the hybrid public key (for on-chain leaf hash) and the
 /// hybrid signature. The ML-DSA secret key is derived, used, and
-/// zeroized entirely within Rust — it never crosses the FFI boundary.
+/// zeroized inside this crate; only the public key and signature leave it.
 pub struct PqcAuthSignature {
     /// Canonical hybrid public key bytes.
     pub hybrid_public_key: Vec<u8>,
@@ -1109,7 +1107,8 @@ impl std::fmt::Debug for PqcAuthSignature {
 ///
 /// Derives the output's hybrid key, signs with the hedged production
 /// nonce, and returns the canonical public key and signature. The secret
-/// key exists only for that derivation and never crosses the FFI boundary.
+/// key exists only for that derivation, inside this crate, and is wiped
+/// when it ends.
 ///
 /// `domain` is the scheme-level domain-separation string for the calling
 /// surface (SA-R-2): `SCHEME_DOMAIN_PQC_AUTH_TX` for a tx spend auth,

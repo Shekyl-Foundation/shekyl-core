@@ -1697,8 +1697,10 @@ rust/shekyl-multisig/src/
 ├── ceremony/              — the signing ceremony (§11)
 │   ├── mod.rs             — Role, CeremonyError
 │   ├── context.rs         — SigningContext (§11.5)
-│   ├── derivation.rs      — GroupOutputRecord, GroupOutputs, DerivedSpend,
-│   │                        InputContext, UnsignedSpend (§9.5, §11.5)
+│   ├── derivation/        — GroupOutputRecord, GroupOutputs, DerivedSpend,
+│   │   │                    InputContext, UnsignedSpend (§9.5, §11.5)
+│   │   ├── mod.rs
+│   │   └── tests.rs
 │   ├── files.rs           — the bodies, Authenticated<B>, import (§11.1,
 │   │                        wire format §3.1)
 │   ├── nonce.rs           — HeldNonce, HeldNonceStore, ConsumedNonce,
@@ -1713,7 +1715,11 @@ rust/shekyl-multisig/src/
 │   │   ├── responder.rs   — Responder, ResponderInput
 │   │   └── cosigner.rs    — Cosigner
 │   └── spend_paths.rs     — SpendPaths, SpendPathsError (§11.5)
-├── intent.rs              — SpendIntent v2, canonical serialization (§9)
+├── intent/                — SpendIntent v3, canonical serialization (§9)
+│   ├── mod.rs
+│   ├── payee.rs           — IntentPayee: who the intent pays, by recipient
+│   │                        index (wire format §2.3)
+│   └── tests.rs
 ├── envelope.rs            — the ceremony file: seal as a member, trial-decrypt
 │                            import, the plaintext codec (§12.1)
 ├── messages.rs            — the message-type discriminants (§12.2)
