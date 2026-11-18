@@ -77,10 +77,7 @@ impl NodeLeg {
         if let Some(leg) = service_console(network, request)? {
             return Ok(leg);
         }
-        Ok(Self::Owner(LocalTarget::this_computer(
-            network,
-            shekyl_process::platform::service_rendezvous().as_deref(),
-        )))
+        Ok(Self::Owner(LocalTarget::this_computer(network)))
     }
 
     /// One call of method `M`.

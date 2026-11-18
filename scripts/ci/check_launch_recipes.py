@@ -17,7 +17,7 @@ Five checks over an enumerated set of files:
    the paths systemd creates and the paths the daemon writes are one pair,
    not two that happen to agree today. A `--service` unit's data home (its
    `--data-dir`, or else the daemon's default: `SERVICE_DATA_HOME` in
-   `rust/shekyl-daemon-config/src/paths.rs` under `LINUX_SERVICE_PARENT`
+   `rust/shekyl-rpc-rendezvous/src/place.rs` under `LINUX_SERVICE_PARENT`
    in `rust/shekyl-process/src/platform.rs`) is `/var/lib/<StateDirectory>`
    at `StateDirectoryMode=0700`, the mode the daemon checks.
 3. Every key the fleet's generators write into a node's TOML
@@ -40,7 +40,7 @@ Five checks over an enumerated set of files:
    `FREEBSD_SERVICE_PARENT`, made at mode 0700 (a `--data-dir`, when one
    is given, names it); the log directory is mode 0750; and the rendezvous
    directory is the path of `FREEBSD_SERVICE_RENDEZVOUS` in
-   `rust/shekyl-process/src/platform.rs`, at the shipped unit's
+   `rust/shekyl-rpc-rendezvous/src/place.rs`, at the shipped unit's
    `RuntimeDirectoryMode`. daemon(8) is not passed
    `-r` or `-R`: FreeBSD 14 restarts every termination under those flags,
    including a clean exit. The script's `restart_seconds` equals the
@@ -74,12 +74,15 @@ from pathlib import Path
 
 TABLE_FRAGMENT = "docs/generated/shekyld_options.md"
 PLATFORM_RS = "rust/shekyl-process/src/platform.rs"
-PATHS_RS = "rust/shekyl-daemon-config/src/paths.rs"
-# The constant `service_rendezvous()` returns on FreeBSD. The gate reads
-# the paths from the source so the launchers and the daemon cannot diverge.
+# The service's rendezvous rows and its data home's name, defined once for
+# the daemon and every client (`shekyl_rpc_rendezvous::service_rendezvous`).
+PLACE_RS = "rust/shekyl-rpc-rendezvous/src/place.rs"
+# The constant `service_rendezvous()` returns on FreeBSD (in PLACE_RS). The
+# gate reads the paths from the source so the launchers and the daemon
+# cannot diverge.
 FREEBSD_RENDEZVOUS_CONST = "FREEBSD_SERVICE_RENDEZVOUS"
 # The parents `service_parent()` returns on Linux and FreeBSD (in
-# PLATFORM_RS), and the data home's leaf under them (in PATHS_RS).
+# PLATFORM_RS), and the data home's leaf under them (in PLACE_RS).
 LINUX_PARENT_CONST = "LINUX_SERVICE_PARENT"
 FREEBSD_PARENT_CONST = "FREEBSD_SERVICE_PARENT"
 DATA_HOME_CONST = "SERVICE_DATA_HOME"
@@ -536,17 +539,17 @@ def check(
     if len(live) < 10:
         return [f"{TABLE_FRAGMENT} names {len(live)} rows — the fragment or the pattern is wrong"]
     sources: dict[str, str] = {}
-    for rel in (PLATFORM_RS, PATHS_RS):
+    for rel in (PLATFORM_RS, PLACE_RS):
         try:
             sources[rel] = (repo / rel).read_text(encoding="utf-8")
         except OSError as e:
             return [f"cannot read {rel}: {e}"]
     constants: dict[str, str] = {}
     for rel, name in (
-        (PLATFORM_RS, FREEBSD_RENDEZVOUS_CONST),
+        (PLACE_RS, FREEBSD_RENDEZVOUS_CONST),
         (PLATFORM_RS, LINUX_PARENT_CONST),
         (PLATFORM_RS, FREEBSD_PARENT_CONST),
-        (PATHS_RS, DATA_HOME_CONST),
+        (PLACE_RS, DATA_HOME_CONST),
     ):
         value = string_constant(sources[rel], name)
         if value is None:
@@ -685,6 +688,13 @@ def selftest() -> int:
         'const FREEBSD_SERVICE_PARENT: &str = "/var/db";\n'
     )
     paths_ok = 'const SERVICE_DATA_HOME: &str = "shekyl";\n'
+
+    def place_of(platform: str) -> str:
+        """The rendezvous crate's fixture for a platform fixture: the
+        rendezvous row as that fixture spells it, and the data home's name.
+        One fixture text carries a case's edit to either file."""
+        return platform + paths_ok
+
     rc_cases = [
         ("an agreeing rc.d script passes", rc_ok, platform_ok, unit_ok, []),
         ("a dead flag on the rc.d command line is named", rc_ok.replace("--log-file", "--detach --log-file"), platform_ok, unit_ok, ["`--detach`, which is not a row"]),
@@ -717,8 +727,8 @@ def selftest() -> int:
         (repo / "u").mkdir()
         (repo / "rust" / "shekyl-process" / "src").mkdir(parents=True)
         (repo / PLATFORM_RS).write_text(platform_ok)
-        (repo / "rust" / "shekyl-daemon-config" / "src").mkdir(parents=True)
-        (repo / PATHS_RS).write_text(paths_ok)
+        (repo / "rust" / "shekyl-rpc-rendezvous" / "src").mkdir(parents=True)
+        (repo / PLACE_RS).write_text(place_of(platform_ok))
         shipped = "u/shipped.service"
         for title, unit, fleet, gen, expect in cases:
             (repo / "u" / "shipped.service").write_text(unit)
@@ -734,6 +744,7 @@ def selftest() -> int:
             (repo / "u" / "gen.sh").write_text(gen_ok)
             (repo / "u" / "rc").write_text(script)
             (repo / PLATFORM_RS).write_text(platform)
+            (repo / PLACE_RS).write_text(place_of(platform))
             errors = check(repo, ["u/shipped.service", "u/fleet@.service"], {"u/gen.sh": ["u/fleet@.service"]}, ["u/rc"], shipped)
             ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
             print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
@@ -789,6 +800,7 @@ def selftest() -> int:
         (repo / "rust" / "shekyl-rpc-tunnel" / "src").mkdir(parents=True)
         (repo / TUNNEL_TABLE_RS).write_text(t_table)
         (repo / PLATFORM_RS).write_text(platform_ok)
+        (repo / PLACE_RS).write_text(place_of(platform_ok))
         for title, unit, rc, expect in tunnel_cases:
             (repo / "u" / "tunnel.service").write_text(unit)
             (repo / "u" / "tunnel-rc").write_text(rc)

@@ -5307,6 +5307,7 @@ dependencies = [
  "serde_json",
  "shekyl-crypto-hash",
  "shekyl-network",
+ "shekyl-win-sec",
 ]
 
 [[package]]
@@ -5347,6 +5348,7 @@ dependencies = [
  "shekyl-rpc-grants",
  "shekyl-rpc-rendezvous",
  "shekyl-rpc-stream",
+ "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",

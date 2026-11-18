@@ -2294,6 +2294,7 @@ name = "shekyl-rpc-rendezvous"
 version = "3.1.0"
 dependencies = [
  "shekyl-crypto-hash",
+ "shekyl-win-sec",
 ]
 
 [[package]]

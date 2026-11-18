@@ -617,6 +617,7 @@ cleared = [
   { through = "2fb779723ea04ce06f65d3547c51f3e89661de17", reason = "The Android target_os gates are deleted. Linux still calls setpriority with SERVING_NICE 19, and the serving runtime's Linux test still reads that value back. The BA-T5 session 3 T1 capture still prices this tree." },
   { through = "b0cbd52d721ca83c78271234e335e9e138ea1b00", reason = "runtime.rs changes only a test: the accept-loop test names the receipt width on signer_at_synced_tip. SERVING_NICE and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
   { through = "6ecc1155ec178d61e538e359591e50dcbc21a697", reason = "runtime.rs changes only a test: the accept-loop test calls signer_at_synced_tip without a width. SERVING_NICE and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
+  { through = "be9d8ab307dd7084cd98afe86228d6c754b509b6", reason = "Adds LOWERS_THREADS, a constant set in the same cfg arms that pick the call, and a test of it. The lowering call, SERVING_NICE 19 and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
 ]
 
 [[constant]]

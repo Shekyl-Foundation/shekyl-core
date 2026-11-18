@@ -198,7 +198,6 @@ impl ReplArgs {
         }
         Ok(DaemonTarget::ThisComputer {
             network: parse_network(self.network_name())?,
-            service_rendezvous: shekyl_process::platform::service_rendezvous(),
         })
     }
 
