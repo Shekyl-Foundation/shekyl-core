@@ -727,6 +727,23 @@ fn create_exclusive(path: &Path) -> io::Result<File> {
     }
 }
 
+/// Not yet converted to the tree's one replace, which Rick ruled every
+/// file replace goes through (2026-11-18), for two reasons found when
+/// converting it:
+///
+/// - the one replace stages `<name>.new`, and `cached-microdescs`'s staged
+///   name is `cached-microdescs.new`, itself one of [`FILES`] (Tor's
+///   microdescriptor journal): staging the store would remove the journal
+///   as a leftover, and a crash would leave store bytes under the
+///   journal's name for the next copy to pick up;
+/// - on Windows a cache file is created with an owner-only protected
+///   descriptor and no integrity label, which no `Access` kind reproduces
+///   (`OwnerOnly` adds the no-read-up label, `Private` inherits).
+// CLIPPY: disallowed_methods — not yet on the one replace, for the reasons above.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the Tor directory cache's staged name collides with cached-microdescs.new and its Windows descriptor has no Access kind; held for a ruling, see the doc above"
+)]
 fn replace_name(from: &Path, to: &Path, durability: Durability) -> io::Result<()> {
     #[cfg(not(windows))]
     {

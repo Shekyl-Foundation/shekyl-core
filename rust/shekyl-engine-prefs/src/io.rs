@@ -424,6 +424,11 @@ fn quarantine_if_present(toml_path: &Path, hmac_path: &Path) -> io::Result<Vec<P
             continue;
         }
         let target = pick_quarantine_target(src, ts)?;
+        // CLIPPY: disallowed_methods — a tampered file moved aside, not a replace.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "moves a tampered file aside to a quarantine name chosen not to exist; not a file replace"
+        )]
         fs::rename(src, &target)?;
         out.push(target);
     }

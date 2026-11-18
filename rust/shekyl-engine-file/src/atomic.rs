@@ -283,6 +283,11 @@ mod tests {
     /// std loses it, and rotation would be broken again. The POSIX arms go red
     /// if a mandatory lock ever appears there.
     #[test]
+    // CLIPPY: disallowed_methods — test support.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test support: pins how persist and std's rename behave over a locked target, the behaviour the one replace is chosen against"
+    )]
     fn replacing_a_locked_target_is_platform_dependent() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("x.keys");

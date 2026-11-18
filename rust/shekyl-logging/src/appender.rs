@@ -327,6 +327,11 @@ impl SizeRollingWriter {
         let suffix = utc_rotation_suffix();
         let rotated = pick_nonexistent_rotated_path(&self.dir, &self.prefix, &suffix)?;
 
+        // CLIPPY: disallowed_methods — log rotation, not a replace.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "log rotation: moves the live log to a rotated name chosen not to exist; not a file replace"
+        )]
         fs::rename(&live, &rotated)?;
 
         // From here, `self.file` still points at the renamed inode on

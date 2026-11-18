@@ -1,0 +1,22 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+# A file is replaced in one place (Rick, 2026-11-18):
+# `shekyl_os_account::private_file::replace`, or a `StagedWrite` when the
+# caller needs the staged file between the write and the rename. On Windows
+# that goes through `shekyl_win_sec::replace`, the one Windows file replace,
+# which waits for a scanner that holds either file and falls back on FAT.
+# `std::fs::rename` and tempfile's persist family replace a file without
+# either, so they are refused here. A rename that is not a file replace
+# (log rotation, moving a file or directory aside, test support, a directory
+# moved onto a name that must not exist, os-account's own Unix rename)
+# carries `#[allow(clippy::disallowed_methods, reason = "...")]` naming why.
+disallowed-methods = [
+    { path = "std::fs::rename", reason = "replace a file through shekyl_os_account::private_file::replace or StagedWrite (Rick, 2026-11-18)" },
+    { path = "tempfile::NamedTempFile::persist", reason = "replace a file through shekyl_os_account::private_file::replace or StagedWrite (Rick, 2026-11-18)", allow-invalid = true },
+    { path = "tempfile::NamedTempFile::persist_noclobber", reason = "replace a file through shekyl_os_account::private_file::replace or StagedWrite (Rick, 2026-11-18)", allow-invalid = true },
+    { path = "tempfile::TempPath::persist", reason = "replace a file through shekyl_os_account::private_file::replace or StagedWrite (Rick, 2026-11-18)", allow-invalid = true },
+    { path = "tempfile::TempPath::persist_noclobber", reason = "replace a file through shekyl_os_account::private_file::replace or StagedWrite (Rick, 2026-11-18)", allow-invalid = true },
+]
