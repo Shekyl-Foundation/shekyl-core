@@ -305,8 +305,8 @@ fn target(dir: &Path) -> LocalTarget {
         Network::Regtest,
         &Instance::Default,
         Some(&rendezvous_dir(dir)),
+        None,
     )
-    .expect("a named directory")
 }
 
 fn log(dir: &Path, data: &str) -> String {
@@ -372,9 +372,9 @@ fn ready_then_owner_calls_and_the_close_stops_it() {
     let ours = ready_or_panic(&mut daemon, ours, dir.path(), "data");
     let target = target(dir.path());
     assert!(
-        target.path().exists(),
+        target.path().expect("a named directory").exists(),
         "the ready line came before the rendezvous {}",
-        target.path().display()
+        target.path().expect("a named directory").display()
     );
     let status = target
         .call::<shekyl_rpc_client::wire::MineStatus>(&shekyl_rpc_types::kinds::NoParams)
@@ -401,13 +401,85 @@ fn ready_then_owner_calls_and_the_close_stops_it() {
         evidence(dir.path(), "data")
     );
     assert!(
-        !target.path().exists(),
+        !target.path().expect("a named directory").exists(),
         "a clean stop removes the rendezvous"
     );
     assert!(
         matches!(target.dial(), Err(LocalFault::NotRunning { .. })),
         "{:?}",
         target.dial().err()
+    );
+}
+
+/// **Test 7: a half-close stops it, and end of stream means it is gone.**
+/// The parent shuts down its writing half and keeps reading. The daemon
+/// reads end of stream and stops, as on a full close. The parent's read
+/// returns end of stream only when the daemon's main has returned: at that
+/// read the rendezvous is already removed and the data directory's lock is
+/// free; the exit follows. A launcher starts its next
+/// daemon on that read, with no timer. Red edit: drop `_owning_to_exit` in
+/// `run::main_loading`; the read then returns when the watch sees the
+/// close, at the start of the stop, with the rendezvous still there.
+#[test]
+fn a_half_close_stops_it_and_end_of_stream_means_it_is_gone() {
+    const NAME: &str = "a_half_close_stops_it_and_end_of_stream_means_it_is_gone";
+    run_role_if_requested();
+    let dir = workdir();
+    let (mut daemon, ours) = launch(NAME, dir.path(), "data", &[]);
+    let mut ours = ready_or_panic(&mut daemon, ours, dir.path(), "data");
+    let target = target(dir.path());
+    let rendezvous = target
+        .path()
+        .expect("the test names its rendezvous directory")
+        .to_path_buf();
+    assert!(rendezvous.exists(), "ready means the rendezvous exists");
+
+    ours.shutdown(std::net::Shutdown::Write)
+        .expect("the parent's writing half");
+    match ours.set_read_timeout(Some(STOP_ARRIVES)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {}
+        Err(e) => panic!("a read bound: {e}"),
+    }
+    let mut byte = [0u8; 1];
+    let read = std::io::Read::read(&mut ours, &mut byte);
+    // Taken at the read's return, before anything else can pass.
+    let rendezvous_gone = !rendezvous.exists();
+    let lock_free = shekyl_daemon_config::Lock::take(&dir.path().join("data")).is_ok();
+    match read {
+        Ok(0) => {}
+        other => {
+            reap(&mut daemon);
+            panic!(
+                "the parent's read after its half-close: {other:?}\n{}",
+                evidence(dir.path(), "data")
+            )
+        }
+    }
+    assert!(
+        rendezvous_gone,
+        "end of stream came while the rendezvous was still there\n{}",
+        evidence(dir.path(), "data")
+    );
+    assert!(
+        lock_free,
+        "end of stream came while the data directory was still locked\n{}",
+        evidence(dir.path(), "data")
+    );
+    // Nothing of the stop is left: the two readings above are what a
+    // launcher relies on. The exit itself follows.
+    let exit = ended_within(&mut daemon, STOP_ARRIVES).unwrap_or_else(|| {
+        reap(&mut daemon);
+        panic!(
+            "the daemon did not exit after end of stream\n{}",
+            evidence(dir.path(), "data")
+        )
+    });
+    assert!(exit.success(), "{exit}\n{}", evidence(dir.path(), "data"));
+    assert!(
+        log(dir.path(), "data").contains(CLOSED),
+        "{}",
+        evidence(dir.path(), "data")
     );
 }
 
@@ -456,7 +528,7 @@ fn assert_stopped_after_the_parent(dir: &Path) {
     let target = target(dir);
     let stopped = holds_within(STOP_ARRIVES, || {
         log(dir, "data").contains(CLOSED)
-            && !target.path().exists()
+            && !target.path().expect("a named directory").exists()
             && shekyl_daemon_config::Lock::take(&dir.join("data")).is_ok()
     });
     assert!(

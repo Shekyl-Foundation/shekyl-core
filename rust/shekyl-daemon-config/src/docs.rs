@@ -121,6 +121,7 @@ fn kind_text(kind: &Kind) -> String {
             with_keywords(&base, keywords)
         }
         Kind::Endpoint(_) => "IP endpoint (`address:port`)".to_owned(),
+        Kind::Listen(_) => "IP address, with or without a port (`address[:port]`)".to_owned(),
         Kind::PeerEndpoint(PeerRule::Any) => "IP endpoint or v3 onion with a port".to_owned(),
         Kind::PeerEndpoint(PeerRule::OnionOnly) => "v3 onion with a port".to_owned(),
         Kind::Address => "Shekyl address".to_owned(),
@@ -197,6 +198,7 @@ fn example_value(kind: &Kind, default: &Default) -> String {
         .to_owned(),
         Kind::Endpoint(EndpointRule::GlobalUnicast) => "\"<public-address>:11021\"".to_owned(),
         Kind::Endpoint(_) => "\"127.0.0.1:11029\"".to_owned(),
+        Kind::Listen(_) => "\"127.0.0.1\"".to_owned(),
         Kind::PeerEndpoint(PeerRule::Any) => "\"203.0.113.10:11021\"".to_owned(),
         Kind::PeerEndpoint(PeerRule::OnionOnly) => "\"<56 characters>.onion:11021\"".to_owned(),
         Kind::Address => "\"<address>\"".to_owned(),

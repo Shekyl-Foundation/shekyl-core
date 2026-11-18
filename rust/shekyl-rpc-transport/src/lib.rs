@@ -138,6 +138,137 @@ enum Authentication {
     },
 }
 
+/// A wallet's one daemon target (`RPC_CHANNEL.md` RT-15): "this computer",
+/// the owner's leg of the node this account runs, or a named address over
+/// HTTP until RT-W12. A client holds exactly one: it connects to it or says
+/// why it cannot, and never falls back to the other.
+#[derive(Clone, Debug)]
+pub enum DaemonTransport {
+    /// "This computer": the owner's socket or pipe ([`local::LocalRpc`]).
+    ThisComputer(local::LocalRpc),
+    /// A named address.
+    Address(HttpRpc),
+}
+
+impl From<HttpRpc> for DaemonTransport {
+    fn from(rpc: HttpRpc) -> Self {
+        Self::Address(rpc)
+    }
+}
+
+impl From<local::LocalRpc> for DaemonTransport {
+    fn from(rpc: local::LocalRpc) -> Self {
+        Self::ThisComputer(rpc)
+    }
+}
+
+impl Rpc for DaemonTransport {
+    fn post(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+    ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
+        async move {
+            match self {
+                Self::ThisComputer(rpc) => rpc.post(route, body).await,
+                Self::Address(rpc) => rpc.post(route, body).await,
+            }
+        }
+    }
+}
+
+/// What a wallet is configured to reach (`RPC_CHANNEL.md` RT-15): "this
+/// computer" when no `daemon-address` is given, otherwise the address named.
+/// Exactly one; [`Self::connect`] makes its one [`DaemonTransport`].
+#[derive(Clone)]
+pub enum DaemonTarget {
+    /// The node this account runs on this computer, over its owner's leg.
+    /// `service_rendezvous` is the service's fixed rendezvous directory
+    /// (`shekyl_process::platform::service_rendezvous`), read only to say
+    /// that this computer's node is a service.
+    ThisComputer {
+        /// The wallet's network: which node's rendezvous.
+        network: shekyl_network::Network,
+        /// The service's rendezvous directory, where the platform has one.
+        service_rendezvous: Option<std::path::PathBuf>,
+    },
+    /// A named daemon address (plaintext HTTP until RT-W12), and the SOCKS5h
+    /// proxy its connections go through.
+    Address {
+        /// The daemon's base URL; may carry digest credentials.
+        url: String,
+        /// The SOCKS5h proxy; `None` is direct.
+        proxy: Option<String>,
+    },
+}
+
+/// Manual: an address may carry digest credentials in its authority, so it
+/// renders through [`redacted_endpoint`], as the proxy does.
+impl std::fmt::Debug for DaemonTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ThisComputer {
+                network,
+                service_rendezvous,
+            } => f
+                .debug_struct("ThisComputer")
+                .field("network", network)
+                .field("service_rendezvous", service_rendezvous)
+                .finish(),
+            Self::Address { url, proxy } => f
+                .debug_struct("Address")
+                .field("url", &redacted_endpoint(url))
+                .field("proxy", &proxy.as_deref().map(redacted_endpoint))
+                .finish(),
+        }
+    }
+}
+
+impl DaemonTarget {
+    /// A named address, dialled directly (no proxy).
+    #[must_use]
+    pub fn address(url: impl Into<String>) -> Self {
+        Self::Address {
+            url: url.into(),
+            proxy: None,
+        }
+    }
+
+    /// This target's transport, each call bounded by `timeout`, or by the
+    /// transport's default when `None`.
+    ///
+    /// # Errors
+    ///
+    /// A named address this transport cannot dial (see
+    /// [`HttpRpc::with_proxy`]). "This computer" does not fail here: a node
+    /// that is not running, a service, or a failed peer check is the first
+    /// call's error.
+    pub async fn connect(&self, timeout: Option<Duration>) -> Result<DaemonTransport, RpcError> {
+        match self {
+            Self::ThisComputer {
+                network,
+                service_rendezvous,
+            } => {
+                let target =
+                    local::LocalTarget::this_computer(*network, service_rendezvous.as_deref());
+                Ok(DaemonTransport::ThisComputer(match timeout {
+                    Some(within) => local::LocalRpc::within(target, within),
+                    None => local::LocalRpc::new(target),
+                }))
+            }
+            Self::Address { url, proxy } => Ok(DaemonTransport::Address(
+                HttpRpc::with_options(
+                    url.clone(),
+                    timeout.unwrap_or(DEFAULT_TIMEOUT),
+                    proxy.clone(),
+                )
+                .await
+                .map_err(RpcError::from)?,
+            )),
+        }
+    }
+}
+
 /// An HTTP(S) transport for the RPC.
 ///
 /// Requires tokio.
@@ -286,6 +417,19 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
         credentials,
         tls,
     })
+}
+
+/// A daemon address as an operator types it (`daemon-address`, including the
+/// address a service refusal tells them to set). A scheme-less `host:port`
+/// — `127.0.0.1:11030`, `[::1]:11030` — is `http://` plus that text. A URL
+/// is itself. Startup validation then sees one shape.
+#[must_use]
+pub fn daemon_address_url(address: &str) -> String {
+    if address.contains("://") {
+        address.to_owned()
+    } else {
+        format!("http://{address}")
+    }
 }
 
 /// Validate a daemon URL and optional proxy **offline** — every construction
@@ -964,6 +1108,24 @@ mod tests {
             message.contains("`pow`") && message.contains("missing"),
             "{message}"
         );
+    }
+
+    /// A scheme-less address, including a bracketed IPv6 endpoint, is the
+    /// `http://` URL validation accepts. Red edit: leave the text unchanged
+    /// in `daemon_address_url`, and both bare forms fail the shape check.
+    #[test]
+    fn a_bare_daemon_address_is_an_http_url() {
+        assert_eq!(
+            daemon_address_url("127.0.0.1:11030"),
+            "http://127.0.0.1:11030"
+        );
+        assert_eq!(daemon_address_url("[::1]:11030"), "http://[::1]:11030");
+        assert_eq!(
+            daemon_address_url("http://127.0.0.1:11030"),
+            "http://127.0.0.1:11030"
+        );
+        validate_endpoint(&daemon_address_url("127.0.0.1:11030"), None).expect("ipv4");
+        validate_endpoint(&daemon_address_url("[::1]:11030"), None).expect("ipv6");
     }
 
     /// `validate_endpoint` is the offline startup gate: well-formed

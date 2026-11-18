@@ -51,11 +51,11 @@ where
     P: PendingTxEngine,
 {
     pub(super) engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
-    /// The daemon address serving derives its shard set over — threaded from
+    /// The daemon target serving derives its shard set over — threaded from
     /// the embedder at driver start (`into_shared` / `start_cadence`), the
     /// same "the endpoint is the caller's" shape `start_serving_if_staker`
     /// itself documents.
-    pub(super) daemon_address: String,
+    pub(super) daemon: shekyl_rpc_transport::DaemonTarget,
     pub(super) slot: ServingSlot,
 }
 
@@ -81,7 +81,7 @@ where
 
     fn fire(&mut self, _tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let weak = Weak::clone(&self.engine);
-        let address = self.daemon_address.clone();
+        let daemon = self.daemon.clone();
         let slot = Arc::clone(&self.slot);
         Box::pin(async move {
             // Liveness under a brief lock: a live task is the no-op fire; a
@@ -104,7 +104,7 @@ where
             let Some(engine) = weak.upgrade() else {
                 return;
             };
-            match Engine::start_serving_if_staker(engine, &address).await {
+            match Engine::start_serving_if_staker(engine, &daemon).await {
                 Ok(Some(handle)) => {
                     *slot.lock().expect("serving slot lock") = Some(handle);
                 }

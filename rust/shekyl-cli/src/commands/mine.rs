@@ -351,8 +351,7 @@ mod tests {
     #[test]
     fn a_loopback_daemon_is_not_reminded() {
         let daemon = crate::daemon::DaemonClient::new(
-            "http://127.0.0.1:18081",
-            None,
+            shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:18081"),
             None,
             Network::Mainnet,
         )
@@ -371,8 +370,7 @@ mod tests {
     #[test]
     fn a_remote_daemon_is_reminded_and_mining_still_starts() {
         let remote = crate::daemon::DaemonClient::new(
-            "http://203.0.113.5:18081",
-            None,
+            shekyl_rpc_transport::DaemonTarget::address("http://203.0.113.5:18081"),
             None,
             Network::Mainnet,
         )
@@ -402,8 +400,7 @@ mod tests {
             ),
         ]);
         let daemon = crate::daemon::DaemonClient::new(
-            &format!("http://{address}"),
-            None,
+            shekyl_rpc_transport::DaemonTarget::address(format!("http://{address}")),
             None,
             Network::Mainnet,
         )
@@ -445,8 +442,7 @@ mod tests {
             ),
         ]);
         let daemon = crate::daemon::DaemonClient::new(
-            &format!("http://{address}"),
-            None,
+            shekyl_rpc_transport::DaemonTarget::address(format!("http://{address}")),
             None,
             Network::Mainnet,
         )
@@ -469,8 +465,7 @@ mod tests {
             shekyl_rpc_transport::json_rpc_result_body(&status),
         )]);
         let daemon = crate::daemon::DaemonClient::new(
-            &format!("http://{address}"),
-            None,
+            shekyl_rpc_transport::DaemonTarget::address(format!("http://{address}")),
             None,
             Network::Mainnet,
         )

@@ -175,9 +175,9 @@ where
     /// Start the serving host iff this wallet is a staker with an active persona.
     pub async fn start_serving_if_staker(
         engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
-        daemon_address: &str,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
     ) -> Result<Option<ServingHandle>, ServingStartError> {
-        Engine::start_serving_if_staker(engine, daemon_address).await
+        Engine::start_serving_if_staker(engine, daemon).await
     }
 }
 

@@ -38,7 +38,7 @@ use shekyl_units::{AtomicUnits, AtomicUnitsString};
 use crate::error::WalletRpcError;
 use crate::lifecycle::make_daemon;
 use crate::params::{parse_hex32, parse_optional_object, parse_required_object};
-use crate::tenant::{require_open_engine, DaemonEndpoint, TenantState};
+use crate::tenant::{require_open_engine, DaemonTarget, TenantState};
 use crate::types::{
     CheckReserveProofResult, CheckTxProofResult, GetReserveProofResult, GetTxProofResult,
     TxProofOutputView,
@@ -235,11 +235,9 @@ pub(crate) async fn check_reserve_proof(
 
 /// Read the tenant's network / daemon binding without requiring an open
 /// wallet (the `check_*` methods are wallet-less by contract). The full
-/// [`DaemonEndpoint`] (address + proxy) travels together so the check
+/// [`DaemonTarget`] (address + proxy) travels together so the check
 /// dial keeps the server's proxy posture.
-async fn network_and_daemon(
-    tenants: &tokio::sync::Mutex<TenantState>,
-) -> (Network, DaemonEndpoint) {
+async fn network_and_daemon(tenants: &tokio::sync::Mutex<TenantState>) -> (Network, DaemonTarget) {
     let state = tenants.lock().await;
     (state.network, state.daemon.clone())
 }
@@ -369,8 +367,8 @@ mod tests {
         let tenants = tokio::sync::Mutex::new(TenantState::new(
             dir.path().to_path_buf(),
             Network::Testnet,
-            DaemonEndpoint {
-                address: "http://127.0.0.1:1".to_string(),
+            DaemonTarget::Address {
+                url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
         ));

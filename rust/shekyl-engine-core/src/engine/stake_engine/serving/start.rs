@@ -140,7 +140,7 @@ where
     /// host is up either way.
     pub async fn start_serving_if_staker(
         self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
-        daemon_address: &str,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
     ) -> Result<Option<ServingHandle>, ServingStartError> {
         // Brief read borrow: clone the spawn inputs. Filesystem work stays
         // outside this lock — `tor_service_config` creates and chmods a
@@ -205,10 +205,9 @@ where
 
         // ① local posture. `LocalNodeRpc` refuses a non-loopback URL by
         // construction, so the refusal below is the type's, not a check here.
-        let claim_rpc =
-            crate::engine::prpc::LocalNodeRpc::new(daemon_address.to_owned(), CLAIM_SOURCE_TIMEOUT)
-                .await
-                .map_err(|e| ServingStartError::DaemonNotLoopback(Box::new(e)))?;
+        let claim_rpc = crate::engine::prpc::LocalNodeRpc::new(daemon, CLAIM_SOURCE_TIMEOUT)
+            .await
+            .map_err(|e| ServingStartError::DaemonNotLoopback(Box::new(e)))?;
 
         // The `SF-D5` gate's height (`WSS-24`), on the same loopback transport,
         // cloned rather than re-derived: one construction, one loopback proof,
@@ -310,10 +309,12 @@ mod tests {
     async fn start_serving_if_staker_is_none_for_a_non_staker() {
         let (_tmp, engine) = non_staker_engine();
         let arc = Arc::new(RwLock::new(engine));
-        let started =
-            Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1")
-                .await
-                .expect("non-staker auto-start must not error");
+        let started = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        )
+        .await
+        .expect("non-staker auto-start must not error");
         assert!(started.is_none(), "a non-staker gets no serving host");
         assert!(
             !arc.read().await.open_slots.serving.is_claimed(),
@@ -325,10 +326,12 @@ mod tests {
     async fn an_idle_staker_gets_no_host_and_does_not_claim_the_slot() {
         let (_tmp, engine) = staker_engine(3).await;
         let arc = Arc::new(RwLock::new(engine));
-        let started =
-            Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1")
-                .await
-                .expect("idle staker is Ok(None), not an error");
+        let started = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        )
+        .await
+        .expect("idle staker is Ok(None), not an error");
         assert!(
             started.is_none(),
             "nothing to serve until a persona is active"
@@ -344,9 +347,11 @@ mod tests {
         let (_tmp, engine) = staker_engine(3).await;
         activate(&engine, 3).await;
         let arc = Arc::new(RwLock::new(engine));
-        let Err(err) =
-            Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://example.com:18081")
-                .await
+        let Err(err) = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://example.com:18081"),
+        )
+        .await
         else {
             panic!("non-loopback must fail closed");
         };
@@ -372,14 +377,20 @@ mod tests {
         let (_tmp, engine) = staker_engine(3).await;
         activate(&engine, 3).await;
         let arc = Arc::new(RwLock::new(engine));
-        let first =
-            Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1")
-                .await
-                .expect("first start")
-                .expect("active persona starts a host");
+        let first = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        )
+        .await
+        .expect("first start")
+        .expect("active persona starts a host");
         assert!(arc.read().await.open_slots.serving.is_claimed());
 
-        match Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1").await
+        match Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        )
+        .await
         {
             Err(ServingStartError::AlreadyRunning) => {}
             Ok(_) => panic!("expected AlreadyRunning, got a second handle"),

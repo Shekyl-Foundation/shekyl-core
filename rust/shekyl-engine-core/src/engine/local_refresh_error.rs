@@ -80,6 +80,13 @@ pub(crate) enum LocalRefreshError {
     #[error("the daemon's reply broke the RPC contract during refresh")]
     DaemonProtocol,
 
+    /// The wallet's target refused before any daemon answered: something
+    /// other than this account's node at "this computer"'s rendezvous
+    /// ([`DaemonFault::PeerCheck`]), or a service there that the wallet does
+    /// not dial ([`DaemonFault::Service`]). Neither clears by retrying.
+    #[error("the wallet's daemon target refused during refresh")]
+    DaemonTarget(DaemonFault),
+
     /// Daemon returned a structurally-malformed block (producer's
     /// pre-pass or scanner-side structural validation tripped).
     #[error("daemon returned a structurally malformed block")]
@@ -125,6 +132,7 @@ impl LocalRefreshError {
             | DaemonFault::FeeResponse
             | DaemonFault::NotPermitted => Self::DaemonProtocol,
             DaemonFault::Internal => Self::Internal,
+            DaemonFault::PeerCheck | DaemonFault::Service(_) => Self::DaemonTarget(fault),
         }
     }
 }
@@ -146,6 +154,10 @@ impl From<LocalRefreshError> for RefreshError {
             LocalRefreshError::DaemonProtocol => daemon(
                 DaemonFault::Protocol,
                 "LocalRefresh: the daemon's reply broke the RPC contract",
+            ),
+            LocalRefreshError::DaemonTarget(fault) => daemon(
+                fault,
+                "LocalRefresh: the wallet's daemon target refused before any daemon answered",
             ),
             LocalRefreshError::Malformed => daemon(
                 DaemonFault::Protocol,
@@ -222,5 +234,7 @@ pub(super) const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
         RpcError::NoSuchMethod(_) => ProtocolErrorKind::IdentityMismatch,
         RpcError::TransactionsUnavailable(_) => ProtocolErrorKind::TransactionsUnavailable,
         RpcError::Refused(refusal) => ProtocolErrorKind::Refused(refusal.class),
+        RpcError::PeerCheck(_) => ProtocolErrorKind::PeerCheck,
+        RpcError::Service(_) => ProtocolErrorKind::Service,
     }
 }

@@ -1202,8 +1202,8 @@ fn a_lost_verdict_past_the_cap_is_said_at_once() {
     assert!(!text.contains("not syncing"), "{text}");
 }
 
-/// `Held` while the link is down: waiting for Tor, and syncing over
-/// nothing when clearnet is off.
+/// `Held` while the link is down: waiting for Tor, and not syncing yet
+/// when clearnet is off (Tor is configured and holds no session).
 #[test]
 fn a_held_origin_under_a_down_link_waits_for_tor() {
     let (core, _) = Core::start(policy(), managed(false), 0);
@@ -1211,7 +1211,7 @@ fn a_held_origin_under_a_down_link_waits_for_tor() {
     let text = said(&core);
     assert!(
         text.starts_with(
-            "This node is waiting for Tor and holding its own transactions. It is not syncing."
+            "This node is waiting for Tor and holding its own transactions. It is not syncing yet."
         ),
         "{text}"
     );
@@ -1255,7 +1255,7 @@ fn the_node_syncs_over_the_connectors_that_hold_a_session() {
     );
     core.on(sessions(0, 0), 5);
     assert!(
-        line(&core).contains("It is not syncing."),
+        line(&core).contains("It is not syncing yet."),
         "{}",
         line(&core)
     );
