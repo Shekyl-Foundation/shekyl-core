@@ -317,8 +317,10 @@ pub fn sync_dir(dir: &Path) -> std::io::Result<()> {
     File::open(dir)?.sync_all()
 }
 
-/// Make `dir`'s entries durable. Windows has no directory handle to sync;
-/// the rename is durable on its own once the file was.
+/// Does nothing on Windows: Windows documents no user-mode flush of a
+/// directory (`FlushFileBuffers` takes a file, or a volume with
+/// administrative rights), so a rename's durability is not settled here
+/// but in the one Windows replace, `shekyl_win_sec::replace`.
 ///
 /// # Errors
 ///
@@ -724,12 +726,26 @@ fn holds_access(path: &Path, access: Access) -> bool {
 /// staged file, no rename. One that matches in bytes but fails the check
 /// is replaced, which restores its protection.
 ///
+/// An unchanged file still has its directory synced, so a skip never
+/// leaves an earlier rename of the same bytes unsynced (Rick, 2026-11-18).
+///
+/// **Not the wallet's path** (Rick, 2026-11-18). The wallet's files are
+/// written through [`StagedWrite`] directly, never skipped: its save
+/// reports `Durability::Confirmed`, which authorises a broadcast, and a
+/// skip after an earlier same-bytes write whose directory sync failed would
+/// report that write confirmed without making it so; and the skip's
+/// comparison would read the sealed wallet file into a buffer nothing wipes
+/// on every save.
+///
 /// # Errors
 ///
-/// [`CommitError`], as [`StagedWrite::create`] and [`StagedWrite::commit`].
+/// [`CommitError`], as [`StagedWrite::create`] and [`StagedWrite::commit`];
+/// [`CommitError::Unsynced`] when an unchanged file's directory could not
+/// be synced.
 pub fn replace(live: &Path, bytes: &[u8], access: Access) -> Result<Replaced, CommitError> {
     let unchanged = std::fs::read(live).is_ok_and(|held| held == bytes);
     if unchanged && holds_access(live, access) {
+        sync_dir(parent(live)).map_err(|error| CommitError::Unsynced(live.to_path_buf(), error))?;
         return Ok(Replaced::Unchanged);
     }
     StagedWrite::<Replace>::create(live, bytes, access)?.commit()?;
