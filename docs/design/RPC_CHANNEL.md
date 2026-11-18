@@ -1328,10 +1328,11 @@ R0 RT-7 stands: generated material only, never typed from memory.
   leave exactly that gap. The replacement is one change: the new private
   half is written to the key file's journal, the console fingerprint and
   the reset note are committed in one store transaction, and the journal
-  is then renamed over the key file. A later start renames a journal whose
-  fingerprint is already the record, discards a journal that was never
-  committed when the live file already matches, and refuses a key file
-  that matches neither. It does not adopt a file the record does not name.
+  is then renamed over the key file. The key file's staged file is a
+  *journal* (`StagedWrite<Journal>`): a failure never discards it. A later
+  start renames a journal whose fingerprint is already the record, sets
+  aside a journal that was never committed when the live file already
+  matches, and refuses a key file that matches neither. It does not adopt a file the record does not name.
   It touches no other enrollment and is logged at the next start. This is a command that changes daemon
   state, not a file edited by hand, so the rule above stands. Who may run
   it is who may write the service's data home — an OS permission the
@@ -2037,6 +2038,17 @@ a demonstrated operator recovery need returns it as a ruled capability.
 A rendezvous is how a client finds "this computer"'s daemon without
 guessing. It is published **after** the listener is bound, **atomically**
 (write and rename), removed on clean exit, and replaced on the next start.
+Every rendezvous file, the service's console leg name and the bundle are
+written through `shekyl-os-account`'s `StagedWrite`, the one place a file
+is replaced (Rick, 2026-11-18). Each is a *replace*: its staged `.new` is
+named by nothing, so the next start's write removes one a crash left and a
+failed commit removes its own. On Windows the rename is the handle's
+(`FileRenameInfoEx`, replace-if-exists, POSIX semantics), so a reader of
+the old record keeps reading it. A program that holds the staged file
+without delete sharing (an antivirus scanner, a search indexer) is waited
+for up to `REPLACE_WAIT`, 2 s (an Assumption, basis at the constant); past
+it the start refuses with `config.replace.held-open`, naming the file and
+the directory to exclude from scanning.
 Every rendezvous path is keyed by the genesis-derived network id, not a
 nettype name (rule 71), so daemons of different networks coexist and a
 client never reaches the wrong network's node.
