@@ -133,7 +133,12 @@ jobs:
   package-and-publish:
     name: Package & Publish Release
     needs: [build-gitian]
-    runs-on: ubuntu-22.04
+    # 24.04, not the build jobs' 22.04: the installer check unpacks the NSIS
+    # installer with 7-Zip, and 22.04's p7zip 16.02 cannot decode it. On an
+    # installer built here it reports "Data Error" for shekyld.exe and, asked
+    # for tor/ alone, exits 0 with a tor.exe that is not the one packed.
+    # 24.04's p7zip-full is 7-Zip 23.01, which reads it byte-exact.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10  # p90 3.3 min over 12 runs; the floor
     # On a tag this packages and publishes. Dispatched with package_dry_run
     # it packages and stops: the .deb/.rpm staging, the post-pack checks and
@@ -155,9 +160,12 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ruby ruby-dev rubygems rpm rpm2cpio cpio nsis p7zip-full
+          sudo apt-get install -y ruby ruby-dev rubygems rpm rpm2cpio cpio nsis p7zip-full pipx
           sudo gem install --no-document fpm
-          python3 -m pip install git-archive-all
+          # 24.04 refuses a pip install into the system Python (PEP 668);
+          # pipx gives the tool its own environment and puts it on PATH.
+          pipx install git-archive-all
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Package release assets
         run: |
