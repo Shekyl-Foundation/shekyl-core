@@ -441,10 +441,10 @@ states is now gated, and the ingest crate must not enable it.
 
 ### 3.9 The trace artifact — layout (increment 2, §7 commit 4b)
 
-The corpus's layout is the corpus module's (`corpus.rs`, format 4: an
+The corpus's layout is `shekyl-corpus`'s (`CORPUS_CODEC.md`; format 4: an
 `extend` record carries a block with its bundle section, a `rewind` record
 a pop target, and the reader refuses tag `0x03` as it refuses any other
-unknown tag). The trace is the LMDB side's contribution, Rust-minted
+unknown tag); the ingest's `corpus.rs` reads it as the replay `Source`. The trace is the LMDB side's contribution, Rust-minted
 and versioned like the corpus; little-endian, fixed widths; every violation
 a `TraceFault` naming what it found.
 
