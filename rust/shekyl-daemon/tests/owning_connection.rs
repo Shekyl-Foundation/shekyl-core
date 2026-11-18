@@ -428,7 +428,11 @@ fn a_half_close_stops_it_and_end_of_stream_means_it_is_gone() {
     let (mut daemon, ours) = launch(NAME, dir.path(), "data", &[]);
     let mut ours = ready_or_panic(&mut daemon, ours, dir.path(), "data");
     let target = target(dir.path());
-    assert!(target.path().exists(), "ready means the rendezvous exists");
+    let rendezvous = target
+        .path()
+        .expect("the test names its rendezvous directory")
+        .to_path_buf();
+    assert!(rendezvous.exists(), "ready means the rendezvous exists");
 
     ours.shutdown(std::net::Shutdown::Write)
         .expect("the parent's writing half");
@@ -440,7 +444,7 @@ fn a_half_close_stops_it_and_end_of_stream_means_it_is_gone() {
     let mut byte = [0u8; 1];
     let read = std::io::Read::read(&mut ours, &mut byte);
     // Taken at the read's return, before anything else can pass.
-    let rendezvous_gone = !target.path().exists();
+    let rendezvous_gone = !rendezvous.exists();
     let lock_free = shekyl_daemon_config::Lock::take(&dir.path().join("data")).is_ok();
     match read {
         Ok(0) => {}
