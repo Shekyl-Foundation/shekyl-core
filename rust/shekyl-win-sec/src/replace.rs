@@ -40,7 +40,9 @@
 //! **The creating handle** (Rick, 2026-11-18). A replace that writes its
 //! own staged file holds one handle from the create to the close
 //! ([`create_staged`], [`Staged`]): created `CREATE_NEW` with write and
-//! delete access, `FILE_FLAG_WRITE_THROUGH` and its access descriptor, it
+//! delete access, `FILE_FLAG_WRITE_THROUGH` and its access descriptor,
+//! sharing read only (write sharing is an option for the wallet's password
+//! rotation alone, [`StagedSharing`]; delete is never shared), it
 //! writes and syncs the data, renames itself over the destination through
 //! the steps above ([`Staged::commit`]), calls `FlushFileBuffers` after the
 //! rename, and closes. No commit reopens a staged file it created, so a
@@ -286,14 +288,34 @@ pub enum StagedDescriptor {
 /// (`FILE_READ_ATTRIBUTES`).
 const STAGED_ACCESS: u32 = GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES;
 
-/// Sharing of the creating handle. Delete sharing alone would not be enough:
-/// the wallet's password rotation locks the staged file through a second
-/// handle it opens for reading and writing before the rename
-/// (`shekyl-engine-file`'s `atomic_write_file_with`), which needs write
-/// sharing. A program that opens the file without sharing delete fails its
-/// own open whatever this handle shares, because this handle holds
-/// `DELETE` access.
-const STAGED_SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+/// What the creating handle shares with another program's open of the
+/// staged file (Rick, 2026-11-18). Never delete: the handle holds `DELETE`
+/// access to rename the file, and another program that could delete or
+/// rename it would race the commit. A program that opens the file without
+/// sharing delete fails its own open whatever this handle shares, because
+/// this handle holds `DELETE` access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StagedSharing {
+    /// `FILE_SHARE_READ`: a reader may open it, a writer may not. The
+    /// default ([`create_staged`]).
+    Read,
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`: a writer may open it too. Only
+    /// the wallet's password rotation, which locks the staged keys file
+    /// through a second handle it opens for reading and writing before the
+    /// rename (`shekyl-engine-file`'s `atomic_write_file_with`); read
+    /// sharing alone refuses that open with `ERROR_SHARING_VIOLATION`.
+    ReadWrite,
+}
+
+impl StagedSharing {
+    /// The `dwShareMode` bits.
+    fn share_mode(self) -> u32 {
+        match self {
+            Self::Read => FILE_SHARE_READ,
+            Self::ReadWrite => FILE_SHARE_READ | FILE_SHARE_WRITE,
+        }
+    }
+}
 
 /// A staged file, held from its create to its close by the one handle that
 /// writes it, syncs it, renames it and flushes it (module docs).
@@ -313,7 +335,7 @@ pub enum OnFailure {
 
 /// Create the staged file `path`, `CREATE_NEW`, with `descriptor` set in the
 /// creating call, write-through, held open for its whole life by the
-/// returned handle.
+/// returned handle, sharing read only ([`StagedSharing::Read`]).
 ///
 /// # Errors
 ///
@@ -321,6 +343,19 @@ pub enum OnFailure {
 /// [`io::Error::other`]), or the create failed: an existing entry at `path`
 /// is `ERROR_FILE_EXISTS`.
 pub fn create_staged(path: &Path, descriptor: StagedDescriptor) -> io::Result<Staged> {
+    create_staged_with(path, descriptor, StagedSharing::Read)
+}
+
+/// [`create_staged`], the creating handle sharing as `sharing` says.
+///
+/// # Errors
+///
+/// Exactly [`create_staged`]'s.
+pub fn create_staged_with(
+    path: &Path,
+    descriptor: StagedDescriptor,
+    sharing: StagedSharing,
+) -> io::Result<Staged> {
     let built = match descriptor {
         StagedDescriptor::Inherited => None,
         StagedDescriptor::PrivateFile => Some(
@@ -360,7 +395,7 @@ pub fn create_staged(path: &Path, descriptor: StagedDescriptor) -> io::Result<St
         CreateFileW(
             wide.as_ptr(),
             STAGED_ACCESS,
-            STAGED_SHARE,
+            sharing.share_mode(),
             attributes,
             CREATE_NEW,
             FILE_FLAG_WRITE_THROUGH | FILE_ATTRIBUTE_NORMAL,
@@ -847,6 +882,80 @@ mod tests {
             "the commit waited {:?}",
             began.elapsed()
         );
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
+    }
+
+    /// The creating handle's default sharing is read only: a second writer
+    /// cannot open the staged file whatever it shares, and fails with a
+    /// sharing violation, while a reader can. Red edit: share write in
+    /// `StagedSharing::Read`, and the writer that shares everything opens it.
+    #[test]
+    fn a_second_writer_cannot_open_a_staged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("record");
+        let (staged, staged_path) = staged_in(dir.path(), "record", b"new");
+        for share in [
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_SHARE_READ,
+            0,
+        ] {
+            let writer = std::fs::OpenOptions::new()
+                .write(true)
+                .share_mode(share)
+                .open(&staged_path)
+                .unwrap_err();
+            assert!(is_sharing_violation(&writer), "share {share:#x}: {writer}");
+        }
+        drop(
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&staged_path)
+                .expect("a reader that shares everything opens the staged file"),
+        );
+        staged
+            .commit(
+                &live,
+                Instant::now() + Duration::from_secs(2),
+                OnFailure::Remove,
+            )
+            .unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
+    }
+
+    /// With write sharing a writer that shares read, write and delete opens
+    /// the staged file (the wallet's password rotation locks it so), and the
+    /// creating handle still renames it with that writer's handle open. Red
+    /// edit: drop `FILE_SHARE_WRITE` from `StagedSharing::ReadWrite`, and
+    /// the open is a sharing violation.
+    #[test]
+    fn write_sharing_lets_a_writer_that_shares_everything_open_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("record");
+        let staged_path = dir.path().join("record.staging");
+        let staged = create_staged_with(
+            &staged_path,
+            StagedDescriptor::Inherited,
+            StagedSharing::ReadWrite,
+        )
+        .unwrap();
+        std::io::Write::write_all(&mut staged.file(), b"new").unwrap();
+        staged.sync().unwrap();
+        let writer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&staged_path)
+            .expect("write sharing lets the writer open the staged file");
+        staged
+            .commit(
+                &live,
+                Instant::now() + Duration::from_secs(2),
+                OnFailure::Remove,
+            )
+            .unwrap();
+        drop(writer);
         assert_eq!(std::fs::read(&live).unwrap(), b"new");
     }
 

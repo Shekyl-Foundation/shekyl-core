@@ -40,6 +40,7 @@ use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
 use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
+use shekyl_os_account::private_file::HeldOpen;
 use std::io;
 use std::path::PathBuf;
 
@@ -115,9 +116,8 @@ pub enum WalletFileError {
     AlreadyLocked { path: PathBuf },
 
     /// The atomic-write sequence wrote a fresh staged file successfully but
-    /// could not rename it into place: the rename failed, or on Windows
-    /// another program held the staged file or the target past the one
-    /// replace's wait.
+    /// could not rename it into place: the rename failed. Another program
+    /// holding a file past the wait is [`Self::HeldOpen`].
     ///
     /// The original target (if any) is **untouched** — that is the
     /// guarantee. Removal of the staged file is attempted on failure, but
@@ -130,6 +130,16 @@ pub enum WalletFileError {
         #[source]
         source: io::Error,
     },
+
+    /// Another program held a file the Windows replace needs (a leftover
+    /// staged file, or the target) open past the replace's wait, most
+    /// likely an antivirus scanner or a search indexer; or, on a FAT or
+    /// exFAT volume, the target may instead not be writable
+    /// ([`HeldOpen::or_unwritable`]). The target is untouched. Its own
+    /// variant because its remedy, excluding the wallet's folder from
+    /// scanning, is not the disk's (Rick, 2026-11-18).
+    #[error("{0}")]
+    HeldOpen(HeldOpen),
 
     /// The keys file decoded cleanly but declared a `network` byte that
     /// does not map to any known [`Network`]. Envelope-level validation
