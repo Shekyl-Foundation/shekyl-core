@@ -617,8 +617,12 @@ fn the_fixes_sentence_is_each_fix_s_own_words_joined() {
 /// being hidden. Hidden is exactly: Tor on, `address-hiding`, and under a
 /// managed Tor a link that still carries (`carries` or `open-only`). With
 /// `address-hiding` and a carriage of `gone` the node is holding, and the
-/// accessor once said hiding. Red edit: in `own_tx_fate`, read
-/// `Carriage::Gone` as hidden.
+/// accessor once said hiding. An unknown fate is said in one of two ways:
+/// the update sentence where a keyword is one this build does not know,
+/// and the contradiction sentence where every keyword is known and they do
+/// not fit together. Red edits: in `own_tx_fate`, read `Carriage::Gone` as
+/// hidden; in the renderer, send the contradiction case to the update
+/// sentence.
 #[test]
 fn every_combination_has_one_fate_and_the_line_says_it() {
     use crate::render::{CARRYING, CARRYING_OPEN_ONLY, HOLDING, OFFLINE, OPEN_NETWORK, WAITING};
@@ -650,6 +654,7 @@ fn every_combination_has_one_fate_and_the_line_says_it() {
     clearnets.push(serde_json::from_value(word("relay-only")).expect("decodes"));
 
     let mut hidden = HashSet::new();
+    let mut contradictions = HashSet::new();
     let mut seen = HashSet::new();
     let mut combinations = 0;
     for origination in &originations {
@@ -687,8 +692,24 @@ fn every_combination_has_one_fate_and_the_line_says_it() {
                         fate == OwnTxFate::Hidden,
                         "{what}"
                     );
+                    // Unknown is said in one of two ways, never both: a
+                    // keyword this build does not know asks for an update;
+                    // known keywords that do not fit together are a report
+                    // that contradicts itself, which no update cures.
                     if fate == OwnTxFate::Unknown {
-                        assert!(line.contains(UNKNOWN_SENTENCE), "{what}");
+                        let updates = line.contains(UNKNOWN_SENTENCE);
+                        let contradicts = line.starts_with(CONTRADICTS_SENTENCE);
+                        assert_eq!(updates, status.has_unknown(), "{what}");
+                        assert_eq!(contradicts, !status.has_unknown(), "{what}");
+                        if contradicts {
+                            contradictions.insert((
+                                origination.clone(),
+                                carriage.is_some(),
+                                tor.clone(),
+                            ));
+                        }
+                    } else {
+                        assert!(!line.contains(CONTRADICTS_SENTENCE), "{what}");
                     }
                     // A setting this build does not know is never read past.
                     if matches!(tor, TorSetting::Unknown { .. })
@@ -718,6 +739,22 @@ fn every_combination_has_one_fate_and_the_line_says_it() {
         want.insert((hiding.clone(), carriage.clone(), TorSetting::Operator));
     }
     assert_eq!(hidden, want);
+
+    // The contradictions, whole: an origination that needs Tor with Tor
+    // off, whatever else the reply carries; and `address-hiding` under a
+    // managed setting with no `tor` object.
+    let mut want = HashSet::new();
+    for origination in [
+        Origination::AddressHiding,
+        Origination::Connecting,
+        Origination::Rebuilding,
+    ] {
+        for has_tor_object in [true, false] {
+            want.insert((origination.clone(), has_tor_object, TorSetting::Off));
+        }
+    }
+    want.insert((Origination::AddressHiding, false, TorSetting::Managed));
+    assert_eq!(contradictions, want);
 
     // The fates by name, one sample each.
     let fate = |origination: Origination, tor: TorSetting, carriage: Option<Carriage>| {

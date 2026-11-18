@@ -31,7 +31,7 @@ mod render;
 
 pub use render::{
     fix_sentence, held_at_start_sentence, install_sentence, names_data_dir, render,
-    UNKNOWN_SENTENCE,
+    CONTRADICTS_SENTENCE, UNKNOWN_SENTENCE,
 };
 
 /// A closed set of keywords, with an arm for a keyword this build does not
@@ -777,10 +777,13 @@ impl TorStatus {
     /// `open-only`). The relay's verdict lags a Tor that ended until the
     /// relay sees its sessions close, so `address-hiding` beside a carriage
     /// of `gone` is held. Anything this build cannot read as one of the
-    /// four known fates is [`OwnTxFate::Unknown`]: a setting, an
-    /// origination or (where it decides) a carriage it does not know; an
-    /// origination that needs Tor beside a `tor` setting of `off`; and
-    /// `address-hiding` under a managed setting with no `tor` object.
+    /// four known fates is [`OwnTxFate::Unknown`], for either of two
+    /// reasons. A keyword it does not know: a setting, an origination or
+    /// (where it decides) a carriage. Or known keywords that contradict
+    /// each other: an origination that needs Tor beside a `tor` setting of
+    /// `off`, and `address-hiding` under a managed setting with no `tor`
+    /// object. The renderer says which ([`Self::has_unknown`] tells them
+    /// apart); the fate is the same, and promises nothing.
     #[must_use]
     pub fn own_tx_fate(&self) -> OwnTxFate {
         if !matches!(self.posture.clearnet, Clearnet::On | Clearnet::Off) {

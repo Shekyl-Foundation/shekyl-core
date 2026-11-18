@@ -59,10 +59,15 @@ consumer writes a sentence of its own (`TSR-Q13`; Rick, 2026-11-08).
   sentence is picked from the fate, so the line and a send decision cannot
   disagree, and a client (the GUI wallet's send review) maps the fate
   through and reads no field. `Unknown` is everything this build cannot
-  read as one of the other four, and promises nothing. A table test runs
+  read as one of the other four, and promises nothing. The renderer says
+  it in one of two ways: the update sentence where the reply carries a
+  keyword this build does not know, and "The node's Tor report contradicts
+  itself, so nothing can be said about where its transactions go." where
+  every keyword is known and they do not fit together (an origination that
+  needs Tor beside `tor = off`), which no update cures. A table test runs
   every origination, carriage, `tor` and `clearnet` setting, known and
   unknown, and asserts one fate each with the line's first sentence
-  matching it.
+  matching it, and which of the two sentences each unknown case gets.
 
 ## 3. The shape
 

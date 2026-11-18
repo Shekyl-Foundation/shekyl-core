@@ -6,7 +6,8 @@
 //! The one renderer (`TSR-Q13`): the daemon's log line, `shekyl-cli` and the
 //! GUI all say what this says, from the wire shape alone.
 //!
-//! Clauses in order: what the node does with its traffic; the named cause,
+//! Clauses in order: what the node does with its traffic, or that its
+//! report contradicts itself; the named cause,
 //! or else the quiet line; the clock; the onion; the bootstrap; the fixes;
 //! and, once, that the node reported something this version does not know.
 
@@ -41,6 +42,10 @@ pub(crate) const OPEN_NETWORK: &str = "This node is syncing and sending over the
 
 /// Said while Tor and clearnet are both off.
 pub(crate) const OFFLINE: &str = "This node is offline.";
+
+/// Said when every keyword in the reply is known and they contradict each
+/// other, so no fate can be read from them (Rick, 2026-11-17).
+pub const CONTRADICTS_SENTENCE: &str = "The node's Tor report contradicts itself, so nothing can be said about where its transactions go.";
 
 /// Whether [`render`] names a data directory for `status`. Only the
 /// unusable sentence has a place for the path (IG-Q97). A caller that
@@ -126,10 +131,16 @@ fn behaviour(status: &TorStatus, unknown: &mut bool) -> String {
         }
         OwnTxFate::OpenNetwork => OPEN_NETWORK.to_owned(),
         OwnTxFate::Offline => OFFLINE.to_owned(),
-        OwnTxFate::Unknown => {
+        // Two different things are unknown. A keyword this build does not
+        // know is said by the update sentence, once, at the end. A reply
+        // whose keywords are all known and do not fit together (Tor off
+        // beside an origination that needs Tor) is not cured by an update:
+        // the report contradicts itself, and the line says that.
+        OwnTxFate::Unknown if status.has_unknown() => {
             *unknown = true;
             String::new()
         }
+        OwnTxFate::Unknown => CONTRADICTS_SENTENCE.to_owned(),
     }
 }
 
