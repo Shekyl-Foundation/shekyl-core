@@ -175,6 +175,10 @@ wallet_rpc_error_codes! {
     /// a version this build cannot read. It is rebuilt from the chain once
     /// deleted; `data.cause` says which.
     CurveTreeStoreUnusable = -29016 => "CURVE_TREE_STORE_UNUSABLE",
+    /// Open: this computer's random-number source failed the wallet's
+    /// check, so the wallet did not open. Only a `conformance` build runs
+    /// the check.
+    RandomSourceCheckFailed = -29017 => "RANDOM_SOURCE_CHECK_FAILED",
     /// Build: address parse / network check failed.
     InvalidRecipient = -29100 => "INVALID_RECIPIENT",
     /// Build: spendable balance too low.
@@ -579,6 +583,18 @@ pub enum WalletRpcError {
         /// Why the store cannot be used.
         cause: CurveTreeStoreCause,
     },
+    /// `-29017`: this computer's random-number source failed the check the
+    /// wallet runs before it stakes (the `conformance` build's self-cert,
+    /// S6). The wallet did not open: staking on numbers that fail it could
+    /// link the wallet's stakes. The grade stays in the server log. The
+    /// check's false-alarm rate is about one in a million, so one retry is
+    /// the first remedy; a second failure means this computer.
+    #[error(
+        "this computer's random-number source failed the wallet's safety check, so the \
+         wallet did not open — try once more; if it fails again, open the wallet on \
+         another computer"
+    )]
+    RandomSourceCheckFailed,
     /// `-29201`: the daemon did not answer.
     #[error(
         "the daemon did not answer — check that it is running and its address is right, then retry"
@@ -1299,6 +1315,7 @@ impl WalletRpcError {
             Self::WalletCloseBlocked { .. } => WalletRpcErrorCode::WalletCloseBlocked,
             Self::CurveTreeUnavailable => WalletRpcErrorCode::CurveTreeUnavailable,
             Self::CurveTreeStoreUnusable { .. } => WalletRpcErrorCode::CurveTreeStoreUnusable,
+            Self::RandomSourceCheckFailed => WalletRpcErrorCode::RandomSourceCheckFailed,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
@@ -1597,6 +1614,9 @@ impl From<OpenError> for WalletRpcError {
             OpenError::Io(io) => from_io_error(io),
             OpenError::Key(e) => from_key_error(&e),
             OpenError::Persistence(e) => e.into(),
+            // The grade was logged where the check ran. The wire carries the
+            // remedy only.
+            OpenError::StakeRngSelfCertFailed => Self::RandomSourceCheckFailed,
         }
     }
 }
@@ -3546,6 +3566,22 @@ mod tests {
         assert_eq!(err.code().as_i32(), -29007);
         let data = err.data().expect("data");
         assert_ne!(data["wallet"], data["expected"]);
+    }
+
+    /// The stake random-number check's refusal is `-29017`, with the remedy
+    /// and no grade on the wire. The variant is a unit, so this build can
+    /// construct it and the conversion is the real `From` arm.
+    #[test]
+    fn a_failed_random_source_check_names_its_remedy() {
+        let err: WalletRpcError = OpenError::StakeRngSelfCertFailed.into();
+        assert_eq!(err.code(), WalletRpcErrorCode::RandomSourceCheckFailed);
+        assert_eq!(err.code().as_i32(), -29017);
+        assert_eq!(err.data(), None);
+        let message = err.message();
+        assert!(!message.contains("chi-square"), "{message}");
+        for remedy in ["did not open", "try once more", "another computer"] {
+            assert!(message.contains(remedy), "{remedy}: {message}");
+        }
     }
 
     #[test]
