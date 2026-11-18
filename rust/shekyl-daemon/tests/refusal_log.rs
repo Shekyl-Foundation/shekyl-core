@@ -97,7 +97,8 @@ fn run(test: &str, dir: &Path, args: &[&str]) -> (i32, String, Option<String>) {
 
 /// A refused service start: its refusal is in the log file, the same words
 /// standard error has. As root the walk refuses the service before the
-/// lock (the log file is appended to as the logger would); as any other
+/// lock, at its rendezvous directory (the log file is appended to as the
+/// logger would); as any other
 /// account the service starts its logging, and the channel's key, which
 /// another account can read, fails its RPC after the logger runs. Red edit:
 /// write a start's refusal to standard error alone, as `exit::refuse` did.
@@ -109,7 +110,9 @@ fn a_refused_service_start_leaves_its_refusal_in_the_log() {
     // SAFETY: `geteuid` reads this process's credentials and cannot fail.
     let root = unsafe { libc::geteuid() } == 0;
     let expected = if root {
-        "config.service.root"
+        // The walk checks the service's rendezvous directory first, and
+        // refuses a root daemon there.
+        "config.service.rendezvous"
     } else {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         let data = shekyl_daemon_config::paths::data_dir_default(
