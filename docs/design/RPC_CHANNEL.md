@@ -254,8 +254,11 @@ GUI's child holds an **owning connection** for its life
 stream socket pair the GUI made and the daemon inherited
 (`owning-connection`). It carries the daemon's readiness (`shekyld-ready 1`,
 written once the owner's leg is bound, served and published) and its life
-(the GUI's close, or its death, stops the daemon cleanly), and nothing
-else. The GUI's calls go over the owner's leg, resolved as "this computer"
+(the GUI's close, its half-close, or its death stops the daemon cleanly),
+and nothing else. The daemon holds its own end until its process exits:
+the GUI reads end of stream when the daemon is gone, its rendezvous
+removed and its data directory unlocked, and starts the next daemon on
+that read (Rick, 2026-11-17). The GUI's calls go over the owner's leg, resolved as "this computer"
 through the rendezvous (`shekyl-rpc-transport`'s `local::LocalTarget`, which
 keeps this section's two failures apart). The wallet engine's own calls move
 onto it in RT-W10 step 5, which gives the engine's `Rpc` the failed peer
