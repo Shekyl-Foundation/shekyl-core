@@ -4,7 +4,8 @@
 # hook, which reloads systemd on install and, on upgrade, restarts
 # shekyld.service only when it is already enabled. The hook never enables
 # or starts the daemon: the operator does, with
-# `systemctl enable --now shekyld`, once /etc/shekyl holds the node's file.
+# `systemctl enable --now shekyld`, after putting any settings in
+# /etc/shekyl/shekyld-<network>.toml.
 set -e
 
 # The service's account. shekyld.service runs as User=shekyl and

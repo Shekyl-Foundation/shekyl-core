@@ -85,8 +85,10 @@ Section "Shekyl Core (required)" SecCore
   ; shekyld.exe (shekyl-tor-control-client, BESIDE_TOR_DIR). The default
   ; `tor = managed` runs it, so a daemon installed without it has no Tor.
   ; The daemon refuses a tor directory holding anything but the pinned
-  ; files, so an earlier release's directory goes first.
+  ; files, so an earlier release's directory goes first, and its licences
+  ; with it.
   RMDir /r "$INSTDIR\tor"
+  RMDir /r "$INSTDIR\tor-licenses"
   SetOutPath "$INSTDIR\tor"
   File "${BIN_DIR}\tor\tor.exe"
   SetOutPath "$INSTDIR\tor-licenses"
@@ -141,6 +143,9 @@ Section "Start Menu Shortcuts" SecShortcuts
   CreateDirectory "$SMPROGRAMS\Shekyl"
   CreateShortCut "$SMPROGRAMS\Shekyl\Shekyl Daemon.lnk" "$INSTDIR\shekyld.exe"
   CreateShortCut "$SMPROGRAMS\Shekyl\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+  ; An earlier installer made a shortcut to shekyl-cli.exe, which Windows
+  ; never shipped; installing over it removes the dead shortcut.
+  Delete "$SMPROGRAMS\Shekyl\Shekyl CLI Wallet.lnk"
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN

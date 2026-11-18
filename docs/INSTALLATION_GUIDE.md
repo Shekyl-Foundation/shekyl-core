@@ -239,14 +239,28 @@ Run the daemon in the background via your platform's service manager
 (systemd on Linux, rc.d on FreeBSD, launchd on macOS, Task Scheduler on
 Windows). A shipped systemd unit lives at
 `contrib/packaging/linux/shekyld.service`, with `shekyl.slice` beside
-it. The `.deb` installs both and creates the `shekyl` account the unit runs
-as. It does not start the daemon: put any settings in
-`/etc/shekyl/shekyld-<network>.toml`, then run
-`systemctl enable --now shekyld`. Without the `.deb`, create the account
-first (`useradd --system --user-group --home-dir /nonexistent
---no-create-home --shell /usr/sbin/nologin shekyl`), copy both units to
-`/etc/systemd/system/`, and enable it the same way; systemd refuses to
-start a unit whose account does not exist. The slice is the daemon's own
+it. The `.deb` installs both and creates the `shekyl` account the unit
+runs as; it does not start the daemon. Put any settings in
+`/etc/shekyl/shekyld-<network>.toml`, then enable and start it:
+
+```bash
+sudo systemctl enable --now shekyld
+```
+
+Without the `.deb`, create the account first, because systemd refuses to
+start a unit whose account does not exist. Then install both units and
+enable the daemon; the unit runs `/usr/local/bin/shekyld`:
+
+```bash
+sudo useradd --system --user-group --home-dir /nonexistent \
+  --no-create-home --shell /usr/sbin/nologin shekyl
+sudo cp contrib/packaging/linux/shekyld.service \
+  contrib/packaging/linux/shekyl.slice /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now shekyld
+```
+
+The slice is the daemon's own
 top-level control group, weighed 4:1 against `user.slice` under
 contention, so a daemon that is syncing or verifying keeps about 80 % of
 the CPU while a wallet in a user session serves archival shards beside

@@ -217,8 +217,9 @@ The `.deb` also:
 - Creates the `shekyl` system account the unit runs as, once, with no home
   and no login shell (`contrib/packaging/linux/deb-after-install.sh`); an
   existing account is left as it is, and removal keeps it
-- Does not enable or start the daemon: with any settings in
-  `/etc/shekyl/shekyld-<network>.toml`, `sudo systemctl enable --now shekyld`
+- Does not enable or start the daemon. Put any settings in
+  `/etc/shekyl/shekyld-<network>.toml`, then run
+  `sudo systemctl enable --now shekyld`
 - Restarts an enabled daemon on upgrade
 - Data directory: `/var/lib/shekyl` (the unit's `StateDirectory`)
 - Log: `/var/log/shekyl/shekyld.log`
