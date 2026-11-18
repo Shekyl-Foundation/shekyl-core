@@ -56,6 +56,7 @@ impl PseudoOutBlinds {
     #[must_use]
     pub fn from_intent(seed: &IntentSeed, inputs: NonZeroUsize, outputs: &[Commitment]) -> Self {
         Self::balancing(
+            inputs,
             (0..inputs.get() - 1).map(|input| seed.pseudo_out_blind(input)),
             outputs,
         )
@@ -82,24 +83,34 @@ impl PseudoOutBlinds {
         outputs: &[Commitment],
     ) -> Self {
         Self::balancing(
+            inputs,
             (1..inputs.get()).map(|_| Zeroizing::new(Scalar::random(rng))),
             outputs,
         )
     }
 
-    /// `free`, then the blind that balances `outputs`: their masks less
-    /// every free blind.
-    fn balancing(free: impl Iterator<Item = Zeroizing<Scalar>>, outputs: &[Commitment]) -> Self {
+    /// `free` (every input's blind but the last), then the blind that
+    /// balances `outputs`: their masks less every free blind.
+    ///
+    /// The set is allocated once, at its size: a vector that grew would
+    /// free its earlier buffers, blinds in them, without wiping them, and
+    /// `Zeroizing` wipes only the buffer it holds when it drops.
+    fn balancing(
+        inputs: NonZeroUsize,
+        free: impl Iterator<Item = Zeroizing<Scalar>>,
+        outputs: &[Commitment],
+    ) -> Self {
         let mut last = Zeroizing::new(Scalar::ZERO);
         for output in outputs {
             *last += output.mask;
         }
-        let mut blinds = Zeroizing::new(Vec::new());
+        let mut blinds = Zeroizing::new(Vec::with_capacity(inputs.get()));
         for blind in free {
-            *last -= *blind;
+            *last -= &*blind;
             blinds.push(*blind);
         }
         blinds.push(*last);
+        debug_assert_eq!(blinds.len(), inputs.get(), "one blind per input");
         Self(blinds)
     }
 
@@ -197,6 +208,21 @@ mod tests {
         let outputs = outputs(&[3]);
         let [a, b] = [(); 2].map(|()| PseudoOutBlinds::random(inputs(2), &outputs).into_bytes());
         assert_ne!(*a[0], *b[0]);
+    }
+
+    /// The set is allocated once, at its size, so no grown-out buffer of
+    /// blinds is freed unwiped: at three inputs a vector that grew would
+    /// hold four slots.
+    #[test]
+    fn a_set_of_blinds_is_allocated_once() {
+        let outputs = outputs(&[2]);
+        let seed = IntentSeed::new(&[0x71; 32]);
+        for blinds in [
+            PseudoOutBlinds::random(inputs(3), &outputs),
+            PseudoOutBlinds::from_intent(&seed, inputs(3), &outputs),
+        ] {
+            assert_eq!(blinds.0.capacity(), 3);
+        }
     }
 
     /// The blinds print their count and nothing of themselves.

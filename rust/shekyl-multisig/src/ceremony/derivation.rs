@@ -342,16 +342,19 @@ impl DerivedSpend {
         network_id: NetworkId,
     ) -> Result<Self, DeriveError> {
         let (intent, tree, paths) = paths.into_parts();
-        let records = intent
+        // Allocated once, at the input count: each record carries the
+        // secrets re-derived for it, and a vector that grew would free its
+        // earlier buffers, secrets in them, without wiping them.
+        let mut records = Vec::with_capacity(intent.input_count().get());
+        for ((&global_index, amount), path) in intent
             .intent()
             .input_global_indices
             .iter()
             .zip(intent.input_amounts())
             .zip(paths)
-            .map(|((&global_index, amount), path)| {
-                spendable(ledger, key, global_index, *amount, path)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        {
+            records.push(spendable(ledger, key, global_index, *amount, path)?);
+        }
         let seed = &intent.intent().kem_randomness_seed;
         let tx_key = TxKey::from_intent_seed(seed);
         // A single-signer recipient's keys, mapped once; the payees borrow

@@ -382,15 +382,17 @@ impl BuiltSpend {
             return Err(BuildSpendError::TooManyOutputs { count });
         }
         let order = tx_key.output_order(count);
-        let outputs = order
-            .recipients()
-            .zip(0u64..)
-            .map(|(recipient, position)| {
-                let Recipient { payee, amount } = recipients[recipient];
+        // Allocated once, at its size: each output holds its mask, and a
+        // vector that grew would free its earlier buffers, masks in them,
+        // without wiping them.
+        let mut outputs = Vec::with_capacity(count);
+        for (recipient, position) in order.recipients().zip(0u64..) {
+            let Recipient { payee, amount } = recipients[recipient];
+            outputs.push(
                 build_output(tx_key, payee, amount, position)
-                    .map_err(|source| BuildSpendError::Output { recipient, source })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                    .map_err(|source| BuildSpendError::Output { recipient, source })?,
+            );
+        }
         let wire = SpendOutputs::of(tx_key, &outputs).map_err(BuildSpendError::Extra)?;
         Ok(Self {
             outputs,
@@ -574,6 +576,21 @@ mod tests {
         assert!(fields
             .iter()
             .any(|f| matches!(f, TxExtraField::PqcMultisig(entries) if entries.len() == 1)));
+    }
+
+    /// A spend's outputs, each holding its mask, are allocated once, at
+    /// their count, so no grown-out buffer of masks is freed unwiped: at
+    /// three outputs a vector that grew would hold four slots.
+    #[test]
+    fn a_spends_outputs_are_allocated_once() {
+        let address = group(3, 2);
+        let payee = Payee::Group {
+            address: &address,
+            network: &NET,
+        };
+        let recipients = [400, 600, 800].map(|amount| Recipient { payee, amount });
+        let spend = BuiltSpend::build(&TxKey::random().unwrap(), &recipients).unwrap();
+        assert_eq!(spend.outputs.capacity(), recipients.len());
     }
 
     /// The outputs as the transaction carries them: each prefix output is
