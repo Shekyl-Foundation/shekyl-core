@@ -419,6 +419,19 @@ fn parse_endpoint(url: String) -> Result<ParsedEndpoint, RpcError> {
     })
 }
 
+/// A daemon address as an operator types it (`daemon-address`, including the
+/// address a service refusal tells them to set). A scheme-less `host:port`
+/// — `127.0.0.1:11030`, `[::1]:11030` — is `http://` plus that text. A URL
+/// is itself. Startup validation then sees one shape.
+#[must_use]
+pub fn daemon_address_url(address: &str) -> String {
+    if address.contains("://") {
+        address.to_owned()
+    } else {
+        format!("http://{address}")
+    }
+}
+
 /// Validate a daemon URL and optional proxy **offline** — every construction
 /// check short of dialing: the authority credential grammar, the URL shape
 /// (http(s) scheme, authority, no query, base-path normalization), the proxy
@@ -1095,6 +1108,24 @@ mod tests {
             message.contains("`pow`") && message.contains("missing"),
             "{message}"
         );
+    }
+
+    /// A scheme-less address, including a bracketed IPv6 endpoint, is the
+    /// `http://` URL validation accepts. Red edit: leave the text unchanged
+    /// in `daemon_address_url`, and both bare forms fail the shape check.
+    #[test]
+    fn a_bare_daemon_address_is_an_http_url() {
+        assert_eq!(
+            daemon_address_url("127.0.0.1:11030"),
+            "http://127.0.0.1:11030"
+        );
+        assert_eq!(daemon_address_url("[::1]:11030"), "http://[::1]:11030");
+        assert_eq!(
+            daemon_address_url("http://127.0.0.1:11030"),
+            "http://127.0.0.1:11030"
+        );
+        validate_endpoint(&daemon_address_url("127.0.0.1:11030"), None).expect("ipv4");
+        validate_endpoint(&daemon_address_url("[::1]:11030"), None).expect("ipv6");
     }
 
     /// `validate_endpoint` is the offline startup gate: well-formed

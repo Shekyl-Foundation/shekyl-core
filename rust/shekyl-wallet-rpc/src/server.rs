@@ -412,7 +412,10 @@ pub fn daemon_target(
     proxy: Option<String>,
 ) -> Result<DaemonTarget, String> {
     match (address, proxy) {
-        (Some(url), proxy) => Ok(DaemonTarget::Address { url, proxy }),
+        (Some(url), proxy) => Ok(DaemonTarget::Address {
+            url: shekyl_rpc_transport::daemon_address_url(&url),
+            proxy,
+        }),
         (None, None) => Ok(DaemonTarget::ThisComputer {
             network,
             service_rendezvous: shekyl_process::platform::service_rendezvous(),
@@ -1035,6 +1038,23 @@ mod tests {
             refused.contains("--proxy needs --daemon-address"),
             "{refused}"
         );
+        // The service refusal names a bare endpoint. It has to be the URL
+        // startup validation accepts. Red edit: store the text unchanged,
+        // and `127.0.0.1:11030` is not an http URL.
+        for (given, url) in [
+            ("127.0.0.1:11030", "http://127.0.0.1:11030"),
+            ("[::1]:11030", "http://[::1]:11030"),
+        ] {
+            let DaemonTarget::Address {
+                url: got,
+                proxy: None,
+            } = daemon_target(Network::Mainnet, Some(given.into()), None).unwrap()
+            else {
+                panic!("{given} must be an address")
+            };
+            assert_eq!(got, url);
+            shekyl_rpc_transport::validate_endpoint(&got, None).expect(given);
+        }
     }
 
     /// The credential-redaction pin: no `Debug` of server configuration —
