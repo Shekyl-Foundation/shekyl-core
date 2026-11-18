@@ -4526,9 +4526,9 @@ version = "3.1.0"
 dependencies = [
  "hkdf",
  "hmac",
- "rustix",
  "serde",
  "sha2",
+ "shekyl-os-account",
  "shekyl-units",
  "tempfile",
  "thiserror",
