@@ -926,7 +926,13 @@ impl WalletFile {
         // advisory lock survives the rename (per-OFD on POSIX, per-
         // handle on Windows). `EXDEV` translation is the belt-and-
         // suspenders for layered filesystems whose `st_dev` lies.
-        match std::fs::rename(&self.keys_path, &new_keys_path) {
+        // CLIPPY: disallowed_methods — save_as moves the keys file, not a replace.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "save_as moves the locked keys file to a new name that must not exist, keeping its inode and lock; not a file replace"
+        )]
+        let moved = std::fs::rename(&self.keys_path, &new_keys_path);
+        match moved {
             Ok(()) => {}
             Err(e) if is_cross_device_error(&e) => {
                 return Err(WalletFileError::SaveAsCrossFilesystem {

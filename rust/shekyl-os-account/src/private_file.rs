@@ -560,6 +560,11 @@ fn remove_leftover(staged: &Path, live: &Path, deadline: Instant) -> Result<(), 
 
 /// Rename `staged` over `live`.
 #[cfg(unix)]
+// CLIPPY: disallowed_methods — this is the one Unix file replace.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the one Unix file replace: rename(2) over the destination, which every replace in the tree goes through (Rick, 2026-11-18)"
+)]
 fn rename_over(staged: &Path, live: &Path, _deadline: Instant) -> Result<(), CommitError> {
     std::fs::rename(staged, live).map_err(|error| CommitError::Io(live.to_path_buf(), error))
 }

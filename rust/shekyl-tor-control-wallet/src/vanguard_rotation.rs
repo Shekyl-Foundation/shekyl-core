@@ -73,6 +73,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use kameo::error::SendError;
 use tokio::sync::oneshot;
 
+use shekyl_os_account::private_file::{self, Access, CommitError, Journal, StagedWrite};
 use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
 use shekyl_tor_control_client::control::vanguards::{
@@ -442,11 +443,12 @@ pub fn state_path(data_dir: &Path) -> PathBuf {
     data_dir.join("shekyl-vanguards.state")
 }
 
-/// The in-progress copy [`save_state`] writes before committing it over
-/// [`state_path`]. Also the crash-recovery copy [`read_state`] falls back to:
-/// it exists **only** when a save did not complete.
-fn temp_path(path: &Path) -> PathBuf {
-    path.with_extension("state.tmp")
+/// The staged copy [`save_state`] writes before committing it over
+/// [`state_path`]: the state file's journal ([`private_file::staged_path`]).
+/// Also the crash-recovery copy [`read_state`] falls back to: it exists
+/// **only** when a save did not complete.
+fn journal_path(path: &Path) -> PathBuf {
+    private_file::staged_path(path)
 }
 
 /// What reading the persisted state found.
@@ -459,7 +461,7 @@ enum StateOnDisk {
     /// Nothing persisted: a genuine first run, where selecting fresh is both
     /// correct and unremarkable.
     Absent,
-    /// A usable state — from the canonical file, or recovered from the temp copy
+    /// A usable state — from the canonical file, or recovered from the journal
     /// an interrupted save left behind.
     Held(RotationState),
     /// Something is there that could not be turned into a state: an I/O error,
@@ -475,12 +477,12 @@ enum StateOnDisk {
 ///
 /// Malformed content — wrong set sizes, duplicates, L2/L3 overlap — is never
 /// accepted as a partial set that would silently under-pin. When the canonical
-/// file is missing or unusable, the temp copy is tried: it exists only after an
+/// file is missing or unusable, the journal is tried: it exists only after an
 /// interrupted save, where it may be the *only* durable record of the set, and
 /// [`RotationState::deserialize`]'s structural gate is what makes reading a
 /// possibly-partial file safe.
 fn read_state(path: &Path) -> StateOnDisk {
-    let recovered = |fallback: StateOnDisk| match std::fs::read_to_string(temp_path(path)) {
+    let recovered = |fallback: StateOnDisk| match std::fs::read_to_string(journal_path(path)) {
         Ok(text) => RotationState::deserialize(&text).map_or(fallback, StateOnDisk::Held),
         Err(_) => fallback,
     };
@@ -503,9 +505,10 @@ fn read_state(path: &Path) -> StateOnDisk {
     }
 }
 
-/// Persist rotation state **atomically and durably**: write a temp file, force
-/// it to stable storage, rename it over the canonical path, then force the
-/// directory entry.
+/// Persist rotation state **atomically and durably** through the tree's one
+/// replace (Rick, 2026-11-18): the bytes are staged as the state file's
+/// journal and synced, the journal is renamed over the canonical path, and
+/// the directory entry is synced.
 ///
 /// Both halves are load-bearing for the same reason, and neither alone is
 /// enough. Atomicity keeps a half-written file from ever being read as the
@@ -515,56 +518,29 @@ fn read_state(path: &Path) -> StateOnDisk {
 /// fresh, and the restart has caused a rotation — precisely the invariant this
 /// module exists to hold.
 ///
-/// The temp file is **never deleted on failure**. After a failed rename it can
-/// be the only durable copy of the set — Windows cannot rename onto an existing
-/// file, so the destination has to go first — and [`read_state`] falls back to
-/// it. A successful rename consumes it, so a temp file lingering is itself the
-/// signal that the last save did not complete.
+/// The staged file is a [`Journal`]: it is **never deleted on failure**. After
+/// a failed rename it can be the only durable copy of the set, and
+/// [`read_state`] falls back to it. A successful rename consumes it, so a
+/// journal lingering is itself the signal that the last save did not complete.
+/// On Windows the rename goes through the one Windows replace, which replaces
+/// an existing file in one step and waits for a reader that holds it.
 ///
-/// **The boundary of that recovery, stated rather than implied:** the temp has
-/// one fixed name, so a later save truncates it. Both copies are therefore lost
-/// only by a *double* fault — a Windows rename that failed after the destination
-/// was removed, followed by a save whose write also fails — and only a process
-/// restart inside that window re-draws, since in-memory state carries the set
-/// meanwhile. Per-save unique temp names would close it at the cost of durable
-/// garbage accumulating in the Tor `DataDirectory` (or a GC pass to sweep it),
-/// which is the worse trade for a two-fault, one-platform path.
+/// **The boundary of that recovery, stated rather than implied:** the journal
+/// has one fixed name, so a later save replaces it. Both copies are therefore
+/// lost only by a *double* fault — a rename that failed, followed by a save
+/// whose write also fails — and only a process restart inside that window
+/// re-draws, since in-memory state carries the set meanwhile.
+///
+/// The directory sync after the rename stays best-effort, as it always was: a
+/// failure there costs durability of the *rename*, not correctness — a reader
+/// still sees either the old state or the new one, never a mix — so
+/// [`CommitError::Unsynced`] is a completed save.
 fn save_state(path: &Path, state: &RotationState) -> std::io::Result<()> {
-    use std::io::Write as _;
-
-    let tmp = temp_path(path);
-    {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(state.serialize().as_bytes())?;
-        // The rename below is only as good as the bytes it commits.
-        file.sync_all()?;
-    }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        // POSIX `rename` overwrites atomically and never reports this; Windows
-        // refuses an existing destination, so remove and retry — and only ever
-        // here, after the temp is already on stable storage, so the window where
-        // the canonical path is missing is covered by `read_state`'s fallback
-        // rather than left open. Any other error is the caller's to see.
-        if e.kind() != std::io::ErrorKind::AlreadyExists {
-            return Err(e);
-        }
-        std::fs::remove_file(path)?;
-        std::fs::rename(&tmp, path)?;
-    }
-    sync_parent_dir(path);
-    Ok(())
-}
-
-/// Force the directory entry the rename just created.
-///
-/// Best-effort: not every platform lets a directory be opened for sync (Windows
-/// does not), and a failure costs durability of the *rename*, not correctness —
-/// a reader still sees either the old state or the new one, never a mix.
-fn sync_parent_dir(path: &Path) {
-    if let Some(dir) = path.parent() {
-        if let Ok(handle) = std::fs::File::open(dir) {
-            drop(handle.sync_all());
-        }
+    let staged =
+        StagedWrite::<Journal>::create(path, state.serialize().as_bytes(), Access::Default)?;
+    match staged.commit() {
+        Ok(()) | Err(CommitError::Unsynced(..)) => Ok(()),
+        Err(error) => Err(std::io::Error::from(error)),
     }
 }
 
@@ -1634,39 +1610,72 @@ L3 $BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 2\n";
 
     #[test]
     fn a_durable_save_leaves_no_temp_behind() {
-        // The temp file is the crash-recovery copy, so its *presence* is the
+        // The journal is the crash-recovery copy, so its *presence* is the
         // signal that a save did not complete. A successful save must consume it.
         let dir = tempfile::tempdir().unwrap();
         let path = state_path(dir.path());
         let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(5)).unwrap();
         save_state(&path, &state).unwrap();
         assert!(path.exists());
-        assert!(!temp_path(&path).exists());
+        assert!(!journal_path(&path).exists());
         // And an overwrite of an existing file works on every platform.
         save_state(&path, &state).unwrap();
-        assert!(!temp_path(&path).exists());
+        assert!(!journal_path(&path).exists());
     }
 
     #[test]
     fn an_interrupted_save_is_recovered_from_the_temp_copy() {
-        // The window this closes: a rename that failed after the destination was
-        // removed (Windows cannot rename onto an existing file), leaving the temp
-        // as the ONLY durable copy. Reading only the canonical path would re-draw
-        // the persona's whole topology; the structural gate is what makes reading
-        // a possibly-partial temp safe.
+        // The window this closes: a save that wrote and synced its journal and
+        // stopped before the rename, leaving the journal as the ONLY durable
+        // copy. Reading only the canonical path would re-draw the persona's
+        // whole topology; the structural gate is what makes reading a
+        // possibly-partial journal safe. Planted as a crash leaves it: the
+        // journal written directly beside a canonical path that holds nothing.
         let dir = tempfile::tempdir().unwrap();
         let path = state_path(dir.path());
         let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(6)).unwrap();
-        std::fs::write(temp_path(&path), state.serialize()).unwrap();
+        std::fs::write(journal_path(&path), state.serialize()).unwrap();
+        assert_eq!(
+            journal_path(&path),
+            private_file::staged_path(&path),
+            "the journal read back is the one the save stages"
+        );
 
         match read_state(&path) {
             StateOnDisk::Held(recovered) => assert_eq!(recovered, state),
-            _ => panic!("a complete temp copy must be recovered, not re-drawn"),
+            _ => panic!("a complete journal must be recovered, not re-drawn"),
         }
 
-        // A partial temp is still refused — recovery must not lower the bar.
-        std::fs::write(temp_path(&path), "L2 $AA 1\n").unwrap();
+        // A partial journal is still refused — recovery must not lower the bar.
+        std::fs::write(journal_path(&path), "L2 $AA 1\n").unwrap();
         assert!(matches!(read_state(&path), StateOnDisk::Absent));
+    }
+
+    /// A save whose rename fails keeps its journal, and the next read
+    /// recovers the set from it. The canonical path is a non-empty
+    /// directory, which no rename replaces on any platform. Red edit: stage
+    /// the save as a `Replace`, whose failed commit removes its staged file,
+    /// and this read finds nothing to recover.
+    #[test]
+    fn a_failed_save_keeps_its_journal_for_the_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = state_path(dir.path());
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("occupied"), b"").unwrap();
+        let state = RotationState::select_fresh(&pool(30), t0(), &mut SeededRng(7)).unwrap();
+        assert!(
+            save_state(&path, &state).is_err(),
+            "a rename onto a non-empty directory must fail"
+        );
+        assert_eq!(
+            std::fs::read_to_string(journal_path(&path)).unwrap(),
+            state.serialize(),
+            "a failed save keeps its journal"
+        );
+        match read_state(&path) {
+            StateOnDisk::Held(recovered) => assert_eq!(recovered, state),
+            _ => panic!("the failed save's journal must be recovered, not re-drawn"),
+        }
     }
 
     #[test]

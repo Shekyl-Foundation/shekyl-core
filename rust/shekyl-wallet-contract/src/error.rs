@@ -2094,9 +2094,7 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
         }
         F::DirectoryMissing { .. } => WalletRpcError::WalletDirMissing,
         F::AlreadyLocked { .. } => WalletRpcError::WalletLockedElsewhere,
-        F::AtomicWriteRename { .. } | F::AtomicWriteFinalizeStaged { .. } => {
-            WalletRpcError::WalletFileIoFailed
-        }
+        F::AtomicWriteRename { .. } => WalletRpcError::WalletFileIoFailed,
         F::NetworkMismatch { expected, found } => WalletRpcError::WalletNetworkMismatch {
             wallet: found.to_string(),
             expected: expected.to_string(),

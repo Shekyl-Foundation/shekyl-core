@@ -5,15 +5,14 @@
 
 //! The network marker (`DAEMON_CONFIG_CUTOVER.md` §2.6; IG-Q17, DC-Q15):
 //! `shekyld.network` at the data directory's root, TOML holding the network
-//! and the network id, written to a temporary file, synced, renamed into
-//! place with the directory synced after, and read only while the lock is
-//! held.
+//! and the network id, written through the one replace (a staged file,
+//! synced, renamed into place with the directory synced after), and read
+//! only while the lock is held.
 
-use std::fs::File;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use shekyl_options::{Code, Diagnostic, Source};
+use shekyl_os_account::private_file::{self, Access};
 
 use crate::lock::Lock;
 use crate::network::Network;
@@ -123,7 +122,7 @@ pub fn check_or_write(
         MarkerRead::Matched => Ok(MarkerOutcome::Matched),
         MarkerRead::Absent => {
             let path = data_dir.join(MARKER_FILE);
-            write(data_dir, &path, network, network_id).map_err(|e| {
+            write(&path, network, network_id).map_err(|e| {
                 Diagnostic::new(Code::DataDirUnusable, Source::Machine)
                     .option("data-dir")
                     .param("path", data_dir.display().to_string())
@@ -160,21 +159,16 @@ pub fn parse(text: &str) -> Option<(Network, NetworkId)> {
     Some((network, id))
 }
 
-/// Temporary file, sync, rename, directory sync.
-fn write(
-    data_dir: &Path,
-    path: &Path,
-    network: Network,
-    network_id: NetworkId,
-) -> std::io::Result<()> {
-    let staged: PathBuf = data_dir.join(format!("{MARKER_FILE}.tmp"));
-    {
-        let mut f = File::create(&staged)?;
-        f.write_all(render(network, network_id).as_bytes())?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&staged, path)?;
-    shekyl_os_account::private_file::sync_dir(data_dir)
+/// The one replace (Rick, 2026-11-18): a staged file, synced, renamed over
+/// `path`, and the directory synced. The marker keeps what a plain create
+/// gives it ([`Access::Default`]).
+fn write(path: &Path, network: Network, network_id: NetworkId) -> std::io::Result<()> {
+    private_file::replace(
+        path,
+        render(network, network_id).as_bytes(),
+        Access::Default,
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -250,7 +244,7 @@ mod tests {
             check_or_write(&lock, Network::Testnet, ID_A).unwrap(),
             MarkerOutcome::Matched
         );
-        assert!(!lock.data_dir().join(format!("{MARKER_FILE}.tmp")).exists());
+        assert!(!private_file::staged_path(&lock.data_dir().join(MARKER_FILE)).exists());
     }
 
     #[test]
