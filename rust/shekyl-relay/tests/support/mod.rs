@@ -621,7 +621,9 @@ pub fn discard_the_carrier(rig: &Rig, outbound: Vec<Wire>) {
     thread::sleep(SETTLE);
     rig.advance(PAST_THE_FIRST_EPOCH);
     thread::sleep(SETTLE);
-    // Each channel is due within 6.7 s of the roll, one per wake.
-    rig.drive(STEP, 15, || false);
+    // Each channel is due at a memoryless cadence (mean 5 s), one per
+    // wake, after its epoch tail; two minutes leaves a channel without a
+    // due tick about once in 10^10.
+    rig.drive(STEP, 120, || false);
     thread::sleep(SETTLE);
 }

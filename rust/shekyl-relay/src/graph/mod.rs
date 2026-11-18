@@ -35,6 +35,7 @@ use shekyl_types::relay::RelayMethod;
 use crate::noise_queue::Starts;
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
+mod broadcast_hold;
 mod cover;
 mod embargo;
 mod epoch_map;
@@ -43,12 +44,13 @@ mod origin;
 
 pub use embargo::{
     origin_publication_budget_ms, origin_retry_ms, origin_retry_secs, EmbargoWork,
-    OriginPublication, NEVER_SENT_RETRY_MS,
+    OriginPublication, StemWork, NEVER_SENT_RETRY_MS,
 };
 pub use origin::OriginVerdict;
 
 use epoch_map::EpochMap;
 
+pub use broadcast_hold::Broadcast;
 pub use cover::{timing_visible, transit_ms};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
@@ -521,6 +523,9 @@ pub struct Relay {
     /// chose it). With [`link_encrypted`], the connector's native cell, it
     /// is whether a session is encrypted ([`Self::session_encrypted`]).
     added_encryption: Vec<ConnectorId>,
+    /// Transactions whose stem phase ended here, held before their broadcast
+    /// starts (`CVR-R10`, `broadcast_hold`).
+    broadcast_holds: broadcast_hold::BroadcastHolds,
 }
 
 impl Relay {
@@ -600,6 +605,7 @@ impl Relay {
             embargoes: embargo::Embargoes::default(),
             node_sync: NodeSync::Unsynchronised,
             added_encryption: added_encryption.to_vec(),
+            broadcast_holds: broadcast_hold::BroadcastHolds::default(),
         })
     }
 
@@ -665,7 +671,14 @@ impl Relay {
                     starts: Starts::Open,
                 })
             }
-            Some(_) => None,
+            Some(_) => {
+                // Nothing was sent: the channel is bound to no one, so the
+                // next boundary owes no tail to a peer it left.
+                if let Some(bound) = self.noise.binding_mut(channel) {
+                    bound.peer = None;
+                }
+                None
+            }
             None => {
                 if let Some(bound) = self.noise.binding_mut(channel) {
                     bound.peer = None;
@@ -1240,6 +1253,11 @@ pub enum RelayCarrier {
     /// exists for. The send loop must respect that binding rather than
     /// broadcasting to every channel (§42.5a).
     Noise { channel: SlotIndex },
+    /// The destination's session carries cover but holds no stem slot, so
+    /// no window can carry the stem (`CVR-R6`). A relayed stem ends its stem
+    /// phase; this node's own transaction waits. Never a bare send: on a
+    /// covered session a stem leaves only inside a window.
+    NoWindow,
 }
 
 /// A plan together with the wire that carries it — the whole answer in one
@@ -1259,49 +1277,40 @@ pub struct RelayDispatch {
 impl Relay {
     /// Attach a carrier to a plan, per §42.3.
     ///
-    /// Noise carries a **stem** and only a stem, and only when noise is
-    /// enabled on this zone. A fluff epoch and a no-route both take the
-    /// ordinary connection: fluff by §42.3's design, no-route because there is
-    /// nothing to carry.
-    ///
-    /// [`RelayPlan::AwaitSync`] and [`RelayPlan::NoOwnEdge`] name
-    /// [`RelayCarrier::Ordinary`] so the match is total. That carrier is
-    /// unread: the plan is the refusal, and the caller returns before any
-    /// send.
-    ///
-    /// [`RelayPlan::OwnEdge`] leaves on the ordinary connection.
-    /// [`RelayPlan::Stem`] to a covered session ([`Self::noise_destination`]),
-    /// while noise is on, is that slot's channel — including a local origin
-    /// whose first hop is the slot. A relayed stem with no slot is map
-    /// corruption. In release that arm still returns
-    /// [`RelayCarrier::Ordinary`]: the stem goes out. That is a cover
-    /// degradation, not a routing one.
+    /// A stem and an own edge take [`Self::carrier_to`] their destination.
+    /// A fluff epoch, a no-route, and the refusals take
+    /// [`RelayCarrier::Ordinary`] so the match is total: a fluff epoch ends
+    /// the stem phase, a no-route has nothing to carry, and on a refusal the
+    /// caller returns before any send.
     fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
         match plan {
-            RelayPlan::Stem(destination) if self.noise.enabled() => {
-                match self.map.slot_of(destination) {
-                    Some(slot) if self.noise_destination(destination) => {
-                        RelayCarrier::Noise { channel: slot }
-                    }
-                    Some(_) => RelayCarrier::Ordinary,
-                    None => {
-                        debug_assert!(
-                            false,
-                            "planned a relayed stem to a peer with no slot: the destination came \
-                         from this map in this call, so this is map corruption, not a posture"
-                        );
-                        RelayCarrier::Ordinary
-                    }
-                }
+            RelayPlan::Stem(destination) | RelayPlan::OwnEdge(destination) => {
+                self.carrier_to(destination)
             }
-            // OwnEdge leaves on the ordinary connection. The other plans
-            // are a refusal or have nothing to carry.
-            RelayPlan::OwnEdge(_)
-            | RelayPlan::NoOwnEdge
+            RelayPlan::NoOwnEdge
             | RelayPlan::AwaitSync
             | RelayPlan::NoRoute
-            | RelayPlan::FluffEpoch
-            | RelayPlan::Stem(_) => RelayCarrier::Ordinary,
+            | RelayPlan::FluffEpoch => RelayCarrier::Ordinary,
+        }
+    }
+
+    /// How a stem to `destination` leaves this node (`CVR-R6`; Rick,
+    /// 2026-11-15, restated 2026-11-18).
+    ///
+    /// On a session that carries cover ([`Self::noise_destination`], with
+    /// the carrier on), the stem leaves only inside a window: its slot's
+    /// channel, or [`RelayCarrier::NoWindow`] when the session holds no
+    /// slot. On a session that carries none — a plaintext link, or a node
+    /// with the carrier off — there is no window to wait for and the stem
+    /// takes the ordinary connection.
+    #[must_use]
+    pub fn carrier_to(&self, destination: ConnectionId) -> RelayCarrier {
+        if !(self.noise.enabled() && self.noise_destination(destination)) {
+            return RelayCarrier::Ordinary;
+        }
+        match self.map.slot_of(destination) {
+            Some(channel) => RelayCarrier::Noise { channel },
+            None => RelayCarrier::NoWindow,
         }
     }
 

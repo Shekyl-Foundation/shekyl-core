@@ -119,21 +119,29 @@ pub enum Effect {
         /// Channel index. Positional: channel `i` follows stem slot `i`.
         channel: usize,
     },
-    /// Stem these blobs to `peer` on the ordinary wire: an embargo's reshape
-    /// to the alternate (§12.2), or a held origin's first send (RX-2). The
-    /// bytes are the transaction's own; no relay or retry state rides them
-    /// (§12.2 item 5).
+    /// Stem this transaction to `peer`: an embargo's reshape to the
+    /// alternate (§12.2), or a held origin's first send (RX-2). It leaves as
+    /// [`Relay::carrier_to`] the peer says (`CVR-R6`): inside a window on a
+    /// covered session, on the ordinary connection otherwise. The bytes are
+    /// the transaction's own; no relay or retry state rides them (§12.2
+    /// item 5).
     Stem {
         /// The successor.
         peer: ConnectionId,
-        /// The transaction blobs.
-        blobs: Vec<TxBlob>,
+        /// The transaction, by hash.
+        tx: crate::TxId,
+        /// Its bytes.
+        blob: TxBlob,
+        /// The session it arrived on; `None` for this node's own.
+        source: Option<ConnectionId>,
     },
-    /// The zone fluffed these transactions as the last resort, or saw them
-    /// circulate: the pool's shown bit is set for each (criterion 2, Q9).
-    Published {
-        /// The transactions, by hash.
-        txs: Vec<crate::TxId>,
+    /// A broadcast that ends a stem has finished its hold (`CVR-R10`): queue
+    /// these transactions for fluff now, and show them.
+    Broadcast {
+        /// The transactions, with the hashes the pool knows them by.
+        txs: Vec<(crate::TxId, TxBlob)>,
+        /// The session the stem arrived on, which the fluff excludes.
+        source: Option<ConnectionId>,
     },
 }
 
@@ -200,6 +208,9 @@ impl Driver {
         if let Some(unsent) = self.zone.unsent_deadline() {
             wake = wake.min(unsent);
         }
+        if let Some(held) = self.zone.broadcast_hold_deadline() {
+            wake = wake.min(held);
+        }
         wake
     }
 
@@ -227,21 +238,24 @@ impl Driver {
         // asio timer actually fires for these — not only when fluff/epoch
         // happen to wake first.
         // A silence is an embargo that fired: the zone re-stems to the
-        // alternate or fluffs (§12.2, §14.7). Then every held origin that is
+        // alternate or ends the stem phase (§12.2, §14.7; `CVR-R6`, `CVR-R10`). Then every held origin that is
         // due is planned again (RX-2). The tallies the silences also feed are
         // §12.11's, whose selection consumer is not built.
         let fired = self.zone.fire_embargoes(now, rng);
         let unsent = self.zone.due_unsent(now, rng);
-        let mut published = fired.published;
-        published.extend(unsent.published);
-        for (peer, blob) in fired.stems.into_iter().chain(unsent.stems) {
+        for stem in fired.stems.into_iter().chain(unsent.stems) {
             effects.push(Effect::Stem {
-                peer,
-                blobs: vec![blob],
+                peer: stem.peer,
+                tx: stem.tx,
+                blob: stem.blob,
+                source: stem.source,
             });
         }
-        if !published.is_empty() {
-            effects.push(Effect::Published { txs: published });
+        for held in self.zone.due_broadcasts(now) {
+            effects.push(Effect::Broadcast {
+                txs: held.txs,
+                source: held.source,
+            });
         }
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {

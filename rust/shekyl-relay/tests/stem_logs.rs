@@ -50,11 +50,11 @@ impl Write for Sink {
 }
 
 /// **A stem's transactions and successor are never logged.** A stem goes to
-/// its successor, then a second stem's write fails and it falls back to
-/// fluff; every event at TRACE is captured. No line names either
+/// its successor, then a second stem's write fails and its stem phase ends
+/// here (held, then broadcast); every event at TRACE is captured. No line names either
 /// transaction, and no line about a stem names the successor (a fluff may
 /// name the peers it reaches). The test first sees the stem's own event, so
-/// an empty log cannot pass. Red edits: put `?peer` back on "a reshape stem
+/// an empty log cannot pass. Red edits: put `?peer` back on "a zone stem
 /// was written", `?destination` on "a stem was forwarded" or
 /// `tx = ?pending.tx` on the carrier's discard, and this fails.
 #[test]
@@ -72,9 +72,8 @@ fn the_log_never_names_a_stems_transactions_or_its_successor() {
         CloseCause::new(CloseKind::IoError),
     ));
     sender.inject_blocking(new_transactions(vec![blob(2)], false));
-    support::wait_until("the fallback showed it", || {
-        rig.pool.shown().contains(&id_of(&blob(2)))
-    });
+    let shown = rig.drive(STEP, 180, || rig.pool.shown().contains(&id_of(&blob(2))));
+    assert!(shown, "the fallback never showed it");
     thread::sleep(SETTLE);
 
     let text = String::from_utf8(log.lock().expect("the log").clone()).expect("UTF-8");
@@ -106,10 +105,10 @@ fn text(log: &Mutex<Vec<u8>>) -> String {
 
 /// **The carrier's discarded stem and the embargo's reshape stem are logged
 /// without their transactions or successors too.** A stem the carrier
-/// holds is discarded when its sessions go, and fluffs; a stem whose
-/// embargo fires with no re-arrival is re-stemmed to the alternate
+/// holds is discarded when its sessions go, and its stem phase ends; a stem
+/// whose embargo fires with no re-arrival is re-stemmed to the alternate
 /// successor. The test first sees both events. Red edits: put
-/// `tx = ?pending.tx` back on the discard's line, or `?peer` on "a reshape
+/// `tx = ?pending.tx` back on the discard's line, or `?peer` on "a zone
 /// stem was written", and this fails.
 #[test]
 fn the_carrier_discard_and_the_reshape_name_nothing_either() {
@@ -144,16 +143,16 @@ fn the_carrier_discard_and_the_reshape_name_nothing_either() {
     thread::sleep(SETTLE);
     drop(rig.batches(&mut one));
     drop(rig.batches(&mut two));
-    rig.drive(STEP, 200, || text(&log).contains("a reshape stem was"));
+    rig.drive(STEP, 200, || text(&log).contains("a zone stem was"));
     drop(sender);
 
     let text = text(&log);
     assert!(
-        text.contains("the carrier discarded a forwarded stem"),
+        text.contains("the carrier discarded a stem"),
         "the capture saw the carrier's discard:\n{text}"
     );
     assert!(
-        text.contains("a reshape stem was"),
+        text.contains("a zone stem was"),
         "the capture saw the embargo's reshape:\n{text}"
     );
     for tag in [7, 8] {

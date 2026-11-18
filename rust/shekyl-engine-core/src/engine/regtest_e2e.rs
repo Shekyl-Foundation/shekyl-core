@@ -490,23 +490,32 @@ impl RegtestSpawn {
     }
 }
 
-/// How long an offline daemon's posted job may take to list its shown pool:
-/// the relay fluffs at once, and the follower rebuilds on the wake.
-const SHOWN_POOL_LIMIT: Duration = Duration::from_secs(30);
+/// How long a daemon's posted job may take to list its shown pool.
+///
+/// An offline daemon shows its own transaction at once (it has no network
+/// to stem on), and the follower rebuilds on the wake. A peered daemon
+/// shows a transaction when its stem ends there: at most one carrier
+/// window to reach it and the hold before the broadcast (`CVR-R10`), six
+/// memoryless cadence draws together, 82 s at their 99.9th percentile
+/// (Erlang, mean 5 s each), then one fluff flush toward an inbound peer,
+/// 8.75 s at its 99.9th percentile: 91 s, so 100 s.
+const SHOWN_POOL_LIMIT: Duration = Duration::from_secs(100);
 
 /// The miner's wait on the Tor trio ([`RegtestDaemon::start_tor_trio`]).
 /// A transaction it originates is unbroadcast until a fluff comes back.
 /// The longest path is A → C (stem), C → B (fluff), B → A (fluff), or
 /// A → B → C (stems) and C → A (fluff): at most two stem hops, each waiting
-/// at most one carrier slot (`NOISE_MIN_DELAY_MS` + `NOISE_DELAY_JITTER_MS`,
-/// 6.67 s), and at most two fluff flushes toward an inbound peer, each a
-/// Poisson draw over quarter-seconds with λ = 20
-/// (`FLUFF_AVERAGE_IN_QUARTER_SECS`), 8.75 s at its 99.9th percentile, plus
-/// three onion circuits at 5 s each: 13.3 + 17.5 + 15 ≈ 46 s, so 60 s.
+/// for one carrier window, and the hold where the stem ends (`CVR-R10`,
+/// five windows' draws): seven memoryless cadence draws together, 91 s at
+/// their 99.9th percentile (Erlang, mean 5 s each); at most two fluff
+/// flushes toward an inbound peer, each a Poisson draw over quarter-seconds
+/// with λ = 20 (`FLUFF_AVERAGE_IN_QUARTER_SECS`), 8.75 s at its 99.9th
+/// percentile; and three onion circuits at 5 s each: 91 + 17.5 + 15 ≈ 124
+/// s, so 130 s.
 ///
 /// The derivation assumes the whole mesh. A session down at this limit
 /// fails the wait, and the walk is rerun.
-const TOR_SHOWN_POOL_LIMIT: Duration = Duration::from_secs(60);
+const TOR_SHOWN_POOL_LIMIT: Duration = Duration::from_secs(130);
 
 /// How [`RegtestDaemon::wait_shown_pool_in_template`] reads the pool.
 struct ShownPool {

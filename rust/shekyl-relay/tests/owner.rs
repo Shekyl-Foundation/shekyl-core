@@ -15,7 +15,7 @@ use std::thread;
 use shekyl_p2p_session::CloseKind;
 use shekyl_relay::owner::Admit;
 use shekyl_relay::NodeSync;
-use support::{blob, id_of, new_transactions, txpool_complement, Asked, Build, Rig, SETTLE};
+use support::{blob, id_of, new_transactions, txpool_complement, Asked, Build, Rig, SETTLE, STEP};
 
 #[test]
 fn a_batch_before_sync_is_ignored_and_the_session_stays() {
@@ -75,19 +75,25 @@ fn a_stem_batch_goes_to_an_outbound_successor_as_a_stem() {
 }
 
 /// A node with no outbound session has no stem successor, so a stem it
-/// receives takes the retry-then-fluff fallback and goes to its other
-/// peers as a fluff. This is the designed path, taken for every stem such
-/// a node holds; its log line is a debug line (the alpha.11 fleet: an
-/// ERROR per stem on an inbound-only node).
+/// receives ends its stem phase here: held before its broadcast
+/// (`CVR-R10`), then fluffed to its other peers. This is the designed path,
+/// taken for every stem such a node holds; its log line is a debug line
+/// (the alpha.11 fleet: an ERROR per stem on an inbound-only node). Nothing
+/// is shown or sent until the hold ends on the rig's clock.
 #[test]
-fn a_stem_with_no_outbound_successor_is_fluffed_to_the_other_peers() {
+fn a_stem_with_no_outbound_successor_is_held_then_fluffed_to_the_other_peers() {
     let rig = Rig::build(Build::default());
     let mut sender = rig.inbound(1);
     let mut other = rig.inbound(2);
     sender.inject_blocking(new_transactions(vec![blob(4)], false));
     support::wait_until("the blob was admitted", || rig.pool.admits().len() == 1);
-    support::wait_until("it was shown", || rig.pool.shown().len() == 1);
+    assert!(
+        rig.quiet(&mut other),
+        "the stem is held: no broadcast before the clock moves"
+    );
+    assert!(rig.pool.shown().is_empty(), "not shown during the hold");
     let batch = rig.read_batch_within(&mut other, 10);
+    support::wait_until("it was shown", || rig.pool.shown().len() == 1);
     assert!(batch.dandelionpp_fluff, "with no successor the stem fluffs");
     assert_eq!(batch.txs, vec![blob(4)]);
     assert!(
@@ -233,4 +239,27 @@ fn stopping_the_owner_refuses_a_local_origin() {
     support::wait_until("the owner stopped", || {
         !rig.relay.relay_local(id_of(&blob(1)), blob(1))
     });
+}
+
+/// **This node's own transaction is never broadcast** (`CVR-R6`). A node
+/// with a network but no stem successor — only inbound sessions — holds
+/// its own transaction until a successor appears: it is neither sent to
+/// the inbound peer nor shown, however long the clock runs past any hold.
+///
+/// What edit reds this: send a local origin with no route to the fluff
+/// path, as the inherited relay did (the inbound peer reads it, and it is
+/// shown).
+#[test]
+fn a_local_origin_with_no_successor_is_held_and_never_broadcast() {
+    let rig = Rig::build(Build::default());
+    let mut inbound = rig.inbound(1);
+    let tx = id_of(&blob(5));
+    assert!(rig.relay.relay_local(tx, blob(5)), "the owner took it");
+    rig.drive(STEP, 180, || false);
+    thread::sleep(SETTLE);
+    assert!(
+        rig.quiet(&mut inbound),
+        "this node's own transaction reached a peer with no stem to carry it"
+    );
+    assert!(rig.pool.shown().is_empty(), "never shown");
 }

@@ -22,9 +22,14 @@
 //! fire re-stems to the source's alternate, taken from its frozen pin
 //! (never `stem_for` again, W1; never a new edge, §12.2 item 6; stable
 //! across a churn refill within the epoch, W3c). The second fire, or a first
-//! fire with no live alternate, fluffs to every session but the source and
-//! marks the transaction shown: the W3/W3b last resort (§14.6). Fluff on
-//! expiry, which the C++ pool did, is not ported (§14).
+//! fire with no live alternate, ends the stem phase: the transaction is held
+//! before its broadcast (`CVR-R10`), then fluffed to every session but the
+//! source and marked shown, the W3/W3b last resort (§14.6). Fluff on expiry,
+//! which the C++ pool did, is not ported (§14).
+//!
+//! **This node's own transaction is never broadcast** (`CVR-R6`): an
+//! origin whose embargo ends with no reshape is planned again, keeping its
+//! first arm time ([`Relay::requeue_origin`]).
 //!
 //! **An origin that never sent** (`AwaitSync`, `NoOwnEdge`, a write that
 //! failed) is held unsent, not shown and not fluffed (RX-2), and re-planned
@@ -43,7 +48,7 @@ use shekyl_relay_privacy::params::{origin_retry_one_in, DandelionParams};
 use shekyl_relay_privacy::schedule::{EmbargoTimer, Millis};
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-use super::{embargo_timer, NodeSync, Relay, RelayPlan, TxBlob};
+use super::{embargo_timer, NodeSync, Relay, RelayCarrier, RelayPlan, TxBlob};
 use crate::stem_watch::TxId;
 
 /// How long an originated transaction that was never sent waits before the
@@ -87,8 +92,11 @@ pub fn origin_retry_secs() -> u32 {
 /// daemon calls it overdue, in milliseconds.
 ///
 /// [`origin_retry_secs`] times the origin's fires ([`origin_terms`]). The
-/// daemon's clock. On time, the last fire fluffs at this age and the hold
-/// is gone; a hold still here at this age is [`OriginPublication::HeldOverdue`].
+/// daemon's clock. On time, a stem has completed and the transaction has
+/// been seen circulating by this age. This node never broadcasts its own
+/// transaction (`CVR-R6`): an origin whose fires all ran out is planned
+/// again ([`Relay::requeue_origin`]), and a hold still here at this age is
+/// [`OriginPublication::HeldOverdue`].
 #[must_use]
 pub fn origin_publication_budget_ms() -> Millis {
     static BUDGET: OnceLock<Millis> = OnceLock::new();
@@ -175,15 +183,29 @@ pub(super) struct Embargoes {
     pub(super) unsent: HashMap<TxId, Unsent>,
 }
 
-/// What a poll's embargo and held-origin work produced.
+/// What a poll's embargo and held-origin work produced: stems to send.
+///
+/// A stem phase this work ends is held before its broadcast inside the zone
+/// (`CVR-R10`), and this node's own transaction is never broadcast
+/// (`CVR-R6`), so the work carries no publication.
 #[derive(Debug, Default)]
 pub struct EmbargoWork {
-    /// Stem these bytes to this peer on the ordinary wire: a reshape, or a
-    /// held origin's first send.
-    pub stems: Vec<(ConnectionId, TxBlob)>,
-    /// Transactions the zone published (fluffed): the pool's shown bit is
-    /// set for each.
-    pub published: Vec<TxId>,
+    /// A reshape, or a held origin's first send.
+    pub stems: Vec<StemWork>,
+}
+
+/// One stem the zone asks for, sent by [`Relay::carrier_to`] its peer: inside
+/// a window on a covered session, on the ordinary connection otherwise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StemWork {
+    /// The successor.
+    pub peer: ConnectionId,
+    /// The transaction.
+    pub tx: TxId,
+    /// Its bytes.
+    pub blob: TxBlob,
+    /// The session it arrived on; `None` for this node's own.
+    pub source: Option<ConnectionId>,
 }
 
 impl Relay {
@@ -234,7 +256,18 @@ impl Relay {
     }
 
     /// Act on every embargo that fired by `now`: re-stem once to the
-    /// alternate, else fluff and publish (§12.2, §14.7; RX-1 for the origin).
+    /// alternate (§12.2, §14.7; RX-1 for the origin), else end the stem
+    /// phase.
+    ///
+    /// The reshape leaves as [`Relay::carrier_to`] the alternate says
+    /// (`CVR-R6`). On the ordinary connection its embargo is armed now, as
+    /// the write is immediate; through a window the carrier's verdict arms
+    /// it ([`Relay::record_stem`]), so an embargo cannot expire while the
+    /// carrier still holds the transaction. With no window for a covered
+    /// alternate, or no alternate, the stem phase ends: a relayed stem is
+    /// held before its broadcast (`CVR-R10`), and this node's own
+    /// transaction is planned again ([`Relay::requeue_origin`]), never
+    /// broadcast.
     pub fn fire_embargoes<R: RelayRng + ?Sized>(
         &mut self,
         now: Millis,
@@ -259,32 +292,83 @@ impl Relay {
                 } else {
                     timer.deadline(now, rng)
                 };
-                Some((alternate, peer.connector, deadline))
+                let carrier = self.carrier_to(alternate);
+                (carrier != RelayCarrier::NoWindow).then_some((
+                    alternate,
+                    peer.connector,
+                    deadline,
+                    carrier,
+                ))
             });
             match restem {
-                Some((alternate, connector, deadline)) => {
+                Some((alternate, connector, deadline, carrier)) => {
                     let held = self
                         .embargoes
                         .held
                         .get_mut(&tx)
                         .expect("held checked present above");
                     held.restemmed = true;
-                    self.stem_watch
-                        .stemmed(tx, alternate, held.source, connector, deadline);
-                    work.stems.push((alternate, TxBlob::clone(&held.blob)));
+                    if carrier == RelayCarrier::Ordinary {
+                        self.stem_watch
+                            .stemmed(tx, alternate, held.source, connector, deadline);
+                    }
+                    work.stems.push(StemWork {
+                        peer: alternate,
+                        tx,
+                        blob: TxBlob::clone(&held.blob),
+                        source: held.source,
+                    });
                 }
                 None => {
-                    let held = self
+                    let source = self
                         .embargoes
                         .held
-                        .remove(&tx)
-                        .expect("held checked present above");
-                    self.queue_fluff(&[held.blob], held.source, now, rng);
-                    work.published.push(tx);
+                        .get(&tx)
+                        .expect("held checked present above")
+                        .source;
+                    if source.is_none() {
+                        self.requeue_origin(&tx, now);
+                    } else {
+                        let held = self
+                            .embargoes
+                            .held
+                            .remove(&tx)
+                            .expect("held checked present above");
+                        // The stem phase ends here: held before its
+                        // broadcast (`CVR-R10`); shown when the hold ends.
+                        self.hold_broadcast(&[(tx, held.blob)], source, now, rng);
+                    }
                 }
             }
         }
         work
+    }
+
+    /// This node's own `tx`, which was stemmed and is held, is planned again:
+    /// its embargo ended with no reshape, or the carrier dropped its window.
+    /// It moves to the unsent rows, keeping the time it was first armed so
+    /// its publication budget does not start over, and is re-planned by
+    /// [`Self::due_unsent`]. Never broadcast (`CVR-R6`). A transaction this
+    /// node did not originate, or does not hold, is left alone.
+    pub fn requeue_origin(&mut self, tx: &TxId, now: Millis) {
+        let Some(held) = self.embargoes.held.get(tx) else {
+            if let Some(unsent) = self.embargoes.unsent.get_mut(tx) {
+                unsent.due = now.saturating_add(NEVER_SENT_RETRY_MS);
+            }
+            return;
+        };
+        if held.source.is_some() {
+            return;
+        }
+        let held = self.embargoes.held.remove(tx).expect("held checked above");
+        self.embargoes.unsent.insert(
+            *tx,
+            Unsent {
+                blob: held.blob,
+                due: now.saturating_add(NEVER_SENT_RETRY_MS),
+                armed_at: held.armed_at,
+            },
+        );
     }
 
     /// Hold this node's own `txs`, which were not sent: not shown, not
@@ -320,9 +404,11 @@ impl Relay {
         }
     }
 
-    /// Plan every held origin that is due. A route sends and arms the
-    /// embargo; a hold waits another grid; no route after the refresh
-    /// fluffs, as a fresh origin's plan does.
+    /// Plan every held origin that is due. A route sends it as
+    /// [`Relay::carrier_to`] its peer says: on the ordinary connection it is
+    /// armed now, through a window the verdict arms it. A hold, no route
+    /// after the refresh, or no window waits another grid: this node's own
+    /// transaction is never broadcast (`CVR-R6`).
     pub fn due_unsent<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) -> EmbargoWork {
         let mut work = EmbargoWork::default();
         let mut due: Vec<TxId> = self
@@ -335,34 +421,46 @@ impl Relay {
         due.sort_unstable();
         for tx in due {
             let plan = self.plan_relay_with_refresh(None, true, self.node_sync, rng);
-            match plan {
+            let route = match plan {
                 RelayPlan::Stem(peer) | RelayPlan::OwnEdge(peer) => {
-                    // Leave the unsent row until `record_stem` copies its
-                    // `armed_at`. Removing it first would start the budget over.
-                    let blob = TxBlob::clone(
-                        &self
-                            .embargoes
-                            .unsent
-                            .get(&tx)
-                            .expect("due ids come from the map")
-                            .blob,
-                    );
-                    self.record_stem(&[(tx, TxBlob::clone(&blob))], peer, None, now, rng);
-                    work.stems.push((peer, blob));
+                    Some((peer, self.carrier_to(peer)))
                 }
-                RelayPlan::AwaitSync | RelayPlan::NoOwnEdge => {
-                    if let Some(unsent) = self.embargoes.unsent.get_mut(&tx) {
-                        unsent.due = now.saturating_add(NEVER_SENT_RETRY_MS);
-                    }
-                }
-                RelayPlan::NoRoute | RelayPlan::FluffEpoch => {
+                RelayPlan::AwaitSync
+                | RelayPlan::NoOwnEdge
+                | RelayPlan::NoRoute
+                | RelayPlan::FluffEpoch => None,
+            };
+            match route {
+                Some((peer, carrier)) if carrier != RelayCarrier::NoWindow => {
                     let unsent = self
                         .embargoes
                         .unsent
-                        .remove(&tx)
+                        .get_mut(&tx)
                         .expect("due ids come from the map");
-                    self.queue_fluff(&[unsent.blob], None, now, rng);
-                    work.published.push(tx);
+                    let blob = TxBlob::clone(&unsent.blob);
+                    if carrier == RelayCarrier::Ordinary {
+                        // Written at once: armed now. Leave the unsent row
+                        // until `record_stem` copies its `armed_at`.
+                        self.record_stem(&[(tx, TxBlob::clone(&blob))], peer, None, now, rng);
+                    } else {
+                        // Through a window: the verdict arms it. Until then
+                        // the row waits a grid, so it is not planned twice.
+                        unsent.due = now.saturating_add(NEVER_SENT_RETRY_MS);
+                    }
+                    work.stems.push(StemWork {
+                        peer,
+                        tx,
+                        blob,
+                        source: None,
+                    });
+                }
+                // No route, no window, or a hold: this node's own
+                // transaction waits another grid. It is never broadcast
+                // (`CVR-R6`).
+                _ => {
+                    if let Some(unsent) = self.embargoes.unsent.get_mut(&tx) {
+                        unsent.due = now.saturating_add(NEVER_SENT_RETRY_MS);
+                    }
                 }
             }
         }

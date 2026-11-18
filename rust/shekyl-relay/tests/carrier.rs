@@ -15,7 +15,9 @@
 //! stem observations (`stem_in_flight`).
 //!
 //! The rig's clock is manual. A carrier window goes out only when the
-//! clock moves (each channel every 3.3–6.7 s), so "the carrier took it" is
+//! clock moves (each channel at a memoryless cadence, mean 5 s), and a
+//! stem that ends its phase here is broadcast only when its hold ends
+//! (`CVR-R10`, mean 25 s), so "the carrier took it" is
 //! recognised the way the C++ cases recognised it: nothing reaches any
 //! wire, nothing is shown, nothing is observed — until the clock moves.
 
@@ -131,14 +133,16 @@ fn a_real_transaction_rides_the_carrier_and_is_recorded_when_its_window_goes_out
 /// would publish this node's own transaction from its own address, and
 /// recording it would buy it the long origin retry for a send that never
 /// happened (§92.5c). It is held instead, and re-planned: the moment an
-/// outbound session appears it leaves on the ordinary wire as a stem,
-/// before the clock moves (the carrier would need the clock).
+/// outbound session appears it is queued on that session's channel, and
+/// it leaves inside a window once the clock moves — never on the ordinary
+/// wire (`CVR-R6`).
 ///
-/// What edit reds this: drop the `pending.local` arm of `apply_verdict`,
-/// so a discarded origin takes the forwarded stem's fluff fallback (it is
-/// shown); or drop the `hold_origin` call (the new session never gets it).
+/// What edit reds this: drop the `local` arm of `no_window`, so a
+/// discarded origin is broadcast (it is shown); drop the `hold_origin` call
+/// (the new session never gets it); or send a held origin bare (it reaches
+/// the new session before the clock moves).
 #[test]
-fn a_discarded_origin_is_held_unshown_and_leaves_on_the_next_outbound_session() {
+fn a_discarded_origin_is_held_unshown_and_leaves_in_the_next_sessions_window() {
     // The watch starts synchronised, with no change for the owner to see:
     // the zone's planner of held origins must read it from the start, or
     // the held origin waits at AwaitSync for good.
@@ -159,33 +163,42 @@ fn a_discarded_origin_is_held_unshown_and_leaves_on_the_next_outbound_session() 
     );
     assert_eq!(rig.relay.snapshot().stem_in_flight, 0);
 
-    // Read without moving the clock: the carrier cannot have sent it.
+    // Before the clock moves nothing reaches the new session: its stem
+    // leaves only inside a window.
     let mut fresh = rig.outbound(3);
-    let batch = support::batch_of(rig.read_within(&mut fresh, SETTLE).expect(
-        "the discarded origin was not held: a new outbound session should \
-         take it at once as an ordinary stem, and nothing came",
-    ));
-    assert_eq!(
-        batch.txs,
-        vec![blob(4)],
-        "the held origin leaves on the first outbound session it gets"
+    assert!(
+        rig.quiet(&mut fresh),
+        "the held origin went out bare on a covered session"
     );
-    assert!(!batch.dandelionpp_fluff, "an origin stems");
+    let mut carried = Vec::new();
+    let sent = rig.drive(STEP, 120, || {
+        carried.extend(rig.batches(&mut fresh));
+        carrying(&carried, &blob(4)) != 0
+    });
+    assert!(
+        sent,
+        "the discarded origin was not held: the new session's channel never \
+         carried it"
+    );
+    assert!(
+        carried.iter().all(|batch| !batch.dandelionpp_fluff),
+        "an origin stems"
+    );
     assert!(rig.pool.shown().is_empty(), "a stem is not shown");
 }
 
-/// **A forwarded stem the carrier discards falls back to fluff.**
+/// **A forwarded stem the carrier discards ends its stem phase here.**
 /// (Replaces the C++ `a_discarded_forwarded_stem_falls_back_to_fluff`.)
 ///
 /// A relayed transaction is not this node's, and the carrier's discard
 /// leaves nobody else to move it on: without the fallback it is stranded
-/// in this node's pool. It is shown, and the next fluff release carries it
-/// to the peers other than its source.
+/// in this node's pool. It is held before its broadcast (`CVR-R10`), then
+/// shown and fluffed to the peers other than its source.
 ///
-/// What edit reds this: drop `fluff_and_record` from `apply_verdict`'s
-/// discard arm (nothing is shown and nothing is fluffed).
+/// What edit reds this: drop the relayed arm of `no_window` (nothing is
+/// shown and nothing is fluffed).
 #[test]
-fn a_discarded_forwarded_stem_falls_back_to_fluff() {
+fn a_discarded_forwarded_stem_is_held_then_fluffed() {
     let rig = carrier_rig();
     let mut first = rig.outbound(1);
     let mut second = rig.outbound(2);
@@ -196,6 +209,9 @@ fn a_discarded_forwarded_stem_falls_back_to_fluff() {
     assert_the_carrier_holds_it(&rig, &mut [&mut first, &mut second]);
 
     discard_the_carrier(&rig, vec![first, second]);
+    let batch = rig.read_batch_within(&mut bystander, 10);
+    assert!(batch.dandelionpp_fluff, "the fallback is a fluff");
+    assert_eq!(batch.txs, vec![blob(6)]);
     assert_eq!(
         rig.pool.shown(),
         vec![id_of(&blob(6))],
@@ -203,9 +219,6 @@ fn a_discarded_forwarded_stem_falls_back_to_fluff() {
          otherwise nothing ever moves it on and it is stranded until it \
          expires from the pool"
     );
-    let batch = rig.read_batch_within(&mut bystander, 10);
-    assert!(batch.dandelionpp_fluff, "the fallback is a fluff");
-    assert_eq!(batch.txs, vec![blob(6)]);
     drop(sender);
 }
 
@@ -250,23 +263,26 @@ fn a_transaction_already_in_the_carrier_is_not_enqueued_twice() {
     assert_eq!(rig.relay.snapshot().stem_in_flight, 1);
 }
 
-/// **A batch the carrier can only partly take splits: the refused half
-/// alone takes the ordinary stem, the taken half alone rides the carrier.**
-/// (Replaces the C++ `a_batch_the_carrier_partly_refuses_splits_without_double_counting`,
-/// its stem half.)
+/// **A batch the carrier can only partly take splits: the taken half rides
+/// the carrier, and the refused half ends its stem phase here.**
+/// (Replaces the C++ `a_batch_the_carrier_partly_refuses_splits_without_double_counting`.)
 ///
 /// The refusal is by size, the realistic one: a transaction over five
-/// windows cannot be carried. The ordinary wire must carry only that one;
-/// sending the whole batch there would put the carried transaction on the
-/// clear wire as well, and record it before any window of it went out.
+/// windows cannot be carried. On a covered session a stem leaves only inside
+/// a window (`CVR-R6`), so the refused one is not stemmed on the ordinary
+/// wire: it is held before its broadcast (`CVR-R10`) and fluffed. The
+/// carried one must stay out of that fluff: its verdict resolves it, and
+/// fluffing it too would send it twice and publish it while it is still
+/// being carried.
 ///
-/// The rig's send cap is raised so the oversize stem is written rather
-/// than closing the session; the failed-write half is the next case.
+/// The rig's send cap is raised so the oversize fluff is written rather
+/// than closing the sessions.
 ///
-/// What edit reds this: send the whole batch after the carrier loop in
-/// `dispatch` (replace `to_send = refused` with the original batch).
+/// What edit reds this: send the refused half bare (an ordinary stem
+/// appears before the clock moves); or end the whole batch (the carried
+/// one is shown).
 #[test]
-fn a_batch_the_carrier_partly_refuses_stems_only_the_refused_half() {
+fn a_batch_the_carrier_partly_refuses_ends_only_the_refused_half() {
     let rig = carrier_rig_from(Build {
         send_cap: 1 << 20,
         ..Build::default()
@@ -278,55 +294,56 @@ fn a_batch_the_carrier_partly_refuses_stems_only_the_refused_half() {
     sender.inject_blocking(new_transactions(vec![blob(1), large.clone()], false));
     support::wait_until("both blobs were admitted", || rig.pool.admits().len() == 2);
     thread::sleep(SETTLE);
+    assert!(
+        read_all(&rig, &mut [&mut first, &mut second]).is_empty(),
+        "nothing leaves before the clock moves: no ordinary stem"
+    );
 
-    let ordinary = read_all(&rig, &mut [&mut first, &mut second]);
-    assert_eq!(
-        ordinary.len(),
-        1,
-        "one ordinary stem, for the refused half: {} batch(es)",
-        ordinary.len()
+    let mut seen = Vec::new();
+    let done = rig.drive(STEP, 180, || {
+        seen.extend(read_all(&rig, &mut [&mut first, &mut second]));
+        rig.relay.snapshot().stem_in_flight == 1 && !rig.pool.shown().is_empty()
+    });
+    assert!(
+        done,
+        "the carrier never took the small one, or the hold never ended"
+    );
+    thread::sleep(SETTLE);
+    seen.extend(read_all(&rig, &mut [&mut first, &mut second]));
+    let stems: Vec<_> = seen
+        .iter()
+        .filter(|batch| !batch.dandelionpp_fluff)
+        .collect();
+    assert!(
+        stems.iter().all(|batch| batch.txs == vec![blob(1)]),
+        "only the carried one stems"
     );
     assert!(
-        ordinary[0].txs == vec![large.clone()],
-        "the ordinary stem carried {} transaction(s); the carrier took the \
-         small one, so only the oversize one belongs on the clear wire",
-        ordinary[0].txs.len()
+        seen.iter()
+            .filter(|batch| batch.txs.contains(&large))
+            .all(|batch| batch.dandelionpp_fluff),
+        "the refused one is never stemmed"
     );
-    assert!(!ordinary[0].dandelionpp_fluff);
     assert_eq!(
-        rig.relay.snapshot().stem_in_flight,
-        1,
-        "only the ordinary stem is observed at send time"
+        rig.pool.shown(),
+        vec![id_of(&large)],
+        "only the refused one ended its stem phase here"
     );
-
-    let carried = rig.drive(STEP, 30, || rig.relay.snapshot().stem_in_flight == 2);
-    assert!(carried, "the carrier never completed the small transaction");
-    let late = read_all(&rig, &mut [&mut first, &mut second]);
-    assert_eq!(
-        carrying(&late, &blob(1)),
-        1,
-        "the small one rode the carrier once"
-    );
-    assert_eq!(carrying(&late, &large), 0, "the oversize one went out once");
-    assert!(rig.pool.shown().is_empty());
     drop(sender);
 }
 
-/// **When the refused half's stem fails, the fluff fallback carries only
-/// the refused half.** (Replaces the C++
-/// `a_batch_the_carrier_partly_refuses_splits_without_double_counting`,
+/// **The refused half alone is broadcast, at the default send cap too.**
+/// (Replaces the C++ `a_batch_the_carrier_partly_refuses_splits_without_double_counting`,
 /// its fluff half.)
 ///
-/// At the harness's 64 KiB send cap the oversize stem's write is refused,
-/// every retry with it, and the batch falls through to fluff. The
-/// transaction the carrier holds must stay out of that fluff: its verdict
-/// is what resolves it, and fluffing it too would send it twice and
-/// publish it while it is still being carried.
+/// At the harness's 64 KiB send cap the oversize fluff's writes are refused,
+/// but the transaction is still shown when its hold ends. The transaction
+/// the carrier holds must not be.
 ///
-/// What edit reds this: as for the stem half — the whole batch reaches the
-/// fallback and the carried transaction is shown.
+/// What edit reds this: end the whole batch's stem phase (the carried one is
+/// shown too).
 #[test]
-fn a_split_batch_whose_stem_fails_fluffs_only_the_refused_half() {
+fn a_split_batch_broadcasts_only_the_refused_half() {
     let rig = carrier_rig();
     assert!(
         oversize(2).len() > SEND_CAP,
@@ -337,15 +354,14 @@ fn a_split_batch_whose_stem_fails_fluffs_only_the_refused_half() {
     let sender = rig.inbound(1);
     sender.inject_blocking(new_transactions(vec![blob(1), oversize(2)], false));
     support::wait_until("both blobs were admitted", || rig.pool.admits().len() == 2);
-    support::wait_until("the fallback showed what it fluffed", || {
-        !rig.pool.shown().is_empty()
-    });
+    let shown = rig.drive(STEP, 180, || !rig.pool.shown().is_empty());
+    assert!(shown, "the refused half's hold never ended");
     thread::sleep(SETTLE);
     assert_eq!(
         rig.pool.shown(),
         vec![id_of(&oversize(2))],
-        "the fluff fallback took the transaction the carrier holds as well \
-         as the one it refused"
+        "the broadcast took the transaction the carrier holds as well as the \
+         one it refused"
     );
     drop(sender);
 }
@@ -394,15 +410,17 @@ fn a_verdict_for_a_transaction_the_pool_dropped_records_nothing() {
     drop(sender);
 }
 
-/// **A stem whose write fails is not recorded as stemmed; it fluffs.**
+/// **A stem whose write fails is not recorded as stemmed; it is held, then
+/// fluffed.**
 /// (Replaces the C++ `a_failed_stem_is_not_recorded_as_relayed`, which ran
 /// with the carrier off, as this does.)
 ///
 /// First a stem goes out and is observed, so the failure below is known
 /// to be a stem epoch's, on a routed successor. Then the successor's
 /// writer fails: the stem's write is refused, the retry with it, and the
-/// transaction takes the fluff fallback. An observation armed for it would
-/// charge the successor for a send that never happened.
+/// transaction's stem phase ends here: held, then broadcast (`CVR-R10`). An
+/// observation armed for it would charge the successor for a send that
+/// never happened.
 ///
 /// What edit reds this: record the stem in `dispatch` whatever `send_stem`
 /// returned.
@@ -424,9 +442,8 @@ fn a_failed_stem_is_not_recorded_and_falls_back_to_fluff() {
         CloseCause::new(CloseKind::IoError),
     ));
     sender.inject_blocking(new_transactions(vec![blob(2)], false));
-    support::wait_until("the fallback showed it", || {
-        rig.pool.shown().contains(&id_of(&blob(2)))
-    });
+    let shown = rig.drive(STEP, 180, || rig.pool.shown().contains(&id_of(&blob(2))));
+    assert!(shown, "the fallback never showed it");
     thread::sleep(SETTLE);
     assert_eq!(
         rig.relay.snapshot().stem_in_flight,

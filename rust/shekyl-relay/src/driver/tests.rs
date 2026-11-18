@@ -283,7 +283,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
                     sends += 1;
                 }
                 Effect::Fluff { .. } => unreachable!("nothing was queued"),
-                Effect::Stem { .. } | Effect::Published { .. } => {
+                Effect::Stem { .. } | Effect::Broadcast { .. } => {
                     unreachable!("nothing was stemmed or held")
                 }
             }
@@ -363,7 +363,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
                      delivered to the successor"
                 ),
                 Effect::Fluff { .. } => unreachable!("nothing was queued"),
-                Effect::Stem { .. } | Effect::Published { .. } => {
+                Effect::Stem { .. } | Effect::Broadcast { .. } => {
                     unreachable!("nothing was stemmed or held")
                 }
             }
@@ -789,7 +789,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .into_iter()
         .filter_map(|e| match e {
             Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
-            Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Published { .. } => None,
+            Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. } => None,
         })
         .collect();
     assert_eq!(
@@ -814,7 +814,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .into_iter()
         .filter_map(|e| match e {
             Effect::NoiseSend { channel, .. } | Effect::NoiseUnbind { channel } => Some(channel),
-            Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Published { .. } => None,
+            Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. } => None,
         })
         .collect();
     assert_eq!(second.len(), 1, "the remaining overdue channel fires next");
@@ -1152,11 +1152,25 @@ fn a_peer_lost_in_the_tail_ends_it() {
     d.zone_mut().start_epoch(now, &mut rng);
     d.zone_mut().rebuild_stems(&mut rng);
     d.zone_mut().on_connection_close(&old0);
+    // Re-offer a survivor so the map can backfill a slot the closed peer
+    // held; whether channel 0 then sends or unbinds, the gone peer gets no
+    // tail window, and a send it makes opens starts.
+    let survivor = [id(1), id(2), id(3), id(4)]
+        .into_iter()
+        .find(|peer| *peer != old0)
+        .expect("three survivors");
+    d.zone_mut().on_session_established(
+        survivor,
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
     let after = drive(&mut d, &mut queues, &mut rng, 20);
-    let first = after
-        .iter()
-        .find(|s| s.0 == 0)
-        .expect("channel 0 sent again");
-    assert_ne!(first.1, old0, "a lost peer is not sent the tail");
-    assert_eq!(first.2, Starts::Open, "the tail ended with the peer");
+    assert!(
+        after.iter().all(|s| s.1 != old0),
+        "a lost peer is sent no tail window"
+    );
+    if let Some(first) = after.iter().find(|s| s.0 == 0) {
+        assert_eq!(first.2, Starts::Open, "the tail ended with the peer");
+    }
 }

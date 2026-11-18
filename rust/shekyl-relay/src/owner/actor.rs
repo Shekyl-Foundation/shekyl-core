@@ -278,9 +278,23 @@ struct Pending {
     local: bool,
 }
 
-/// Why a stem fell back to fluff after its retry: the inherited
-/// retry-then-fluff, the designed path. None is a fault. A node with no
-/// outbound session takes it for every stem it holds, so it is a debug line.
+/// What the owner's `stem_out` did with a stem.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StemOut {
+    /// Written on the ordinary connection and recorded.
+    Written,
+    /// Queued on a carrier channel; the verdict records it. Any refused part
+    /// already took its no-window path.
+    Carried,
+    /// No window could take it: an origin is held, a relayed stem ended.
+    Ended,
+    /// The ordinary write failed; nothing was recorded.
+    WriteFailed,
+}
+
+/// Why a relayed stem ended its stem phase here: held, then broadcast
+/// (`CVR-R10`). None is a fault. A node with no outbound session takes it
+/// for every stem it holds, so it is a debug line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StemFallback {
     /// No outbound session is a stem successor, after the refresh.
@@ -289,6 +303,10 @@ enum StemFallback {
     EpochFluffs,
     /// The successor's session was gone when it was written, twice.
     WriteFailed,
+    /// The successor's session carries cover and no window could take the
+    /// stem: its channel's queue refused it, or it holds no slot
+    /// (`CVR-R6`). On a covered session a stem leaves only inside a window.
+    NoWindow,
 }
 
 impl StemFallback {
@@ -297,6 +315,7 @@ impl StemFallback {
             Self::NoSuccessor => "no outbound session to stem to",
             Self::EpochFluffs => "the epoch turned to fluff",
             Self::WriteFailed => "the stem successor's session was closing",
+            Self::NoWindow => "no carrier window could take the stem",
         }
     }
 }
@@ -396,6 +415,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         last_verdict,
         snapshot,
         origins,
+        offline: config.connectors.is_empty(),
     };
     runtime.spawn(actor.run());
     Ok(Started { port, handle })
@@ -427,6 +447,9 @@ struct Actor<C: Clock + Clone + Send + Sync + 'static> {
     last_verdict: OriginVerdict,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
     origins: Arc<Mutex<Arc<HashMap<TxId, Millis>>>>,
+    /// The node was built with no connector: it has no network, so it can
+    /// send nothing and no watcher can see a stem.
+    offline: bool,
 }
 
 impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
@@ -633,16 +656,36 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             // The log never names a stem's successor or its transactions
             // (`RPC_CHANNEL.md` §6.4, RT-O9.3): it sits on disk, at any
             // level a runtime option may raise.
-            Effect::Stem { peer, blobs } => {
-                if self.send_batch(peer, &blobs, false) {
-                    tracing::debug!(count = blobs.len(), "a reshape stem was written");
-                } else {
-                    tracing::debug!("a reshape stem was not written; the next fire fluffs");
+            Effect::Stem {
+                peer,
+                tx,
+                blob,
+                source,
+            } => {
+                let one = [(tx, blob)];
+                let carrier = self.driver.zone().carrier_to(peer);
+                let now = self.now();
+                match self.stem_out(&one, peer, carrier, source, source.is_none(), now) {
+                    StemOut::Written => {
+                        tracing::debug!("a zone stem was written");
+                    }
+                    // The embargo was armed when the zone asked; the next
+                    // fire ends the stem phase.
+                    StemOut::WriteFailed => {
+                        tracing::debug!("a zone stem was not written; the next fire ends it");
+                    }
+                    StemOut::Carried | StemOut::Ended => {}
                 }
             }
-            Effect::Published { txs } => {
-                for tx in &txs {
-                    self.pool.shown(tx);
+            Effect::Broadcast { txs, source } => {
+                // The hold ended (`CVR-R10`). A transaction a block took
+                // meanwhile is not broadcast.
+                let live: Vec<(TxId, TxBlob)> = txs
+                    .into_iter()
+                    .filter(|(tx, _)| self.pool.holds(tx))
+                    .collect();
+                if !live.is_empty() {
+                    self.fluff_and_record(&live, source);
                 }
             }
             Effect::NoiseSend {
@@ -705,17 +748,11 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         }
         let one = [(pending.tx, pending.blob)];
         if !outcome.was_sent() {
-            if pending.local {
-                // An origin the carrier dropped is held, neither shown nor
-                // fluffed (§92.5c).
-                let now = self.now();
-                self.driver.zone_mut().hold_origin(&one, now);
-                return;
-            }
-            // A forwarded stem the carrier dropped takes the failed-stem
-            // fallback: it fluffs, which is what moves it along.
-            tracing::debug!("the carrier discarded a forwarded stem; fluffing");
-            self.fluff_and_record(&one, pending.source);
+            // The carrier dropped it: an origin is planned again, a relayed
+            // stem ends its stem phase here (`CVR-R6`).
+            tracing::debug!("the carrier discarded a stem");
+            let now = self.now();
+            self.no_window(&one, pending.source, pending.local, now);
             return;
         }
         let Some(successor) = outcome.peer() else {
@@ -748,8 +785,16 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         self.driver.zone_mut().hold_origin(txs, now);
     }
 
-    /// `dandelionpp_notify`: plan, then send on the carrier the plan names,
-    /// retry once over refreshed stems, and fluff what could not stem.
+    /// `dandelionpp_notify`: plan, then send as the plan's carrier says,
+    /// retry a failed ordinary write once over refreshed stems, and end the
+    /// stem phase of what could not stem.
+    ///
+    /// On a covered session a stem leaves only inside a window (`CVR-R6`):
+    /// what its channel refuses, or a covered successor with no slot, ends
+    /// a relayed stem here and holds this node's own. This node's own
+    /// transaction is never broadcast: every arm that would end its stem
+    /// phase holds it instead. A relayed stem whose phase ends here is held
+    /// before its broadcast (`CVR-R10`).
     fn dispatch(&mut self, txs: &[(TxId, TxBlob)], source: Option<ConnectionId>, local: bool) {
         let node_sync = *self.node_sync.borrow();
         let now = self.now();
@@ -759,7 +804,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             node_sync,
             &mut *self.rng,
         );
-        match plan {
+        let destination = match plan {
             RelayPlan::AwaitSync => {
                 tracing::debug!("unsynchronised node originates no stem; the zone holds it");
                 self.driver.zone_mut().hold_origin(txs, now);
@@ -769,7 +814,85 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                 self.hold_own_origin(txs, now);
                 return;
             }
-            RelayPlan::OwnEdge(destination) => {
+            RelayPlan::FluffEpoch if !local => {
+                // This node's fluff decision ends the stem phase.
+                self.driver
+                    .zone_mut()
+                    .hold_broadcast(txs, source, now, &mut *self.rng);
+                return;
+            }
+            RelayPlan::Stem(destination) | RelayPlan::OwnEdge(destination) => Some(destination),
+            RelayPlan::NoRoute | RelayPlan::FluffEpoch => None,
+        };
+        if let Some(destination) = destination {
+            match self.stem_out(txs, destination, carrier, source, local, now) {
+                StemOut::Written | StemOut::Carried | StemOut::Ended => return,
+                StemOut::WriteFailed => {}
+            }
+        }
+        if local && self.offline {
+            // A node with no connector has no network: there is no stem to
+            // send and no peer to hide it from. Its own transaction is shown
+            // at once, so its own blocks can carry it, and sent nowhere.
+            self.fluff_and_record(txs, source);
+            return;
+        }
+        if local {
+            // This node's own transaction: no route, or its ordinary write
+            // failed. Held and planned again, never broadcast (`CVR-R6`).
+            tracing::debug!("this node's stem did not leave; the zone holds it");
+            self.driver.zone_mut().hold_origin(txs, now);
+            return;
+        }
+        self.driver.zone_mut().update_stems(&mut *self.rng);
+        let retry = self
+            .driver
+            .zone_mut()
+            .plan_dispatch(source, local, node_sync, &mut *self.rng);
+        let fallback = match retry.plan {
+            RelayPlan::AwaitSync | RelayPlan::NoOwnEdge => return,
+            RelayPlan::Stem(destination) | RelayPlan::OwnEdge(destination) => {
+                match self.stem_out(txs, destination, retry.carrier, source, local, now) {
+                    StemOut::Written | StemOut::Carried | StemOut::Ended => return,
+                    StemOut::WriteFailed => StemFallback::WriteFailed,
+                }
+            }
+            RelayPlan::NoRoute => StemFallback::NoSuccessor,
+            RelayPlan::FluffEpoch => StemFallback::EpochFluffs,
+        };
+        self.end_stem(txs, source, fallback, now);
+    }
+
+    /// Send one stem as `carrier` says (`CVR-R6`).
+    ///
+    /// Through a window: each transaction is queued on the channel as its own
+    /// message, and the carrier's verdict records it; what the queue refuses
+    /// takes [`Self::no_window`]. No window for a covered successor: the same.
+    /// On the ordinary connection, a session that carries no cover: written
+    /// now and recorded, or reported as a failed write for the caller's
+    /// retry.
+    fn stem_out(
+        &mut self,
+        txs: &[(TxId, TxBlob)],
+        destination: ConnectionId,
+        carrier: RelayCarrier,
+        source: Option<ConnectionId>,
+        local: bool,
+        now: Millis,
+    ) -> StemOut {
+        match carrier {
+            RelayCarrier::Noise { channel } => {
+                let refused = self.carry(txs, channel.get(), source, local);
+                if !refused.is_empty() {
+                    self.no_window(&refused, source, local, now);
+                }
+                StemOut::Carried
+            }
+            RelayCarrier::NoWindow => {
+                self.no_window(txs, source, local, now);
+                StemOut::Ended
+            }
+            RelayCarrier::Ordinary => {
                 if self.send_stem(destination, txs) {
                     self.driver.zone_mut().record_stem(
                         txs,
@@ -778,112 +901,104 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                         now,
                         &mut *self.rng,
                     );
-                    return;
+                    StemOut::Written
+                } else {
+                    StemOut::WriteFailed
                 }
-                tracing::debug!("the own-edge write failed; the origin is held");
-                self.driver.zone_mut().hold_origin(txs, now);
-                return;
-            }
-            RelayPlan::Stem(_) | RelayPlan::NoRoute | RelayPlan::FluffEpoch => {}
-        }
-        let mut to_send: Vec<(TxId, TxBlob)> = txs.to_vec();
-        if let (RelayPlan::Stem(_), RelayCarrier::Noise { channel }) = (plan, carrier) {
-            // One transaction per carrier message: two in one would share
-            // a window, a slot and a successor. What the carrier refuses
-            // takes the ordinary stem below; the batch splits rather than
-            // failing whole, so one oversize transaction does not put its
-            // neighbours on the clear wire.
-            let mut refused = Vec::new();
-            for (tx, blob) in to_send {
-                if self
-                    .carrier_pending
-                    .values()
-                    .any(|pending| pending.tx == tx)
-                {
-                    // The carrier owns it; its verdict resolves it.
-                    continue;
-                }
-                let Some(framed) = self.frame_for_carrier(&blob) else {
-                    refused.push((tx, blob));
-                    continue;
-                };
-                let token = self.next_token;
-                self.next_token = self.next_token.wrapping_add(1);
-                // Recorded before enqueued: both sides own the token or
-                // neither does.
-                self.carrier_pending.insert(
-                    token,
-                    Pending {
-                        tx,
-                        blob: TxBlob::clone(&blob),
-                        source,
-                        local,
-                    },
-                );
-                let enqueued = self
-                    .noise
-                    .as_mut()
-                    .is_some_and(|queue| queue.enqueue(channel.get(), framed, CarrierToken(token)));
-                if !enqueued {
-                    self.carrier_pending.remove(&token);
-                    refused.push((tx, blob));
-                }
-            }
-            to_send = refused;
-            if to_send.is_empty() {
-                return;
             }
         }
-        if plan != RelayPlan::FluffEpoch {
-            if let RelayPlan::Stem(destination) = plan {
-                if self.send_stem(destination, &to_send) {
-                    self.driver.zone_mut().record_stem(
-                        &to_send,
-                        destination,
-                        source,
-                        now,
-                        &mut *self.rng,
-                    );
-                    return;
-                }
+    }
+
+    /// Queue each transaction on `channel` as its own carrier message and
+    /// return those the queue refused. One transaction per message: two in
+    /// one would share a window, a slot and a successor. A transaction the
+    /// carrier already holds is left to its verdict.
+    fn carry(
+        &mut self,
+        txs: &[(TxId, TxBlob)],
+        channel: usize,
+        source: Option<ConnectionId>,
+        local: bool,
+    ) -> Vec<(TxId, TxBlob)> {
+        let mut refused = Vec::new();
+        for (tx, blob) in txs {
+            if self
+                .carrier_pending
+                .values()
+                .any(|pending| pending.tx == *tx)
+            {
+                continue;
             }
-            self.driver.zone_mut().update_stems(&mut *self.rng);
-            let retry = self
-                .driver
-                .zone_mut()
-                .plan_relay(source, local, node_sync, &mut *self.rng);
-            let fallback = match retry {
-                RelayPlan::AwaitSync => return,
-                RelayPlan::NoOwnEdge => {
-                    // The first plan answers this for every origin today. A
-                    // retry that reaches it takes the same hold, and never
-                    // fluffs on a link whose peer learns the address.
-                    self.hold_own_origin(&to_send, now);
-                    return;
-                }
-                RelayPlan::Stem(destination) | RelayPlan::OwnEdge(destination) => {
-                    if self.send_stem(destination, &to_send) {
-                        self.driver.zone_mut().record_stem(
-                            &to_send,
-                            destination,
-                            source,
-                            now,
-                            &mut *self.rng,
-                        );
-                        return;
-                    }
-                    StemFallback::WriteFailed
-                }
-                RelayPlan::NoRoute => StemFallback::NoSuccessor,
-                RelayPlan::FluffEpoch => StemFallback::EpochFluffs,
+            let Some(framed) = self.frame_for_carrier(blob) else {
+                refused.push((*tx, TxBlob::clone(blob)));
+                continue;
             };
-            tracing::debug!(
-                count = to_send.len(),
-                "fluffing what could not stem: {}",
-                fallback.reason()
+            let token = self.next_token;
+            self.next_token = self.next_token.wrapping_add(1);
+            // Recorded before enqueued: both sides own the token or neither
+            // does.
+            self.carrier_pending.insert(
+                token,
+                Pending {
+                    tx: *tx,
+                    blob: TxBlob::clone(blob),
+                    source,
+                    local,
+                },
             );
+            let enqueued = self
+                .noise
+                .as_mut()
+                .is_some_and(|queue| queue.enqueue(channel, framed, CarrierToken(token)));
+            if !enqueued {
+                self.carrier_pending.remove(&token);
+                refused.push((*tx, TxBlob::clone(blob)));
+            }
         }
-        self.fluff_and_record(&to_send, source);
+        refused
+    }
+
+    /// A stem no window could take (`CVR-R6`). This node's own transaction
+    /// is planned again, never broadcast or sent bare. A relayed stem ends
+    /// its stem phase here: its relay state is dropped, and it is held
+    /// before its broadcast (`CVR-R10`).
+    fn no_window(
+        &mut self,
+        txs: &[(TxId, TxBlob)],
+        source: Option<ConnectionId>,
+        local: bool,
+        now: Millis,
+    ) {
+        if local {
+            for (tx, _) in txs {
+                self.driver.zone_mut().requeue_origin(tx, now);
+            }
+            self.driver.zone_mut().hold_origin(txs, now);
+            return;
+        }
+        for (tx, _) in txs {
+            self.driver.zone_mut().release(tx);
+        }
+        self.end_stem(txs, source, StemFallback::NoWindow, now);
+    }
+
+    /// A relayed stem's phase ends here: held before its broadcast
+    /// (`CVR-R10`).
+    fn end_stem(
+        &mut self,
+        txs: &[(TxId, TxBlob)],
+        source: Option<ConnectionId>,
+        fallback: StemFallback,
+        now: Millis,
+    ) {
+        tracing::debug!(
+            count = txs.len(),
+            "holding for broadcast what could not stem: {}",
+            fallback.reason()
+        );
+        self.driver
+            .zone_mut()
+            .hold_broadcast(txs, source, now, &mut *self.rng);
     }
 
     /// The pool is told the transactions are shown, then the zone queues
