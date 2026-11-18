@@ -804,6 +804,35 @@ pub fn rpc_error(fault: LocalFault) -> RpcError {
 mod tests {
     use super::*;
 
+    /// **"This computer" names the service's directory itself** (Rick,
+    /// 2026-11-18). A client gives its network and nothing else, and the
+    /// target it gets looks for the service's record in the platform's
+    /// service rendezvous directory, under this network's name for the
+    /// default instance. Pure: nothing is dialled and no host is needed.
+    /// Red edit: have `this_computer` pass `None` for the service
+    /// directory; every client then stops seeing a service, silently.
+    #[test]
+    fn this_computer_names_the_service_s_directory_itself() {
+        let target = LocalTarget::this_computer(Network::Regtest);
+        let expected = shekyl_rpc_rendezvous::service_rendezvous().map(|dir| {
+            shekyl_rpc_rendezvous::service_record_path(
+                &dir,
+                &Network::Regtest.network_id(),
+                &Instance::Default,
+            )
+        });
+        assert_eq!(target.service_record, expected);
+        // Every platform with a row has a directory, so this is not a
+        // comparison of two absences there.
+        if cfg!(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "macos"
+        )) {
+            assert!(target.service_record.is_some());
+        }
+    }
+
     #[test]
     fn a_content_length_reply_is_its_body() {
         let raw =
