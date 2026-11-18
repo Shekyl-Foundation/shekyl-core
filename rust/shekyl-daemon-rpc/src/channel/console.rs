@@ -108,7 +108,7 @@ pub(crate) fn install(
     let fingerprint = fingerprint_of(&key);
     let live = dir.join(files::CONSOLE_KEY_FILE);
     let journal = StagedWrite::<Journal>::create(&live, &key.to_key_file(), Access::Console)
-        .map_err(|error| FileRefused::Io(private_file::staged_path(&live), error))?;
+        .map_err(FileRefused::from)?;
     // A store failure leaves the journal unnamed; the next start's
     // reconcile sets it aside.
     store.commit_console(&fingerprint, reset_at)?;

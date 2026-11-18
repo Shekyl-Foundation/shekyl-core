@@ -55,7 +55,7 @@ use std::fs::File;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
@@ -205,8 +205,7 @@ pub fn replace_console(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError
 }
 
 fn replace(path: &Path, bytes: &[u8], access: Access) -> Result<(), PrivateFileError> {
-    StagedWrite::<Replace>::create(path, bytes, access)
-        .map_err(|error| PrivateFileError::Io(staged_path(path), error))?
+    StagedWrite::<Replace>::create(path, bytes, access)?
         .commit()
         .map_err(PrivateFileError::from)
 }
@@ -339,9 +338,9 @@ impl Kind for Replace {
 /// could not be renamed over its destination.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldOpen {
-    /// The staged file.
-    pub staged: PathBuf,
-    /// The file it was to replace.
+    /// The file another program held: the staged file, or the live one.
+    pub held: PathBuf,
+    /// The file the replace was to write.
     pub live: PathBuf,
 }
 
@@ -349,10 +348,10 @@ impl std::fmt::Display for HeldOpen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} could not replace {}: another program kept it open for more than {} s",
-            self.staged.display(),
-            self.live.display(),
-            REPLACE_WAIT.as_secs()
+            "{} was held open by another program for more than {} s, so {} could not be replaced",
+            self.held.display(),
+            REPLACE_WAIT.as_secs(),
+            self.live.display()
         )
     }
 }
@@ -395,6 +394,9 @@ impl From<CommitError> for std::io::Error {
 pub struct StagedWrite<K: Kind> {
     staged: PathBuf,
     live: PathBuf,
+    /// The one deadline the leftover's removal, the source's open and the
+    /// rename share: [`REPLACE_WAIT`] from the start of the replace.
+    deadline: Instant,
     kind: PhantomData<K>,
 }
 
@@ -407,22 +409,28 @@ impl<K: Kind> StagedWrite<K> {
     ///
     /// # Errors
     ///
-    /// The staged file could not be removed, created or written.
-    pub fn create(live: &Path, bytes: &[u8], access: Access) -> std::io::Result<Self> {
+    /// [`CommitError::HeldOpen`] when another program held a leftover
+    /// staged file past [`REPLACE_WAIT`]; [`CommitError::Io`] when it could
+    /// not be removed, or the new one created or written.
+    pub fn create(live: &Path, bytes: &[u8], access: Access) -> Result<Self, CommitError> {
+        let deadline = Instant::now() + REPLACE_WAIT;
         let staged = staged_path(live);
-        remove_if_present(&staged)?;
-        write_new(&staged, bytes, access)?;
+        remove_leftover(&staged, live, deadline)?;
+        write_new(&staged, bytes, access)
+            .map_err(|error| CommitError::Io(staged.clone(), error))?;
         Ok(Self {
             staged,
             live: live.to_path_buf(),
+            deadline,
             kind: PhantomData,
         })
     }
 
     /// Rename the staged file over the destination, and make the rename
     /// durable. The one place a file is replaced: on Windows a reader that
-    /// holds the staged file without delete sharing is waited for, up to
-    /// [`REPLACE_WAIT`], and nothing else is retried.
+    /// holds the staged file or the live one without delete sharing is
+    /// waited for until the replace's one deadline, and nothing else is
+    /// retried.
     ///
     /// # Errors
     ///
@@ -431,7 +439,7 @@ impl<K: Kind> StagedWrite<K> {
     /// later start; a [`Replace`]'s staged file is removed, and a removal
     /// that fails too is left to the next start's [`StagedWrite::create`].
     pub fn commit(self) -> Result<(), CommitError> {
-        if let Err(error) = rename_over(&self.staged, &self.live) {
+        if let Err(error) = rename_over(&self.staged, &self.live, self.deadline) {
             if K::REMOVED_ON_FAILURE {
                 // The reader that held the rename may hold the removal too;
                 // the next start's create is the cleanup that always runs.
@@ -466,6 +474,7 @@ impl StagedWrite<Journal> {
         Ok(Self {
             staged,
             live: live.to_path_buf(),
+            deadline: Instant::now() + REPLACE_WAIT,
             kind: PhantomData,
         })
     }
@@ -491,25 +500,54 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Remove a leftover staged file before a new one is written.
+#[cfg(unix)]
+fn remove_leftover(staged: &Path, _live: &Path, _deadline: Instant) -> Result<(), CommitError> {
+    remove_if_present(staged).map_err(|error| CommitError::Io(staged.to_path_buf(), error))
+}
+
+/// Remove a leftover staged file before a new one is written, waiting
+/// until `deadline` for a reader that holds it
+/// ([`shekyl_win_sec::replace::remove`]).
+#[cfg(windows)]
+fn remove_leftover(staged: &Path, live: &Path, deadline: Instant) -> Result<(), CommitError> {
+    shekyl_win_sec::replace::remove(staged, deadline)
+        .map_err(|error| windows_fault(error, staged, live))
+}
+
 /// Rename `staged` over `live`.
 #[cfg(unix)]
-fn rename_over(staged: &Path, live: &Path) -> Result<(), CommitError> {
+fn rename_over(staged: &Path, live: &Path, _deadline: Instant) -> Result<(), CommitError> {
     std::fs::rename(staged, live).map_err(|error| CommitError::Io(live.to_path_buf(), error))
 }
 
 /// Rename `staged` over `live` through the one Windows file replace
-/// ([`shekyl_win_sec::replace::replace`]), which waits up to
-/// [`REPLACE_WAIT`] for a reader that holds `staged` without delete sharing.
+/// ([`shekyl_win_sec::replace::replace`]), which waits until `deadline`
+/// for a reader that holds either file.
 #[cfg(windows)]
-fn rename_over(staged: &Path, live: &Path) -> Result<(), CommitError> {
-    use shekyl_win_sec::replace::{replace, ReplaceError};
-    replace(staged, live, REPLACE_WAIT).map_err(|error| match error {
-        ReplaceError::HeldOpen => CommitError::HeldOpen(HeldOpen {
-            staged: staged.to_path_buf(),
+fn rename_over(staged: &Path, live: &Path, deadline: Instant) -> Result<(), CommitError> {
+    shekyl_win_sec::replace::replace(staged, live, deadline)
+        .map_err(|error| windows_fault(error, staged, live))
+}
+
+/// The commit's error for a Windows replace's, naming the file held.
+#[cfg(windows)]
+fn windows_fault(
+    error: shekyl_win_sec::replace::ReplaceError,
+    staged: &Path,
+    live: &Path,
+) -> CommitError {
+    use shekyl_win_sec::replace::{Held, ReplaceError};
+    match error {
+        ReplaceError::HeldOpen(held) => CommitError::HeldOpen(HeldOpen {
+            held: match held {
+                Held::Staged => staged.to_path_buf(),
+                Held::Live => live.to_path_buf(),
+            },
             live: live.to_path_buf(),
         }),
         ReplaceError::Io(error) => CommitError::Io(live.to_path_buf(), error),
-    })
+    }
 }
 
 /// Where `live`'s staged file is written.
@@ -866,7 +904,7 @@ mod wait_tests {
         let failed = staged.commit();
         assert!(began.elapsed() >= REPLACE_WAIT);
         assert!(
-            matches!(&failed, Err(CommitError::HeldOpen(held)) if held.live == live),
+            matches!(&failed, Err(CommitError::HeldOpen(held)) if held.held == staged_path(&live)),
             "{failed:?}"
         );
         reader.join().unwrap();
@@ -900,5 +938,76 @@ mod wait_tests {
             .expect("the destination's reader does not hold the rename");
         reader.join().unwrap();
         assert_eq!(std::fs::read(&live).unwrap(), b"new");
+    }
+
+    /// A leftover staged file a reader holds at the next start is waited
+    /// for within the replace's deadline, and past it is `HeldOpen` naming
+    /// the staged file. Red edit: remove the leftover with a bare
+    /// `remove_file`, and a scanner holding it fails the start at once.
+    #[test]
+    fn a_held_leftover_is_waited_for_and_past_the_wait_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("record");
+        std::fs::write(staged_path(&live), b"left behind").unwrap();
+        let reader = hold(&staged_path(&live), REPLACE_WAIT / 4);
+        StagedWrite::<Replace>::create(&live, b"new", Access::WorldReadable)
+            .expect("the leftover's reader let go within the wait")
+            .commit()
+            .unwrap();
+        reader.join().unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
+
+        std::fs::write(staged_path(&live), b"left behind").unwrap();
+        let reader = hold(&staged_path(&live), REPLACE_WAIT * 2);
+        let failed = StagedWrite::<Replace>::create(&live, b"newer", Access::WorldReadable);
+        assert!(
+            matches!(&failed, Err(CommitError::HeldOpen(held)) if held.held == staged_path(&live)),
+            "{failed:?}"
+        );
+        reader.join().unwrap();
+        assert_eq!(
+            std::fs::read(&live).unwrap(),
+            b"new",
+            "the live file is untouched"
+        );
+    }
+
+    /// A reader that holds the live file without delete sharing fails the
+    /// rename with a sharing violation (measured 2026-11-18). One that lets
+    /// go within the deadline is waited for and the commit lands; one that
+    /// outstays it is `HeldOpen` naming the live file, which keeps its old
+    /// bytes. Red edit: return the rename's sharing violation at once, and
+    /// a scanner reading the published record fails the next start.
+    #[test]
+    fn a_destination_held_without_delete_sharing_is_waited_for_and_past_the_wait_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("record");
+        std::fs::write(&live, b"old").unwrap();
+        let staged = StagedWrite::<Replace>::create(&live, b"new", Access::WorldReadable).unwrap();
+        let reader = hold(&live, REPLACE_WAIT / 4);
+        staged
+            .commit()
+            .expect("the live file's reader let go within the wait");
+        reader.join().unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"new");
+
+        let staged =
+            StagedWrite::<Replace>::create(&live, b"newer", Access::WorldReadable).unwrap();
+        let reader = hold(&live, REPLACE_WAIT * 2);
+        let failed = staged.commit();
+        assert!(
+            matches!(&failed, Err(CommitError::HeldOpen(held)) if held.held == live),
+            "{failed:?}"
+        );
+        reader.join().unwrap();
+        assert_eq!(
+            std::fs::read(&live).unwrap(),
+            b"new",
+            "the live file keeps its bytes"
+        );
+        assert!(
+            !staged_path(&live).exists(),
+            "the failed replace removed its own staged file"
+        );
     }
 }

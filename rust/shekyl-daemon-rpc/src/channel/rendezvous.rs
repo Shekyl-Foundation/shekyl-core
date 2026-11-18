@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use shekyl_rpc_rendezvous::{ServiceChannel, ServiceRecord};
 
-use shekyl_os_account::private_file::{self, Access, Replace, StagedWrite};
+use shekyl_os_account::private_file::{Access, Replace, StagedWrite};
 
 use super::files::FileRefused;
 
@@ -64,9 +64,7 @@ impl ServiceRendezvous {
             view: view.first().copied(),
         }
         .bytes();
-        StagedWrite::<Replace>::create(path, &record, Access::WorldReadable)
-            .map_err(|error| FileRefused::Io(private_file::staged_path(path), error))?
-            .commit()?;
+        StagedWrite::<Replace>::create(path, &record, Access::WorldReadable)?.commit()?;
         Ok(Self {
             path: path.to_path_buf(),
             record,

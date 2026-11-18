@@ -20,8 +20,7 @@
 //!    sharing read, write and delete, without following a link. Another
 //!    program that holds the staged file open without delete sharing (a
 //!    scanner, an indexer) fails this open with `ERROR_SHARING_VIOLATION`
-//!    ([`is_sharing_violation`]). [`replace`] waits on that open, and on
-//!    nothing else, up to the caller's deadline.
+//!    ([`is_sharing_violation`]).
 //! 2. [`Source::rename_over`] renames it over the destination with
 //!    `FileRenameInfoEx`, `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` and
 //!    `FILE_RENAME_FLAG_POSIX_SEMANTICS`. A reader of the destination that
@@ -36,6 +35,15 @@
 //!    commits there. What such a file system loses is replacing a file a
 //!    reader holds open: a reader of the destination, whatever it shares,
 //!    fails the classic rename with `ERROR_ACCESS_DENIED`.
+//!
+//! **One deadline** (Rick, 2026-11-18): the removal of a leftover staged
+//! file ([`remove`]), the source's open and the rename itself share the
+//! caller's deadline, `REPLACE_WAIT` in all, not per step. Each waits only
+//! on a reader that holds its file: a sharing violation, and on a file
+//! system that took the classic rename, the access denial a held
+//! destination gives there. The source's handle stays open across the
+//! rename's retries. Past the deadline the failure names the file held
+//! ([`Held`]).
 
 #![cfg(windows)]
 
@@ -47,7 +55,9 @@ use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_SHARING_VIOLATION};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_SHARING_VIOLATION,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     FileRenameInfo, FileRenameInfoEx, SetFileInformationByHandle, DELETE,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_INFO_BY_HANDLE_CLASS, FILE_RENAME_INFO, FILE_SHARE_DELETE,
@@ -61,39 +71,81 @@ use windows_sys::Win32::System::WindowsProgramming::{
 /// reader that lets go is seen within 50 ms.
 const POLL: Duration = Duration::from_millis(50);
 
-/// Why [`replace`] failed.
+/// Which file another program held past the deadline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Held {
+    /// The staged file (a leftover being removed, or the source's open).
+    Staged,
+    /// The live file the rename would replace.
+    Live,
+}
+
+/// Why [`remove`] or [`replace`] failed.
 #[derive(Debug)]
 pub enum ReplaceError {
-    /// Another program held the staged file open without delete sharing
-    /// past the caller's wait.
-    HeldOpen,
-    /// The open or the rename failed.
+    /// Another program held this file open past the deadline.
+    HeldOpen(Held),
+    /// A step failed otherwise.
     Io(io::Error),
 }
 
-/// Rename `staged` over `live`: wait up to `wait` for a reader that holds
-/// `staged` without delete sharing, then rename through the handle, with
-/// POSIX semantics where the file system has them.
+/// Run `step` until it succeeds, fails with something other than a held
+/// file, or `deadline` passes; a held file is `held` past it.
+fn waiting<T>(
+    deadline: Instant,
+    held: Held,
+    mut step: impl FnMut() -> Result<T, (io::Error, bool)>,
+) -> Result<T, ReplaceError> {
+    loop {
+        match step() {
+            Ok(value) => return Ok(value),
+            Err((_, true)) if Instant::now() < deadline => std::thread::sleep(POLL),
+            Err((_, true)) => return Err(ReplaceError::HeldOpen(held)),
+            Err((error, false)) => return Err(ReplaceError::Io(error)),
+        }
+    }
+}
+
+/// Remove the leftover staged file at `staged`, if there is one, waiting
+/// until `deadline` for a reader that holds it without delete sharing.
 ///
 /// # Errors
 ///
-/// [`ReplaceError::HeldOpen`] past the wait; [`ReplaceError::Io`] when the
-/// open or the rename failed otherwise.
-pub fn replace(staged: &Path, live: &Path, wait: Duration) -> Result<(), ReplaceError> {
-    let deadline = Instant::now() + wait;
-    let source = loop {
-        match open_source(staged) {
-            Ok(source) => break source,
-            Err(error) if is_sharing_violation(&error) => {
-                if Instant::now() >= deadline {
-                    return Err(ReplaceError::HeldOpen);
-                }
-                std::thread::sleep(POLL);
+/// [`ReplaceError::HeldOpen`] past the deadline; [`ReplaceError::Io`]
+/// when the removal failed otherwise.
+pub fn remove(staged: &Path, deadline: Instant) -> Result<(), ReplaceError> {
+    waiting(deadline, Held::Staged, || {
+        match std::fs::remove_file(staged) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                let held = is_sharing_violation(&error);
+                Err((error, held))
             }
-            Err(error) => return Err(ReplaceError::Io(error)),
         }
-    };
-    source.rename_over(live).map_err(ReplaceError::Io)
+    })
+}
+
+/// Rename `staged` over `live` through the handle, with POSIX semantics
+/// where the file system has them, waiting until `deadline` for a reader
+/// of either file. The handle stays open across the rename's retries.
+///
+/// # Errors
+///
+/// [`ReplaceError::HeldOpen`] naming the file held past the deadline;
+/// [`ReplaceError::Io`] when the open or the rename failed otherwise.
+pub fn replace(staged: &Path, live: &Path, deadline: Instant) -> Result<(), ReplaceError> {
+    let source = waiting(deadline, Held::Staged, || {
+        open_source(staged).map_err(|error| {
+            let held = is_sharing_violation(&error);
+            (error, held)
+        })
+    })?;
+    waiting(deadline, Held::Live, || {
+        source
+            .attempt(live)
+            .map_err(|failed| (failed.error, failed.held))
+    })
 }
 
 /// A staged file, open for its rename.
@@ -131,6 +183,12 @@ pub fn is_ex_unsupported(error: &io::Error) -> bool {
     error.raw_os_error() == i32::try_from(ERROR_INVALID_PARAMETER).ok()
 }
 
+/// A failed rename, and whether a reader holding the destination failed it.
+struct Failed {
+    error: io::Error,
+    held: bool,
+}
+
 /// The rename a call asks for: the class and the union's value.
 #[derive(Clone, Copy)]
 enum Rename {
@@ -144,18 +202,35 @@ impl Source {
     /// Rename the file over `destination`, replacing it if it exists: with
     /// POSIX semantics, and once more through the classic class when the
     /// file system refuses `FileRenameInfoEx` ([`is_ex_unsupported`]).
+    /// One attempt; [`replace`] is the waiting caller.
     ///
     /// # Errors
     ///
     /// `destination` is not a valid path, or the rename failed.
-    pub fn rename_over(self, destination: &Path) -> io::Result<()> {
+    pub fn rename_over(&self, destination: &Path) -> io::Result<()> {
+        self.attempt(destination).map_err(|failed| failed.error)
+    }
+
+    /// One rename, and whether its failure is a reader holding the
+    /// destination: a sharing violation, or on the classic class (a file
+    /// system without POSIX renames) the access denial a held destination
+    /// gives there.
+    fn attempt(&self, destination: &Path) -> Result<(), Failed> {
         let posix =
             Rename::Ex(FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS);
         match self.rename_with(destination, posix) {
-            Err(error) if is_ex_unsupported(&error) => {
-                self.rename_with(destination, Rename::Classic)
-            }
-            renamed => renamed,
+            Ok(()) => Ok(()),
+            Err(error) if is_ex_unsupported(&error) => self
+                .rename_with(destination, Rename::Classic)
+                .map_err(|error| Failed {
+                    held: is_sharing_violation(&error)
+                        || error.raw_os_error() == i32::try_from(ERROR_ACCESS_DENIED).ok(),
+                    error,
+                }),
+            Err(error) => Err(Failed {
+                held: is_sharing_violation(&error),
+                error,
+            }),
         }
     }
 

@@ -127,7 +127,7 @@ pub fn held_open_refusal(
         shekyl_options::Code::ReplaceHeldOpen,
         shekyl_options::Source::Machine,
     )
-    .param("path", held.live.display().to_string())
+    .param("path", held.held.display().to_string())
     .param(
         "wait",
         shekyl_os_account::private_file::REPLACE_WAIT

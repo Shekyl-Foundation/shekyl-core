@@ -218,9 +218,7 @@ mod windows {
     /// and rename it over the path: a reader sees the old record or the new
     /// one.
     fn publish(plan: &OwnerSocketPlan, record: &[u8]) -> Result<(), CommitError> {
-        StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)
-            .map_err(|e| CommitError::Io(plan.path.clone(), e))?
-            .commit()
+        StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)?.commit()
     }
 
     /// The start-up dial (`RPC_CHANNEL.md` §7.1).
@@ -247,14 +245,16 @@ mod windows {
         match open_verified(&record.pipe) {
             Ok(_answered) => Err(running(plan, network)),
             Err(DialError::Busy) => Err(running(plan, network)),
+            // The publish replaces it (`StagedWrite`), waiting for a reader
+            // that holds it: a scanner reading a stale record is
+            // `config.replace.held-open`, never an impostor.
             Err(DialError::NotFound) => {
                 tracing::info!(
                     target: "global",
                     "replacing a stale owner's rendezvous at {} (nothing answered)",
                     plan.path.display()
                 );
-                std::fs::remove_file(&plan.path)
-                    .map_err(|e| impostor(format!("a stale record that cannot be removed: {e}")))
+                Ok(())
             }
             // A pipe of another logon session admits that session alone.
             Err(DialError::Open(_)) if record.session != session => Err(running(plan, network)),
@@ -421,6 +421,53 @@ mod windows {
             assert_eq!(rendezvous.check(), Ok(()));
             drop(rendezvous);
             assert!(!plan.path.exists());
+        }
+
+        /// A stale record a reader holds without delete sharing is replaced
+        /// once the reader lets go within the wait, and past the wait the
+        /// start refuses with `config.replace.held-open`, never as an
+        /// impostor. Red edit: remove the stale record before the publish,
+        /// and the held record is `config.socket.impostor` at once.
+        #[tokio::test]
+        async fn a_held_stale_record_is_waited_for_and_never_an_impostor() {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+            let hold = |path: &Path, hold: std::time::Duration| {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(FILE_SHARE_READ)
+                    .open(path)
+                    .unwrap();
+                std::thread::spawn(move || {
+                    std::thread::sleep(hold);
+                    drop(file);
+                })
+            };
+            let wait = shekyl_os_account::private_file::REPLACE_WAIT;
+            let base = tempfile::tempdir().unwrap();
+            let plan = plan(base.path());
+            let crashed = |plan: &OwnerSocketPlan| {
+                let (listener, rendezvous) =
+                    OwnerSocket::bind(plan, "regtest").unwrap().into_parts();
+                drop(listener);
+                std::mem::forget(rendezvous);
+            };
+
+            crashed(&plan);
+            let reader = hold(&plan.path, wait / 4);
+            let (_listener, rendezvous) = OwnerSocket::bind(&plan, "regtest")
+                .expect("the reader let go within the wait")
+                .into_parts();
+            reader.join().unwrap();
+            assert_eq!(rendezvous.check(), Ok(()));
+            drop(rendezvous);
+            drop(_listener);
+
+            crashed(&plan);
+            let reader = hold(&plan.path, wait * 2);
+            let refused = OwnerSocket::bind(&plan, "regtest").err().expect("refused");
+            reader.join().unwrap();
+            assert_eq!(refused.code, Code::ReplaceHeldOpen, "{}", refused.render());
         }
 
         /// What is not a rendezvous record is reported and left alone.

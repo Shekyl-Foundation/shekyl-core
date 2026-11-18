@@ -2043,12 +2043,16 @@ written through `shekyl-os-account`'s `StagedWrite`, the one place a file
 is replaced (Rick, 2026-11-18). Each is a *replace*: its staged `.new` is
 named by nothing, so the next start's write removes one a crash left and a
 failed commit removes its own. On Windows the rename is the handle's
-(`FileRenameInfoEx`, replace-if-exists, POSIX semantics), so a reader of
-the old record keeps reading it. A program that holds the staged file
-without delete sharing (an antivirus scanner, a search indexer) is waited
-for up to `REPLACE_WAIT`, 2 s (an Assumption, basis at the constant); past
-it the start refuses with `config.replace.held-open`, naming the file and
-the directory to exclude from scanning.
+(`FileRenameInfoEx`, replace-if-exists, POSIX semantics; on FAT32 and
+exFAT the classic `FileRenameInfo`), so a reader of the old record that
+shares delete keeps reading it. A program that holds the staged file or
+the record without delete sharing (an antivirus scanner, a search indexer)
+is waited for: the removal of a leftover staged file, the staged file's
+open and the rename share one deadline, `REPLACE_WAIT`, 2 s in all (Rick,
+2026-11-18; the 2 s is an Assumption, basis at the constant). Past it the
+start refuses with `config.replace.held-open`, naming the file held and the
+directory to exclude from scanning. A stale record, which a crashed daemon
+left, is replaced by the publish the same way, never removed beside it.
 Every rendezvous path is keyed by the genesis-derived network id, not a
 nettype name (rule 71), so daemons of different networks coexist and a
 client never reaches the wrong network's node.

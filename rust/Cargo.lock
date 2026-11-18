@@ -4336,6 +4336,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
