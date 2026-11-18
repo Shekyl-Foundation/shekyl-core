@@ -120,15 +120,28 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         assert!(block.judged_by.contains(&row), "{row} judged the block");
     }
 
-    // The transition: two inserts, in post order.
+    // The transition: two inserts, in persona-key order
+    // (`ArchivalDelta::records`), not post order: each is found by its
+    // persona.
     let records = block.archival.records();
     assert_eq!(records.len(), 2, "one write per join");
+    assert!(
+        records[0].persona() < records[1].persona(),
+        "the writes are in persona-key order"
+    );
+    let write_of = |persona| {
+        records
+            .iter()
+            .find(|write| write.persona() == persona)
+            .expect("a write for each join")
+    };
+    let (compact_write, whole_write) = (write_of(&compact.id()), write_of(&whole.id()));
     let Input::BondPost(posted) = &join_compact.input else {
         unreachable!()
     };
-    assert_eq!(records[0].persona(), &compact.id());
-    assert_eq!(records[0].kind(), RecordWriteKind::Insert);
-    let record = records[0].record();
+    assert_eq!(compact_write.persona(), &compact.id());
+    assert_eq!(compact_write.kind(), RecordWriteKind::Insert);
+    let record = compact_write.record();
     assert_eq!(record.hybrid_pubkey, compact.identity());
     assert_eq!(record.bond_spend_pk, compact.bond_spend());
     // FN-DSA increment 3: the production constructor commits the persona's
@@ -160,11 +173,11 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     assert!(record.claimed_settlement_epochs.is_empty());
     assert_eq!(record.first_paying_emission_height, None);
 
-    assert_eq!(records[1].persona(), &whole.id());
-    assert_eq!(records[1].kind(), RecordWriteKind::Insert);
-    assert_eq!(records[1].record().holdings, Holdings::CompleteTree);
+    assert_eq!(whole_write.persona(), &whole.id());
+    assert_eq!(whole_write.kind(), RecordWriteKind::Insert);
+    assert_eq!(whole_write.record().holdings, Holdings::CompleteTree);
     assert_eq!(
-        records[1].record().bonded_total.to_raw(),
+        whole_write.record().bonded_total.to_raw(),
         ARCHIVAL_BOND_FLOOR_ATOMIC,
         "a complete tree is one holding at the floor"
     );
@@ -197,14 +210,14 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     );
     assert_eq!(
         scenario.bond_record(whole.id()).await.expect("read"),
-        Some(records[1].record().clone()),
+        Some(whole_write.record().clone()),
     );
     assert_eq!(
         scenario.budget_accruing(epoch).await.expect("read"),
         Some(accrued),
         "the epoch's accruing row is the verdict's post-image"
     );
-    let whole_record = records[1].record().clone();
+    let whole_record = whole_write.record().clone();
     spender.push(&block);
 
     // The next block reads the records: a release of the persisted
