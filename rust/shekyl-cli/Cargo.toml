@@ -86,6 +86,9 @@ base64 = "0.22"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# A unit test names a directory for an owner's leg (`LocalTarget::test_override`).
+# TEST_ONLY: a dev edge alone may enable it.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
 # The regtest spawns in this crate's tests take the spawn lock. The binary
 # does not launch tor; the lock is the gate's subject for a watched image,
 # and the test uses the same call the harness does.
