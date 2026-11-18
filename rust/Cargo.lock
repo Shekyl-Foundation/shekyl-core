@@ -4514,6 +4514,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-engine-prefs",
  "shekyl-engine-state",
+ "shekyl-os-account",
  "shekyl-types",
  "tempfile",
  "thiserror",
