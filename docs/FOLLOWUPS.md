@@ -491,15 +491,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: the wallet lane — [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q63, with IG-Q29's loader
   - Target: pre-genesis
 
-- **The Linux packages create no `shekyl` account, though the shipped unit runs as it (`INPUT_GRAMMAR.md` IG-F12).** `contrib/packaging/linux/shekyld.service` sets `User=shekyl`, and `deb-after-install.sh` only reloads systemd, so on a fresh install the unit cannot start. IG-Q64, RULED 2026-10-22, is the fix (`INPUT_GRAMMAR.md` §22); the packaging is unbuilt on `dev`. Falsify by a fresh `.deb` and RPM install whose `id shekyl` succeeds before the unit first starts.
-  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
-  - Target: pre-genesis
-
-- **No installer creates the daemon's configuration directory (`INPUT_GRAMMAR.md` IG-F13).** Nothing creates `/etc/shekyl/` (R2) on Linux, and the Windows installer does not create `%ProgramData%\shekyl\`, which IG-13 says only the installer creates. IG-Q64, RULED 2026-10-22, is the fix (`INPUT_GRAMMAR.md` §22); the packaging is unbuilt on `dev`. Falsify by a fresh install that leaves the configuration directory that question names.
-  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
-  - Target: pre-genesis
-
-- **The shipped systemd unit runs mainnet only (`INPUT_GRAMMAR.md` IG-F16).** `contrib/packaging/linux/shekyld.service` passes no `--network`, so a package cannot run testnet, the network every alpha release runs, without an operator's own unit. IG-Q64, RULED 2026-10-22, is the fix (`INPUT_GRAMMAR.md` §22); the packaging is unbuilt on `dev`. Falsify by a packaged unit whose `ExecStart` passes `--network` for the instance and still pairs `--data-dir` and `--log-file` with `StateDirectory` and `LogsDirectory`.
+- **The Windows installer does not create the daemon's machine-wide root (`INPUT_GRAMMAR.md` IG-F13).** IG-13 says only the installer creates `%ProgramData%\shekyl\`, and it creates it when the daemon runs as a Windows service. That waits on RT-W14 (`INPUT_GRAMMAR.md` §22, IG-Q64). The Linux half is built: the packages declare `/etc/shekyl/`. Falsify by a Windows install with `service` that leaves `%ProgramData%\shekyl\`.
   - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
   - Target: pre-genesis
 

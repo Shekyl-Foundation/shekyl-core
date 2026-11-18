@@ -256,7 +256,8 @@ invokes cmake commands as needed.
 
 * Run Shekyl with `shekyld` (foreground), or supervise it with systemd/
   launchd/Task Scheduler for background operation. See
-  `contrib/packaging/linux/shekyld.service` for an example systemd unit.
+  `contrib/packaging/linux/shekyld@.service` for the systemd unit, one
+  instance per network.
 
 * **Optional**: run the test suite (from `rust/`):
 
@@ -479,9 +480,10 @@ in [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 To run in the background, use your platform's service manager (systemd,
 launchd, or Task Scheduler). The shipped systemd unit is
-`contrib/packaging/linux/shekyld.service`, which runs in its own
-`shekyl.slice` beside it (the `.deb` installs both). Adapt paths and the
-service user to your deployment. The daemon has no console and reads
+`contrib/packaging/linux/shekyld@.service`, one instance per network
+(`systemctl enable --now shekyld@testnet`), which runs in its own
+`shekyl.slice` beside it. The `.deb` and the `.rpm` install both and create
+the `shekyl` account it runs as. The daemon has no console and reads
 nothing from stdin; its commands are `shekyl-cli` words. `shekyld` always
 runs in the foreground and is supervised externally.
 
