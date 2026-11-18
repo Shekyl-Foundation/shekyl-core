@@ -20,6 +20,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[features]
+# TEST_ONLY (scripts/ci/check_test_only_features.py): `LocalTarget::test_override`,
+# a test node's own directories in place of "this computer"'s. Enabled on
+# dev-dependency edges alone, so no production client can name a directory.
+test-override = []
+
 [dependencies]
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 zeroize = { version = "^1.5", default-features = false, features = ["alloc", "std"] }
@@ -75,6 +81,8 @@ tracing = "0.1"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# This crate's own integration tests name a test node's directory.
+shekyl-rpc-transport = { path = ".", features = ["test-override"] }
 tempfile = "3"
 # rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's
 # read_exact/write_all (the ATYP=DOMAIN wire pin in `http_client`).
