@@ -4827,8 +4827,9 @@ beside its testnet node.
      11 790 s;
   4. the trace's regeneration and its pin.
 - **At `8e9534d64f`:** the same unit tests, census, regeneration and pin.
-  This commit adds four columns: the reward minted, every listed fee per
-  block, and the Standard body's weight and fee. The first reading could
+  This commit adds five columns: the reward minted, the penalty's share of
+  it, every listed fee per block, and the Standard body's weight and fee.
+  The first reading could
   grade GRW-3's emission clause, GRW-2's body, and §5.35.1's fee only from
   figures borrowed from other narrations. The committed fixture is this
   second reading, written under
@@ -4843,11 +4844,11 @@ beside its testnet node.
 | Prediction | Outcome |
 | --- | --- |
 | **GRW-1.** Inherited, standard, at rest (y25–y40): 45–55 % of blocks stop at the penalty, the rest drained, none at the limit. `steady` after the crossing: every block drained. Before the crossing, on both: nearly every block at the penalty, 22 listed | **Held, but for one quarter on `steady`.** At rest 48.8–49.2 % stop at the penalty, the rest drain, none hit the limit. Before the crossing, 100 % stop at the penalty on both traffics, 22 carried. On `steady` every block drains from y19 q3, except y23 q2: there 0.4 % stop at the penalty. That quarter the Standard body steps from 14.64 to 15.28 KB, and 50 bodies of the new weight do not fit the 733 K LTEM until it follows to 765 K |
-| **GRW-2.** The carried count's median rests at 65–70, lowered from the queue's 70 by the pool's expiries and refusals; it holds from y21 to y40 while the median's bytes grow with the body; the effective median never at its 3·LTEM clamp, and within 3 % of the LTEM | **The rest point held; its stated reason, the clamp and the start of the hold missed.** The count rests at 68–69 from y21 q4 to y40, and y21's first three quarters read 66–67. That is the queue's own point (49.5 % at 70, 51.1 % at 69). The pool drops nothing at rest (0.00 a block), so expiries and refusals do not lower it. §5.35.1's 65 was read mid-climb, at y20. The bytes step once, 997 K to 1 041–1 056 K, with the body's step in y23. At rest the effective median is within 0.4–1.8 % of the LTEM and never at the clamp. **It is at the clamp during the crossing:** in y19 q2, 14.8 % of blocks are judged at 3·LTEM, and 0.4 % in y19 q3. The rest weight is above 3 × 324 K, so the clamp binds until the LTEM moves. Each long-term weight is clamped to 1.7·LTEM, so the LTEM rises at most 1.7× a long window |
-| **GRW-3.** Every body past the penalty-free weight pays its penalty. In total nearly free: at rest under one body a block past it, the year's penalty under 1 % of the year's fees and under 0.05 % of its emission. The room is bought once, during the climb (y19–y21) | **Paid per body and nearly free at rest held; "bought once" missed.** The surplus is positive in every period of every run. At rest: 0.49–0.50 bodies a block past the free weight, the penalty 0.67–0.79 % of every listed fee and 0.0101–0.0102 % of the reward minted. The crossing year costs more: y19's penalty is 84 329 SKL, 0.085 % of its emission, and 2.36 % of fees in y19 q2. The penalty never stops. y19–y21 costs 109 009 SKL, and y22–y40 another 102 962. At rest each block that stops at the penalty lists exactly one body past the free weight (1.00–1.02), and that body gives up 68–80 % of its own fee to the penalty. The room under the risen median is used free. The burst above it pays on half the blocks, every year |
+| **GRW-2.** The carried count's median rests at 65–70, lowered from the queue's 70 by the pool's expiries and refusals; it holds from y21 to y40 while the median's bytes grow with the body; the effective median never at its 3·LTEM clamp, and within 3 % of the LTEM | **The rest point held; its stated reason, the clamp and the start of the hold missed.** The count rests at 68–69 from y21 q4 to y40, except 67 in y23 q2–q3 while the body steps. y21's first three quarters read 66–67. That is the queue's own point (49.5 % at 70, 51.1 % at 69). The pool drops nothing at rest (0.00 a block), so expiries and refusals do not lower it. §5.35.1's 65 was read mid-climb, at y20. The bytes step once, 997 K to 1 041–1 056 K, with the body's step in y23. At rest the effective median is within 2 % of the LTEM and never at the clamp. **It is at the clamp during the crossing:** in y19 q2, 14.8 % of blocks are judged at 3·LTEM, and 0.4 % in y19 q3. The rest weight is above 3 × 324 K, so the clamp binds until the LTEM, the median of 100 000 blocks, moves. It moves from 324 K to 616 K by the quarter's end |
+| **GRW-3.** Every body past the penalty-free weight pays its penalty. In total nearly free: at rest under one body a block past it, the year's penalty under 1 % of the year's fees and under 0.05 % of its emission. The room is bought once, during the climb (y19–y21) | **Paid per body and nearly free at rest held; "bought once" missed.** The surplus is positive in every period of every run. At rest: 0.49–0.50 bodies a block past the free weight, the penalty 0.67–0.79 % of every listed fee and 0.0101–0.0102 % of the reward minted. The crossing year costs more: y19's penalty is 84 329 SKL, 0.085 % of its emission, and 2.36 % of fees in y19 q2. The penalty never stops. y19–y21 costs 109 009 SKL, and y22–y40 another 102 962. At rest each block that stops at the penalty lists exactly one body past the free weight (1.00–1.02), and the penalty it adds is 68–80 % of its fee. The room under the risen median is used free. The burst above it pays on half the blocks, every year |
 | **GRW-4.** The effective median leaves the floor in y19; the rest count within a year; the LTEM at it by y21 | **The start and the LTEM held; the year to rest missed.** It leaves in y19 q2. The carried count goes 22 → 54 in that one quarter, then 58 (y19 q4), 65 (y20 q4) and 68 (y21 q4): about two and a half years, closing more slowly as the share of blocks stopping at the penalty nears half (63.2 % in y20 q1, 50.4 % in y21 q4). The LTEM reaches 997 K, 68 bodies of 14.64 KB, at y21 q4 |
 | **GRW-5.** The inherited zone grows from y19. The re-derived zone does not: about 30 % of blocks at their stop, under half, so the LTEM stays on the floor to y40. The economies' rest count within a body of each other. For the zone decision, the traffic's burstiness sets where blocks sit after the gate | **The zones held; the economies were not run.** The inherited zone grows from y19 q2. The re-derived zone's LTEM is 1 260 K in every period to y40, with 29.1–31.8 % of blocks at the penalty, and its carried count 49–51. This PR runs production only, so the economies are not graded here: EUP-4 prep reads them. The zone decision's clause held, and the fee rides on it (below) |
-| **GRW-6.** Every narration and steady pin passes unregenerated at this PR's head | **Held at `a78cd1e627`, and carried to the head by what changed since.** The nightly lane passed 10 of 10 unregenerated: stage 2 standard, flat control and steady; ESR-10, EUP-4 and the grid's nightly scopes; ESR-10's and EUP-4's steady scopes; the baseline's reader test; the ESR-11 timing set. After it, only `growth_trace.rs` changed among the sim's sources, and no other fold reads that file. The merge of `dev` touched nothing in the sim's dependency tree. The per-PR narration pins run at the final head |
+| **GRW-6.** Every narration and steady pin passes unregenerated at this PR's head | **Held at `a78cd1e627`, and carried to the head by what changed since.** The nightly lane passed 10 of 10 unregenerated: stage 2 standard, flat control and steady; ESR-10, EUP-4 and the grid's nightly scopes; ESR-10's and EUP-4's steady scopes; the baseline's reader test; the ESR-11 timing set. After it, only `growth_trace.rs` changed among the sim's sources, and no other fold reads that file. The merge of `dev` (`d4187e6e9f`) touched one crate in the sim's dependency tree, `shekyl-chain-store`, with two lint allowances and no code. It moved no external crate's version. The per-PR narration pins and the trace's pin passed in a fresh clone at `e76cdaab48`. The three steady pins, the reader test and the timing set last ran at `a78cd1e627` |
 
 **The four questions.**
 1. **Paid or free.** Each body past the penalty-free weight pays its own
@@ -4858,8 +4859,13 @@ beside its testnet node.
    - the crossing year costs 0.085 %.
 
    It is not a one-time purchase. Half the blocks keep listing one body
-   past the free weight, every year. The miner keeps 20–32 % of that
-   body's fee. The rest is withheld from the coinbase and stays unminted.
+   past the free weight, every year. That body raises the block's gross
+   coinbase by 20–32 % of its fee, and the rest of its fee covers the
+   reward withheld, which stays unminted. `Fill::admit` compares gross
+   figures: a body is listed when it does not lower the penalised reward
+   plus every fee. The fee's three-way split (burn, stakers, miner) and
+   the reward's miner and staker legs come after, so what the miner
+   itself nets from that body is not traced here.
 2. **Whether it stops, and where.** It stops at a carried median of 68–69
    ordinary bodies (1 041–1 056 K), where half the blocks stop at the
    penalty. That is 3.2 times the inherited zone's room, and under the
@@ -4881,11 +4887,13 @@ beside its testnet node.
      - the count jumps from 22 to 54 in a quarter;
      - one block in seven is judged at the surge clamp.
 
+     The clamp also needs the ratchet. `steady` drains the same backlog
+     into 50 a block, 733 K, under 3 × 324 K, and never reaches it.
      Users who leave or bid up would leave a smaller backlog.
    - **Two other sim inputs matter at rest:**
      - **No propagation cost.** A miner who weighed orphan risk against
-       the 20–32 % of one body's fee could decline it, and the median
-       would ratchet less. EUP-4 prep's inclusion column measures that
+       what one body past the free weight nets could decline it, and the
+       median would ratchet less. EUP-4 prep's inclusion column measures that
        range.
      - **Every miner runs the template.** A miner listing less slows the
        ratchet.
@@ -4897,7 +4905,7 @@ beside its testnet node.
      inherited rest's: 0.032–0.034 % of the reward every year from y18,
      and 0.018 % over y1–y17. About 31 % of its
      blocks stop at the penalty, each listing about three bodies past the
-     free weight, which give up 39–49 % of their fees.
+     free weight. The penalty they add is 39–49 % of their fees.
    - **The economies** were not run. Every fee that reads the LTEM
      inherits the M² term, which bears on B's and C's fee predictions.
    - **The zone decision.** In a zone under the rest point, once the gate
