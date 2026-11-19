@@ -48,8 +48,9 @@ indistinguishable from the sends around it, on each such link.
   (`relay-cover`, `on` unless set `off`). Cover starts as soon as a stem
   slot holds a covered peer; it does not wait for sync. A node that opts out
   relays no stems: a stem it receives is broadcast at once. Its own
-  transactions still stem, bare, and it warns on every start. Whether the
-  opt-out survives is decided before genesis (§8).
+  transactions still stem, bare, and it warns on every start. **The opt-out
+  is provisional** (Rick, 2026-11-18): once cover is tested and validated it
+  will not be optional; otherwise cover is dropped (§8).
 - **`CVR-R2` — the relay reads the connector's `local_observer_visibility`
   cell.** There is no cover class. The class stored the 2026-09-04 ruling
   that Tor's volume was its cover as a fact of the connector.
@@ -77,10 +78,10 @@ indistinguishable from the sends around it, on each such link.
   the 30-minute limit. A `p2p-upload-max` below the cover rate refuses the
   start.
 - **`CVR-R6` — in the stem phase, a transaction leaves a covered session
-  only inside a window.** A node's own transaction always waits for its
-  window; it is never broadcast as a fallback and never sent bare on a
-  covered session. A relayed stem that cannot get a window ends its stem
-  phase there and is broadcast. The embargo's reshape goes through the
+  only inside a window.** Before its first send, a node's own transaction
+  waits for its window; it is not broadcast as a fallback and not sent bare
+  on a covered session. A relayed stem that cannot get a window ends its
+  stem phase there and is broadcast. The embargo's reshape goes through the
   alternate's channel, or the stem phase ends. The emission tick does not
   wait on relay work. Broadcast (fluff) is outside the rule: it uses the
   ordinary connection to every peer, uncovered. Where no cover runs the rule
@@ -88,6 +89,14 @@ indistinguishable from the sends around it, on each such link.
   no connector configured makes its own transaction public at once; a node
   whose peers are all down holds it, because mining its own unbroadcast
   transaction and publishing the block would attribute it to that node.
+- **Once sent, a node's own transaction is treated as a relayed one**
+  (Rick, 2026-11-18). It draws its embargo from the same random timer, and
+  when that fires it takes the same two steps: a reshape to the alternate,
+  then a broadcast. Any reaction that differed for own transactions would
+  let a stem peer sort them out, by dropping every stem from a node and
+  watching what the node does. The own/relayed distinction exists only
+  before the first send, where a hold is not seen at all. This reverses
+  RX-1's fixed origin retry interval.
 - **Own transactions ride a stem slot** (Rick, 2026-10-08;
   `DAEMON_RELAY_PRIVACY.md` §95.3, §98). When a node has hidden-address
   sessions, slot 0 is reserved for them and the local source pins on its
@@ -134,9 +143,9 @@ connections, so the volume is not on the links the node's sends are on
 
 8,192 B/s sent per node while it has covered stem peers, and as much
 received from the peers that stem to it: about 0.7 GB a day each way. A
-transaction's stem takes a mean of 5 s per hop to leave. The origin's retry
-interval, the embargo's 1-in-10 quantile, is 3770 s where it was 1176 s
-without cover.
+transaction's stem takes a mean of 5 s per hop to leave. A transaction
+dropped at its first hop is re-stemmed after one embargo draw (mean 1638 s
+on Tor, 1320 s on clearnet) and broadcast after a second.
 
 ## 4. Reciprocity — a net contributor, not a consumer
 
@@ -221,8 +230,9 @@ Stated here and in the user documents.
 - **A transaction of two or more windows completes its stem less often than
   a one-window one.** The embargo is sized for one window per hop.
 - **A transaction dropped mid-stem takes longer to recover than without
-  cover.** The embargo and the origin's retry are sized for carrier-paced
-  hops.
+  cover.** The embargo is sized for carrier-paced hops, and a node's own
+  transaction waits out the same embargo as a relayed one: a mean of
+  1638 s on Tor to the reshape, and a second draw to the broadcast.
 - **An opted-out node's own sends are visible to a watcher**, and it gives
   no stem privacy to others.
 
@@ -258,13 +268,15 @@ The instrument and its record are their own change after the mechanism.
 [`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md)), decided together with
 the measurement in hand:
 
-- whether cover stays opt-out or becomes always-on;
+- whether cover becomes always-on or is dropped. The intent is settled:
+  once cover is tested and validated it is not optional, and otherwise it is
+  dropped. The opt-out is provisional until then;
 - a hold before a broadcast, to blur the last stem hop on clearnet
   (`CVR-R10`, ruled and removed on 2026-11-18 when the build was cut back to
   its core);
 - the budget and cadence;
 - the 30-minute embargo limit;
-- whether cover is kept at all, if the pass mark fails.
+- what replaces cover, if the pass mark fails and it is dropped.
 
 Two measurements feed it, reported with the `CVR-R7` run: how well a
 clearnet watcher picks the predecessor that delivered a broadcast

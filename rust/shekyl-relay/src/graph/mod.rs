@@ -42,8 +42,8 @@ mod hidden_slot;
 mod origin;
 
 pub use embargo::{
-    origin_publication_budget_ms, origin_retry_ms, origin_retry_secs, EmbargoWork,
-    OriginPublication, StemWork, NEVER_SENT_RETRY_MS,
+    embargo_fire_wait_secs, origin_publication_budget_ms, EmbargoWork, OriginPublication, StemWork,
+    NEVER_SENT_RETRY_MS,
 };
 pub use origin::OriginVerdict;
 
@@ -61,9 +61,9 @@ pub type TxBlob = Arc<[u8]>;
 
 /// The longest declared connector transit.
 ///
-/// The origin retry does not know which connector carried the stem — the
-/// pool does not store one — so it waits this long rather than naming a
-/// connector. A connector with no assessed transit is not in the max. A
+/// The overdue budget for this node's own transaction does not know which
+/// connector carried the stem — the pool does not store one — so it is
+/// sized for this transit rather than naming a connector. A connector with no assessed transit is not in the max. A
 /// later connector with a longer transit raises the wait without a new call
 /// site. *Records-was: `longest_measured_transit`, an `f64`; the values
 /// were never measurements (§97).*

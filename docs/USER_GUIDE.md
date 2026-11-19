@@ -995,7 +995,8 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 > - **A large transaction (two or more windows) completes its private relay
 >   less often than a small one.**
 > - **A transaction dropped on its way takes longer to recover than without
->   cover**: up to about an hour before your node tries another route.
+>   cover**: about half an hour on average before your node tries another
+>   route, and as long again before it broadcasts it.
 >
 > Setting `relay-cover off` turns it off: your node then sends its own
 > transactions where a watcher can see them, and relays none privately for

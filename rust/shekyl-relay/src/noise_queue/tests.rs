@@ -500,8 +500,14 @@ fn unbind_reports_every_message_it_discards() {
     assert_eq!(
         q.take_resolved(),
         vec![
-            CarrierOutcome::Discarded(CarrierToken(11)),
-            CarrierOutcome::Discarded(CarrierToken(12)),
+            CarrierOutcome::Discarded {
+                token: CarrierToken(11),
+                started: false,
+            },
+            CarrierOutcome::Discarded {
+                token: CarrierToken(12),
+                started: false,
+            },
         ],
         "both queued messages left without being sent, and both must say so"
     );
@@ -511,9 +517,9 @@ fn unbind_reports_every_message_it_discards() {
 ///
 /// This is the case that makes the two arms different rather than redundant:
 /// the transport really did accept some of its fragments, and the message was
-/// still never accepted in full. A producer that treated a partial run as a
-/// relay would give the origin the long backoff for a transaction no peer can
-/// reassemble.
+/// still never accepted in full. The discard says so (`started`): a byte of
+/// the transaction has left, so the node treats it as a sent one, its own
+/// included.
 #[test]
 fn a_partially_sent_message_that_is_unbound_reports_discarded() {
     let mut q = queues(1);
@@ -529,8 +535,12 @@ fn a_partially_sent_message_that_is_unbound_reports_discarded() {
     q.unbind(0);
     assert_eq!(
         q.take_resolved(),
-        vec![CarrierOutcome::Discarded(CarrierToken(21))],
-        "a run interrupted mid-message is a discard, not a delivery"
+        vec![CarrierOutcome::Discarded {
+            token: CarrierToken(21),
+            started: true,
+        }],
+        "a run interrupted mid-message is a discard, not a delivery, and it \
+         says a window of it left: from then on the transaction is a sent one"
     );
 }
 
@@ -557,7 +567,10 @@ fn a_stale_send_token_cannot_complete_a_later_message() {
     q.unbind(0); // bumps the epoch and discards 31
     assert_eq!(
         q.take_resolved(),
-        vec![CarrierOutcome::Discarded(CarrierToken(31))]
+        vec![CarrierOutcome::Discarded {
+            token: CarrierToken(31),
+            started: false,
+        }]
     );
 
     assert!(q.enqueue(0, striped(1), CarrierToken(32)));

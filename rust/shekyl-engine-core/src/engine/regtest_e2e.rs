@@ -542,12 +542,14 @@ impl ShownPool {
     }
 }
 
-/// The origin's first embargo fire. The relay owns the derivation
-/// ([`shekyl_relay::origin_retry_secs`]); the embargo walks wait that
-/// interval out. The submit watchdog does not read it: overdue is the
-/// daemon's judgment.
-fn origin_retry() -> Duration {
-    Duration::from_secs(u64::from(shekyl_relay::origin_retry_secs()))
+/// How long the embargo walks wait for one embargo fire before calling it
+/// late. The relay owns the derivation
+/// ([`shekyl_relay::embargo_fire_wait_secs`]): the shared timer's 1-in-100
+/// quantile. The fire is a memoryless draw, the same for this node's own
+/// transaction as for a relayed one, so it has no earliest time. The submit
+/// watchdog does not read it: overdue is the daemon's judgment.
+fn embargo_fire_wait() -> Duration {
+    Duration::from_secs(u64::from(shekyl_relay::embargo_fire_wait_secs()))
 }
 
 /// One connected block, kept whole for a chain-vector capture: the block

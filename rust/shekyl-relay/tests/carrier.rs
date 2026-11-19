@@ -130,7 +130,7 @@ fn a_real_transaction_rides_the_carrier_and_is_recorded_when_its_window_goes_out
 ///
 /// An origin the carrier dropped was never sent. Showing or fluffing it
 /// would publish this node's own transaction from its own address, and
-/// recording it would buy it the long origin retry for a send that never
+/// recording it would buy it a full embargo for a send that never
 /// happened (§92.5c). It is held instead, and re-planned: the moment an
 /// outbound session appears it is queued on that session's channel, and
 /// it leaves inside a window once the clock moves — never on the ordinary

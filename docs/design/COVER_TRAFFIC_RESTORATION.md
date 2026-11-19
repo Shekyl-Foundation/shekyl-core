@@ -18,7 +18,8 @@ The rulings, the residuals and what reopens before genesis are in
 - **Embargo:** derived with every stem hop carrier-paced; 1638 s on Tor,
   inside Axis 1's 30-minute limit, which stays.
 - **In the stem phase a transaction leaves a covered session only inside a
-  window**, and a node never broadcasts its own transaction.
+  window**. Before its first send a node's own transaction waits for its
+  window; once sent it is treated as a relayed one.
 - **Axis 3 stands:** relay co-location does not retire the carrier. The
   measurement that tested the opposite found no cover
   ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md)).

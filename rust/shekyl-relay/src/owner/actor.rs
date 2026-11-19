@@ -458,7 +458,6 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         last_verdict,
         snapshot,
         origins,
-        offline: config.connectors.is_empty(),
     };
     runtime.spawn(actor.run());
     Ok(Started { port, handle })
@@ -501,9 +500,6 @@ struct Actor<C: Clock + Clone + Send + Sync + 'static> {
     last_verdict: OriginVerdict,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
     origins: Arc<Mutex<Arc<HashMap<TxId, Millis>>>>,
-    /// The node was built with no connector: it has no network, so it can
-    /// send nothing and no watcher can see a stem.
-    offline: bool,
 }
 
 impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
@@ -786,12 +782,11 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             return;
         }
         let one = [(pending.tx, pending.blob)];
-        if !outcome.was_sent() {
-            // The carrier dropped it: an origin is planned again, a relayed
-            // stem ends its stem phase here (`CVR-R6`).
+        if let CarrierOutcome::Discarded { started, .. } = outcome {
+            // The carrier dropped it (`CVR-R6`).
             tracing::debug!("the carrier discarded a stem");
             let now = self.now();
-            self.no_window(&one, pending.source, pending.local, now);
+            self.no_window(&one, pending.source, pending.local, started, now);
             return;
         }
         let Some(successor) = outcome.peer() else {
@@ -830,10 +825,11 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     ///
     /// On a covered session a stem leaves only inside a window (`CVR-R6`):
     /// what its channel refuses, or a covered successor with no slot, ends
-    /// a relayed stem here and holds this node's own. This node's own
-    /// transaction is never broadcast: every arm that would end its stem
-    /// phase holds it instead. A relayed stem whose phase ends here is
-    /// broadcast.
+    /// a relayed stem here and holds this node's own. Before its first
+    /// send this node's own transaction waits: every arm here that would
+    /// end its stem phase holds it instead. A relayed stem whose phase ends
+    /// here is broadcast. Once a transaction has been sent, nothing treats
+    /// this node's own differently (`graph::embargo`).
     fn dispatch(&mut self, txs: &[(TxId, TxBlob)], source: Option<ConnectionId>, local: bool) {
         if !local && !self.driver.zone().noise_enabled() {
             // The operator opted out of cover (`CVR-R1`): this node relays
@@ -873,16 +869,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                 StemOut::WriteFailed => {}
             }
         }
-        if local && self.offline {
-            // A node with no connector has no network: there is no stem to
-            // send and no peer to hide it from. Its own transaction is shown
-            // at once, so its own blocks can carry it, and sent nowhere.
-            self.fluff_and_record(txs, source);
-            return;
-        }
         if local {
             // This node's own transaction: no route, or its ordinary write
-            // failed. Held and planned again, never broadcast (`CVR-R6`).
+            // failed, before any send. Held and planned again.
             tracing::debug!("this node's stem did not leave; the zone holds it");
             self.driver.zone_mut().hold_origin(txs, now);
             return;
@@ -927,12 +916,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             RelayCarrier::Noise { channel } => {
                 let refused = self.carry(txs, channel.get(), source, local);
                 if !refused.is_empty() {
-                    self.no_window(&refused, source, local, now);
+                    self.no_window(&refused, source, local, false, now);
                 }
                 StemOut::Carried
             }
             RelayCarrier::NoWindow => {
-                self.no_window(txs, source, local, now);
+                self.no_window(txs, source, local, false, now);
                 StemOut::Ended
             }
             RelayCarrier::Ordinary => {
@@ -1007,31 +996,39 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         refused
     }
 
-    /// A stem no window could take (`CVR-R6`). This node's own transaction
-    /// is planned again, never broadcast or sent bare. A relayed stem ends
-    /// its stem phase here: its relay state is dropped, and it is
-    /// broadcast.
+    /// A stem no window could take, or whose window the carrier dropped
+    /// (`CVR-R6`).
+    ///
+    /// This node's own transaction waits, held and planned again, only while
+    /// it has never been sent: no stem of it is recorded and no window of it
+    /// left (`started`). A transaction that has been sent is treated as a
+    /// relayed one whoever originated it (Rick, 2026-11-18): its stem phase
+    /// ends here, its relay state is dropped, and it is broadcast.
     fn no_window(
         &mut self,
         txs: &[(TxId, TxBlob)],
         source: Option<ConnectionId>,
         local: bool,
+        started: bool,
         now: Millis,
     ) {
-        if local {
-            for (tx, _) in txs {
-                self.driver.zone_mut().requeue_origin(tx, now);
-            }
-            self.driver.zone_mut().hold_origin(txs, now);
+        let (waits, ends): (Vec<_>, Vec<_>) = txs
+            .iter()
+            .cloned()
+            .partition(|(tx, _)| local && !started && !self.driver.zone().stem_sent(tx));
+        if !waits.is_empty() {
+            self.driver.zone_mut().hold_origin(&waits, now);
+        }
+        if ends.is_empty() {
             return;
         }
-        for (tx, _) in txs {
+        for (tx, _) in &ends {
             self.driver.zone_mut().release(tx);
         }
-        self.end_stem(txs, source, StemFallback::NoWindow);
+        self.end_stem(&ends, source, StemFallback::NoWindow);
     }
 
-    /// A relayed stem's phase ends here: it is broadcast.
+    /// A stem's phase ends here: it is broadcast.
     fn end_stem(
         &mut self,
         txs: &[(TxId, TxBlob)],

@@ -72,18 +72,23 @@ impl<C: Clock + Clone + Send + Sync + 'static> CarrierTask<C> {
     pub(super) async fn run(mut self) {
         self.arm();
         loop {
+            // The wake is served before the inbox: a burst of commands must
+            // not delay a due window, or the delay would follow the node's
+            // traffic (`CVR-R6`). A window sent before a pending view or
+            // session change is applied goes to the old binding or fails its
+            // write; both are handled.
             tokio::select! {
                 biased;
-                cmd = self.inbox.recv() => match cmd {
-                    None | Some(CarrierCmd::Stop) => break,
-                    Some(cmd) => self.on_cmd(cmd),
-                },
                 wake = self.owner.wait_wake_async() => {
                     if wake.is_err() {
                         break;
                     }
                     self.on_wake();
                 }
+                cmd = self.inbox.recv() => match cmd {
+                    None | Some(CarrierCmd::Stop) => break,
+                    Some(cmd) => self.on_cmd(cmd),
+                },
             }
         }
         if let Err(_engine_closing) = self.owner.deregister() {}
@@ -103,7 +108,10 @@ impl<C: Clock + Clone + Send + Sync + 'static> CarrierTask<C> {
                 token,
             } => {
                 if !self.queues.enqueue(channel, message, token) {
-                    self.report(vec![CarrierOutcome::Discarded(token)]);
+                    self.report(vec![CarrierOutcome::Discarded {
+                        token,
+                        started: false,
+                    }]);
                 }
             }
             CarrierCmd::Session { id, session } => match session {

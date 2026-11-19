@@ -15807,16 +15807,53 @@ prices them against each other rather than adopting `p` by default.
 same question asked by a different actor, so it is asked at the same confidence:
 `one_in = 1 / (1 - alpha) = 10`, and the 1-in-10 survival quantile of the
 adopted anonymity timer is **1176 s**
-(`shekyl-relay` `origin_retry_secs`, `graph/embargo.rs`). **UPDATE
-2026-11-18 (`CVR-R5`): the timer is now the shipped, carrier-paced one, and
-the same quantile reads 3770 s.** The derivation is unchanged; where this
-section says 1176 s, read the value `origin_retry_secs` returns.
+(`shekyl-relay` `origin_retry_secs`, `graph/embargo.rs`).
+
+> **REVERSED 2026-11-18 (Rick; the review of #1431).** An origin has no
+> retry interval of its own. Once a transaction has been sent on a stem, no
+> code path distinguishes this node's own from one it relays: it draws its
+> embargo from the same random timer, and on fire it takes the same two
+> steps, a reshape to the alternate and then a broadcast.
+>
+> **What was reversed.** This item's fixed interval for an origin
+> (`origin_retry_secs`, deleted with `origin_retry_ms` and `origin_terms`),
+> and with it the rule that an origin's embargo ends in another stem and
+> never in a broadcast (`Relay::requeue_origin`, deleted).
+>
+> **Why.** A fixed interval is a reaction a stem peer can time. A peer that
+> drops every stem a node sends it sees the relayed ones come back around
+> at memoryless times and the node's own at one fixed time, and so sorts
+> the node's own transactions from the ones it relays. The same holds for
+> any reaction that differs: a different timer, a different step on fire,
+> or no broadcast at the end. The under-provisioning this item answered
+> (a 1-in-2 false retry at the timer's mean) is the price of the shared
+> draw, and it is paid: an origin whose stem is still travelling may
+> reshape it, exactly as a relay may.
+>
+> **What stays.** The own/relayed distinction before the first send, where
+> a hold is not seen: the sync hold, the hidden-address edge, a full
+> channel, and a window the carrier dropped before any byte left
+> (the carrier-discard paragraph below, `NEVER_SENT_RETRY_MS`). The rate
+> derived here, 1 in 10, also stays, as the confidence of a **status**
+> figure: the age at which the daemon reports an unpublished own
+> transaction overdue is the shared timer's 1-in-10 quantile over two
+> fires (`origin_publication_budget_ms`, 7540 s on the shipped,
+> carrier-paced timer). Nothing is sent on that figure.
+>
+> **The edit that would bring a difference back** is any read of "is this
+> one mine" on the embargo path: in `record_stem`'s deadline or in
+> `fire_embargoes`. `a_dropped_stem_gets_one_reaction_own_or_relayed`
+> (`graph/embargo_tests.rs`) fails on it.
+>
+> Where the rest of this section says an origin re-broadcasts at 1176 s,
+> read it as the record of the interval that was reversed.
 
 That is a constant with a live provenance rather than a point inside a bracket:
 if `alpha` moves the interval follows, instead of decoupling silently. Its
 derivation stays fixed through the DRS-X flip and the rebuild, and is revisited
 after the rebuild against the Rust relay as built (Rick, 2026-10-30; owner RD,
-the FOLLOWUPS row *Revisit the origin's first retry*). The retry follows the
+the FOLLOWUPS row *Revisit the origin's first retry*, closed 2026-11-18 by the
+reversal above). The retry follows the
 derivation, and no literal holds its value (Rick, 2026-11-08): it reads 1176 s
 since BA-Q9 put the door's signature and range proof into the hop it reads. Same
 shape as §94.8's argument for deriving rather than choosing, and it removes the

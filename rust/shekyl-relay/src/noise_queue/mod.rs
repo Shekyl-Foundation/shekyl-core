@@ -89,10 +89,10 @@ pub struct CarrierToken(pub u64);
 /// up, and it is why discard reports too.
 ///
 /// The consumer must treat [`Self::Discarded`] as **not relayed** rather than
-/// as silence: the pool's `relayed` bit drives an origin's backoff, and an
-/// origin given the long wait for a message that was discarded waits out
-/// [`crate::origin_retry_secs`] for a transaction that was never sent and
-/// will not be.
+/// as silence. `started` says whether any window of the message was accepted
+/// by the transport before it was dropped: a transaction of which a byte has
+/// left is a sent transaction, and from then on this node treats its own as
+/// it treats a relayed one (Rick, 2026-11-18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CarrierOutcome {
     /// Every window was accepted by the transport for `peer` — see the type
@@ -115,7 +115,13 @@ pub enum CarrierOutcome {
     },
     /// The message left the queue without being fully sent. No peer: a
     /// discarded message has no successor to charge.
-    Discarded(CarrierToken),
+    Discarded {
+        /// The message.
+        token: CarrierToken,
+        /// Whether any window of it was accepted by the transport, to any
+        /// peer, before it was dropped.
+        started: bool,
+    },
 }
 
 impl CarrierOutcome {
@@ -126,7 +132,7 @@ impl CarrierOutcome {
     pub fn peer(self) -> Option<ConnectionId> {
         match self {
             Self::Sent { peer, .. } => Some(peer),
-            Self::Discarded(_) => None,
+            Self::Discarded { .. } => None,
         }
     }
 }
@@ -136,7 +142,7 @@ impl CarrierOutcome {
     #[must_use]
     pub fn token(self) -> CarrierToken {
         match self {
-            Self::Sent { token, .. } | Self::Discarded(token) => token,
+            Self::Sent { token, .. } | Self::Discarded { token, .. } => token,
         }
     }
 
@@ -169,6 +175,9 @@ pub enum Starts {
 struct PendingMessage {
     bytes: Vec<u8>,
     token: CarrierToken,
+    /// A window of this message was accepted by the transport, to some
+    /// peer. It stays set through a restart (CV-1): those bytes left.
+    started: bool,
 }
 
 /// One channel's pending work.
@@ -253,9 +262,10 @@ impl NoiseSend {
         let Some(q) = self.live(queues) else {
             return;
         };
-        let Some(message) = q.pending.front() else {
+        let Some(message) = q.pending.front_mut() else {
             return;
         };
+        message.started = true;
 
         let next = q
             .offset
@@ -446,6 +456,7 @@ impl NoiseQueues {
                 q.pending.push_back(PendingMessage {
                     bytes: message,
                     token,
+                    started: false,
                 });
                 true
             }
@@ -530,12 +541,16 @@ impl NoiseQueues {
     /// `Sent` would wait forever on a record that will never fire.
     pub fn unbind(&mut self, channel: usize) {
         if let Some(q) = self.channels.get_mut(channel) {
-            let dropped: Vec<CarrierToken> = q.pending.drain(..).map(|m| m.token).collect();
+            let dropped: Vec<(CarrierToken, bool)> =
+                q.pending.drain(..).map(|m| (m.token, m.started)).collect();
             q.offset = None;
             q.bound = None;
             q.bump();
-            self.resolved
-                .extend(dropped.into_iter().map(CarrierOutcome::Discarded));
+            self.resolved.extend(
+                dropped
+                    .into_iter()
+                    .map(|(token, started)| CarrierOutcome::Discarded { token, started }),
+            );
         }
     }
 

@@ -22,7 +22,8 @@
 > - **A large transaction (two or more windows) completes its private relay
 >   less often than a small one.**
 > - **A transaction dropped on its way takes longer to recover than without
->   cover**: up to about an hour before your node tries another route.
+>   cover**: about half an hour on average before your node tries another
+>   route, and as long again before it broadcasts it.
 
 Tor is the anonymity network this daemon dials. I2P is not. The usage of
 Tor is still considered experimental - there are a few pessimistic

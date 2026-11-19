@@ -72,6 +72,14 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 /// The false-retry rate for an **origin's** re-broadcast, as `1 / one_in` —
 /// derived from [`EMBARGO_FULL_TRAVEL_PROBABILITY`], not chosen beside it.
 ///
+/// **Status only since 2026-11-18 (Rick).** An origin no longer retries on a
+/// timer of its own: once sent, its transaction draws the same embargo as a
+/// relayed one, because a fixed interval for own transactions let a stem
+/// peer sort them out. This rate now sets only the age at which the daemon
+/// reports an unpublished own transaction overdue
+/// (`shekyl-relay`'s `origin_publication_budget_ms`). The text below is the
+/// derivation of the rate, which stands.
+///
 /// # Why the origin's retry is the network's question asked by a different actor
 ///
 /// `EMBARGO_FULL_TRAVEL_PROBABILITY` pins the confidence at which a *relaying*

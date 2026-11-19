@@ -235,16 +235,16 @@ fn stopping_the_owner_refuses_a_local_origin() {
     });
 }
 
-/// **This node's own transaction is never broadcast** (`CVR-R6`). A node
-/// with a network but no stem successor — only inbound sessions — holds
-/// its own transaction until a successor appears: it is neither sent to
+/// **Before its first send, this node's own transaction waits** (`CVR-R6`).
+/// A node with a network but no stem successor — only inbound sessions —
+/// holds its own transaction until a successor appears: it is neither sent to
 /// the inbound peer nor shown, however long the clock runs.
 ///
 /// What edit reds this: send a local origin with no route to the fluff
 /// path, as the inherited relay did (the inbound peer reads it, and it is
 /// shown).
 #[test]
-fn a_local_origin_with_no_successor_is_held_and_never_broadcast() {
+fn a_local_origin_with_no_successor_is_held_until_it_can_stem() {
     let rig = Rig::build(Build::default());
     let mut inbound = rig.inbound(1);
     let tx = id_of(&blob(5));
