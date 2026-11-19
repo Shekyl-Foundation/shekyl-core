@@ -85,7 +85,7 @@ use kameo::error::{ActorStopReason, Infallible, PanicError, SendError};
 use kameo::message::{Context, Message};
 
 use shekyl_curve_tree::{
-    AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ClientError, CurveTreeClient,
+    AssembleInput, AssembledPaths, BlockHeight, BlockLeaves, ClientError, CurveTreeClient,
     PostureDeclaration, ReferenceBlock, SegmentPin, TxLeafInputs,
 };
 
@@ -600,7 +600,7 @@ impl Message<RootAndDepthAt> for CurveTreeActor {
 }
 
 impl Message<AssembleTx> for CurveTreeActor {
-    type Reply = Result<Vec<AssembledPath>, ClientError>;
+    type Reply = Result<AssembledPaths, ClientError>;
 
     async fn handle(
         &mut self,
@@ -1044,7 +1044,7 @@ impl CurveTreeHandle {
         &self,
         reference: ReferenceBlock,
         inputs: Vec<AssembleInput>,
-    ) -> Result<Vec<AssembledPath>, CurveTreeHandleError> {
+    ) -> Result<AssembledPaths, CurveTreeHandleError> {
         self.actor_ref()
             .ask(AssembleTx { reference, inputs })
             .await

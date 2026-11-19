@@ -168,7 +168,8 @@ names the landed function it must reuse:
    backing output against the reference block's tree root.
 5. **Reward vouts + fee inputs** — the ordered `RewardCommit` set
    (commitment, loud `amount_plain`, one-time key) for the per-epoch
-   amounts; fee inputs are ordinary FCMP++ `txin_to_key` spends
+   amounts, the vouts at the positions the transaction key derives (R-24;
+   CEN-J24 reads the loud vouts in vout order, wherever they sit); fee inputs are ordinary FCMP++ `txin_to_key` spends
    (verify step 7 is the existing tx layer). Amounts are the step-1
    recomputed shares — the builder never invents an amount.
 6. **Dual auth** — `auth_msgs` over the R1.A inventory + reward-commit

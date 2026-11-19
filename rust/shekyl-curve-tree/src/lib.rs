@@ -64,6 +64,7 @@ pub mod store;
 pub mod types;
 
 pub use assemble::PathRootFault;
+pub use assemble::{AssembledPath, AssembledPaths, PathParts};
 pub use client::{
     BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, ExpectedOutput,
     OwnedRegistration, OwnershipSync, RawOutput, TxLeafInputs,
@@ -85,7 +86,7 @@ pub use store::{
     StoreOpenFault,
 };
 pub use types::{
-    AssembleInput, AssembledPath, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes,
-    CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity, ReferenceBlock, TargetKind,
-    TreeContext, TreePosition,
+    AssembleInput, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes, CurveTreeRoot, Gindex,
+    LeafEntry, OneTimePubkey, OutputIdentity, ReferenceBlock, TargetKind, TreeContext,
+    TreePosition,
 };

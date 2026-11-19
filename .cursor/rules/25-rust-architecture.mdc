@@ -59,6 +59,18 @@ New functionality:
   silent leaves a node that is up and does nothing: on 2026-11-02 an
   ingest service stopped on a full disk and the daemon answered RPC
   from the old tip for 34 minutes.
+- **A feature never changes a public type's shape.** A variant of a
+  `pub` enum, and a `pub` field of a `pub` struct, carries no
+  `#[cfg(...)]` that names a feature: it exists in every build, and the
+  feature gates the code that constructs or fills it. Cargo unifies
+  features across a build, so a variant one crate's feature adds lands
+  in every dependent's exhaustive match and breaks each match that does
+  not name it (2026-11-17: `cargo check --workspace --all-features`
+  stopped compiling `shekyl-wallet-contract` on
+  `OpenError::StakeRngSelfCertFailed`). A private field, or a member of
+  a `pub(crate)` type, is out of reach of other crates and out of scope.
+  `scripts/ci/check_feature_gated_members.py` holds this; the cases that
+  predate the rule are its allowlist, which only shrinks.
 
 ## Decoding untrusted bytes
 

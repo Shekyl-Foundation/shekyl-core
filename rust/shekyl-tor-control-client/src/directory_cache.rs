@@ -33,7 +33,12 @@
 //! nothing for that copy to protect. A save writes a temporary name in the
 //! cache directory, syncs it, and renames it over the previous file. A save
 //! that stops before the rename leaves the previous file. The temporary name
-//! is not one of the four, so a later copy does not pick it up.
+//! is not one of the four, so a later copy does not pick it up. On Windows
+//! both are written through the tree's one Windows replace, on its creating
+//! handle (`shekyl_win_sec::replace::Staged`): created write-through,
+//! owner-only, and renamed over the destination by that handle. The rename
+//! replaces a link at the destination's name without following it, so no
+//! name is ever removed first (measured on Windows 11 23H2, 2026-11-18).
 //!
 //! A boot has one source. The daemon's own cache is that source when it holds
 //! a file a boot may copy. A test build may otherwise install the job lane's
@@ -391,8 +396,19 @@ enum Durability {
     Save,
 }
 
+/// A cache file written to its temporary name, not yet renamed.
+struct Staged {
+    /// The temporary name.
+    partial: PathBuf,
+    /// The name it replaces.
+    dest: PathBuf,
+    /// Windows: the creating handle, which renames it.
+    #[cfg(windows)]
+    handle: shekyl_win_sec::replace::Staged,
+}
+
 /// Write `bytes` to the temporary name and leave the destination alone.
-fn stage(dir: &Path, name: &str, bytes: &[u8], durability: Durability) -> io::Result<()> {
+fn stage(dir: &Path, name: &str, bytes: &[u8], durability: Durability) -> io::Result<Staged> {
     let partial = dir.join(partial_name(name));
     // A leftover from a save that did not finish. `remove_file` on a symlink
     // removes the link, not whatever it names.
@@ -401,33 +417,81 @@ fn stage(dir: &Path, name: &str, bytes: &[u8], durability: Durability) -> io::Re
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    let mut file = create_exclusive(&partial)?;
-    file.write_all(bytes)?;
-    if durability == Durability::Save {
-        file.sync_all()?;
+    #[cfg(unix)]
+    {
+        let mut file = create_exclusive(&partial)?;
+        file.write_all(bytes)?;
+        if durability == Durability::Save {
+            file.sync_all()?;
+        }
     }
-    Ok(())
+    // The owner-only, unlabelled descriptor a cache file has always had,
+    // set in the creating call.
+    #[cfg(windows)]
+    let handle = {
+        use shekyl_win_sec::replace::{create_staged, StagedDescriptor};
+        let handle = create_staged(&partial, StagedDescriptor::PrivateFile)?;
+        let mut file = handle.file();
+        file.write_all(bytes)?;
+        if durability == Durability::Save {
+            handle.sync()?;
+        }
+        handle
+    };
+    Ok(Staged {
+        partial,
+        dest: dir.join(name),
+        #[cfg(windows)]
+        handle,
+    })
 }
 
-/// Rename the staged file over `name`. The destination becomes the new bytes
-/// in one replacement, or it is unchanged. A save asks the rename to reach
-/// disk; a launch copy does not.
-fn commit(dir: &Path, name: &str, durability: Durability) -> io::Result<()> {
-    let partial = dir.join(partial_name(name));
-    if !is_regular_file(&partial) {
-        drop(fs::remove_file(&partial));
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "the staged cache file is not a regular file",
-        ));
+/// Rename the staged file over its destination. The destination becomes the
+/// new bytes in one replacement, or it is unchanged. On Unix the staged
+/// name is checked to be a regular file first: the rename goes by name. On
+/// Windows the creating handle renames the file it created; a launch copy
+/// takes the same path as a save, and the save's durability is the one
+/// replace's (a cache that is not confirmed durable is still the cache, so
+/// either answer is a completed save).
+fn commit(staged: Staged) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let Staged { partial, dest } = staged;
+        if !is_regular_file(&partial) {
+            drop(fs::remove_file(&partial));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the staged cache file is not a regular file",
+            ));
+        }
+        replace_name(&partial, &dest)
     }
-    let dest = dir.join(name);
-    replace_name(&partial, &dest, durability)
+    #[cfg(windows)]
+    {
+        use shekyl_win_sec::replace::{Held, OnFailure, ReplaceError};
+        let deadline = std::time::Instant::now() + shekyl_os_account::private_file::REPLACE_WAIT;
+        match staged
+            .handle
+            .commit(&staged.dest, deadline, OnFailure::Remove)
+        {
+            Ok(_durability) => Ok(()),
+            Err(ReplaceError::Io(error)) => Err(error),
+            Err(ReplaceError::HeldOpen(held)) => Err(io::Error::other(
+                shekyl_os_account::private_file::HeldOpen {
+                    held: match held {
+                        Held::Staged => staged.partial,
+                        Held::Live | Held::LiveOrUnwritable => staged.dest.clone(),
+                    },
+                    live: staged.dest,
+                    or_unwritable: held == Held::LiveOrUnwritable,
+                },
+            )),
+        }
+    }
 }
 
 fn place(dir: &Path, name: &str, bytes: &[u8], durability: Durability) -> io::Result<()> {
-    stage(dir, name, bytes, durability)?;
-    commit(dir, name, durability)
+    commit(stage(dir, name, bytes, durability)?)
 }
 
 fn create_owner_only(path: &Path) -> io::Result<()> {
@@ -595,33 +659,17 @@ fn read_capped(file: File, len: u64, limit: u64) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+#[cfg(unix)]
 fn is_regular_file(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let Ok(file) = OpenOptions::new()
-            .read(true)
-            .custom_flags(read_only_nofollow())
-            .open(path)
-        else {
-            return false;
-        };
-        regular_len(&file).is_some()
-    }
-    #[cfg(windows)]
-    {
-        let Ok(file) = open_handle(path, OpenAs::File) else {
-            return false;
-        };
-        let Ok(info) = file_info(&file) else {
-            return false;
-        };
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-        };
-        info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
-            && info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .custom_flags(read_only_nofollow())
+        .open(path)
+    else {
+        return false;
+    };
+    regular_len(&file).is_some()
 }
 
 #[cfg(unix)]
@@ -705,76 +753,30 @@ fn file_info(
     Ok(info)
 }
 
+#[cfg(unix)]
 fn create_exclusive(path: &Path) -> io::Result<File> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(FILE_MODE)
-            .open(path)?;
-        file.set_permissions(fs::Permissions::from_mode(FILE_MODE))?;
-        Ok(file)
-    }
-    #[cfg(windows)]
-    {
-        shekyl_win_sec::create_owner_only_file(path).map_err(|error| match error {
-            shekyl_win_sec::FileCreateError::Create(io_error) => io_error,
-            other => io::Error::other(other),
-        })
-    }
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .mode(FILE_MODE)
+        .open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(FILE_MODE))?;
+    Ok(file)
 }
 
-fn replace_name(from: &Path, to: &Path, durability: Durability) -> io::Result<()> {
-    #[cfg(not(windows))]
-    {
-        let _ = durability;
-        fs::rename(from, to)
-    }
-    #[cfg(windows)]
-    {
-        if path_is_reparse(to) {
-            // The name is a link. Remove the link itself, not its target,
-            // then move the new file onto the name. A crash between the two
-            // leaves the name absent, which a copy treats as missing.
-            fs::remove_file(to)?;
-        }
-        move_replace(from, to, durability)
-    }
-}
-
-#[cfg(windows)]
-fn path_is_reparse(path: &Path) -> bool {
-    let Ok(file) = open_handle(path, OpenAs::File) else {
-        return false;
-    };
-    let Ok(info) = file_info(&file) else {
-        return false;
-    };
-    info.dwFileAttributes & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-        != 0
-}
-
-#[cfg(windows)]
-fn move_replace(from: &Path, to: &Path, durability: Durability) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-    let mut flags = MOVEFILE_REPLACE_EXISTING;
-    if durability == Durability::Save {
-        flags |= MOVEFILE_WRITE_THROUGH;
-    }
-    let from_w: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
-    let to_w: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    // SAFETY: both buffers are NUL-terminated and outlive the call.
-    let ok = unsafe { MoveFileExW(from_w.as_ptr(), to_w.as_ptr(), flags) };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+/// The Unix file replace of the cache: `rename(2)` over the destination,
+/// which replaces a link at that name without following it. Windows renames
+/// through the one Windows replace's creating handle ([`commit`]).
+// CLIPPY: disallowed_methods — the cache's staged name is its own.
+#[cfg(unix)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the Tor directory cache's Unix rename: its staged name is its own (the one replace's `<name>.new` would be Tor's own cached-microdescs.new), and on Windows it goes through shekyl_win_sec::replace's creating handle"
+)]
+fn replace_name(from: &Path, to: &Path) -> io::Result<()> {
+    fs::rename(from, to)
 }
 
 #[cfg(test)]
@@ -896,10 +898,10 @@ mod tests {
         let name = "cached-certs";
         let dest = cache.join(name);
         fs::write(&dest, b"old-cache-complete").unwrap();
-        stage(&cache, name, b"new-cache-complete-bytes", Durability::Save).unwrap();
+        let staged = stage(&cache, name, b"new-cache-complete-bytes", Durability::Save).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"old-cache-complete");
         assert!(cache.join(partial_name(name)).is_file());
-        commit(&cache, name, Durability::Save).unwrap();
+        commit(staged).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"new-cache-complete-bytes");
         assert!(!cache.join(partial_name(name)).exists());
     }

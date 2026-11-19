@@ -102,6 +102,14 @@ pub enum Code {
     SocketDirUnusable,
     /// The owner's socket path is longer than the platform's socket limit.
     SocketPathLong,
+    /// A file the daemon replaces at its start was held open by another
+    /// program (an antivirus scanner, a search indexer) for longer than the
+    /// daemon waits (Rick, 2026-11-18).
+    ReplaceHeldOpen,
+    /// A Windows service's rendezvous key, `HKLM\SOFTWARE\Shekyl\Rendezvous`,
+    /// is missing, or its owner, readers or writers are not the installer's
+    /// (Rick, 2026-11-18).
+    ServiceRendezvousKey,
     /// An operator-named socket directory on a platform whose owner's leg
     /// has no socket directory: Windows, whose rendezvous directory is
     /// fixed (Rick, 2026-11-14).
@@ -160,6 +168,8 @@ impl Code {
             Self::SocketDirNone => "config.socket-dir.none",
             Self::SocketDirUnusable => "config.socket-dir.unusable",
             Self::SocketPathLong => "config.socket-dir.path-long",
+            Self::ReplaceHeldOpen => "config.replace.held-open",
+            Self::ServiceRendezvousKey => "config.service.rendezvous-key",
             Self::SocketDirPlatform => "config.socket-dir.platform",
             Self::SocketRunning => "config.socket.running",
             Self::SocketImpostor => "config.socket.impostor",
@@ -417,6 +427,17 @@ impl Diagnostic {
                 "`{opt}` is not available on this platform: {}",
                 p("reason")
             ),
+            Code::ServiceRendezvousKey => format!(
+                "the service's rendezvous key {} cannot be used: {}; the installer creates it with the service account, owned by Administrators or SYSTEM, readable by every account and writable only by the service account, Administrators and SYSTEM",
+                p("path"),
+                p("found")
+            ),
+            Code::ReplaceHeldOpen => format!(
+                "{} could not be written: {}; {} and start the daemon again",
+                p("path"),
+                p("cause"),
+                p("remedy")
+            ),
             Code::SocketPathLong => format!(
                 "the owner's socket path {} is {} bytes and this platform allows {}; name a shorter `--rpc-socket-dir`",
                 p("path"),
@@ -540,6 +561,8 @@ mod tests {
             Code::SocketDirUnusable,
             Code::SocketPathLong,
             Code::SocketDirPlatform,
+            Code::ReplaceHeldOpen,
+            Code::ServiceRendezvousKey,
             Code::SocketRunning,
             Code::SocketImpostor,
             Code::OwningConnectionUnusable,

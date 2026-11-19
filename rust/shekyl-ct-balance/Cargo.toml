@@ -11,10 +11,29 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# TEST_ONLY (`scripts/ci/check_test_only_features.py`): `PseudoOutBlinds::seeded`,
+# blinds drawn from a caller's seed for the chain forge's reproducible chains
+# (CHAIN_FORGE.md §5.2, S2). Forwarded by shekyl-tx-builder's TEST_ONLY
+# `seeded-rng`; no build that ships enables it (CF-R9).
+seeded-rng = ["dep:rand_chacha"]
+
 [dependencies]
 curve25519-dalek = "4"
+# The intent seed a group's blinds are derived from (`PseudoOutBlinds::from_intent`).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The outputs' openings the last blind balances.
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-units = { path = "../shekyl-units" }
+# The OS a solo spend's blinds are drawn from (`OsRng`).
+rand_core = { version = "0.6", features = ["std"] }
+rand_chacha = { version = "0.3", optional = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+hex = "0.4"
+serde_json = "1"
 
 [lints]
 workspace = true

@@ -8,29 +8,31 @@
 //! and standard error at every start whatever the level; they are not log
 //! events.
 
-use std::path::Path;
-
 use shekyl_options::{Source, Table, Visibility};
 
+use crate::load::ConfigFileFate;
 use crate::resolve::Resolved;
 use crate::sections::{Clearnet, DaemonConfig, Tor};
 
 /// Every value and its source, in table order, as one line. A secret shows
 /// as `set`, never its text; `mine-address` shows shortened to its first
 /// and last eight characters, and `option show` gives the full value under
-/// its grant (Rick, 2026-11-02). The configuration file read, or the
-/// default path at which none was found, leads.
+/// its grant (Rick, 2026-11-02). The configuration file leads: the file
+/// that was read, `none` when none was asked for, or the default path at
+/// which no file was found.
 #[must_use]
 pub fn effective_configuration(
     table: &Table,
     resolved: &Resolved,
-    config_file: Option<&Path>,
-    default_path: &Path,
+    config_file: &ConfigFileFate,
 ) -> String {
     let mut parts = Vec::with_capacity(resolved.values.len() + 1);
     parts.push(match config_file {
-        Some(p) => format!("config-file={} (cli)", p.display()),
-        None => format!("config-file=none-at:{} (default)", default_path.display()),
+        ConfigFileFate::Read(path) => format!("config-file={} (cli)", path.display()),
+        ConfigFileFate::None => "config-file=none (cli)".to_owned(),
+        ConfigFileFate::DefaultAbsent(path) => {
+            format!("config-file=none-at:{} (default)", path.display())
+        }
     });
     // The config-file row is the first part above, with the path's fate.
     for row in table
@@ -149,8 +151,7 @@ impl Announcements {
 pub fn announcements(
     table: &Table,
     resolved: &Resolved,
-    config_file: Option<&Path>,
-    default_path: &Path,
+    config_file: &ConfigFileFate,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> Announcements {
@@ -158,7 +159,7 @@ pub fn announcements(
     rest.push(posture(config));
     rest.extend(warnings.iter().cloned());
     Announcements {
-        effective: effective_configuration(table, resolved, config_file, default_path),
+        effective: effective_configuration(table, resolved, config_file),
         rest,
     }
 }
@@ -172,7 +173,7 @@ mod tests {
     use crate::sections::build;
     use crate::table::TABLE;
     use std::ffi::OsString;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn resolved_only(cli: &[&str], file: &str) -> Resolved {
         let args: Vec<OsString> = cli.iter().map(OsString::from).collect();
@@ -235,8 +236,7 @@ mod tests {
         let line = effective_configuration(
             &TABLE,
             &resolved,
-            None,
-            Path::new("/etc/shekyl/shekyld-regtest.toml"),
+            &ConfigFileFate::DefaultAbsent("/etc/shekyl/shekyld-regtest.toml".into()),
         );
         assert!(line.starts_with("effective configuration: config-file=none-at:/etc/shekyl/shekyld-regtest.toml (default)"), "{line}");
         assert!(line.contains("dev-difficulty=7 (cli)"), "{line}");
@@ -281,6 +281,37 @@ mod tests {
         );
     }
 
+    /// The startup line names the file that was read, the default path at
+    /// which none was found, or that none was asked for. Red edit: report
+    /// [`ConfigFileFate::DefaultAbsent`] for [`ConfigFileFate::None`].
+    #[test]
+    fn the_line_says_when_no_file_was_asked_for() {
+        let (resolved, _) = setup(&["--tor", "off"], "");
+        let none = effective_configuration(&TABLE, &resolved, &ConfigFileFate::None);
+        assert!(
+            none.starts_with("effective configuration: config-file=none (cli)"),
+            "{none}"
+        );
+        let absent = effective_configuration(
+            &TABLE,
+            &resolved,
+            &ConfigFileFate::DefaultAbsent("/etc/x.toml".into()),
+        );
+        assert!(
+            absent.contains("config-file=none-at:/etc/x.toml (default)"),
+            "{absent}"
+        );
+        let read = effective_configuration(
+            &TABLE,
+            &resolved,
+            &ConfigFileFate::Read("/srv/shekyld.toml".into()),
+        );
+        assert!(
+            read.contains("config-file=/srv/shekyld.toml (cli)"),
+            "{read}"
+        );
+    }
+
     /// `mine-address` prints shortened: the first and last eight characters
     /// and nothing of the middle. Red edit: print the full address.
     #[test]
@@ -295,7 +326,11 @@ mod tests {
         .encode()
         .unwrap();
         let (resolved, _) = setup(&["--mine-address", &text, "--tor", "off"], "");
-        let line = effective_configuration(&TABLE, &resolved, None, Path::new("/etc/x.toml"));
+        let line = effective_configuration(
+            &TABLE,
+            &resolved,
+            &ConfigFileFate::DefaultAbsent("/etc/x.toml".into()),
+        );
         let want = format!(
             "mine-address={}…{} (cli)",
             &text[..8],
@@ -340,8 +375,7 @@ mod tests {
         let announced = announcements(
             &TABLE,
             &resolved,
-            None,
-            Path::new("/etc/shekyl/shekyld-regtest.toml"),
+            &ConfigFileFate::DefaultAbsent("/etc/shekyl/shekyld-regtest.toml".into()),
             &config,
             &warnings,
         );

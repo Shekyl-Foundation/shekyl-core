@@ -14,6 +14,9 @@
 //!   coinbase template.
 //! - [`TxKey::from_genesis_seed`] — the genesis transaction, from the
 //!   network's name and its recipients ([`GENESIS_TXKEY`]).
+//! - [`TxKey::from_intent_seed`] — a multisig spend, from its intent's seed,
+//!   so every member builds the same outputs
+//!   ([`crate::multisig_intent::LABEL_INTENT_TX_KEY`]).
 //! - `TxKey::seeded` — only under the TEST_ONLY `seeded-rng` feature, so a
 //!   fixture can pin a key.
 //!
@@ -48,6 +51,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CryptoError;
 use crate::kem::SharedSecret;
+use crate::multisig_intent::IntentSeed;
 use crate::schnorr;
 
 /// The length of a transaction key's scalar, and of its stored and
@@ -108,6 +112,16 @@ impl TxKey {
     pub fn from_genesis_seed(name: &NameId, recipients: &[u8]) -> Self {
         let seed = Zeroizing::new(GENESIS_TXKEY.frame(name, [recipients]).into_bytes());
         Self::from_scalar(&Zeroizing::new(Scalar::from_bytes_mod_order(*seed)))
+    }
+
+    /// A multisig spend's key, derived from its intent's seed under
+    /// [`crate::multisig_intent::LABEL_INTENT_TX_KEY`] (R-14): every member
+    /// holding the intent derives the same key, and so builds the same
+    /// outputs. The derivation reduces 64 expanded bytes mod ℓ, so the
+    /// scalar is canonical.
+    #[must_use]
+    pub fn from_intent_seed(seed: &IntentSeed) -> Self {
+        Self::from_scalar(&seed.tx_key_scalar())
     }
 
     /// The key whose scalar is `bytes` reduced mod ℓ, so a fixture can pin

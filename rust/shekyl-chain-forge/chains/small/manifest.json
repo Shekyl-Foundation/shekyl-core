@@ -18,8 +18,8 @@
   "blocks": 1507,
   "tip_height": 1504,
   "transactions": 292,
-  "corpus_sha256": "b7e1f89a710346d81bcdaccec85266bf40130b6bad11753834af160a8506f0d7",
-  "trace_sha256": "617d7711bcb7f4b46c923f207afaf0a25076bd87da1c576aaeb01650c373545f",
+  "corpus_sha256": "241beb8e57896cbd5b989da42365b8150982b840c86e79298280cf816db4bc72",
+  "trace_sha256": "04bd05cb99c8165464943fa5341aefaa4e2357c97f1bd9a7000f125aa15f6939",
   "events": [
     {
       "name": "first-spend-2in",

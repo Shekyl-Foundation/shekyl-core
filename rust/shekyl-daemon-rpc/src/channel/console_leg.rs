@@ -48,10 +48,15 @@ pub fn place(dir: &Path) -> PathBuf {
 ///
 /// # Errors
 ///
-/// Something other than a socket is at the socket's path, or the bind, the
-/// mode or (Windows) the pipe's record failed.
+/// Something other than a socket is at the socket's path, or the bind or
+/// the mode failed.
 #[cfg(unix)]
-pub fn bind(dir: &Path) -> std::io::Result<ConsoleListener> {
+pub fn bind(dir: &Path) -> Result<ConsoleListener, crate::run::StartFault> {
+    bind_socket(dir).map_err(|e| crate::run::StartFault::Refused(e.to_string()))
+}
+
+#[cfg(unix)]
+fn bind_socket(dir: &Path) -> std::io::Result<ConsoleListener> {
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
     let path = place(dir);
     match std::fs::symlink_metadata(&path) {
@@ -75,9 +80,11 @@ pub fn bind(dir: &Path) -> std::io::Result<ConsoleListener> {
 ///
 /// # Errors
 ///
-/// The pipe could not be created, or its record not written.
+/// The pipe could not be created, or its record not written
+/// ([`crate::run::StartFault::HeldOpen`] when another program held the
+/// staged record open past the wait).
 #[cfg(windows)]
-pub fn bind(dir: &Path) -> std::io::Result<ConsoleListener> {
+pub fn bind(dir: &Path) -> Result<ConsoleListener, crate::run::StartFault> {
     use rand_core::{OsRng, RngCore};
     let mut draw = [0u8; 16];
     OsRng.fill_bytes(&mut draw);
@@ -87,9 +94,9 @@ pub fn bind(dir: &Path) -> std::io::Result<ConsoleListener> {
         draw.iter().map(|b| format!("{b:02x}")).collect::<String>()
     );
     let listener = shekyl_win_sec::OwnerOnlyPipeListener::bind_console(name.clone())
-        .map_err(|e| std::io::Error::other(format!("the console's pipe: {e}")))?;
+        .map_err(|e| format!("the console's pipe: {e}"))?;
     shekyl_os_account::private_file::replace_console(&place(dir), name.as_bytes())
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+        .map_err(super::files::FileRefused::from)?;
     Ok(crate::owner::OwnerListener::from(listener))
 }
 

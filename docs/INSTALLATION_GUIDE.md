@@ -232,10 +232,41 @@ Start daemon in foreground:
 
 Run the daemon in the background via your platform's service manager
 (systemd on Linux, rc.d on FreeBSD, launchd on macOS, Task Scheduler on
-Windows). A shipped systemd unit lives at
-`contrib/packaging/linux/shekyld.service`, with `shekyl.slice` beside
-it; the `.deb` installs both, or copy both to `/etc/systemd/system/` and
-`systemctl enable --now shekyld`. The slice is the daemon's own
+Windows). The shipped systemd unit is the template
+`contrib/packaging/linux/shekyld@.service`, one instance per network,
+with `shekyl.slice` beside it. The `.deb` and the `.rpm` install both,
+create the `shekyl` system account the unit runs as and `/etc/shekyl`,
+and place each public network's settings file,
+`/etc/shekyl/shekyld-<network>.toml`, when none is there: every option in
+it is commented out, so the daemon runs on its defaults. They refuse to install where
+an account named `shekyl` is already someone's login, because the daemon
+would run with that login's rights, and say how to rename it. They do not
+start the daemon. Set what you need in the network's file, then enable
+and start that network's instance; before every start it checks the file
+as the daemon's account:
+
+```bash
+sudo systemctl enable --now shekyld@testnet
+```
+
+Without a package, apply the same two declarations first, because
+systemd refuses to start a unit whose account does not exist. Check first
+that no login is named `shekyl` (`getent passwd shekyl`): the declaration
+keeps an account that already exists, and the daemon would run as it. Then install
+both units and enable the daemon; the unit runs `/usr/local/bin/shekyld`:
+
+```bash
+sudo cp contrib/packaging/linux/shekyl.sysusers /usr/lib/sysusers.d/shekyl.conf
+sudo cp contrib/packaging/linux/shekyl.tmpfiles /usr/lib/tmpfiles.d/shekyl.conf
+sudo systemd-sysusers shekyl.conf
+sudo systemd-tmpfiles --create shekyl.conf
+sudo cp contrib/packaging/linux/shekyld@.service \
+  contrib/packaging/linux/shekyl.slice /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now shekyld@testnet
+```
+
+The slice is the daemon's own
 top-level control group, weighed 4:1 against `user.slice` under
 contention, so a daemon that is syncing or verifying keeps about 80 % of
 the CPU while a wallet in a user session serves archival shards beside

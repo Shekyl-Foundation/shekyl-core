@@ -1,8 +1,8 @@
 ; The Windows installer. Built as `.github/workflows/gitian.yml` does:
 ;
 ;   makensis -DVERSION=<version> -DBIN_DIR=<dir holding shekyld.exe> \
-;            -DLICENSE_FILE=<path>/LICENSE -DOUTPUT_FILE=<path>/shekyl-setup.exe \
-;            contrib/packaging/windows/shekyl.nsi
+;            -DLICENSE_FILE=<path>/LICENSE -DEXAMPLE_TOML=<path>/shekyld.example.toml \
+;            -DOUTPUT_FILE=<path>/shekyl-setup.exe contrib/packaging/windows/shekyl.nsi
 ;
 ; makensis resolves a relative path against this script's directory, not
 ; the working directory, so the defaults below are spelled from here: the
@@ -19,6 +19,9 @@
 !endif
 !ifndef LICENSE_FILE
   !define LICENSE_FILE "..\..\..\LICENSE"
+!endif
+!ifndef EXAMPLE_TOML
+  !define EXAMPLE_TOML "..\..\..\docs\generated\shekyld.example.toml"
 !endif
 !ifndef OUTPUT_FILE
   !define OUTPUT_FILE "shekyl-setup.exe"
@@ -75,9 +78,30 @@ Section "Shekyl Core (required)" SecCore
   SectionIn RO
   SetOutPath "$INSTDIR"
 
+  ; What the Windows archive ships: the daemon and the RPC tunnel. Windows
+  ; ships no shekyl-cli or shekyl-wallet-rpc (cmake/BuildRust.cmake), so the
+  ; installer names neither.
   File "${BIN_DIR}\shekyld.exe"
-  File /nonfatal "${BIN_DIR}\shekyl-cli.exe"
-  File /nonfatal "${BIN_DIR}\shekyl-wallet-rpc.exe"
+  File "${BIN_DIR}\shekyl-rpc-tunnel.exe"
+  ; The rendered example settings file, every option commented out
+  ; (INPUT_GRAMMAR.md IG-Q64). A daemon run as the user has no machine-wide
+  ; settings path: it reads %LOCALAPPDATA%\Shekyl\shekyld-<network>.toml,
+  ; and no file there means the defaults. This is the reference to copy from.
+  File "${EXAMPLE_TOML}"
+
+  ; The pinned Tor, where the daemon looks for it on Windows: `tor\` beside
+  ; shekyld.exe (shekyl-tor-control-client, BESIDE_TOR_DIR). The default
+  ; `tor = managed` runs it, so a daemon installed without it has no Tor.
+  ; The daemon refuses a tor directory holding anything but the pinned
+  ; files, so an earlier release's directory goes first, and its licences
+  ; with it.
+  RMDir /r "$INSTDIR\tor"
+  RMDir /r "$INSTDIR\tor-licenses"
+  SetOutPath "$INSTDIR\tor"
+  File "${BIN_DIR}\tor\tor.exe"
+  SetOutPath "$INSTDIR\tor-licenses"
+  File /r "${BIN_DIR}\tor-licenses\*"
+  SetOutPath "$INSTDIR"
 
   WriteRegStr HKLM "Software\Shekyl" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Shekyl" \
@@ -126,25 +150,34 @@ SectionEnd
 Section "Start Menu Shortcuts" SecShortcuts
   CreateDirectory "$SMPROGRAMS\Shekyl"
   CreateShortCut "$SMPROGRAMS\Shekyl\Shekyl Daemon.lnk" "$INSTDIR\shekyld.exe"
-  CreateShortCut "$SMPROGRAMS\Shekyl\Shekyl CLI Wallet.lnk" "$INSTDIR\shekyl-cli.exe"
   CreateShortCut "$SMPROGRAMS\Shekyl\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+  ; An earlier installer made a shortcut to shekyl-cli.exe, which Windows
+  ; never shipped; installing over it removes the dead shortcut.
+  Delete "$SMPROGRAMS\Shekyl\Shekyl CLI Wallet.lnk"
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "Shekyl daemon and wallet binaries."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "The Shekyl daemon, its pinned Tor, and the RPC tunnel."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPath} "Add Shekyl installation directory to the system PATH."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecShortcuts} "Create Start Menu shortcuts."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
   Delete "$INSTDIR\shekyld.exe"
+  Delete "$INSTDIR\shekyl-rpc-tunnel.exe"
+  Delete "$INSTDIR\shekyld.example.toml"
+  RMDir /r "$INSTDIR\tor"
+  RMDir /r "$INSTDIR\tor-licenses"
+  ; What an earlier installer put here and this one no longer ships.
   Delete "$INSTDIR\shekyl-cli.exe"
   Delete "$INSTDIR\shekyl-wallet-rpc.exe"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 
   Delete "$SMPROGRAMS\Shekyl\Shekyl Daemon.lnk"
-  Delete "$SMPROGRAMS\Shekyl\Shekyl Wallet CLI.lnk"
+  ; The earlier installer's wallet shortcut, under the name it was created
+  ; with (its uninstaller deleted "Shekyl Wallet CLI.lnk", which never existed).
+  Delete "$SMPROGRAMS\Shekyl\Shekyl CLI Wallet.lnk"
   Delete "$SMPROGRAMS\Shekyl\Uninstall.lnk"
   RMDir "$SMPROGRAMS\Shekyl"
 

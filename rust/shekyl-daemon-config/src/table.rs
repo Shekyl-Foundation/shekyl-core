@@ -65,6 +65,10 @@ const INSTANCE: Kind = Kind::Name(NameRule {
     },
 });
 const ORIGIN: Kind = Kind::Origin;
+/// `config-file`: an absolute path, or `none` so no file is read.
+const CONFIG_FILE: Kind = Kind::Path {
+    keywords: &["none"],
+};
 const RATE: Kind = Kind::Quantity {
     dimension: Dimension::Rate,
     min: 1,
@@ -195,9 +199,9 @@ const ROWS: &[Row] = &[
     // command line is its one surface; 0 to 2 are the standard streams.
     public("owning-connection", Kind::Integer { min: 3, keywords: &[] }, Default::Unset, Surface::Cli, "The descriptor (a socket handle on Windows) of one end of a connected stream socket pair the starting process created for this daemon. The daemon writes a ready line on it once its owner's socket is served, and stops when the other end closes. For a wallet that starts its own daemon; not with service."),
     public("instance", INSTANCE, Default::Unset, Surface::Both, "This node's name, for a second node of the same network on this machine: 1 to 16 lower-case letters, digits or hyphens. Unset is the default instance. A named instance needs its own data-dir."),
-    public("config-file", Kind::Path, Default::Derived("/etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused."),
-    public("data-dir", Kind::Path, Default::Derived("the daemon's root and the network's subdirectory"), Surface::Both, "The data directory. An explicit path is used as given."),
-    public("log-file", Kind::Path, Default::Derived("the daemon's root, logs/shekyld-<network>.log"), Surface::Both, "The log file."),
+    public("config-file", CONFIG_FILE, Default::Derived("/etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused; `none` reads no file, for a program that starts its own daemon on the command line alone."),
+    public("data-dir", Kind::PATH, Default::Derived("the daemon's root and the network's subdirectory"), Surface::Both, "The data directory. An explicit path is used as given."),
+    public("log-file", Kind::PATH, Default::Derived("the daemon's root, logs/shekyld-<network>.log"), Surface::Both, "The log file."),
     runtime("log-level", LEVEL, "warn", "The log level: error, warn, info, debug or trace."),
     runtime(
         "log-category",
@@ -214,12 +218,12 @@ const ROWS: &[Row] = &[
     public("tor-socks-password", Kind::Secret, Default::Unset, Surface::File, "The SOCKS password for tor-socks."),
     public("tor-onion", Kind::PeerEndpoint(PeerRule::OnionOnly), Default::Unset, Surface::Both, "This node's onion service and virtual port, on the operator's Tor."),
     public("tor-onion-listen", ENDPOINT, Default::Unset, Surface::Both, "The local endpoint the operator's Tor forwards tor-onion to; required with it."),
-    public("tor-file", Kind::Path, Default::Derived("tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix"), Surface::Both, "The managed Tor binary; tor = managed only. It is verified against the pin wherever it is."),
+    public("tor-file", Kind::PATH, Default::Derived("tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix"), Surface::Both, "The managed Tor binary; tor = managed only. It is verified against the pin wherever it is."),
     public("clearnet-socks", ENDPOINT, Default::Unset, Surface::Both, "A SOCKS proxy for clearnet dials."),
     public("clearnet-socks-username", Kind::Secret, Default::Unset, Surface::File, "The SOCKS username for clearnet-socks."),
     public("clearnet-socks-password", Kind::Secret, Default::Unset, Surface::File, "The SOCKS password for clearnet-socks."),
-    public("clearnet-listen", Kind::List(&ENDPOINT), Default::Derived("0.0.0.0 and the network's p2p port"), Surface::Both, "The clearnet listen endpoints; `none` is dial-only on clearnet."),
-    public("clearnet-advertise", Kind::List(&GLOBAL), Default::Unset, Surface::Both, "The clearnet endpoints peers can reach this node at; at most one per address family."),
+    public("clearnet-listen", Kind::List(&ENDPOINT), Default::Derived("0.0.0.0 and the network's p2p port"), Surface::Both, "The clearnet listen endpoints; `none` is dial-only on clearnet. Beside `clearnet off`, `none` confirms it."),
+    public("clearnet-advertise", Kind::List(&GLOBAL), Default::Unset, Surface::Both, "The clearnet endpoints peers can reach this node at; at most one per address family. Beside `clearnet off`, `none` confirms it."),
     public("p2p-local", Kind::Switch, Default::Unset, Surface::Both, "Accept peers at private addresses, for a private test network."),
     Row {
         name: "p2p-peer",
@@ -244,7 +248,7 @@ const ROWS: &[Row] = &[
     public("p2p-disclose-early", Kind::Switch, Default::Unset, Surface::Both, "Disclose known peers and this node's address below the white-diversity floor, for bootstrapping a small network."),
     Row {
         name: "p2p-ban-file",
-        kind: Kind::Path,
+        kind: Kind::PATH,
         default: Default::Unset,
         surface: Surface::Both,
         runtime: false,
@@ -286,7 +290,7 @@ const ROWS: &[Row] = &[
     // The channel listener (RT-W10 step 4): any address, a wildcard
     // included (RT-14); no channel port is ruled, so unset is no listener.
     public("rpc-listen", Kind::List(&ENDPOINT), Default::Value("none"), Surface::Both, "The authenticated channel's listeners: enrolled clients reach the node here over the Noise channel, from this host or another. Any address, a wildcard included; `none` is no channel listener."),
-    public("rpc-socket-dir", Kind::Path, Default::Unset, Surface::Both, "The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory."),
+    public("rpc-socket-dir", Kind::PATH, Default::Unset, Surface::Both, "The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory."),
     public("rpc-admin-listen", Kind::List(&LOOPBACK), Default::Derived("127.0.0.1 and the network's rpc port"), Surface::Both, "The plaintext full-access listeners, loopback only; `none` is no admin listener."),
     public("rpc-view-listen", Kind::List(&LOOPBACK_LISTEN), Default::Value("none"), Surface::Both, "The plaintext view listeners, loopback only; an address with no port takes the network's view port."),
     public("rpc-cors-origin", Kind::List(&ORIGIN), Default::Value("none"), Surface::Both, "Web origins allowed to call the RPC; `none` denies all. `*` is refused."),
