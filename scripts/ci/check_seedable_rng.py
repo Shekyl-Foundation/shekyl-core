@@ -163,6 +163,12 @@ SITES: dict[tuple[str, str], tuple[str, int, str]] = {
     ("shekyl-crypto-pq/src/fn_dsa_hybrid.rs", "fn_dsa_keygen"): (
         "G1", 1, "FN-DSA keygen from a seed its callers derive (or, in generate_keypair, "
         "draw from the OS)"),
+    ("shekyl-crypto-pq/src/multisig_intent.rs", "rng"): (
+        "G1", 1, "a multisig input's rerandomization seed (RerandomizationSeed): the blinds "
+        "r_o, r_i, r_r_i that shekyl-fcmp's SalSigningParams::new draws from this stream, "
+        "never a signing nonce. Made only by IntentSeed::rerandomization_seed, per input in "
+        "the intent's input order, by HKDF under shekyl/multisig-intent-rerandomize-v1 from "
+        "the intent's group-secret seed (PQC_MULTISIG.md §9.5); no caller passes one in"),
     ("shekyl-crypto-pq/src/output.rs", "construct_output_with_label_plaintext"): (
         "G1", 1, "the output's ML-DSA seed, derived from the transaction secret's shared secret"),
     ("shekyl-crypto-pq/src/output.rs", "keygen_from_seed_bytes"): (
@@ -174,13 +180,6 @@ SITES: dict[tuple[str, str], tuple[str, int, str]] = {
     ("shekyl-crypto-pq/src/output.rs", "sign_derived_output_auth"): (
         "G1", 1, "the spend key's ML-DSA seed, derived from the combined shared secret; the "
         "signature itself is hedged (OS randomness)"),
-    ("shekyl-fcmp/src/frost_sal.rs", "new"): (
-        "G1", 1, "PROVISIONAL until multisig slice 4a-1 (PROVISIONAL). The input's "
-        "rerandomization seed: the blinds r_o, r_i, r_r_i, never a signing nonce. "
-        "PQC_MULTISIG.md §9.5 derives it per input from the intent's group-secret "
-        "kem_randomness_seed by HKDF under shekyl/multisig-intent-rerandomize-v1. Today "
-        "InputContext's caller passes it in; 4a-1 replaces that with the per-input derivation "
-        "from a shekyl-crypto-pq kem_randomness_seed type (4a brief §2.2, §2.3, amendment B)"),
     # G2: verifier batch weights from a domain-separated transcript.
     ("shekyl-bulletproofs/src/derived.rs", "verify_batch"): (
         "G2", 1, "batch_weights_seed over the batch's own proofs; weights only"),
@@ -205,12 +204,7 @@ REGISTRY = REPO / "docs" / "design" / "CRYPTO_DOMAIN_REGISTRY.tsv"
 # (path under rust/, function) -> (the increment that replaces the listing's
 # seed source, the domain label that increment registers in REGISTRY). The
 # label registered means the increment has landed, and the marker is red.
-PROVISIONAL: dict[tuple[str, str], tuple[str, str]] = {
-    ("shekyl-fcmp/src/frost_sal.rs", "new"): (
-        "multisig slice 4a-1",
-        "shekyl/multisig-intent-rerandomize-v1",
-    ),
-}
+PROVISIONAL: dict[tuple[str, str], tuple[str, str]] = {}
 
 # (path under rust/, function) -> why it must stay test-only
 TEST_ONLY_SITES: dict[tuple[str, str], str] = {

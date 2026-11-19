@@ -549,29 +549,13 @@ where
                 other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
             })
             .map_err(StakeEngineError::from)?;
-        if paths.len() != selection.records.len() {
-            return Err(StakeEngineError::from(BondAssemblyError::build(
-                "assemble_tx",
-                format!(
-                    "expected {} paths, got {}",
-                    selection.records.len(),
-                    paths.len()
-                ),
-            ))
-            .into());
-        }
-        // Non-empty: the sweep refuses an empty eligible set structurally.
-        let first = paths.first().ok_or_else(|| {
-            StakeEngineError::from(BondAssemblyError::build(
-                "assemble_tx",
-                "assemble_tx returned no paths",
-            ))
-        })?;
-        let tree_ctx = tree_context_from(&first.tree);
+        // One path per input asked for, in that order, all to one tree: the
+        // batch's own properties (R-26), so the records zip with its paths.
+        let tree_ctx = tree_context_from(&paths.tree());
         let funding: Vec<FundingInputContext> = selection
             .records
             .into_iter()
-            .zip(paths)
+            .zip(paths.into_paths().map(|(_, path)| path.into_parts()))
             .map(|(record, path)| FundingInputContext {
                 record,
                 leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),

@@ -54,7 +54,7 @@ pub enum ResponderInput<'f> {
 /// fn respond(
 ///     ctx: &SigningContext<'_>,
 ///     received: ResponderInput<'_>,
-///     store: &mut impl HeldNonceStore,
+///     store: &mut HeldNonceStore,
 ///     live: &mut impl LiveCeremonies,
 /// ) {
 ///     let _ = Responder::respond(ctx, received, store, live, &mut OsRng);

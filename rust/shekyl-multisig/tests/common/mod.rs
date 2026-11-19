@@ -31,14 +31,15 @@ use shekyl_crypto_pq::multisig_output::{
     MultisigOutputData,
 };
 use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss};
+use shekyl_curve_tree::{ChunkLeaf, PathParts};
 use shekyl_fcmp::frost_sal::{dealer_split, threshold_keys, Ed25519T, ThresholdKeys};
 use shekyl_fcmp::proof::{BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::tree::{
     build_layers, construct_leaf, ed25519_point_to_selene_scalar, key_image_generator,
     selene_point_to_helios_scalar,
 };
-use shekyl_multisig::{InputPath, MemberFile, MemberSecrets};
-use shekyl_types::CurveTreeRoot;
+use shekyl_multisig::{MemberFile, MemberSecrets};
+use shekyl_types::{CommitmentBytes, CurveTreeRoot, OneTimePubkey};
 
 pub mod wallet;
 
@@ -193,7 +194,7 @@ pub fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned 
 
 /// Two outputs paid to a group, as every member scans them, and the tree
 /// that holds them.
-pub struct GroupOutputs {
+pub struct Paid {
     /// Each output, its index in its transaction, and its amount.
     pub outputs: Vec<(MultisigOutputData, u64, u64)>,
     /// What every member's scan recovers, per output.
@@ -202,8 +203,12 @@ pub struct GroupOutputs {
     pub root: CurveTreeRoot,
     /// The tree's layer count.
     pub layers: u8,
-    /// Each output's leaf chunk and branch, for the prover.
+    /// Each output's leaf chunk and branch with its blind, for a prover
+    /// outside the ceremony.
     pub chunks: Vec<ProveInputLeafChunk>,
+    /// The public path both outputs have in the tree (they share one leaf
+    /// chunk), as parts a test batch is built from.
+    pub path: PathParts,
 }
 
 /// The amounts [`pay_group_twice`] pays, in output order.
@@ -215,7 +220,7 @@ const OUTPUT_INDICES: [u64; 2] = [0, 3];
 /// The sender pays the group twice ([`AMOUNTS`]), in two transactions;
 /// every member scans both alone and recovers the same values; the tree
 /// holds both outputs in one leaf chunk, as the daemon builds it.
-pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -> GroupOutputs {
+pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -> Paid {
     let outputs: Vec<(MultisigOutputData, u64, u64)> = AMOUNTS
         .into_iter()
         .zip(OUTPUT_INDICES)
@@ -241,39 +246,24 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
             first
         })
         .collect();
-    let (root, layers, chunks) = tree(&outputs, &scans);
-    GroupOutputs {
+    let (root, layers, chunks, path) = tree(&outputs, &scans);
+    Paid {
         outputs,
         scans,
         root,
         layers,
         chunks,
+        path,
     }
 }
 
-/// Each of `paid`'s outputs' path, named by its key image.
-pub fn paths(paid: &GroupOutputs, chunks: Vec<ProveInputLeafChunk>) -> Vec<InputPath> {
-    paid.scans
-        .iter()
-        .zip(chunks)
-        .map(|(scan, leaf_chunk)| InputPath {
-            key_image: scan.key_image,
-            leaf_chunk,
-        })
-        .collect()
-}
-
-/// `paid`'s paths again: the prover consumes them.
-pub fn rebuild_paths(paid: &GroupOutputs) -> Vec<InputPath> {
-    paths(paid, tree(&paid.outputs, &paid.scans).2)
-}
-
 /// The tree that holds `outputs`, as the daemon builds it: its root, its
-/// layer count, and each output's leaf chunk and branch.
+/// layer count, and each output's leaf chunk and branch, with its blind
+/// and as the public path both outputs have in it.
 fn tree(
     outputs: &[(MultisigOutputData, u64, u64)],
     scans: &[Scanned],
-) -> (CurveTreeRoot, u8, Vec<ProveInputLeafChunk>) {
+) -> (CurveTreeRoot, u8, Vec<ProveInputLeafChunk>, PathParts) {
     let leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = outputs
         .iter()
         .map(|(out, _, _)| {
@@ -321,5 +311,24 @@ fn tree(
             }],
         })
         .collect();
-    (root, depth, chunks)
+    // The tree is real and its root is the fold of these branches, but the
+    // path is written out rather than assembled from a client, so a batch
+    // of it is built through the test-only constructor (R-25, R-26).
+    let path = PathParts {
+        leaf_chunk: leaf_outputs
+            .iter()
+            .zip(&leaf_cm_x)
+            .map(
+                |(&(output_key, key_image_gen, commitment), &cm_x)| ChunkLeaf {
+                    output_key: OneTimePubkey::from_bytes(output_key),
+                    key_image_gen,
+                    commitment: CommitmentBytes::from_bytes(commitment),
+                    cm_x,
+                },
+            )
+            .collect(),
+        c1_layers: vec![],
+        c2_layers: vec![helios_chunk],
+    };
+    (root, depth, chunks, path)
 }

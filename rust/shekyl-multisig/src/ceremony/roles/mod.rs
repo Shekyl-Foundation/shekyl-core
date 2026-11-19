@@ -9,12 +9,12 @@
 //!
 //! Each state is a type with only the steps legal from it, and each step
 //! takes the one [`Authenticated`] body that phase expects, so a file out
-//! of phase cannot be passed. Every state that spans a wait for another
-//! member is rebuilt after a restart from what survives it
-//! (`PQC_MULTISIG.md` §13.1): the proposer from the last file it sent (its
-//! `Proposal`, then its `FinalTx`) and the files it received; a holder as
-//! [`Holder::committed`], its held nonce being the durable fact; the second
-//! round is stateless.
+//! of phase cannot be passed. A proposer's or holder's held nonce lives in
+//! memory only, from commit to sign (R-20, `PQC_MULTISIG.md` §11.4,
+//! §13.1): a restart before it signs forfeits its part, and a new intent
+//! completes the spend. A proposer that has finished holds no nonce and is
+//! rebuilt from the `FinalTx` it sent ([`Proposer::resume_after_finish`]);
+//! the second round is stateless.
 //!
 //! This module holds the steps the roles share: who may send what, the
 //! round-1 contributions and their keys, the preprocess set, signing from a
@@ -135,7 +135,7 @@ fn check_rounds<'r>(
 /// and leaves the store unchanged.
 fn hold_all(
     ctx: &SigningContext<'_>,
-    store: &mut impl HeldNonceStore,
+    store: &mut HeldNonceStore,
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<CheckedRounds, CeremonyError> {
     let keys = own_keys(ctx)?;

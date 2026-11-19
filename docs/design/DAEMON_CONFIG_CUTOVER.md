@@ -336,7 +336,8 @@ The permitted principals are root and the daemon's account on Unix, and for
 reading a file that holds a secret also the daemon's group (Rick,
 2026-10-19), while the daemon's account is that group's only member (Rick,
 2026-10-22). A service install keeps one file, `root:<daemon group>` `0640`
-under `/etc/shekyl` `root:root` `0755`: written by root only, read by root
+under `/etc/shekyl` `root:shekyl` `0750` (the packages' `tmpfiles.d`,
+IG-Q64): written by root only, read by root
 and the daemon. A per-account install keeps it owner-only `0600`. There is
 no separate secrets file. The group's members are its member list plus
 every account whose primary group it is; a file readable through a group
@@ -757,7 +758,7 @@ a chain.
 
 | Launcher | What changes beyond spelling | Regtest, not offline |
 | --- | --- | --- |
-| [`contrib/packaging/linux/shekyld.service:12`](../../contrib/packaging/linux/shekyld.service) | drops `--non-interactive` (no console unless asked, IG-Q8) | — |
+| [`contrib/packaging/linux/shekyld@.service`](../../contrib/packaging/linux/shekyld@.service) (then `shekyld.service:12`) | drops `--non-interactive` (no console unless asked, IG-Q8) | — |
 | [`utils/fleet/skl-node@.service:35`](../../utils/fleet/skl-node@.service) and its siblings; [`utils/fleet/gen_host_configs.sh:69-88`](../../utils/fleet/gen_host_configs.sh) | the generated files become TOML; `--network` moves to the unit's command line; the UPnP key goes | — |
 | [`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:359-396`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs) | the `Linked` arm already declines the managed Tor | yes, already handled |
 | [`rust/shekyl-levin/tests/dual_stack.rs:71-72`](../../rust/shekyl-levin/tests/dual_stack.rs), [`rust/shekyl-levin/tests/inbound_cost_bench.rs:166-167`](../../rust/shekyl-levin/tests/inbound_cost_bench.rs) | `--out-peers 0` goes; each passes `--tor off` (Rick, 2026-10-17, for the second) | yes |

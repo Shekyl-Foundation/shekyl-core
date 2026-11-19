@@ -1,0 +1,61 @@
+# The daemon's unit, one instance per network (INPUT_GRAMMAR.md IG-Q64):
+# `systemctl enable --now shekyld@testnet` (or @mainnet, @stagenet). The
+# instance name is the network, and every path below is that network's, so
+# two networks run side by side on one machine.
+#
+# The account `shekyl` and /etc/shekyl are declared by the packages
+# (shekyl.sysusers, shekyl.tmpfiles); the network's settings file is
+# /etc/shekyl/shekyld-%i.toml, placed by the package when absent.
+[Unit]
+Description=Shekyl Daemon (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# The daemon's own slice, weighed 4:1 against user.slice under contention
+# (shekyl.slice, shipped beside this unit; ruled 2026-10-12).
+Slice=shekyl.slice
+Type=simple
+# `--service`: this is the machine's service instance for the network,
+# which serves no owner's socket and is given no socket directory
+# (INPUT_GRAMMAR.md IG-Q105). Its data home is --data-dir, the
+# StateDirectory below, which the daemon checks and never creates; its log
+# is under the LogsDirectory. No console unless asked, so nothing reads
+# stdin. ExecStartPre is the same command line with --config-verify: the
+# check and the start share one environment, and a refusal happens before
+# the daemon creates anything (IG-Q64). The recipe gate holds the two
+# lines and the directories together (scripts/ci/check_launch_recipes.py).
+ExecStartPre=/usr/local/bin/shekyld --service --network %i --data-dir /var/lib/shekyl/%i --log-file /var/log/shekyl/%i/shekyld.log --config-verify
+ExecStart=/usr/local/bin/shekyld --service --network %i --data-dir /var/lib/shekyl/%i --log-file /var/log/shekyl/%i/shekyld.log
+
+User=shekyl
+Group=shekyl
+
+# /run/shekyl: the service's rendezvous directory (RPC_CHANNEL.md §7.1),
+# the daemon's account's and readable by every user, which the daemon
+# checks and never creates. Every network's instance names it, so it is
+# preserved when one stops; systemd would otherwise remove it from under
+# the others.
+RuntimeDirectory=shekyl
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# /var/lib/shekyl/<network>: the instance's data home, the account's alone
+# (mode 0700), checked by the daemon (RPC_CHANNEL.md §7.1; Rick,
+# 2026-11-14). systemd gives it to the account on every start, including
+# after a change of the account's uid.
+StateDirectory=shekyl/%i
+StateDirectoryMode=0700
+LogsDirectory=shekyl/%i
+
+Restart=on-failure
+RestartSec=30
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/shekyl/%i /var/log/shekyl/%i
+
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

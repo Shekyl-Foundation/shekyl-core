@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
-use shekyl_options::{Code, Diagnostic, PeerEndpoint, Secret, Source, Value};
+use shekyl_options::{Bearing, Code, Diagnostic, PeerEndpoint, Secret, Source, Value};
 
 use crate::resolve::Resolved;
 
@@ -91,6 +91,15 @@ impl<'a> Reader<'a> {
     /// The operator set the row: not absent, and not the table's default.
     pub(super) fn given(&self, name: &str) -> bool {
         !matches!(self.resolved.source(name), None | Some(Source::Default))
+    }
+
+    /// How a row the operator set stands beside a parent that refuses it.
+    /// `None` when the operator did not set the row.
+    pub(super) fn bearing(&self, name: &str) -> Option<Bearing> {
+        if !self.given(name) {
+            return None;
+        }
+        self.resolved.get(name).map(Value::bearing)
     }
 
     pub(super) fn conflict(&mut self, name: &str, conflict: &str) {
