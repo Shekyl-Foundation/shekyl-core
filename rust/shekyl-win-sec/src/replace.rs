@@ -22,7 +22,7 @@
 //!    program that holds the staged file open without delete sharing (a
 //!    scanner, an indexer) fails this open with `ERROR_SHARING_VIOLATION`
 //!    ([`is_sharing_violation`]).
-//! 2. [`Source::rename_over`] renames it over the destination with
+//! 2. Through that handle the staged file is renamed over the destination with
 //!    `FileRenameInfoEx`, `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` and
 //!    `FILE_RENAME_FLAG_POSIX_SEMANTICS`. A reader of the destination that
 //!    shares delete keeps reading the old bytes; one that does not share
@@ -36,6 +36,15 @@
 //!    commits there. What such a file system loses is replacing a file a
 //!    reader holds open: a reader of the destination, whatever it shares,
 //!    fails the classic rename with `ERROR_ACCESS_DENIED`.
+//! 4. A destination whose read-only attribute is set fails the POSIX rename
+//!    on NTFS with `ERROR_ACCESS_DENIED` too, and the classic rename on
+//!    FAT32 with `ERROR_ALREADY_EXISTS`: the replace it was asked for is
+//!    refused as a collision (Windows 11 23H2, build 22631, 2026-11-19). On
+//!    either refusal the destination's attribute is read: set, the failure
+//!    is [`ReplaceError::ReadOnly`] at once, which no wait changes; clear,
+//!    on the classic class an access denial is a reader holding the
+//!    destination ([`Held::Live`]), and anything else is the refusal itself
+//!    (Rick, 2026-11-19).
 //!
 //! **The creating handle** (Rick, 2026-11-18). A replace that writes its
 //! own staged file holds one handle from the create to the close
@@ -65,10 +74,20 @@
 //! user-mode flush of a directory, and `MoveFileExW`'s
 //! `MOVEFILE_WRITE_THROUGH` documents a flush only for a move done as a copy
 //! and a delete. [`Staged::commit`] therefore reports
-//! [`Durability::Durable`] only when the volume's file system is NTFS
-//! (`GetVolumeInformationByHandleW` on the handle), the POSIX rename was the
-//! one that renamed, and the flush after it returned; FAT, exFAT, ReFS and
-//! any other file system report [`Durability::Unconfirmed`], naming it.
+//! [`Durability::Durable`] only when the volume is local, its file system
+//! is NTFS (`GetVolumeInformationByHandleW` on the handle), the POSIX
+//! rename was the one that renamed, and the flush after it returned; FAT,
+//! exFAT, ReFS and any other file system report
+//! [`Durability::Unconfirmed`], naming it.
+//!
+//! **A network drive is never durable** (Rick, 2026-11-19): a volume whose
+//! device is `FILE_REMOTE_DEVICE` (`NtQueryVolumeInformationFile`,
+//! `FileFsDeviceInformation`, on the handle) is
+//! [`Unconfirmed::Remote`] whatever file system it reports. A server names
+//! the file system of the disk it shares, and the write-through sentence
+//! above is NTFS's, on this computer's disk. Network shares are not a
+//! supported configuration: the commit lands and says it is unconfirmed, and
+//! the wallet refuses to send or stake from one (Rick, 2026-11-19).
 //!
 //! **One deadline** (Rick, 2026-11-18): the removal of a leftover staged
 //! file ([`remove`]), the source's open and the rename itself share the
@@ -89,9 +108,13 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use windows_sys::Wdk::Storage::FileSystem::{
+    FileFsDeviceInformation, NtQueryVolumeInformationFile,
+};
+use windows_sys::Wdk::System::SystemServices::{FILE_FS_DEVICE_INFORMATION, FILE_REMOTE_DEVICE};
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_SHARING_VIOLATION, GENERIC_WRITE,
-    INVALID_HANDLE_VALUE, MAX_PATH,
+    RtlNtStatusToDosError, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_INVALID_PARAMETER,
+    ERROR_SHARING_VIOLATION, GENERIC_WRITE, INVALID_HANDLE_VALUE, MAX_PATH,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FileDispositionInfo, FileDispositionInfoEx, FileRenameInfo, FileRenameInfoEx,
@@ -104,6 +127,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::WindowsProgramming::{
     FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
 };
+use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
 use crate::sddl::OwnerOnlyDescriptor;
 use crate::sid::current_user_sid;
@@ -121,12 +145,10 @@ const NTFS: &str = "NTFS";
 pub enum Held {
     /// The staged file (a leftover being removed, or the source's open).
     Staged,
-    /// The live file the rename would replace: a sharing violation.
+    /// The live file the rename would replace: a sharing violation, or on
+    /// the classic rename (FAT32, exFAT) an access denial while the file's
+    /// read-only attribute is clear.
     Live,
-    /// The live file, on the classic rename (FAT32, exFAT): its access
-    /// denial is a reader holding it or a file that is not writable, and
-    /// the two cannot be told apart (Rick, 2026-11-18).
-    LiveOrUnwritable,
 }
 
 /// Why [`remove`], [`replace`] or [`Staged::commit`] failed.
@@ -134,8 +156,18 @@ pub enum Held {
 pub enum ReplaceError {
     /// Another program held this file open past the deadline.
     HeldOpen(Held),
+    /// The live file's read-only attribute is set, and the rename was
+    /// refused for it (module docs, step 4).
+    ReadOnly,
     /// A step failed otherwise.
     Io(io::Error),
+}
+
+/// What one failed step of a replace says: a file another program holds,
+/// which the deadline waits for, or a failure no wait changes.
+enum Fault {
+    Held(Held),
+    Final(ReplaceError),
 }
 
 /// Whether a rename that landed is known to survive a power loss.
@@ -151,38 +183,47 @@ pub enum Durability {
 /// Why a rename that landed is not reported durable.
 #[derive(Debug)]
 pub enum Unconfirmed {
+    /// The volume is a network drive (`FILE_REMOTE_DEVICE`), which is
+    /// never durable, whatever file system it reports: this is the name it
+    /// reports.
+    Remote(String),
     /// The volume's file system is not NTFS: this is its name (`FAT32`,
     /// `exFAT`, `ReFS`, ...). Windows documents the write-through flush of a
     /// rename for NTFS alone.
     FileSystem(String),
-    /// The volume is NTFS, but it refused the POSIX rename and the classic
-    /// one renamed the file.
+    /// The volume is local and NTFS, but it refused the POSIX rename and
+    /// the classic one renamed the file.
     ClassicRename,
     /// The flush after the rename failed.
     Flush(io::Error),
-    /// The volume's file system could not be read.
-    FileSystemUnread(io::Error),
+    /// The volume could not be queried, for its device or its file system.
+    VolumeUnread(io::Error),
 }
 
 /// Run `step` until it succeeds, fails with something other than a held
 /// file, or `deadline` passes; past it, the last held failure's [`Held`].
 fn waiting<T>(
     deadline: Instant,
-    mut step: impl FnMut() -> Result<T, (io::Error, Option<Held>)>,
+    mut step: impl FnMut() -> Result<T, Fault>,
 ) -> Result<T, ReplaceError> {
     loop {
         match step() {
             Ok(value) => return Ok(value),
-            Err((_, Some(_))) if Instant::now() < deadline => std::thread::sleep(POLL),
-            Err((_, Some(held))) => return Err(ReplaceError::HeldOpen(held)),
-            Err((error, None)) => return Err(ReplaceError::Io(error)),
+            Err(Fault::Held(_)) if Instant::now() < deadline => std::thread::sleep(POLL),
+            Err(Fault::Held(held)) => return Err(ReplaceError::HeldOpen(held)),
+            Err(Fault::Final(error)) => return Err(error),
         }
     }
 }
 
-/// [`Held::Staged`] when `error` is a sharing violation.
-fn staged_held(error: &io::Error) -> Option<Held> {
-    is_sharing_violation(error).then_some(Held::Staged)
+/// [`Held::Staged`] when `error` is a sharing violation; otherwise the
+/// error itself.
+fn staged_fault(error: io::Error) -> Fault {
+    if is_sharing_violation(&error) {
+        Fault::Held(Held::Staged)
+    } else {
+        Fault::Final(ReplaceError::Io(error))
+    }
 }
 
 /// Remove the leftover staged file at `staged`, if there is one, waiting
@@ -196,10 +237,7 @@ pub fn remove(staged: &Path, deadline: Instant) -> Result<(), ReplaceError> {
     waiting(deadline, || match std::fs::remove_file(staged) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => {
-            let held = staged_held(&error);
-            Err((error, held))
-        }
+        Err(error) => Err(staged_fault(error)),
     })
 }
 
@@ -216,18 +254,12 @@ pub fn remove(staged: &Path, deadline: Instant) -> Result<(), ReplaceError> {
 /// # Errors
 ///
 /// [`ReplaceError::HeldOpen`] naming the file held past the deadline;
-/// [`ReplaceError::Io`] when the open or the rename failed otherwise.
+/// [`ReplaceError::ReadOnly`] when `live`'s read-only attribute refused the
+/// rename; [`ReplaceError::Io`] when the open or the rename failed
+/// otherwise.
 pub fn replace(staged: &Path, live: &Path, deadline: Instant) -> Result<(), ReplaceError> {
-    let source = waiting(deadline, || {
-        open_source(staged).map_err(|error| {
-            let held = staged_held(&error);
-            (error, held)
-        })
-    })?;
-    waiting(deadline, || {
-        attempt(&source.0, live).map_err(|failed| (failed.error, failed.held))
-    })
-    .map(drop)
+    let source = waiting(deadline, || open_source(staged).map_err(staged_fault))?;
+    waiting(deadline, || attempt(&source.0, live)).map(drop)
 }
 
 /// A staged file, open for its rename.
@@ -444,17 +476,17 @@ impl Staged {
     /// # Errors
     ///
     /// [`ReplaceError::HeldOpen`] naming the live file held past the
-    /// deadline; [`ReplaceError::Io`] when the rename failed otherwise. The
-    /// staged file is then kept or deleted as `on_failure` says.
+    /// deadline; [`ReplaceError::ReadOnly`] when its read-only attribute
+    /// refused the rename; [`ReplaceError::Io`] when the rename failed
+    /// otherwise. The staged file is then kept or deleted as `on_failure`
+    /// says.
     pub fn commit(
         self,
         live: &Path,
         deadline: Instant,
         on_failure: OnFailure,
     ) -> Result<Durability, ReplaceError> {
-        let renamed = waiting(deadline, || {
-            attempt(&self.0, live).map_err(|failed| (failed.error, failed.held))
-        });
+        let renamed = waiting(deadline, || attempt(&self.0, live));
         let path = match renamed {
             Ok(path) => path,
             Err(error) => {
@@ -468,9 +500,14 @@ impl Staged {
         };
         // The second layer (module docs): not what the claim rests on.
         let flushed = flush(&self.0);
-        let durability = match file_system_of(&self.0) {
-            Err(error) => Durability::Unconfirmed(Unconfirmed::FileSystemUnread(error)),
-            Ok(name) if name != NTFS => Durability::Unconfirmed(Unconfirmed::FileSystem(name)),
+        // A network drive first: it may report NTFS (module docs).
+        let volume = is_remote(&self.0).and_then(|remote| Ok((remote, file_system_of(&self.0)?)));
+        let durability = match volume {
+            Err(error) => Durability::Unconfirmed(Unconfirmed::VolumeUnread(error)),
+            Ok((true, name)) => Durability::Unconfirmed(Unconfirmed::Remote(name)),
+            Ok((false, name)) if name != NTFS => {
+                Durability::Unconfirmed(Unconfirmed::FileSystem(name))
+            }
             Ok(_) if path == Renamed::Classic => {
                 Durability::Unconfirmed(Unconfirmed::ClassicRename)
             }
@@ -569,10 +606,36 @@ fn file_system_of(file: &File) -> io::Result<String> {
     Ok(String::from_utf16_lossy(&name[..end]))
 }
 
-/// A failed rename, and whether a reader holding the destination failed it.
-struct Failed {
-    error: io::Error,
-    held: Option<Held>,
+/// Whether the volume `file` is on is a network drive: its device's
+/// characteristics carry `FILE_REMOTE_DEVICE`.
+fn is_remote(file: &File) -> io::Result<bool> {
+    let mut status = IO_STATUS_BLOCK::default();
+    let mut device = FILE_FS_DEVICE_INFORMATION::default();
+    let len = u32::try_from(size_of::<FILE_FS_DEVICE_INFORMATION>())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "the structure is too large"))?;
+    // SAFETY: `status` and `device` are valid, writable and alive across
+    // the call; `len` is `device`'s size, and `FileFsDeviceInformation` is
+    // the class whose structure it is. The handle is open; the class needs
+    // no particular access.
+    let queried = unsafe {
+        NtQueryVolumeInformationFile(
+            file.as_raw_handle(),
+            &raw mut status,
+            (&raw mut device).cast::<core::ffi::c_void>(),
+            len,
+            FileFsDeviceInformation,
+        )
+    };
+    // An NTSTATUS below zero is an error.
+    if queried < 0 {
+        // SAFETY: a pure translation of a status value.
+        let code = unsafe { RtlNtStatusToDosError(queried) };
+        return Err(i32::try_from(code).map_or_else(
+            |_| io::Error::other(format!("NTSTATUS {queried:#x}")),
+            io::Error::from_raw_os_error,
+        ));
+    }
+    Ok(device.Characteristics & FILE_REMOTE_DEVICE != 0)
 }
 
 /// The rename a call asks for: the class and the union's value.
@@ -593,48 +656,40 @@ enum Renamed {
     Classic,
 }
 
-impl Source {
-    /// Rename the file over `destination`, replacing it if it exists: with
-    /// POSIX semantics, and once more through the classic class when the
-    /// file system refuses `FileRenameInfoEx` ([`is_ex_unsupported`]).
-    /// One attempt; [`replace`] is the waiting caller.
-    ///
-    /// # Errors
-    ///
-    /// `destination` is not a valid path, or the rename failed.
-    pub fn rename_over(&self, destination: &Path) -> io::Result<()> {
-        attempt(&self.0, destination)
-            .map(drop)
-            .map_err(|failed| failed.error)
-    }
-}
-
-/// One rename of the file `file` is open on, which rename renamed it, and
-/// whether its failure is the destination held: a sharing violation on
-/// every path; on the classic class (a file system without POSIX renames)
-/// an access denial too, which may as well be a destination that is not
-/// writable. On the POSIX path an access denial is the real error, at once
-/// (Rick, 2026-11-18).
-fn attempt(file: &File, destination: &Path) -> Result<Renamed, Failed> {
+/// One rename of the file `file` is open on, and which rename renamed it.
+fn attempt(file: &File, destination: &Path) -> Result<Renamed, Fault> {
     let posix = Rename::Ex(FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS);
     match rename_with(file, destination, posix) {
         Ok(()) => Ok(Renamed::Posix),
         Err(error) if is_ex_unsupported(&error) => rename_with(file, destination, Rename::Classic)
             .map(|()| Renamed::Classic)
-            .map_err(|error| {
-                let held = if is_sharing_violation(&error) {
-                    Some(Held::Live)
-                } else if error.raw_os_error() == i32::try_from(ERROR_ACCESS_DENIED).ok() {
-                    Some(Held::LiveOrUnwritable)
-                } else {
-                    None
-                };
-                Failed { error, held }
-            }),
-        Err(error) => Err(Failed {
-            held: is_sharing_violation(&error).then_some(Held::Live),
-            error,
-        }),
+            .map_err(|error| destination_fault(error, destination, Renamed::Classic)),
+        Err(error) => Err(destination_fault(error, destination, Renamed::Posix)),
+    }
+}
+
+/// What a failed rename over `destination` through `rename` says (module
+/// docs, steps 2 to 4): a sharing violation is a reader holding it, on
+/// every path. An access denial, and on the classic class a collision (it
+/// was asked to replace), is its read-only attribute when that is set;
+/// when it is clear, an access denial on the classic class is a reader
+/// holding it, and anything else is the refusal itself (Rick, 2026-11-18
+/// and 2026-11-19). An attribute that cannot be read leaves the refusal as
+/// it is: it is never taken for a reader.
+fn destination_fault(error: io::Error, destination: &Path, rename: Renamed) -> Fault {
+    if is_sharing_violation(&error) {
+        return Fault::Held(Held::Live);
+    }
+    let code = error.raw_os_error();
+    let denied = code == i32::try_from(ERROR_ACCESS_DENIED).ok();
+    let collided = rename == Renamed::Classic && code == i32::try_from(ERROR_ALREADY_EXISTS).ok();
+    if !denied && !collided {
+        return Fault::Final(ReplaceError::Io(error));
+    }
+    match std::fs::symlink_metadata(destination).map(|meta| meta.permissions().readonly()) {
+        Ok(true) => Fault::Final(ReplaceError::ReadOnly),
+        Ok(false) if denied && rename == Renamed::Classic => Fault::Held(Held::Live),
+        Ok(false) | Err(_) => Fault::Final(ReplaceError::Io(error)),
     }
 }
 
@@ -715,7 +770,7 @@ mod tests {
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .open(&live)
             .unwrap();
-        open_source(&staged).unwrap().rename_over(&live).unwrap();
+        replace(&staged, &live, Instant::now()).unwrap();
         assert_eq!(std::fs::read(&live).unwrap(), b"new");
         assert!(!staged.exists());
         let mut old = Vec::new();
@@ -818,10 +873,7 @@ mod tests {
     /// `expected` reports unconfirmed, naming that file system, and still
     /// lands the bytes. Refuses, never passes, when `var` is unset.
     fn a_commit_on_reports_unconfirmed(var: &str, expected: &[&str]) {
-        let Some(dir) = std::env::var_os(var) else {
-            panic!("{var} is unset: set it to a directory on the volume this test is about");
-        };
-        let dir = tempfile::tempdir_in(dir).unwrap();
+        let dir = volume_dir(var);
         let live = dir.path().join("record");
         std::fs::write(&live, b"old").unwrap();
         let (staged, staged_path) = staged_in(dir.path(), "record", b"new");
@@ -855,6 +907,102 @@ mod tests {
     #[ignore = "needs SHEKYL_TEST_EXFAT_DIR: a directory on an exFAT volume (a scratch VHD)"]
     fn a_commit_on_exfat_is_unconfirmed() {
         a_commit_on_reports_unconfirmed("SHEKYL_TEST_EXFAT_DIR", &["exFAT"]);
+    }
+
+    /// The directory `var` names, or a refusal when it is unset: the tests
+    /// about a particular volume never pass without one.
+    fn volume_dir(var: &str) -> tempfile::TempDir {
+        let Some(dir) = std::env::var_os(var) else {
+            panic!("{var} is unset: set it to a directory on the volume this test is about");
+        };
+        tempfile::tempdir_in(dir).unwrap()
+    }
+
+    /// Set or clear `path`'s read-only attribute.
+    #[allow(
+        clippy::permissions_set_readonly_false,
+        reason = "Windows: the read-only attribute alone, which a test sets and clears again so its directory can be removed"
+    )]
+    fn set_read_only(path: &Path, read_only: bool) {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(read_only);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// A commit over a destination whose read-only attribute is set, in
+    /// `dir`, is refused as [`ReplaceError::ReadOnly`] at once, never waited
+    /// for as a reader, and the destination keeps its bytes.
+    fn a_read_only_destination_is_refused_at_once_in(dir: &Path) {
+        let live = dir.join("record");
+        std::fs::write(&live, b"old").unwrap();
+        set_read_only(&live, true);
+        let (staged, staged_path) = staged_in(dir, "record", b"new");
+        let started = Instant::now();
+        let refused = staged.commit(&live, started + Duration::from_secs(2), OnFailure::Remove);
+        let waited = started.elapsed();
+        set_read_only(&live, false);
+        assert!(
+            matches!(refused, Err(ReplaceError::ReadOnly)),
+            "{refused:?}"
+        );
+        assert!(
+            waited < Duration::from_secs(1),
+            "the refusal waited {waited:?}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"old");
+        assert!(!staged_path.exists());
+    }
+
+    /// On NTFS the POSIX rename refuses a read-only destination, and the
+    /// refusal says so (Rick, 2026-11-19). Red edit: drop the attribute read
+    /// from `destination_fault`, and the refusal is the bare access denial.
+    #[test]
+    fn a_read_only_destination_on_ntfs_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        a_read_only_destination_is_refused_at_once_in(dir.path());
+    }
+
+    /// On FAT32 the classic rename refuses a read-only destination as a
+    /// collision, `ERROR_ALREADY_EXISTS`, not the denial a held one gets
+    /// (Windows 11 23H2, build 22631, 2026-11-19), and the attribute read on
+    /// it says read-only at once (Rick, 2026-11-19). Red edit: read the
+    /// attribute on an access denial alone, and this is the bare collision
+    /// as `Io`.
+    #[test]
+    #[ignore = "needs SHEKYL_TEST_FAT_DIR: a directory on a FAT32 volume (a scratch VHD)"]
+    fn a_read_only_destination_on_fat_is_refused_at_once() {
+        let dir = volume_dir("SHEKYL_TEST_FAT_DIR");
+        a_read_only_destination_is_refused_at_once_in(dir.path());
+    }
+
+    /// On FAT32 a reader that holds the destination, whatever it shares,
+    /// denies the classic rename; with the read-only attribute clear that is
+    /// the destination held, waited for until the deadline (Rick,
+    /// 2026-11-18). Red edit: take every classic denial for a read-only
+    /// file, and this is `ReadOnly` at once.
+    #[test]
+    #[ignore = "needs SHEKYL_TEST_FAT_DIR: a directory on a FAT32 volume (a scratch VHD)"]
+    fn a_held_destination_on_fat_is_held_open() {
+        let dir = volume_dir("SHEKYL_TEST_FAT_DIR");
+        let live = dir.path().join("record");
+        std::fs::write(&live, b"old").unwrap();
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&live)
+            .unwrap();
+        let (staged, _) = staged_in(dir.path(), "record", b"new");
+        let refused = staged.commit(
+            &live,
+            Instant::now() + Duration::from_millis(300),
+            OnFailure::Remove,
+        );
+        drop(reader);
+        assert!(
+            matches!(refused, Err(ReplaceError::HeldOpen(Held::Live))),
+            "{refused:?}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"old");
     }
 
     /// A watcher that opens the staged file without delete sharing, between
