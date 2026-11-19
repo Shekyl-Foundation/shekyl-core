@@ -21,7 +21,7 @@
 //!
 //! Neither had a derivation. The 3 KiB window was a Monero cadence artifact,
 //! and **`CRYPTONOTE_MAX_FRAGMENTS` was set equal to
-//! [`noise_windows_in_epoch`]`(300)`** — the epoch *ceiling*
+//! the windows a 300 s epoch afforded** — the epoch *ceiling*
 //! on the cap rather than a cap derived from the transactions it has to carry.
 //! It was a number satisfying a constraint nobody had connected to its
 //! subject, so it was unattached rather than wrong.
@@ -218,16 +218,80 @@ const _: () = assert!(
     "the node's channels must spend exactly its cover budget"
 );
 
-/// Windows an epoch of `min_epoch_secs` delivers on one channel at the mean
-/// cadence: the size of a channel's backlog bound.
+/// The most windows one channel may hold pending: one full-size message
+/// (`CVR-R5`; Rick, 2026-11-18).
 ///
-/// Integer division, so a partial window does not count. A backlog bound,
-/// not a delivery promise: a message accepted behind it waits up to about an
-/// epoch for the wire.
+/// A simple cap, not a derivation. A full-size message fits an empty
+/// channel, and up to this many one-window messages queue behind one
+/// another; beyond it the queue refuses, and the stem takes `CVR-R6`'s
+/// fallbacks (a relayed stem ends its stem phase, this node's own
+/// transaction waits). The embargo is sized at a channel's expected
+/// occupancy ([`channel_occupancy`]), not with this cap present at every
+/// hop: a queue this deep is rare at the design load, and a stem that
+/// meets one is covered by the embargo's reshape, at a recovery slower
+/// than without cover.
+pub const BACKLOG_CAP_WINDOWS: u32 = MAX_FRAGMENTS;
+
+/// The longest the embargo may be, in seconds: 30 minutes
+/// (`COVER_TRAFFIC_RESTORATION.md` §1.7, Axis 1, a hard bound; kept, Rick
+/// 2026-11-18).
+///
+/// Fixed, and derived from no per-connector embargo: a bound read off the
+/// embargoes it bounds rises with them and never binds. Thirty minutes is
+/// what a user can be told a transaction may take before it is seen.
+pub const EMBARGO_LIMIT_SECS: u32 = 30 * 60;
+
+/// The smallest network the embargo is sized for, in nodes: 100.
+/// **Assumption** (Rick, 2026-11-18), until the fleet measures it.
+///
+/// Basis: a ruled starting figure, not a reading. A channel's load is the
+/// network's stem traffic spread over every node's channels, so a smaller
+/// network puts more of it on each one, and the embargo grows with it.
+/// `tests/carrier_embargo.rs` pins the size below which the embargo would
+/// pass [`EMBARGO_LIMIT_SECS`].
+pub const SMALLEST_NETWORK_NODES: u32 = 100;
+
+/// The network's transaction rate at its design capacity, in thousandths of
+/// a transaction per second: the full-reward zone filled with the lightest
+/// admissible transaction, every block. 199 (0.1986 per second, rounded up).
+///
+/// Stated here because this crate's default build links neither the wire
+/// nor the chain's parameters; `tests/carrier_window.rs` enforces it against
+/// `MIN_BLOCK_WEIGHT`, the lightest transaction's weight and the block time,
+/// so a change to any of them reds a test naming this constant.
+pub const DESIGN_NETWORK_MILLI_TX_PER_SEC: u32 = 199;
+
+/// One channel's stem load at the design capacity, in transactions per
+/// second, on a network of `nodes` nodes (`CVR-R5`).
+///
+/// Every transaction is stemmed for the mean stem length (`100 / q` hops at
+/// a fluff probability of `q` per cent), and each hop occupies one channel
+/// of one node; the network has [`super::inherited::NOISE_CHANNELS`]
+/// channels per node.
 #[must_use]
-// The `as u32` cannot truncate: the mean is 5 000 ms, over 1 000, so the
-// quotient is strictly less than `min_epoch_secs`, already a `u32`.
-#[allow(clippy::cast_possible_truncation)]
-pub const fn noise_windows_in_epoch(min_epoch_secs: u32) -> u32 {
-    ((min_epoch_secs as u64 * 1_000) / MEAN_CADENCE_MS as u64) as u32
+pub fn channel_load_tx_per_sec(nodes: u32, fluff_probability_pct: u32) -> f64 {
+    let network = f64::from(DESIGN_NETWORK_MILLI_TX_PER_SEC) / 1_000.0;
+    let stem_hops = 100.0 / f64::from(fluff_probability_pct);
+    #[allow(clippy::cast_precision_loss)]
+    let channels = super::inherited::NOISE_CHANNELS as f64 * f64::from(nodes);
+    network * stem_hops / channels
+}
+
+/// The share of an epoch a channel spends in its tail, starting nothing:
+/// the tail's mean span over the shortest epoch.
+#[must_use]
+pub fn tail_share(min_epoch_secs: u32) -> f64 {
+    let tail_ms = f64::from(EPOCH_TAIL_WINDOWS) * f64::from(MEAN_CADENCE_MS);
+    let epoch_ms = (f64::from(min_epoch_secs) * 1_000.0).max(1.0);
+    (tail_ms / epoch_ms).min(1.0)
+}
+
+/// The share of the time a channel has a message ahead of the next one: its
+/// load ([`channel_load_tx_per_sec`]) over its rate less the tail's share
+/// ([`tail_share`]). Below one, or the channel cannot carry its load (the
+/// floor check, `CVR-R5`).
+#[must_use]
+pub fn channel_occupancy(nodes: u32, fluff_probability_pct: u32, min_epoch_secs: u32) -> f64 {
+    let rate = 1_000.0 / f64::from(MEAN_CADENCE_MS) * (1.0 - tail_share(min_epoch_secs));
+    channel_load_tx_per_sec(nodes, fluff_probability_pct) / rate
 }

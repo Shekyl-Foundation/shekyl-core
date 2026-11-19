@@ -35,7 +35,7 @@
 //! failed) is held unsent, not shown and not fluffed (RX-2), and re-planned
 //! on the record's short grid ([`NEVER_SENT_RETRY_MS`]), at once when this
 //! node turns synchronised, and at once when a session is established. The
-//! 1,176 s interval is for a transaction that was sent (§92.5c).
+//! origin retry interval is for a transaction that was sent (§92.5c).
 //!
 //! **Bounded by the pool:** every pool departure releases the state
 //! (`Relay::release`, `DRS_X_STORE_FLIP.md` §2).
@@ -67,14 +67,14 @@ pub const NEVER_SENT_RETRY_MS: Millis = 300_000;
 /// mean and not its 1-in-100 deadline: those are the reshape timer's units.
 fn origin_terms() -> (u32, u32) {
     let params = DandelionParams::adopted_for_transit_ms(super::longest_transit());
-    let secs = EmbargoTimer::adopted(&params).judge_failed_after_secs(origin_retry_one_in());
+    let secs = EmbargoTimer::shipped(&params).judge_failed_after_secs(origin_retry_one_in());
     let fires = u32::try_from(params.graph.stem_count()).expect("stem count fits u32");
     (secs, fires)
 }
 
 /// The origin's retry interval, in milliseconds: the 1-in-`origin_retry_one_in`
-/// survival quantile of the adopted anonymity timer over the longest
-/// declared transit (§92.5c; 1,176 s at the shipped terms). Asked at the
+/// survival quantile of the shipped, carrier-paced anonymity timer over the
+/// longest declared transit (§92.5c; `CVR-R5`). Asked at the
 /// same confidence a relay asks whether a stem completed.
 #[must_use]
 pub fn origin_retry_ms() -> Millis {

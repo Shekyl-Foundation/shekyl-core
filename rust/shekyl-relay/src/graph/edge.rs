@@ -547,7 +547,7 @@ fn a_forwarded_tor_stem_rides_the_cover_channel() {
 }
 
 fn embargo_mean(transit: DerivationMs) -> u32 {
-    shekyl_relay_privacy::schedule::EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
+    shekyl_relay_privacy::schedule::EmbargoTimer::shipped(&DandelionParams::adopted_for_transit_ms(
         transit,
     ))
     .mean_secs()

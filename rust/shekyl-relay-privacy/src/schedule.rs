@@ -545,6 +545,28 @@ impl EmbargoTimer {
         Self::geometric_from_ticks(d.mean_ticks, d.tick_millis)
     }
 
+    /// The embargo the relay ships (`CVR-R5`; Rick, 2026-11-18):
+    /// [`Self::adopted_paced`] at a channel's expected occupancy on the
+    /// smallest network the carrier is sized for
+    /// ([`crate::derive::CarrierPacing::shipped`],
+    /// [`carrier::SMALLEST_NETWORK_NODES`]).
+    ///
+    /// Cover is on by default, so a stem's hops are carrier-paced whatever
+    /// this node's own sessions carry, and every embargo is sized for that.
+    /// [`Self::adopted`] stays the unpaced solve the instruments compare
+    /// against.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::adopted`].
+    #[must_use]
+    pub fn shipped(params: &DandelionParams) -> Self {
+        Self::adopted_paced(
+            params,
+            &crate::derive::CarrierPacing::shipped(carrier::SMALLEST_NETWORK_NODES, params),
+        )
+    }
+
     /// Closed-form mean + Poisson — measurement isolation only.
     ///
     /// Same distribution family as the daemon ships, mean corrected to what the

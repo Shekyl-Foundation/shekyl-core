@@ -240,45 +240,65 @@ fn a_channel_carries_its_share_of_the_budget() {
     );
 }
 
-/// A channel carries the design stem load (`CVR-R5`): it sends windows
-/// faster than the chain can confirm transactions at its design capacity,
-/// so a node relaying every transaction through one channel does not fall
-/// behind.
+/// The network's design transaction rate is what the chain's parameters
+/// say (`DESIGN_NETWORK_MILLI_TX_PER_SEC`): the penalty-free block weight
+/// (`MIN_BLOCK_WEIGHT`, the full-reward zone) filled with the lightest
+/// admissible transaction (one input, the two outputs CEN-I1 requires, at
+/// the shallowest tree depth) every block time (`T_SECONDS`), in
+/// thousandths per second, rounded up. Weight, because the block bound
+/// counts weight and a transaction weighs at least its size.
 ///
-/// Counted in windows, not bytes. Every transaction takes at least one
-/// whole window, so the load is transactions per second: the penalty-free
-/// block weight (`MIN_BLOCK_WEIGHT`, the full-reward zone) over the
-/// lightest admissible transaction's weight (one input, the two outputs
-/// CEN-I1 requires, at the shallowest tree depth), per block time
-/// (`T_SECONDS`). Weight, because the block bound counts weight and a
-/// transaction weighs at least its size.
-///
-/// What edit reds this: a slower cadence, a larger full-reward zone, a
-/// shorter block time, or a lighter transaction shape.
+/// What edit reds this: a larger full-reward zone, a shorter block time, or
+/// a lighter transaction shape.
 #[test]
-// The float figures are the failure message's only; the decision is integer.
-#[allow(clippy::cast_precision_loss)]
-fn a_channel_outruns_the_design_stem_load() {
+fn the_design_transaction_rate_is_the_chains() {
     let lightest = (1..=MAX_TREE_DEPTH)
         .map(|depth| {
             predict_size_and_weight(InputCount::clamped(1), OutputCount::clamped(2), depth, 0).1
         })
         .min()
-        .expect("depths");
+        .expect("depths") as u64;
     let block_weight = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
     let block_secs = shekyl_difficulty::T_SECONDS;
-    // Transactions per second at capacity: block_weight / lightest / block_secs.
-    // Windows per second per channel: 1000 / MEAN_CADENCE_MS. Cross-multiplied.
-    let load = block_weight * u64::from(carrier::MEAN_CADENCE_MS);
-    let carried = (lightest as u64) * block_secs * 1_000;
+    assert_eq!(
+        u64::from(carrier::DESIGN_NETWORK_MILLI_TX_PER_SEC),
+        (block_weight * 1_000).div_ceil(lightest * block_secs),
+        "{block_weight} weight per {block_secs} s block over a {lightest}-weight transaction"
+    );
+}
+
+/// A channel carries its share of the design stem load (`CVR-R5`; restated
+/// 2026-11-18): its rate, less the share of windows the epoch tail bars
+/// from starting a message, exceeds the per-channel load — the network's
+/// transaction rate times the mean stem length, spread over every node's
+/// channels at the smallest network size. Counted in windows: every
+/// transaction takes at least one whole window.
+///
+/// What edit reds this: a slower cadence, a longer tail, a higher design
+/// rate, a longer stem, or a smaller network.
+#[test]
+fn a_channel_outruns_its_share_of_the_design_stem_load() {
+    let params = shekyl_relay_privacy::DandelionParams::inherited();
+    let occupancy = carrier::channel_occupancy(
+        carrier::SMALLEST_NETWORK_NODES,
+        params.fluff_probability_pct,
+        params.min_epoch_secs,
+    );
+    let load = carrier::channel_load_tx_per_sec(
+        carrier::SMALLEST_NETWORK_NODES,
+        params.fluff_probability_pct,
+    );
+    println!(
+        "per-channel load {load:.5} tx/s at {} nodes; occupancy {occupancy:.4}",
+        carrier::SMALLEST_NETWORK_NODES
+    );
     assert!(
-        carried > load,
-        "a channel sends one window per {} ms; the design load is {} transactions \
-         of {lightest} weight per {block_secs} s block, {:.3} per second against \
-         {:.3} windows per second",
-        carrier::MEAN_CADENCE_MS,
-        block_weight / lightest as u64,
-        block_weight as f64 / lightest as f64 / block_secs as f64,
-        1_000.0 / f64::from(carrier::MEAN_CADENCE_MS),
+        occupancy < 1.0,
+        "a channel's load {load} tx/s is {occupancy} of its rate less the tail"
+    );
+    // 0.199 tx/s x 5 hops / 200 channels over 0.2 windows/s x (1 - 20 s / 600 s).
+    assert!(
+        (occupancy - 0.025_73).abs() < 0.000_05,
+        "the occupancy the embargo is sized at moved: {occupancy}"
     );
 }

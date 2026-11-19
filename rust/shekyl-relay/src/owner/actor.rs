@@ -378,12 +378,12 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
     .map_err(RelayStartError::Zone)?;
     // The carrier exists exactly when the zone carries. The dummy goes on
     // the wire, so it is a Levin frame (`noise_notify`), never a zeroed
-    // buffer; the budget is what one epoch can deliver on a channel.
+    // buffer; a channel holds at most one full-size message pending.
     let (inbox_tx, inbox) = mpsc::unbounded_channel();
     let (carrier, window) = if config.noise {
         let dummy = noise_notify(carrier::WINDOW_BYTES).map_err(RelayStartError::Carrier)?;
         let window = dummy.len();
-        let budget = carrier::noise_windows_in_epoch(config.min_epoch_secs);
+        let budget = carrier::BACKLOG_CAP_WINDOWS;
         let queues = NoiseQueues::new(
             config.stems,
             dummy,

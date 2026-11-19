@@ -279,8 +279,10 @@ fn solve_embargo(
 /// Each wait is a sum of memoryless cadence draws, so a Gamma variable of
 /// whole shape:
 ///
-/// - **every hop** waits for `hop_windows` windows on its channel: its own,
-///   behind whatever backlog is queued ahead of it;
+/// - **every hop** waits `hop_windows` windows on its channel: its own;
+/// - **a hop that finds a message ahead** waits `ahead_windows` more;
+///   `ahead_share` is the share of hops that do, a channel's occupancy at
+///   the design load;
 /// - **a hop in an epoch tail** waits `tail_windows` more, since no message
 ///   starts during the tail; `tail_share` is the share of hops that land in
 ///   one.
@@ -288,8 +290,12 @@ fn solve_embargo(
 pub struct CarrierPacing {
     /// The mean of one cadence draw, in milliseconds.
     pub cadence_mean_ms: u64,
-    /// Windows an ordinary hop waits for: one plus the backlog ahead of it.
+    /// Windows every hop waits for.
     pub hop_windows: u32,
+    /// Windows more a hop waits when a message is ahead of it.
+    pub ahead_windows: u32,
+    /// The share of hops that find a message ahead, in `[0, 1]`.
+    pub ahead_share: f64,
     /// Windows more a hop waits when it lands in an epoch tail.
     pub tail_windows: u32,
     /// The share of hops that land in an epoch tail, in `[0, 1]`.
@@ -297,25 +303,26 @@ pub struct CarrierPacing {
 }
 
 impl CarrierPacing {
-    /// The shipped carrier's pacing with `backlog` windows queued ahead of
-    /// every hop, over epochs of at least `min_epoch_secs`.
-    ///
-    /// The tail share is the tail's mean span over the shortest epoch: a hop
-    /// lands in a tail when its message becomes ready during one, and that is
-    /// at most this often.
+    /// The shipped carrier's pacing at a channel's expected occupancy on a
+    /// network of `nodes` nodes (`CVR-R5`): every hop waits one window, a
+    /// hop finds one one-window message ahead with the channel's occupancy
+    /// ([`crate::params::carrier::channel_occupancy`]), and lands in a tail
+    /// with the tail's share of the epoch.
     #[must_use]
-    pub fn shipped(backlog: u32, min_epoch_secs: u32) -> Self {
+    pub fn shipped(nodes: u32, params: &DandelionParams) -> Self {
         use crate::params::carrier;
-        let cadence_mean_ms = u64::from(carrier::MEAN_CADENCE_MS);
-        let tail_ms = u64::from(carrier::EPOCH_TAIL_WINDOWS) * cadence_mean_ms;
-        let epoch_ms = u64::from(min_epoch_secs).saturating_mul(1_000).max(1);
-        #[allow(clippy::cast_precision_loss)]
-        let tail_share = (tail_ms.min(epoch_ms) as f64) / (epoch_ms as f64);
         Self {
-            cadence_mean_ms,
-            hop_windows: 1 + backlog,
+            cadence_mean_ms: u64::from(carrier::MEAN_CADENCE_MS),
+            hop_windows: 1,
+            ahead_windows: 1,
+            ahead_share: carrier::channel_occupancy(
+                nodes,
+                params.fluff_probability_pct,
+                params.min_epoch_secs,
+            )
+            .min(1.0),
             tail_windows: carrier::EPOCH_TAIL_WINDOWS,
-            tail_share,
+            tail_share: carrier::tail_share(params.min_epoch_secs),
         }
     }
 }
@@ -390,8 +397,10 @@ pub fn full_travel_probability_paced(
     for h in 1..=MAX_STEM_TERMS {
         let slack_ticks = div_ceil(u64::from(h) * hop_ms + return_ms, tick_millis);
         timer_mass *= pow_exact(timer_survives, slack_ticks);
-        wait_mass *= (1.0 - pacing.tail_share) * gamma(h, pacing.hop_windows)
-            + pacing.tail_share * gamma(h, pacing.hop_windows + pacing.tail_windows);
+        // The three waits are independent, so their factors multiply.
+        wait_mass *= gamma(h, pacing.hop_windows)
+            * ((1.0 - pacing.ahead_share) + pacing.ahead_share * gamma(h, pacing.ahead_windows))
+            * ((1.0 - pacing.tail_share) + pacing.tail_share * gamma(h, pacing.tail_windows));
         total += stem_mass * q * timer_mass * wait_mass;
         if stem_mass < TAIL_MASS_CUTOFF {
             break;

@@ -68,14 +68,14 @@ fn originate(z: &mut Relay, sent: &(TxId, TxBlob), rng: &mut SplitMix64) -> Conn
     successor
 }
 
-/// The origin retry is the adopted timer's own quantile, and the
+/// The origin retry is the shipped timer's own quantile, and the
 /// publication budget is that interval times the fire count
 /// `RecoveryBudget::for_cap` uses. The reshape budget's mean and its
 /// 1-in-100 deadline are a different clock.
 #[test]
 fn origin_budget_is_the_recovery_cycle_count_times_the_origin_retry() {
     let params = DandelionParams::adopted_for_transit_ms(longest_transit());
-    let timer = EmbargoTimer::adopted(&params);
+    let timer = EmbargoTimer::shipped(&params);
     let fires = u32::try_from(params.graph.stem_count()).expect("stem count fits u32");
     let retry_cap = fires
         .checked_sub(1)
@@ -86,8 +86,8 @@ fn origin_budget_is_the_recovery_cycle_count_times_the_origin_retry() {
         origin_retry_secs(),
         timer.judge_failed_after_secs(origin_retry_one_in())
     );
-    assert_eq!(origin_retry_secs(), 1_176);
-    assert_eq!(origin_retry_ms(), 1_176_000);
+    assert_eq!(origin_retry_secs(), 3_770);
+    assert_eq!(origin_retry_ms(), 3_770_000);
     let budget_ms = u64::from(origin_retry_secs()) * 1_000 * u64::from(recovery.cycles);
     assert_eq!(origin_publication_budget_ms(), budget_ms);
     assert_ne!(u64::from(recovery.mean_secs) * 1_000, budget_ms);

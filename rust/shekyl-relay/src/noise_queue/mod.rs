@@ -326,8 +326,7 @@ pub struct NoiseQueues {
     /// whole reason this exists. A channel emits ONE window per due tick
     /// whether or not anything is queued, so a node stemming faster than the
     /// cadence would grow `pending` — and C++'s token map with it — without
-    /// bound. Refusing at the door instead sends the overflow by the ordinary
-    /// wire, which is where it would have gone anyway.
+    /// bound. Refusing at the door ends a relayed stem's stem phase instead.
     ///
     /// **This is the ONLY bound on growth, and nothing else drains a queue.**
     /// An epoch roll rebuilds the stem slots and does not touch `NoiseQueues`:
@@ -338,17 +337,9 @@ pub struct NoiseQueues {
     /// nothing from `pending`. So the surplus is not something a roll would
     /// have thrown away — without this cap it simply accumulates.
     ///
-    /// Set to one epoch's worth of windows at the mean cadence
-    /// ([`carrier::noise_windows_in_epoch`]). That is a backlog
-    /// bound, not a delivery promise: a channel may not fall more than about
-    /// one epoch behind. What it admits is queueing delay — a message accepted
-    /// behind a full budget waits up to roughly an epoch for the wire. One
-    /// consequence is already handled by the producer rather than owed: the
-    /// pool re-offers a `local` entry at `MIN_RELAY_TIME` (300 s), inside a
-    /// backlog that may run to a full epoch (600 s), so `dandelionpp_notify`
-    /// dedups by txid instead of enqueueing the same transaction twice. What
-    /// remains for the owed re-derivation round is the timing derivation
-    /// itself, not that hazard.
+    /// Set to one full-size message ([`carrier::BACKLOG_CAP_WINDOWS`],
+    /// `CVR-R5`): a simple cap. What it refuses takes `CVR-R6`'s fallbacks —
+    /// a relayed stem ends its stem phase, this node's own transaction waits.
     window_budget: usize,
     /// Terminal outcomes awaiting collection by [`NoiseQueues::take_resolved`].
     resolved: Vec<CarrierOutcome>,

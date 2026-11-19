@@ -102,7 +102,8 @@ fn embargo_timer(declaration: &Declaration) -> Option<Arc<EmbargoTimer>> {
     if let Some((_, timer)) = guard.iter().find(|(key, _)| *key == transit.ms()) {
         return Some(Arc::clone(timer));
     }
-    let timer = Arc::new(EmbargoTimer::adopted(
+    // The shipped embargo: every stem hop carrier-paced (`CVR-R5`).
+    let timer = Arc::new(EmbargoTimer::shipped(
         &shekyl_relay_privacy::params::DandelionParams::adopted_for_transit_ms(transit),
     ));
     guard.push((transit.ms(), Arc::clone(&timer)));
