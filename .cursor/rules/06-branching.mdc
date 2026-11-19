@@ -110,10 +110,26 @@ gate that checks the whole tree also runs on push to `dev`, with the same
 `paths` filter it has on PRs. Consequences:
 
 - **A red run on `dev` is `dev`'s finding, not the last PR's.** The PRs
-  were green on their own heads. GitHub notifies whoever merged. Read the
-  diff since the last green run on `dev`, find the two changes that
-  disagree, and fix it on a new PR before more merges land on top; every
-  open PR that merges `dev` until then inherits the red.
+  were green on their own heads. Each red job opens its own issue,
+  assigned to the Foundation's lead, naming the failing tests and the
+  merges since the workflow last passed, and the job's next green run
+  closes it (`report-dev-red.yml`). Read the diff since the last green run
+  on `dev`, find the two changes that disagree, and fix it on a new PR
+  before more merges land on top; every open PR that merges `dev` until
+  then inherits the red.
+- **A merge re-tests the open PRs it can break.** After each push to
+  `dev`, `freshness.yml` finds the open, non-draft PRs from this
+  repository whose tests reach a crate the push changed
+  (`scripts/ci/freshness_overlap.py`), marks each head
+  `fresh-against-dev` = pending, and re-tests it merged with the new
+  `dev`, running its own scoped tests. Green posts success; red, a
+  conflict, the time budget or a cancelled re-test posts failure, with a
+  comment naming the merge and the failing tests. `rust-pass` fails
+  unless that status is absent or green, so a PR waits for its re-test
+  and cannot merge on a green that predates the merge. One re-test per PR
+  at a time, the newest merge's, and the newest `dev`'s result stands. A
+  draft is tested by its own run when marked ready; a fork is not
+  re-tested, since its code would run in a push run on `dev`.
 - **A run on `dev` that has started finishes.** A workflow's concurrency
   group is its ref, so every push to `dev` shares one. In the build, Rust,
   fuzz-harness and benchmark workflows, a merge queues behind the running
@@ -154,8 +170,9 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   It tests each merge result before it lands by making every author merge
   `dev` and rerun CI after every other merge; with the Rust job over an
   hour and six lanes open, each merge would cost the other five that run.
-  The runs on `dev` test the same combination once, after the merge; the
-  price is that a break lands before it is seen.
+  The freshness re-test runs only the PRs a merge reaches, and the runs on
+  `dev` test every combination once, after the merge; what still lands
+  before it is seen is a break between changes that share no crate.
 - **No merge queue (rule 21).** A queue also tests each merge result
   before it lands, but a group passes only if every required check
   finishes inside the queue's timeout, and a group removed for a timeout
