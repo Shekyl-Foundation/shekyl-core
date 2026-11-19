@@ -132,7 +132,7 @@ impl<
                     state.ledger.unabandon_send(&key, previous, was_pending);
                 })?;
                 // Abandon does not broadcast. An applied write stands.
-                super::super::dispatch_durability::accept_applied(durability);
+                super::super::dispatch_durability::accept_applied(&durability);
                 Ok(AbandonTxOutcome::Abandoned)
             }
         }

@@ -34,6 +34,7 @@ pub mod owner_socket;
 pub mod paths;
 pub mod platform;
 mod probe;
+pub mod replace;
 pub mod resolve;
 pub mod sections;
 pub mod table;
