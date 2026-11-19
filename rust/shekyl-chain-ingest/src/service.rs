@@ -1195,8 +1195,7 @@ pub struct Follow {
     pub pool: Option<PoolWiring>,
     /// The bundle producer, when the node mines and has a fetch path
     /// (`SO-D12` increment 4c). It files from the job seat's ring.
-    #[cfg(feature = "producer")]
-    pub producer: Option<crate::bundle_producer::ProducerSeat>,
+    pub producer: Option<crate::producer_seat::ProducerSeat>,
     /// Wakes the tip follower when the pool's shown set changes at this
     /// tip (`DRS_X_STORE_FLIP.md` Q9). The composition root hands the same
     /// [`Notify`] the pool door's fluff hook fires. The connector fires it

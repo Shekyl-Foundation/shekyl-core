@@ -19,7 +19,7 @@
 //!    where `D` is;
 //! 3. starts every read whose height has come, while the client has a
 //!    free slot, each through the one fetch path
-//!    ([`ProducerSeat::read`](crate::bundle_producer::ProducerSeat::read)),
+//!    ([`ReadFn`]),
 //!    after its start delay, and feeds each outcome back;
 //! 4. offers every block that is ready to the queue
 //!    ([`OfferBundle`](crate::connector::OfferBundle)).
@@ -39,27 +39,21 @@
 //! because the ring is memory only. Never a seed, a nonce or a key
 //! (`scripts/ci/check_bundle_producer_secrets.py`).
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use shekyl_archival_fetch_sched::{FetchScheduler, HolderSource, ShardFacts};
 use shekyl_bundle_producer::{
     DueRead, Filing, Lost, Producer, ReadKey, ReadOutcome, Recorded, TipPublication, Window,
-    WitnessRing,
 };
 use shekyl_chain_store::store::ReadSnapshot;
+
+use crate::producer_seat::{ProducerSeat, ReadFn};
 use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::tx_extra::TxExtraField;
 use tokio::sync::{mpsc, watch};
 
 use crate::connector::{BundleOffered, Connector, LearnDraws, Learned, TipChanged};
 use crate::schedule::ChainRules;
-
-/// One read through the daemon's fetch path: the due read in, its outcome
-/// out. Built over the node's fetch scheduler by [`read_through`].
-pub type ReadFn =
-    Arc<dyn Fn(DueRead) -> Pin<Box<dyn Future<Output = ReadOutcome> + Send>> + Send + Sync>;
 
 /// What the task drives the producer with: the single writer, the store
 /// it writes (read here through snapshots only), and the rules in force.
@@ -85,18 +79,6 @@ pub struct ProducerProgress {
     pub acted_on: u64,
     /// Reads started and not yet ended.
     pub reading: usize,
-}
-
-/// What a node that produces bundles hands the service.
-pub struct ProducerSeat {
-    /// The ring the node's templates draw from: the job seat's own.
-    pub witness: Arc<WitnessRing>,
-    /// The challenge read.
-    pub read: ReadFn,
-    /// The spread each read's start delay is drawn below:
-    /// `shekyl_bundle_producer::READ_START_SPREAD` in the node, the value
-    /// the read ceiling is derived with.
-    pub start_spread: std::time::Duration,
 }
 
 /// The read through `scheduler`: the scheduler's nonce read over a
