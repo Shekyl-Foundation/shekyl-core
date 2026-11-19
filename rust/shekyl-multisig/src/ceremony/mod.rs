@@ -34,13 +34,16 @@
 //! - a file from the member it names is an [`files::Authenticated`], made
 //!   only by [`files::import`], and each step takes the one body it
 //!   expects;
-//! - the intent is a [`crate::invariants::ValidatedIntent`], and the
-//!   member's [`SigningContext`] is built from it;
+//! - the intent is a [`crate::invariants::ValidatedIntent`]; the member's
+//!   spend is a [`DerivedSpend`], made only by deriving it from that intent
+//!   and the member's own ledger, and its [`SigningContext`] is built from
+//!   that;
 //! - a per-output key that matches its committed hash is a
 //!   [`proofs::CommittedMemberKey`];
-//! - a held nonce owns its parameters ([`nonce::HeldNonce`]); only a
-//!   [`nonce::ConsumedNonce`], made after the store gave the nonce up and
-//!   the counter persist returned `Ok`, signs;
+//! - a held nonce owns its parameters ([`nonce::HeldNonce`]) and lives in
+//!   memory only, in a store only the ceremony reaches (R-20); only a
+//!   [`nonce::ConsumedNonce`], made by taking the nonce out of the store,
+//!   signs;
 //! - the responder has one step, which preprocesses and signs in one call
 //!   and holds nothing;
 //! - each role's state offers only the steps legal from it;
@@ -48,29 +51,36 @@
 //!   assembled from its own context, the verified proofs and the checked
 //!   keys.
 //!
-//! Every state that spans a wait for another member is rebuilt from what
-//! survives a restart: the context, the held-nonce store, the files the
-//! member sent and the files it received.
+//! A proposer's or holder's state across a wait for another member lives
+//! in the open wallet only, its held nonce in memory (R-20): closing the
+//! wallet between its commit and its share forfeits its part of the
+//! ceremony, and a new intent completes the spend. The second round holds
+//! no nonce, so a proposer that has finished is rebuilt from the
+//! `FinalTx` it sent ([`Proposer::resume_after_finish`]), and a cosigner
+//! signs from its context and the `FinalTx` alone.
 
 pub mod context;
+pub mod derivation;
 pub mod files;
 pub mod nonce;
 pub mod proofs;
 pub mod roles;
+pub mod spend_paths;
 
-pub use context::{
-    ContextError, InputContext, InputPath, ProposerInputs, SigningContext, UnsignedSpend,
+pub use context::{ContextError, SigningContext};
+pub use derivation::{
+    DeriveError, DerivedSpend, GroupOutputRecord, GroupOutputs, InputContext, UnsignedSpend,
 };
 pub use files::{import, Authenticated, BodyError, ImportError, Incoming};
 pub use nonce::{
-    ConsumeError, ConsumedNonce, HeldNonce, HeldNonceStore, InputInUse, LiveCeremonies,
-    NonceCounterError, NonceCounterSink, StoreError,
+    AlreadyHeld, ConsumedNonce, HeldNonce, HeldNonceStore, InputInUse, LiveCeremonies, NotHeld,
 };
 pub use proofs::{CommittedMemberKey, SignableTransaction};
 pub use roles::{
     AwaitingSignatures, Collecting, Committed, Cosigner, Holder, Proposer, Responder,
     ResponderInput, SharesPending,
 };
+pub use spend_paths::{SpendPaths, SpendPathsError};
 
 use shekyl_bulletproofs::BulletproofError;
 use shekyl_crypto_pq::error::PqcVerifyError;
@@ -225,12 +235,12 @@ pub enum CeremonyError {
     /// Sealing a file.
     #[error(transparent)]
     Seal(#[from] SealError),
-    /// The held-nonce store.
+    /// A nonce for this intent is already held.
     #[error(transparent)]
-    Store(#[from] nonce::StoreError),
-    /// Consuming the held nonce.
+    AlreadyHeld(#[from] nonce::AlreadyHeld),
+    /// No nonce is held for this intent.
     #[error(transparent)]
-    Consume(#[from] nonce::ConsumeError),
+    NotHeld(#[from] nonce::NotHeld),
     /// Another live ceremony spends one of the intent's inputs.
     #[error(transparent)]
     InputInUse(#[from] nonce::InputInUse),

@@ -8,7 +8,6 @@
 
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
-use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_network::NetworkId;
 use shekyl_types::{BlockHash, KeyImage, PrefixHash, SigningPayloadHash};
 use shekyl_wire::{
@@ -53,10 +52,10 @@ pub struct WireEncodeInput {
     /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
     /// consume), NOT the on-chain `curve_trees_tree_depth`. The name is distinct
     /// on purpose: the consensus prunable field is the LMDB depth `L − 1`, so
-    /// [`build_wire_tx`] serializes `fcmp_layers - 1` and the daemon reconstructs
+    /// `build_wire_tx` serializes `fcmp_layers - 1` and the daemon reconstructs
     /// `fcmp_layers = curve_trees_tree_depth + 1` (`blockchain.cpp:4119`). Pass
     /// the layer count here (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4); a spendable
-    /// tx needs `L >= 2` (see [`build_wire_tx`]). The old shekyl-oxide encoder
+    /// tx needs `L >= 2` (see `build_wire_tx`). The old shekyl-oxide encoder
     /// omitted it (it put `reference_block` in the prunable instead — divergence
     /// §3.2/§3.3).
     pub fcmp_layers: u8,
@@ -128,6 +127,29 @@ fn wire_outputs(
         .collect()
 }
 
+/// The committed base of a spend's outputs: each output's encrypted amount
+/// and label, and its commitment, in output order.
+///
+/// The provenance type ends here, deliberately. `CtBase` is `shekyl-wire`'s
+/// representation, shared with the *parse* direction, where the nine bytes
+/// came off the network and no one in this process vouches for them.
+/// Wrapping those in `EncryptedOutputField` would launder unverified data
+/// into a type whose whole meaning is "this crate computed these". So the
+/// send path stays typed right up to this assembly and unwraps only as it
+/// becomes wire. Every spend's base is written here, a multisig one
+/// included ([`crate::outputs::SpendOutputs`]).
+pub(crate) fn committed_base(
+    enc_amounts: &[EncryptedOutputField],
+    enc_labels: &[EncryptedOutputField],
+    commitments: Vec<[u8; 32]>,
+) -> CtBase {
+    CtBase {
+        enc_amounts: enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+        enc_labels: enc_labels.iter().map(|f| f.to_bytes()).collect(),
+        commitments,
+    }
+}
+
 /// Map the builder's spend material onto a canonical `shekyl_wire::Transaction`.
 ///
 /// This replaces the old shekyl-oxide assembly and fixes its four §3 divergences vs the
@@ -191,7 +213,7 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
         .iter()
         .map(|a| WirePqcAuth {
             auth_version: a.auth_version,
-            scheme_id: HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            scheme_id: a.scheme.id(),
             flags: WirePqcAuth::NO_FLAGS,
             hybrid_public_key: a.public_key.clone(),
             hybrid_signature: a.signature.clone(),
@@ -225,19 +247,11 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
         ct: Ct::Fcmp {
             fee: input.fee,
             reference_block: input.reference_block,
-            base: CtBase {
-                // The provenance type ends here, deliberately. `CtBase` is
-                // `shekyl-wire`'s representation, shared with the *parse*
-                // direction, where the nine bytes came off the network and no
-                // one in this process vouches for them. Wrapping those in
-                // `EncryptedOutputField` would launder unverified data into a
-                // type whose whole meaning is "this crate or the FFI boundary
-                // computed these". So the send path stays typed right up to
-                // this private assembly and unwraps only as it becomes wire.
-                enc_amounts: input.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
-                enc_labels: input.enc_labels.iter().map(|f| f.to_bytes()).collect(),
-                commitments: input.out_commitments.clone(),
-            },
+            base: committed_base(
+                &input.enc_amounts,
+                &input.enc_labels,
+                input.out_commitments.clone(),
+            ),
             pqc_auths,
             prunable: Some(Prunable {
                 bulletproofs: vec![bp_plus],
@@ -413,6 +427,7 @@ mod tests {
             fcmp_proof: vec![0xCC; 64],
             pqc_auths: vec![PqcAuth {
                 auth_version: crate::types::PQC_AUTH_VERSION,
+                scheme: crate::types::PqcScheme::Single,
                 signature: vec![0xDD; 128],
                 public_key: vec![0xEE; 64],
             }],
@@ -429,6 +444,29 @@ mod tests {
         let b = encode_final_tx(&input).expect("encode");
         assert_eq!(a, b);
         assert!(!a.is_empty());
+    }
+
+    /// Each slot's scheme reaches the wire as its own `scheme_id`: a
+    /// multisig slot is written as the multisig scheme, not as one signer.
+    #[test]
+    fn each_auth_slot_is_written_under_its_own_scheme() {
+        for scheme in [
+            crate::types::PqcScheme::Single,
+            crate::types::PqcScheme::Multisig,
+        ] {
+            let mut input = minimal_input();
+            for auth in &mut input.pqc_auths {
+                auth.scheme = scheme;
+            }
+            let Ct::Fcmp { pqc_auths, .. } = build_wire_tx(&input).expect("build").ct else {
+                panic!("an FCMP++ spend");
+            };
+            assert!(pqc_auths.iter().all(|a| a.scheme_id == scheme.id()));
+        }
+        assert_ne!(
+            crate::types::PqcScheme::Single.id(),
+            crate::types::PqcScheme::Multisig.id()
+        );
     }
 
     #[test]
@@ -561,6 +599,7 @@ mod tests {
         // 1 spend + 1 extra ⇒ 2 pqc_auths, still 1 pseudo_out.
         input.pqc_auths.push(PqcAuth {
             auth_version: crate::types::PQC_AUTH_VERSION,
+            scheme: crate::types::PqcScheme::Single,
             signature: vec![0xDD; 128],
             public_key: vec![0xEE; 64],
         });
@@ -655,6 +694,7 @@ mod tests {
         input.extra_inputs = vec![Input::fcmp_spend(KeyImage::from_bytes([9u8; 32]))];
         input.pqc_auths.push(PqcAuth {
             auth_version: crate::types::PQC_AUTH_VERSION,
+            scheme: crate::types::PqcScheme::Single,
             signature: vec![0xDD; 128],
             public_key: vec![0xEE; 64],
         });

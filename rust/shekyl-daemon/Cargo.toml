@@ -62,8 +62,9 @@ tempfile = "3"
 # The owning connection's tests (tests/owning_connection.rs) call the
 # daemon as a GUI does: "this computer"'s client on the owner's leg, the
 # rendezvous naming it resolves with (a normal dependency, above), and the
-# methods' table.
-shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+# methods' table. Their nodes live in test directories, named with
+# `LocalTarget::test_override`: TEST_ONLY, a dev edge alone may enable it.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-network = { path = "../shekyl-network" }

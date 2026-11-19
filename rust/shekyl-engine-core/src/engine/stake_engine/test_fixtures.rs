@@ -55,6 +55,37 @@ pub(crate) fn spawn_over(held: &[u32], bonded: &[u32], active: Option<u32>) -> S
     )
 }
 
+/// The S6 self-cert mode [`spawn_with_self_cert`] takes, named here for
+/// suites outside `stake_engine`, whose `types` module is private.
+#[cfg(feature = "conformance")]
+pub(crate) use super::types::TestSelfCert;
+
+/// Spawn a handle over `held` with an explicit S6 self-cert mode.
+/// [`spawn_over`] always skips the check; the S6 tests here and the
+/// wallet-open refusal test need `RealOsRng` or `Degenerate`.
+#[cfg(feature = "conformance")]
+pub(crate) fn spawn_with_self_cert(held: &[u32], mode: TestSelfCert) -> StakeEngineHandle {
+    use kameo::actor::Spawn;
+
+    let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
+        .iter()
+        .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
+        .collect();
+    let args = super::types::StakeEngineArgs {
+        bundles,
+        bonded: BTreeSet::new(),
+        active: None,
+        network: shekyl_network::HARNESS_NETWORK_ID,
+        self_cert: mode,
+        #[cfg(feature = "gf7-hooks")]
+        observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
+    };
+    StakeEngineHandle {
+        actor: super::StakeEngine::spawn(args),
+        bodies: super::body_store_actor::BodyStoreHandle::spawn(ephemeral_body_store()),
+    }
+}
+
 /// A REAL P-paid output for `keys`: a funding record carrying the
 /// exact public identity `construct_output` emitted (so the actor's
 /// re-derivation chain — combined-ss recovery, spend/mask scalars,

@@ -48,7 +48,7 @@
 use shekyl_address::multisig_address::{MultisigAddressError, MultisigAddressPayload};
 use shekyl_crypto_pq::kem::{HybridKemSecretKey, HYBRID_KEM_SECRET_LEN};
 use shekyl_crypto_pq::multisig_envelope::{MultisigEnvelopeSecret, ENVELOPE_SECRET_LEN};
-use shekyl_crypto_pq::multisig_output::MultisigMemberView;
+use shekyl_crypto_pq::multisig_output::{MultisigGroupKey, MultisigMemberView};
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_network::NetworkId;
 use zeroize::Zeroizing;
@@ -258,6 +258,13 @@ impl MemberFile {
     #[must_use]
     pub fn member_kem_secret(&self) -> &HybridKemSecretKey {
         &self.member_kem_secret
+    }
+
+    /// The group's key, typed: the group KEM secret and `b`, which a
+    /// spend's derivation re-derives each input's secrets under.
+    #[must_use]
+    pub fn group_key(&self) -> MultisigGroupKey<'_> {
+        MultisigGroupKey::new(&self.group_kem_secret, &self.b)
     }
 
     /// This member as the multisig signer sees it on `network`: its index,

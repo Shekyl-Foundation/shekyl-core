@@ -40,6 +40,9 @@ http-body-util = { version = "0.1", default-features = false }
 tracing = "0.1"
 
 [dev-dependencies]
+# The end-to-end test's node lives in a directory of its own (`LocalTarget::test_override`).
+# TEST_ONLY: a dev edge alone may enable it.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
 tempfile = "3"
 # The end-to-end test (tests/end_to_end.rs): a real daemon in a child of
 # the test binary, as shekyl-daemon's own tests run one; the owner's calls

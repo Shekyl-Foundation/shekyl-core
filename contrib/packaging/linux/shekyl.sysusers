@@ -1,0 +1,7 @@
+# The daemon's account, declared (INPUT_GRAMMAR.md IG-Q64, IG-F12): the
+# group shekyl and the system user shekyl in it, no home and no login.
+# Installed as /usr/lib/sysusers.d/shekyl.conf by the .deb and the .rpm and
+# applied by their post-install script. shekyld@.service runs as this account.
+# An existing account of that name is used as it is, so pre-install.sh
+# refuses one that is a login.
+u shekyl - "Shekyl daemon" /nonexistent /usr/sbin/nologin

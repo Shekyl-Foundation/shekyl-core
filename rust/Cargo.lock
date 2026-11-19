@@ -4152,8 +4152,15 @@ name = "shekyl-ct-balance"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "hex",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "serde_json",
+ "shekyl-crypto-pq",
  "shekyl-curve-generators",
+ "shekyl-curve-primitives",
  "shekyl-units",
+ "zeroize",
 ]
 
 [[package]]
@@ -4784,12 +4791,15 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-ct-balance",
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-fcmp",
  "shekyl-network",
+ "shekyl-tx-builder",
+ "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
@@ -5298,6 +5308,7 @@ dependencies = [
  "serde_json",
  "shekyl-crypto-hash",
  "shekyl-network",
+ "shekyl-win-sec",
 ]
 
 [[package]]
@@ -5338,6 +5349,7 @@ dependencies = [
  "shekyl-rpc-grants",
  "shekyl-rpc-rendezvous",
  "shekyl-rpc-stream",
+ "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",
@@ -5671,6 +5683,7 @@ dependencies = [
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+ "shekyl-address",
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",

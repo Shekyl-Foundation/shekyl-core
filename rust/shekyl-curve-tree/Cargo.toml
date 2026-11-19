@@ -68,6 +68,13 @@ serde_json = "1"
 # callable, which is visibility theater, not a gate. With resolver v2 a
 # dev-dependency feature does not leak into normal builds.
 test-tamper = []
+# Compiles `AssembledPath::from_parts_unchecked`: a membership path written
+# from its parts, with neither of the assembler's checks (R-25), for the
+# engine's and the multisig crate's tests. Default-off and enabled from
+# dev-dependency edges only, so no shipped binary holds a path the checked
+# assembler did not seal; a TEST_ONLY row of
+# `scripts/ci/check_test_only_features.py` holds that.
+test-paths = []
 
 [dev-dependencies]
 ciphersuite = "0.4"

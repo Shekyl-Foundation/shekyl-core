@@ -14,6 +14,7 @@
 use super::*;
 
 use multiexp::BatchVerifier;
+use shekyl_crypto_pq::multisig_intent::RERANDOMIZATION_SEED_LEN;
 use shekyl_curve_generators::T;
 
 const SIGNABLE: TxSignableHash = TxSignableHash::from_bytes([0x5A; 32]);
@@ -78,7 +79,7 @@ impl SpendFixture {
     }
 
     /// The parameters one member builds from this fixture, under `seed`.
-    fn params_with_seed(&self, seed: &[u8; RERANDOMIZATION_SEED_LEN]) -> SalSigningParams {
+    fn params_with_seed(&self, seed: [u8; RERANDOMIZATION_SEED_LEN]) -> SalSigningParams {
         let spent = SpentOutput {
             output_key: &self.output_key,
             commitment: &self.commitment,
@@ -86,11 +87,17 @@ impl SpendFixture {
             y_kem: &self.y_kem,
             commitment_mask: &self.z,
         };
-        SalSigningParams::new(seed, &spent, &self.a, SIGNABLE).unwrap()
+        SalSigningParams::new(
+            &RerandomizationSeed::seeded(seed),
+            &spent,
+            &self.a,
+            SIGNABLE,
+        )
+        .unwrap()
     }
 
     fn params(&self) -> SalSigningParams {
-        self.params_with_seed(&self.seed)
+        self.params_with_seed(self.seed)
     }
 }
 
@@ -512,7 +519,8 @@ fn the_proposal_refuses_each_bad_value_by_name() {
                 y_kem: y,
                 commitment_mask: z,
             };
-            SalSigningParams::new(&[0x5E; RERANDOMIZATION_SEED_LEN], &spent, a, SIGNABLE).err()
+            let seed = RerandomizationSeed::seeded([0x5E; RERANDOMIZATION_SEED_LEN]);
+            SalSigningParams::new(&seed, &spent, a, SIGNABLE).err()
         };
     let s = &scalar;
     assert_eq!(
@@ -566,7 +574,7 @@ fn a_signer_with_another_seed_does_not_complete_one_sal() {
     let fixture = SpendFixture::new(&g);
     let signers = ps(&[0, 1]);
     let honest = fixture.params();
-    let other = fixture.params_with_seed(&[0xEE; RERANDOMIZATION_SEED_LEN]);
+    let other = fixture.params_with_seed([0xEE; RERANDOMIZATION_SEED_LEN]);
     assert_ne!(honest.rerandomized().input(), other.rerandomized().input());
     let results = run(
         &g,
@@ -601,7 +609,7 @@ fn the_rerandomization_is_pinned() {
         commitment_mask: &Scalar::from(17u64).to_repr(),
     };
     let params = SalSigningParams::new(
-        &[0x42; RERANDOMIZATION_SEED_LEN],
+        &RerandomizationSeed::seeded([0x42; RERANDOMIZATION_SEED_LEN]),
         &spent,
         &Scalar::from(19u64).to_repr(),
         SIGNABLE,

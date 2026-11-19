@@ -60,7 +60,7 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 /// and drop wipes the cipher there. Used for seeded key generation and for
 /// pinning a test vector or a bench, and for a multisig spend's
 /// rerandomization, which every signer derives from the same seed
-/// (`shekyl_fcmp::frost_sal::SalSigningParams::new`). Never a source of fresh
+/// ([`crate::multisig_intent::RerandomizationSeed::rng`]). Never a source of fresh
 /// randomness: the same seed is the same stream.
 pub struct SeededRng {
     /// The cipher at one heap address. Moving [`SeededRng`] moves this
