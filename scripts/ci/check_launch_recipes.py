@@ -17,7 +17,7 @@ Five checks over an enumerated set of files:
    the paths systemd creates and the paths the daemon writes are one pair,
    not two that happen to agree today. A `--service` unit's data home (its
    `--data-dir`, or else the daemon's default: `SERVICE_DATA_HOME` in
-   `rust/shekyl-daemon-config/src/paths.rs` under `LINUX_SERVICE_PARENT`
+   `rust/shekyl-rpc-rendezvous/src/place.rs` under `LINUX_SERVICE_PARENT`
    in `rust/shekyl-process/src/platform.rs`) is `/var/lib/<StateDirectory>`
    at `StateDirectoryMode=0700`, the mode the daemon checks.
 3. Every key the fleet's generators write into a node's TOML
@@ -40,7 +40,7 @@ Five checks over an enumerated set of files:
    `FREEBSD_SERVICE_PARENT`, made at mode 0700 (a `--data-dir`, when one
    is given, names it); the log directory is mode 0750; and the rendezvous
    directory is the path of `FREEBSD_SERVICE_RENDEZVOUS` in
-   `rust/shekyl-process/src/platform.rs`, at the shipped unit's
+   `rust/shekyl-rpc-rendezvous/src/place.rs`, at the shipped unit's
    `RuntimeDirectoryMode`. daemon(8) is not passed
    `-r` or `-R`: FreeBSD 14 restarts every termination under those flags,
    including a clean exit. The script's `restart_seconds` equals the
@@ -58,6 +58,13 @@ Five checks over an enumerated set of files:
    rule are the daemon script's, at the tunnel unit's `RestartSec`. The
    unit carries the hardening set (Rick, 2026-11-16), each directive at its
    ruled value (`TUNNEL_HARDENING`).
+7. The shipped unit is the template `shekyld@.service`, one instance per
+   network (INPUT_GRAMMAR.md IG-Q64). Every `shekyld` command line in it is
+   covered: there is exactly one `ExecStart` and one `ExecStartPre`, and no
+   other command; `ExecStart` passes `--network %i`, `--data-dir` and
+   `--log-file` (check 2 pairs those with the directories); and
+   `ExecStartPre` is that command line plus `--config-verify`, so the check
+   and the start share one environment.
 
 Exit 0 when every check holds; 1 naming each failure; 2 on a subject that
 could not be read (rule 47: a gate asserts its own subject).
@@ -74,17 +81,20 @@ from pathlib import Path
 
 TABLE_FRAGMENT = "docs/generated/shekyld_options.md"
 PLATFORM_RS = "rust/shekyl-process/src/platform.rs"
-PATHS_RS = "rust/shekyl-daemon-config/src/paths.rs"
-# The constant `service_rendezvous()` returns on FreeBSD. The gate reads
-# the paths from the source so the launchers and the daemon cannot diverge.
+# The service's rendezvous rows and its data home's name, defined once for
+# the daemon and every client (`shekyl_rpc_rendezvous::service_rendezvous`).
+PLACE_RS = "rust/shekyl-rpc-rendezvous/src/place.rs"
+# The constant `service_rendezvous()` returns on FreeBSD (in PLACE_RS). The
+# gate reads the paths from the source so the launchers and the daemon
+# cannot diverge.
 FREEBSD_RENDEZVOUS_CONST = "FREEBSD_SERVICE_RENDEZVOUS"
 # The parents `service_parent()` returns on Linux and FreeBSD (in
-# PLATFORM_RS), and the data home's leaf under them (in PATHS_RS).
+# PLATFORM_RS), and the data home's leaf under them (in PLACE_RS).
 LINUX_PARENT_CONST = "LINUX_SERVICE_PARENT"
 FREEBSD_PARENT_CONST = "FREEBSD_SERVICE_PARENT"
 DATA_HOME_CONST = "SERVICE_DATA_HOME"
 
-SHIPPED_UNIT = "contrib/packaging/linux/shekyld.service"
+SHIPPED_UNIT = "contrib/packaging/linux/shekyld@.service"
 UNITS = [
     SHIPPED_UNIT,
     "utils/fleet/skl-node@.service",
@@ -520,6 +530,52 @@ def check_generator(rel: str, text: str, live: dict[str, str], units: dict[str, 
     return errors
 
 
+def exec_lines(text: str) -> list[tuple[str, str]]:
+    """Every `Exec*=` line of a unit, in order, as (key, command)."""
+    out: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip().startswith("Exec") and value.strip():
+            out.append((key.strip(), value.strip()))
+    return out
+
+
+def check_template(rel: str, text: str, live: dict[str, str]) -> list[str]:
+    """Check 7: the shipped template's command lines (IG-Q64)."""
+    errors: list[str] = []
+    if not Path(rel).name.endswith("@.service"):
+        errors.append(f"{rel}: the shipped unit is not a template, shekyld@<network>.service (IG-Q64)")
+    lines = exec_lines(text)
+    others = [key for key, cmd in lines if "shekyld" not in cmd]
+    if others:
+        errors.append(f"{rel}: {', '.join(others)} runs something other than shekyld; the template's commands are its check and its start")
+    stray = [key for key, cmd in lines if "shekyld" in cmd and key not in ("ExecStart", "ExecStartPre")]
+    if stray:
+        errors.append(f"{rel}: {', '.join(stray)} runs shekyld; only ExecStart and its ExecStartPre check may")
+    starts = [cmd for key, cmd in lines if key == "ExecStart"]
+    checks = [cmd for key, cmd in lines if key == "ExecStartPre" and "shekyld" in cmd]
+    if len(starts) != 1:
+        errors.append(f"{rel}: {len(starts)} ExecStart lines; the template has exactly one")
+        return errors
+    if len(checks) != 1:
+        errors.append(f"{rel}: {len(checks)} ExecStartPre checks; the template has exactly one, its start plus --config-verify")
+    _, values = exec_flags(starts[0])
+    if values.get("network") != "%i":
+        errors.append(f"{rel}: ExecStart does not pass --network %i; the instance name is the network")
+    for flag in ("data-dir", "log-file"):
+        if flag not in values:
+            errors.append(f"{rel}: ExecStart does not pass --{flag}; the unit sets it (IG-Q64)")
+    if len(checks) == 1:
+        if shlex.split(checks[0]) != shlex.split(starts[0]) + ["--config-verify"]:
+            errors.append(f"{rel}: ExecStartPre is not ExecStart's command line plus --config-verify")
+        pre_flags, _ = exec_flags(checks[0])
+        errors.extend(command_line_rows(rel, "ExecStartPre", pre_flags, live))
+    return errors
+
+
 def check(
     repo: Path,
     units: list[str],
@@ -527,6 +583,7 @@ def check(
     rc_scripts: list[str] | None = None,
     shipped_unit: str | None = None,
     tunnel: tuple[str, str] | None = None,
+    template: str | None = None,
 ) -> list[str]:
     errors: list[str] = []
     try:
@@ -536,17 +593,17 @@ def check(
     if len(live) < 10:
         return [f"{TABLE_FRAGMENT} names {len(live)} rows — the fragment or the pattern is wrong"]
     sources: dict[str, str] = {}
-    for rel in (PLATFORM_RS, PATHS_RS):
+    for rel in (PLATFORM_RS, PLACE_RS):
         try:
             sources[rel] = (repo / rel).read_text(encoding="utf-8")
         except OSError as e:
             return [f"cannot read {rel}: {e}"]
     constants: dict[str, str] = {}
     for rel, name in (
-        (PLATFORM_RS, FREEBSD_RENDEZVOUS_CONST),
+        (PLACE_RS, FREEBSD_RENDEZVOUS_CONST),
         (PLATFORM_RS, LINUX_PARENT_CONST),
         (PLATFORM_RS, FREEBSD_PARENT_CONST),
-        (PATHS_RS, DATA_HOME_CONST),
+        (PLACE_RS, DATA_HOME_CONST),
     ):
         value = string_constant(sources[rel], name)
         if value is None:
@@ -563,6 +620,10 @@ def check(
             continue
         unit_texts[rel] = unit_fields(text)
         errors.extend(check_unit(rel, text, live, linux_home))
+        if rel == template:
+            errors.extend(check_template(rel, text, live))
+    if template is not None and template not in unit_texts:
+        errors.append(f"cannot read {template}: the shipped template is not among the units checked")
     for rel, unit_rels in generators.items():
         try:
             text = (repo / rel).read_text(encoding="utf-8")
@@ -621,6 +682,7 @@ def selftest() -> int:
         "| `console` | switch | — | command line | no | x |\n"
         "| `service` | switch | — | command line | no | x |\n"
         "| `rpc-socket-dir` | path | — | both | no | x |\n"
+        "| `config-verify` | switch | — | command line | no | x |\n"
         "<!-- development rows, live on the named networks only and not in --help: dev-difficulty (regtest) -->\n"
     )
     unit_ok = (
@@ -685,6 +747,13 @@ def selftest() -> int:
         'const FREEBSD_SERVICE_PARENT: &str = "/var/db";\n'
     )
     paths_ok = 'const SERVICE_DATA_HOME: &str = "shekyl";\n'
+
+    def place_of(platform: str) -> str:
+        """The rendezvous crate's fixture for a platform fixture: the
+        rendezvous row as that fixture spells it, and the data home's name.
+        One fixture text carries a case's edit to either file."""
+        return platform + paths_ok
+
     rc_cases = [
         ("an agreeing rc.d script passes", rc_ok, platform_ok, unit_ok, []),
         ("a dead flag on the rc.d command line is named", rc_ok.replace("--log-file", "--detach --log-file"), platform_ok, unit_ok, ["`--detach`, which is not a row"]),
@@ -717,8 +786,8 @@ def selftest() -> int:
         (repo / "u").mkdir()
         (repo / "rust" / "shekyl-process" / "src").mkdir(parents=True)
         (repo / PLATFORM_RS).write_text(platform_ok)
-        (repo / "rust" / "shekyl-daemon-config" / "src").mkdir(parents=True)
-        (repo / PATHS_RS).write_text(paths_ok)
+        (repo / "rust" / "shekyl-rpc-rendezvous" / "src").mkdir(parents=True)
+        (repo / PLACE_RS).write_text(place_of(platform_ok))
         shipped = "u/shipped.service"
         for title, unit, fleet, gen, expect in cases:
             (repo / "u" / "shipped.service").write_text(unit)
@@ -734,6 +803,7 @@ def selftest() -> int:
             (repo / "u" / "gen.sh").write_text(gen_ok)
             (repo / "u" / "rc").write_text(script)
             (repo / PLATFORM_RS).write_text(platform)
+            (repo / PLACE_RS).write_text(place_of(platform))
             errors = check(repo, ["u/shipped.service", "u/fleet@.service"], {"u/gen.sh": ["u/fleet@.service"]}, ["u/rc"], shipped)
             ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
             print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
@@ -789,10 +859,33 @@ def selftest() -> int:
         (repo / "rust" / "shekyl-rpc-tunnel" / "src").mkdir(parents=True)
         (repo / TUNNEL_TABLE_RS).write_text(t_table)
         (repo / PLATFORM_RS).write_text(platform_ok)
+        (repo / PLACE_RS).write_text(place_of(platform_ok))
         for title, unit, rc, expect in tunnel_cases:
             (repo / "u" / "tunnel.service").write_text(unit)
             (repo / "u" / "tunnel-rc").write_text(rc)
             errors = check(repo, [], {}, tunnel=("u/tunnel.service", "u/tunnel-rc"))
+            ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
+            print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
+            failures += 0 if ok else 1
+        live = rows(table)
+        start = "/usr/local/bin/shekyld --service --network %i --data-dir /var/lib/shekyl/%i --log-file /var/log/shekyl/%i/shekyld.log"
+        template_ok = (
+            f"[Service]\nExecStartPre={start} --config-verify\nExecStart={start}\n"
+            "RuntimeDirectory=shekyl\nRuntimeDirectoryMode=0755\nStateDirectory=shekyl/%i\nStateDirectoryMode=0700\n"
+            "LogsDirectory=shekyl/%i\nRestart=on-failure\nRestartSec=30\n"
+        )
+        template_cases = [
+            ("the shipped template passes", "u/shekyld@.service", template_ok, []),
+            ("a shipped unit that is not a template is named", "u/shekyld.service", template_ok, ["is not a template"]),
+            ("an ExecStart without --network %i is named", "u/shekyld@.service", template_ok.replace("--network %i ", "--network testnet "), ["does not pass --network %i"]),
+            ("a check that is not the start plus --config-verify is named", "u/shekyld@.service", template_ok.replace(" --config-verify", " --log-level info --config-verify", 1), ["ExecStartPre is not ExecStart's command line"]),
+            ("a template with no check is named", "u/shekyld@.service", template_ok.replace(f"ExecStartPre={start} --config-verify\n", ""), ["0 ExecStartPre checks"]),
+            ("another command in the template is named", "u/shekyld@.service", template_ok.replace("[Service]\n", "[Service]\nExecStartPre=/bin/mkdir -p /var/log/shekyl\n"), ["runs something other than shekyld"]),
+            ("shekyld run from ExecStartPost is named", "u/shekyld@.service", template_ok + f"ExecStartPost={start}\n", ["ExecStartPost runs shekyld"]),
+            ("an ExecStart without --data-dir is named", "u/shekyld@.service", template_ok.replace(" --data-dir /var/lib/shekyl/%i", ""), ["does not pass --data-dir"]),
+        ]
+        for title, name, unit, expect in template_cases:
+            errors = check_template(name, unit, live)
             ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
             print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
             failures += 0 if ok else 1
@@ -807,7 +900,7 @@ def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return selftest()
     repo = Path(__file__).resolve().parents[2]
-    errors = check(repo, UNITS, GENERATORS, RC_SCRIPTS, SHIPPED_UNIT, (TUNNEL_UNIT, TUNNEL_RC))
+    errors = check(repo, UNITS, GENERATORS, RC_SCRIPTS, SHIPPED_UNIT, (TUNNEL_UNIT, TUNNEL_RC), SHIPPED_UNIT)
     if errors:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)

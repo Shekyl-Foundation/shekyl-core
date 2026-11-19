@@ -301,7 +301,7 @@ fn bound(end: &End) {
 
 /// "This computer"'s client, told the daemon's rendezvous directory.
 fn target(dir: &Path) -> LocalTarget {
-    LocalTarget::resolve(
+    LocalTarget::test_override(
         Network::Regtest,
         &Instance::Default,
         Some(&rendezvous_dir(dir)),

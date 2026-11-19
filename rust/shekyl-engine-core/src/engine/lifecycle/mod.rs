@@ -69,6 +69,8 @@ pub use types::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 use crate::engine::error::{IoError, OpenError};
 #[cfg(test)]
 use crate::engine::{Capability, Engine, SoloSigner};
+#[cfg(all(test, feature = "conformance"))]
+use assemble::observe_stake_self_cert;
 #[cfg(test)]
 use shekyl_crypto_pq::account::SEED_BYTES;
 #[cfg(test)]

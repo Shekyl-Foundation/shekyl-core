@@ -173,6 +173,16 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
+        "shekyl-rpc-transport",
+        "test-override",
+    ): "LocalTarget::test_override: a test node's own rendezvous directory "
+    "and service directory in place of this account's and this platform's. "
+    "Production names \"this computer\" by its network alone "
+    "(LocalTarget::this_computer, DaemonTarget::ThisComputer), so no client "
+    "can name a wrong directory or leave the service's out (Rick, "
+    "2026-11-18). Enabled from the transport's own, the CLI's, the tunnel's "
+    "and the daemon's dev edges",
+    (
         "shekyl-curve-tree",
         "test-tamper",
     ): "LeafStore::test_tamper_clear_prune_disabled and "
@@ -181,6 +191,17 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "tests (CURVE_TREE_CLIENT.md §11). The prune-disabled posture is one-way "
     "by ruling, so its clear path must not exist in shipped code; enabled "
     "from the p-host and engine-core dev edges only",
+    (
+        "shekyl-curve-tree",
+        "test-paths",
+    ): "AssembledPaths::from_parts_unchecked: a batch of membership paths "
+    "written from its parts with none of the assembler's checks (each "
+    "path's branches fold to the batch's root; that root is the reference "
+    "block's header root). Production gets paths only as the checked "
+    "assembler's batch (R-25, R-26), so a path to a made-up tree must not "
+    "be constructible in shipped code. "
+    "Enabled from the engine-core and multisig dev edges only, for their "
+    "placeholder and tampered paths",
     (
         "shekyl-wire",
         "test-fixtures",
@@ -335,6 +356,16 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "reach a wallet. Enabled from dev edges only; shekyl-p-serve's test-signer "
     "no longer forwards it (it never needed it: F-7, CHAIN_FORGE.md CF-1b)",
     (
+        "shekyl-ct-balance",
+        "seeded-rng",
+    ): "PseudoOutBlinds::seeded: a spend's pseudo-out blinds drawn from a "
+    "ChaCha20 stream over a caller's seed, the last balancing the outputs' "
+    "masks, so the chain forge's spends come out the same every forging "
+    "(CHAIN_FORGE.md §5.2, S2). The production blinds are "
+    "PseudoOutBlinds::random, over the OS, and a group's from_intent; "
+    "forwarded by shekyl-tx-builder's TEST_ONLY seeded-rng only, so no build "
+    "that ships has blinds a caller seeds (CF-R9)",
+    (
         "shekyl-crypto-pq",
         "seeded-rng",
     ): "exposes deterministic signing: sign_with_ml_dsa_seed, "
@@ -367,9 +398,9 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "sign_pqc_auths_seeded, open_spend_seeded, prove_backing_membership_seeded), "
     "which draw the range proof, the pseudo-out blinds, the membership proof and "
     "the ML-DSA nonces from a caller's seed (CHAIN_FORGE.md §5.3, seam T2). "
-    "Forwards shekyl-fcmp's and shekyl-crypto-pq's seeded-rng; the production "
-    "signers draw from the OS, and no build that ships has one that takes its "
-    "caller's randomness (CF-R9)",
+    "Forwards shekyl-fcmp's, shekyl-crypto-pq's and shekyl-ct-balance's "
+    "seeded-rng; the production signers draw from the OS, and no build that "
+    "ships has one that takes its caller's randomness (CF-R9)",
     (
         "shekyl-harness-spender",
         "seeded-rng",
@@ -564,6 +595,7 @@ PERMANENT: dict[tuple[str, str], str] = {
 # the trigger is a different, nearly free thing, and it is what landed.)
 GOVERNED_OWNERS: frozenset[str] = frozenset(
     {
+        "shekyl-rpc-transport",
         "shekyl-wire",
         "shekyl-archival-retention",
         "shekyl-chain-store",
@@ -587,6 +619,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-tx-builder",
         "shekyl-harness-spender",
         "shekyl-harness-wallet",
+        "shekyl-ct-balance",
     }
 )
 

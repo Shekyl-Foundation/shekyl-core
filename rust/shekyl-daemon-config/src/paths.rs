@@ -22,16 +22,9 @@ use shekyl_options::{Code, Diagnostic, Source};
 #[cfg(unix)]
 use crate::directory::{require_service_account, DirectoryAccount, ACCOUNT_ONLY_MODE};
 use crate::network::Network;
-use crate::platform::{Platform, RunMode};
+use shekyl_rpc_rendezvous::SERVICE_DATA_HOME;
 
-/// The service's data home under the platform's service parent
-/// ([`Platform::service_parent`]): `/var/lib/shekyl`, `/var/db/shekyl`,
-/// `%ProgramData%\shekyl`; on Windows the service's rendezvous directory is
-/// inside it. The launch-recipe gate
-/// (`scripts/ci/check_launch_recipes.py`) reads this constant, so the
-/// packaged unit's `StateDirectory` and the FreeBSD script's prestart name
-/// the directory the daemon checks.
-pub const SERVICE_DATA_HOME: &str = "shekyl";
+use crate::platform::{Platform, RunMode};
 
 /// The daemon's root for this run mode, or the refusal when the account
 /// has no home (`config.path.no-home`) or the service root is absent

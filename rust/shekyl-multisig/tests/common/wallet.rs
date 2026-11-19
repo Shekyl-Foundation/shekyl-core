@@ -8,91 +8,44 @@
 //! checks a node runs on the result, from the wire.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use rand_core::{OsRng, RngCore};
-use zeroize::Zeroizing;
 
-use super::{found_group, paths, random_scalar, GroupOutputs, AMOUNTS, NET};
-use curve25519_dalek::Scalar as DalekScalar;
+use super::{random_scalar, Paid, AMOUNTS, NET};
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use shekyl_address::multisig_address::{address_fingerprint, MultisigAddressPayload};
-use shekyl_crypto_pq::kem::X25519_KEM_CT_LEN;
+use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
+use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation, X25519_KEM_CT_LEN};
+use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
-use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
-use shekyl_crypto_pq::signature::verify_pqc_auth;
-use shekyl_curve_primitives::Commitment;
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
+use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
+use shekyl_curve_tree::{
+    AssembleInput, AssembledPaths, BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex,
+    OneTimePubkey, PathParts, ReferenceBlock,
+};
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
-use shekyl_multisig::ceremony::context::ContextError;
-use shekyl_multisig::ceremony::nonce::{InputInUse, StoreError};
+use shekyl_multisig::ceremony::nonce::InputInUse;
 use shekyl_multisig::intent::{
-    ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
+    ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
-    import, HeldNonce, HeldNonceStore, Incoming, InputContext, LedgerView, LiveCeremonies,
-    MemberFile, NonceCounterError, NonceCounterSink, ProposerInputs, SigningContext, UnsignedSpend,
-    ValidatedIntent,
+    import, DerivedSpend, GroupOutputRecord, GroupOutputs, HeldNonceStore, Incoming, LedgerView,
+    LiveCeremonies, MemberFile, SigningContext, SpendPaths, ValidatedIntent,
+};
+use shekyl_tx_weight::{
+    predict_spend_weight, GroupSize, InputCount, OutputCount, Signer, SpendShape,
 };
 use shekyl_types::{BlockHash, KeyImage};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::tx_extra::{self, KemCiphertext, MultisigEntry, TxExtraField};
-use shekyl_wire::{Ct, CtBase, Input, Output, Transaction};
+use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
+use shekyl_wire::{Ct, Input, PqcAuth, Transaction};
 
 // ---------------------------------------------------------------------------
 // The capabilities a wallet injects, in memory
 // ---------------------------------------------------------------------------
-
-#[derive(Default)]
-pub struct Store(pub HashMap<[u8; 32], HeldNonce>);
-
-impl HeldNonceStore for Store {
-    fn put(&mut self, nonce: HeldNonce) -> Result<(), StoreError> {
-        if self.0.contains_key(nonce.intent_hash()) {
-            return Err(StoreError::AlreadyHeld);
-        }
-        self.0.insert(*nonce.intent_hash(), nonce);
-        Ok(())
-    }
-
-    fn take(&mut self, intent_hash: &[u8; 32]) -> Result<Option<HeldNonce>, StoreError> {
-        Ok(self.0.remove(intent_hash))
-    }
-}
-
-/// The durable nonce counter. A failing sink refuses every persist, as a
-/// full disk or a failed fsync does.
-#[derive(Default)]
-pub struct Sink {
-    pub persisted: Vec<([u8; 32], u64)>,
-    pub failing: bool,
-}
-
-impl Sink {
-    /// A sink whose every persist fails.
-    pub fn failing() -> Self {
-        Self {
-            failing: true,
-            ..Self::default()
-        }
-    }
-}
-
-impl NonceCounterSink for Sink {
-    fn next_nonce_counter(&self) -> u64 {
-        self.persisted.last().map_or(0, |(_, c)| c + 1)
-    }
-
-    fn persist_nonce_counter(
-        &mut self,
-        intent_hash: &[u8; 32],
-        counter: u64,
-    ) -> Result<(), NonceCounterError> {
-        if self.failing {
-            return Err(NonceCounterError("the counter write failed".into()));
-        }
-        self.persisted.push((*intent_hash, counter));
-        Ok(())
-    }
-}
 
 #[derive(Default)]
 pub struct Live(pub HashMap<u64, [u8; 32]>);
@@ -112,11 +65,11 @@ impl LiveCeremonies for Live {
     }
 }
 
-/// One member's wallet: its file and its injected capabilities.
+/// One member's wallet: its file, its held nonces (in memory, R-20) and
+/// its input reservations.
 pub struct Wallet {
     pub file: MemberFile,
-    pub store: Store,
-    pub sink: Sink,
+    pub store: HeldNonceStore,
     pub live: Live,
 }
 
@@ -130,115 +83,33 @@ pub const REFERENCE_HASH: [u8; 32] = [0x77; 32];
 pub const FEE: u64 = 100;
 pub const GLOBAL_INDICES: [u64; 2] = [10, 11];
 
-/// The spend's outputs, in output order: a payment to another group, and
-/// the change back to the paying group. With the fee they balance the
-/// group's two inputs ([`AMOUNTS`]).
+/// The spend's outputs, in output order: a payment to a single-signer
+/// address, and the change back to the paying group, the intent's sort
+/// order (a single-signer recipient sorts first). With the fee they
+/// balance the group's two inputs ([`AMOUNTS`]).
 pub const PAYMENT: u64 = 800;
 pub const CHANGE: u64 = 300;
 pub const OUTPUT_AMOUNTS: [u64; 2] = [PAYMENT, CHANGE];
-/// The intent's recipients for them, in the intent's sort order.
-pub const PAYEE_ADDRESS: [u8; 8] = [0x5A; 8];
-pub const CHANGE_ADDRESS: [u8; 8] = [0x6B; 8];
 
-/// What slice 4a derives from the intent and every member derives alike:
-/// the outputs and their fields, each input's pseudo-out blind and
-/// rerandomization seed, and each output's mask.
-pub struct Derived {
-    pub unsigned: UnsignedSpend,
-    pub blinds: [[u8; 32]; 2],
-    pub seeds: [[u8; 32]; 2],
-    pub out_masks: Vec<[u8; 32]>,
-}
-
-/// A spend of `group`'s two outputs: its outputs built by the production
-/// constructor and carried in `tx_extra` as the chain carries them, its
-/// pseudo-out blinds balancing the outputs' masks.
-pub fn derive(group: &MultisigAddressPayload) -> Derived {
-    let (payee, _) = found_group(2, 2);
-    let tx_key = shekyl_crypto_pq::TxKey::random().expect("the OS draws a key");
-    let outputs: Vec<MultisigOutputData> = [&payee, group]
-        .into_iter()
-        .zip(OUTPUT_AMOUNTS)
-        .zip(0u64..)
-        .map(|((address, amount), index)| {
-            construct_multisig_output(&tx_key, address, amount, index, &NET).unwrap()
-        })
-        .collect();
-    let out_masks: Vec<[u8; 32]> = outputs.iter().map(|out| out.z).collect();
-    let mask_sum: DalekScalar = out_masks
-        .iter()
-        .map(|z| DalekScalar::from_canonical_bytes(*z).unwrap())
-        .sum();
-    let a0 = random_scalar();
-    let a1 = mask_sum - a0;
-    let mut seeds = [[0u8; 32]; 2];
-    for seed in &mut seeds {
-        OsRng.fill_bytes(seed);
-    }
-    let unsigned = UnsignedSpend {
-        outputs: outputs
-            .iter()
-            .map(|out| Output {
-                amount: 0,
-                key: out.output_key,
-                view_tag: out.view_tag_prefilter,
-            })
-            .collect(),
-        extra: extra_of(&outputs),
-        base: CtBase {
-            enc_amounts: outputs
-                .iter()
-                .map(|o| o.enc_amount_wire().to_bytes())
-                .collect(),
-            enc_labels: outputs
-                .iter()
-                .map(|o| o.enc_label_wire().to_bytes())
-                .collect(),
-            commitments: outputs.iter().map(|o| o.commitment).collect(),
-        },
-    };
-    Derived {
-        unsigned,
-        blinds: [a0.to_bytes(), a1.to_bytes()],
-        seeds,
-        out_masks,
-    }
-}
-
-/// `tx_extra` for `outputs`, each paying a group: the `0x06` ciphertexts,
-/// the `0x07` leaf entries and the `0x0D` member entries.
-fn extra_of(outputs: &[MultisigOutputData]) -> Vec<u8> {
-    let kem = outputs
-        .iter()
-        .flat_map(|o| [o.kem_ciphertext_x25519.as_slice(), &o.kem_ciphertext_ml_kem])
-        .flatten()
-        .copied()
-        .collect();
-    let leaf = outputs
-        .iter()
-        .flat_map(|o| o.pqc_leaf.entry_bytes())
-        .collect();
-    let entries = outputs
-        .iter()
-        .zip(0u8..)
-        .map(|(o, out_idx)| {
-            MultisigEntry::new(
-                out_idx,
-                o.member_kem_ciphertexts
-                    .iter()
-                    .map(|ct| KemCiphertext::from_bytes(ct.as_slice().try_into().unwrap()))
-                    .collect(),
-                o.enc_key_hashes.clone(),
-            )
-            .unwrap()
-        })
-        .collect();
-    tx_extra::serialize(&[
-        TxExtraField::PqcKemCiphertext(kem),
-        TxExtraField::PqcLeafEntries(leaf),
-        TxExtraField::PqcMultisig(entries),
-    ])
-    .unwrap()
+/// The single-signer address the spend pays: one per test binary, on the
+/// group's network.
+pub fn payee() -> &'static ShekylAddress {
+    static PAYEE: OnceLock<ShekylAddress> = OnceLock::new();
+    PAYEE.get_or_init(|| {
+        let point = || {
+            (&random_scalar() * ED25519_BASEPOINT_TABLE)
+                .compress()
+                .to_bytes()
+        };
+        let (kem, _) = HybridX25519MlKem.keypair_generate().unwrap();
+        ShekylAddress::new(
+            Network::Testnet,
+            point(),
+            point(),
+            [0; MSG_SIGN_PK_LEN],
+            kem.ml_kem,
+        )
+    })
 }
 
 pub fn chain_fingerprint() -> [u8; 32] {
@@ -273,17 +144,22 @@ pub fn intent(
         reference_block_hash: REFERENCE_HASH,
         recipients: vec![
             IntentRecipient {
-                address: PAYEE_ADDRESS.to_vec(),
+                payee: IntentPayee::Single {
+                    address: payee().encode().unwrap(),
+                    label_plaintext: SENTINEL_PLAINTEXT,
+                },
                 amount: AtomicUnits::from_raw(PAYMENT),
             },
             IntentRecipient {
-                address: CHANGE_ADDRESS.to_vec(),
+                payee: IntentPayee::Group {
+                    address: address.to_canonical_bytes(),
+                },
                 amount: AtomicUnits::from_raw(CHANGE),
             },
         ],
         fee: AtomicUnits::from_raw(FEE),
         input_global_indices: GLOBAL_INDICES.to_vec(),
-        kem_randomness_seed: seed,
+        kem_randomness_seed: IntentSeed::new(&seed),
         chain_state_fingerprint: chain_fingerprint(),
     }
 }
@@ -297,94 +173,127 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
             our_address_fingerprint: &address_fingerprint(address),
             n_total: address.n_total(),
             m_required: address.m_required(),
+            network: address.network(),
             chain_tip_height: TIP,
             local_ref_block_hash: &REFERENCE_HASH,
             local_chain_state_fingerprint: &chain_fingerprint(),
             input_amounts: &AMOUNTS.map(AtomicUnits::from_raw),
-            seen_kem_seeds: &HashSet::new(),
+            seen_seeds: &HashSet::new(),
         },
     )
     .expect("the intent is valid for every member")
 }
 
-/// `file`'s context: its own scans and ciphertexts, the shared derivation.
-pub fn context<'a>(
-    file: &'a MemberFile,
-    intent: ValidatedIntent,
-    paid: &GroupOutputs,
-    derived: &Derived,
-) -> SigningContext<'a> {
-    try_context(file, intent, paid, derived, paid.layers).expect("every member's context builds")
+/// A member's ledger of the group's outputs, as a test hands it to the
+/// derivation: the records in any order, looked up by global index. No
+/// path: those come from the tree, as one batch (R-26).
+pub struct Ledger(pub Vec<GroupOutputRecord>);
+
+impl GroupOutputs for Ledger {
+    fn record(&self, global_index: u64) -> Option<GroupOutputRecord> {
+        self.0
+            .iter()
+            .find(|record| record.global_index == global_index)
+            .cloned()
+    }
 }
 
-/// [`context`] under `layers` FCMP++ layers, refusals returned.
-pub fn try_context<'a>(
-    file: &'a MemberFile,
-    intent: ValidatedIntent,
-    paid: &GroupOutputs,
-    derived: &Derived,
-    layers: u8,
-) -> Result<SigningContext<'a>, ContextError> {
-    SigningContext::new(
-        file,
-        NET,
-        intent,
-        input_contexts(file, paid, derived),
-        derived.unsigned.clone(),
-        paid.root,
-        layers,
+/// `file`'s ledger of `paid`'s outputs: public values, the `0x06`
+/// ciphertext, and its own `0x0D` ciphertexts. No secret.
+pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
+    let me = usize::from(file.member_index());
+    Ledger(
+        paid.outputs
+            .iter()
+            .zip(&paid.scans)
+            .zip(GLOBAL_INDICES)
+            .map(|(((out, output_index, _), s), global_index)| {
+                let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
+                GroupOutputRecord {
+                    global_index,
+                    output_index: *output_index,
+                    output_key: out.output_key,
+                    commitment: out.commitment,
+                    source_x25519_ct: out.kem_ciphertext_x25519,
+                    source_ml_kem_ct: out.kem_ciphertext_ml_kem.clone(),
+                    key_image: s.key_image,
+                    leaf_point: out.pqc_leaf.point,
+                    committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
+                    own_x25519_ct: x25519.try_into().unwrap(),
+                    own_ml_kem_ct: ml_kem.to_vec(),
+                }
+            })
+            .collect(),
     )
 }
 
-/// `file`'s view of each input, in payment order: its own scans and
-/// ciphertexts, and the shared derivation.
-pub fn input_contexts(
-    file: &MemberFile,
-    paid: &GroupOutputs,
-    derived: &Derived,
-) -> Vec<InputContext> {
-    let me = usize::from(file.member_index());
+/// What a wallet asks its tree for, for each of `paid`'s outputs, beside
+/// the path's parts: in the intent's input order.
+pub fn asked(paid: &Paid) -> Vec<(AssembleInput, PathParts)> {
     paid.outputs
         .iter()
-        .zip(&paid.scans)
-        .enumerate()
-        .map(|(i, ((out, _, _), s))| {
-            let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
-            InputContext {
-                output_key: out.output_key,
-                commitment: out.commitment,
-                spend_scalar: s.x.clone(),
-                y_kem: s.y_kem.clone(),
-                commitment_mask: s.z.clone(),
-                pseudo_out_blind: Zeroizing::new(derived.blinds[i]),
-                rerandomization_seed: Zeroizing::new(derived.seeds[i]),
-                key_image: s.key_image,
-                committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
-                own_x25519_ct: x25519.try_into().unwrap(),
-                own_ml_kem_ct: ml_kem.to_vec(),
-            }
+        .zip(GLOBAL_INDICES)
+        .map(|((out, _, _), global_index)| {
+            (
+                AssembleInput {
+                    gindex: Gindex::from_raw(global_index),
+                    output_key: OneTimePubkey::from_bytes(out.output_key),
+                    commitment: CommitmentBytes::from_bytes(out.commitment),
+                },
+                paid.path.clone(),
+            )
         })
         .collect()
 }
 
-/// The proposer's own inputs. The leaf chunks are taken: the prover is
-/// their only reader.
-pub fn proposer_inputs(paid: &mut GroupOutputs, derived: &Derived) -> ProposerInputs {
-    let chunks = std::mem::take(&mut paid.chunks);
-    ProposerInputs {
-        output_openings: openings(derived),
-        input_paths: paths(paid, chunks),
-    }
+/// A batch of `paths`, as the tree's actor would hand it over, assembled
+/// against the intents' reference block in a tree with `root` and
+/// `layers` (R-26).
+pub fn batch_in(
+    paths: Vec<(AssembleInput, PathParts)>,
+    root: CurveTreeRoot,
+    layers: u8,
+) -> AssembledPaths {
+    AssembledPaths::from_parts_unchecked(
+        ReferenceBlock {
+            height: BlockHeight::from_raw(REFERENCE_HEIGHT),
+            curve_tree_root: root,
+            block_hash: BlockHash::from_bytes(REFERENCE_HASH),
+        },
+        layers,
+        paths,
+    )
 }
 
-/// Each output's opening, in output order.
-pub fn openings(derived: &Derived) -> Vec<Commitment> {
-    derived
-        .out_masks
-        .iter()
-        .zip(OUTPUT_AMOUNTS)
-        .map(|(mask, amount)| Commitment::from_canonical_mask(mask, amount).unwrap())
-        .collect()
+/// `paid`'s paths, as one batch in the test's tree.
+pub fn batch(paid: &Paid) -> AssembledPaths {
+    batch_in(asked(paid), paid.root, paid.layers)
+}
+
+/// `intent` matched to `batch`.
+pub fn spend_paths(intent: &ValidatedIntent, batch: AssembledPaths) -> SpendPaths {
+    SpendPaths::new(intent, batch).expect("the batch is the intent's inputs at its reference block")
+}
+
+/// `file`'s spend of `intent`, derived from its own ledger and the paths
+/// of `paid`.
+pub fn derive(file: &MemberFile, intent: &ValidatedIntent, paid: &Paid) -> DerivedSpend {
+    DerivedSpend::derive(
+        spend_paths(intent, batch(paid)),
+        &ledger(file, paid),
+        &file.group_key(),
+        NET,
+    )
+    .expect("every member derives the spend")
+}
+
+/// `file`'s context: its own derivation of the intent from its own ledger.
+pub fn context<'a>(
+    file: &'a MemberFile,
+    intent: &ValidatedIntent,
+    paid: &Paid,
+) -> SigningContext<'a> {
+    SigningContext::new(file, derive(file, intent, paid)).expect("every member's context builds")
 }
 
 pub fn import_into(wallet: &Wallet, file: &[u8]) -> Incoming {
@@ -412,10 +321,57 @@ macro_rules! expect {
 // The checks a node runs, from the wire
 // ---------------------------------------------------------------------------
 
+/// The predicted weight of `tx`'s shape, signed by `group` and paying
+/// the intent's recipients (a single-signer address and the group's
+/// change), equals the signed spend's own `weight()`: the scheme-2 auths
+/// and the change's `0x0D` entry are priced exactly (slice 4a §2.4).
+///
+/// So does a solo spend paying the same group (§2.5): the same
+/// transaction, its outputs, `0x0D` entry and proofs unchanged, with each
+/// input authorized by one wallet's hybrid key and signature at their
+/// canonical lengths. The bytes are not a signature; weight is the
+/// serialized size, and the signed solo spend with a group output is the
+/// engine's send (4a-2).
+pub fn assert_weight_predicted(tx: &Transaction, group: &MultisigAddressPayload, paid: &Paid) {
+    let Ct::Fcmp { fee, .. } = &tx.ct else {
+        panic!("an FCMP++ spend");
+    };
+    let size = GroupSize::new(group.n_total(), group.m_required()).unwrap();
+    let weigh = |signer: Signer| {
+        predict_spend_weight(
+            &SpendShape {
+                n_in: InputCount::clamped(tx.prefix.inputs.len()),
+                n_out: OutputCount::clamped(tx.prefix.outputs.len()),
+                tree_depth: paid.layers,
+                signer,
+                group_payees: &[size],
+            },
+            *fee,
+        )
+    };
+    assert_eq!(weigh(Signer::Group(size)), Some(tx.weight()));
+
+    let mut solo = tx.clone();
+    let Ct::Fcmp { pqc_auths, .. } = &mut solo.ct else {
+        unreachable!("matched above");
+    };
+    for auth in pqc_auths.iter_mut() {
+        *auth = PqcAuth {
+            hybrid_signature: vec![0; PQC_HYBRID_SINGLE_SIG_LEN],
+            ..PqcAuth::unsigned(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                vec![0; PQC_HYBRID_SINGLE_KEY_LEN],
+            )
+        };
+    }
+    assert_ne!(solo.weight(), tx.weight());
+    assert_eq!(weigh(Signer::Solo), Some(solo.weight()));
+}
+
 /// Serialize, parse back, and check from the parsed bytes alone: the
 /// structural rules the pool applies first, the intent's fee and reference
 /// block, every input's authorization, and the FCMP++ proof.
-pub fn verify_from_the_wire(tx: &Transaction, paid: &GroupOutputs) {
+pub fn verify_from_the_wire(tx: &Transaction, paid: &Paid) {
     let parsed = Transaction::from_bytes(&tx.serialize()).expect("the transaction parses");
     assert_eq!(parsed, *tx);
     parsed.validate().expect("the transaction is well formed");
@@ -478,8 +434,7 @@ impl Wallet {
     pub fn new(file: MemberFile) -> Self {
         Self {
             file,
-            store: Store::default(),
-            sink: Sink::default(),
+            store: HeldNonceStore::new(),
             live: Live::default(),
         }
     }

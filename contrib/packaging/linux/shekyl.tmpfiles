@@ -1,0 +1,6 @@
+# The daemon's configuration directory (INPUT_GRAMMAR.md IG-Q64, IG-F13):
+# root's, readable by the daemon's group and by no one else. Installed as
+# /usr/lib/tmpfiles.d/shekyl.conf by the .deb and the .rpm and applied by
+# their post-install script. The data and log directories are not here:
+# the unit's StateDirectory and LogsDirectory create them.
+d /etc/shekyl 0750 root shekyl -

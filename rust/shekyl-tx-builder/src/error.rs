@@ -171,7 +171,7 @@ pub enum TxBuilderError {
 ///
 /// Four variants are the user's to act on; every other is an internal
 /// invariant the build path should have made unreachable, named by
-/// [`Self::keyword`] so a report says which one failed.
+/// [`InternalSignFault::keyword`] so a report says which one failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SignFault {
     /// More inputs than one transaction may spend ([`MAX_INPUTS`]).

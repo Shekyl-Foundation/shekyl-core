@@ -7,15 +7,13 @@
 //! shares, completes the SALs, proves, and assembles and releases the
 //! transaction (`PQC_MULTISIG.md` §11.1, steps 1, 3, 5, 7 and 10).
 //!
-//! Each state carries only what its steps need. The outputs' openings and
-//! the inputs' tree paths ([`ProposerInputs`]) live until the proofs are
-//! made and are dropped, wiped, at [`Proposer::finish`]. A restart is
-//! recovered from the last file the proposer sent: its `Proposal` until
-//! [`Proposer::finish`] ([`Proposer::resume`], then replay what it
-//! received), its `FinalTx` after ([`Proposer::resume_after_finish`]).
-//! Between the two its nonce is consumed and the proofs are not yet
-//! written; a crash there forfeits the ceremony, as every consumed nonce
-//! does.
+//! Each state carries only what its steps need. The inputs' tree paths and
+//! the outputs' openings are the context's own, derived from the intent
+//! and the proposer's ledger; the prover's leaf chunks are made from them
+//! at [`Proposer::finish`] and wiped when the proof is made. Until [`Proposer::finish`] the proposer's
+//! nonce is held in memory only (R-20): a restart forfeits its ceremony. A
+//! proposer that has finished holds no nonce and is rebuilt from the
+//! `FinalTx` it sent ([`Proposer::resume_after_finish`]).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -32,12 +30,13 @@ use shekyl_fcmp::frost_sal::{
 use shekyl_fcmp::proof::{prove_with_sal, ProveInputLeafChunk};
 use shekyl_wire::{Ct, Transaction};
 
-use super::super::context::{ProposerInputs, SigningContext};
+use super::super::context::SigningContext;
+use super::super::derivation::InputContext;
 use super::super::files::{
     open_forwarded, Authenticated, Commitment, FinalTx, HybridSig, Incoming, Proposal,
     ResponderShare, SignatureShare, SigningSet,
 };
-use super::super::nonce::{consume, HeldNonceStore, LiveCeremonies, NonceCounterSink};
+use super::super::nonce::{consume, HeldNonceStore, LiveCeremonies};
 use super::super::proofs::{
     SignableTransaction, SignerKeys, VerifiedMembershipProof, VerifiedRangeProof,
 };
@@ -56,14 +55,12 @@ pub struct Proposer<'a, S> {
 
 /// Waiting for every holder's `Commitment`, then the responder's share.
 pub struct Collecting {
-    inputs: ProposerInputs,
     own: CheckedRounds,
     commitments: BTreeMap<u8, Authenticated<Commitment>>,
 }
 
 /// The responder's share is in; waiting for every holder's share.
 pub struct SharesPending {
-    inputs: ProposerInputs,
     own: CheckedRounds,
     commitments: BTreeMap<u8, Authenticated<Commitment>>,
     responder: Authenticated<ResponderShare>,
@@ -91,19 +88,16 @@ impl<'a> Proposer<'a, Collecting> {
     ///
     /// # Errors
     ///
-    /// [`CeremonyError`]: this member is not the proposer, `inputs` does
-    /// not open every output or prove every input, an input is in another live
-    /// ceremony, a nonce for this intent is already held, or a FROST or
-    /// seal refusal.
+    /// [`CeremonyError`]: this member is not the proposer, an input is in
+    /// another live ceremony, a nonce for this intent is already held, or a
+    /// FROST or seal refusal.
     pub fn propose(
         ctx: SigningContext<'a>,
-        inputs: ProposerInputs,
-        store: &mut impl HeldNonceStore,
+        store: &mut HeldNonceStore,
         live: &mut impl LiveCeremonies,
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<(Self, Vec<u8>), CeremonyError> {
         expect_role(&ctx, &[Role::Proposer])?;
-        let inputs = inputs.for_context(&ctx)?;
         live.reserve(ctx.intent.hash(), &ctx.intent.intent().input_global_indices)?;
         let own = hold_all(&ctx, store, rng)?;
         let file = seal_as(
@@ -114,51 +108,14 @@ impl<'a> Proposer<'a, Collecting> {
             },
             rng,
         )?;
-        Ok((Self::collecting(ctx, inputs, own, file.clone()), file))
+        Ok((Self::collecting(ctx, own, file.clone()), file))
     }
 
-    /// Rebuild the proposer after a restart, before [`Proposer::finish`],
-    /// from its context and the `Proposal` file it sent; then replay the
-    /// files it received. Its held nonce stays in the store.
-    ///
-    /// # Errors
-    ///
-    /// [`CeremonyError`]: this member is not the proposer, the file is not
-    /// its own `Proposal` for this intent, or `inputs` does not open every
-    /// output or prove every input.
-    pub fn resume(
-        ctx: SigningContext<'a>,
-        inputs: ProposerInputs,
-        proposal_file: Vec<u8>,
-    ) -> Result<Self, CeremonyError> {
-        expect_role(&ctx, &[Role::Proposer])?;
-        let Incoming::Proposal(sent) = open_forwarded(
-            ctx.member,
-            &ctx.network_id,
-            ctx.intent.hash(),
-            &proposal_file,
-        )?
-        else {
-            return Err(CeremonyError::FileType);
-        };
-        from_role(&ctx, &sent, Role::Proposer)?;
-        let inputs = inputs.for_context(&ctx)?;
-        let sender = sent.sender();
-        let own = CheckedRounds::new(&ctx, sender, sent.into_body().rounds)?;
-        Ok(Self::collecting(ctx, inputs, own, proposal_file))
-    }
-
-    fn collecting(
-        ctx: SigningContext<'a>,
-        inputs: ProposerInputs,
-        own: CheckedRounds,
-        proposal_file: Vec<u8>,
-    ) -> Self {
+    fn collecting(ctx: SigningContext<'a>, own: CheckedRounds, proposal_file: Vec<u8>) -> Self {
         Self {
             ctx,
             proposal_file,
             state: Collecting {
-                inputs,
                 own,
                 commitments: BTreeMap::new(),
             },
@@ -234,16 +191,11 @@ impl<'a> Proposer<'a, Collecting> {
             file.sender(),
             file.body().inputs.iter().map(|i| &i.round),
         )?;
-        let Collecting {
-            inputs,
-            own,
-            commitments,
-        } = self.state;
+        let Collecting { own, commitments } = self.state;
         Ok(Proposer {
             ctx: self.ctx,
             proposal_file: self.proposal_file,
             state: SharesPending {
-                inputs,
                 own,
                 commitments,
                 responder: file,
@@ -304,12 +256,11 @@ impl<'a> Proposer<'a, SharesPending> {
     /// # Errors
     ///
     /// [`CeremonyError`]: a holder's share is missing, the nonce is not
-    /// held or its use cannot be persisted, or a FROST, prover, structure
-    /// or seal refusal.
+    /// held (the wallet closed since the proposal: R-20), or a FROST,
+    /// prover, structure or seal refusal.
     pub fn finish(
         self,
-        store: &mut impl HeldNonceStore,
-        sink: &mut impl NonceCounterSink,
+        store: &mut HeldNonceStore,
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<(Proposer<'a, AwaitingSignatures>, Vec<u8>), CeremonyError> {
         let ctx = &self.ctx;
@@ -317,7 +268,6 @@ impl<'a> Proposer<'a, SharesPending> {
             return Err(CeremonyError::Incomplete);
         }
         let SharesPending {
-            inputs,
             own,
             commitments,
             responder,
@@ -346,20 +296,14 @@ impl<'a> Proposer<'a, SharesPending> {
             )?,
         ));
         let set = PreprocessSet::new(ctx, others)?;
-        let consumed = consume(ctx.intent.hash(), store, sink)?;
+        let consumed = consume(ctx.intent.hash(), store)?;
         let signed = sign_held(consumed, &own, &set)?;
         let sals = complete_sals(signed, &responder, &holder_shares)?;
 
-        let ProposerInputs {
-            output_openings,
-            input_paths,
-        } = inputs;
-        let leaf_chunks: Vec<ProveInputLeafChunk> = input_paths
-            .into_iter()
-            .map(|path| path.leaf_chunk)
-            .collect();
+        let leaf_chunks: Vec<ProveInputLeafChunk> =
+            ctx.inputs.iter().map(InputContext::leaf_chunk).collect();
         let membership = prove_membership(ctx, sals, &leaf_chunks)?;
-        let range = prove_range(ctx, output_openings, rng)?;
+        let range = prove_range(ctx, ctx.output_openings().to_vec(), rng)?;
         let keys = SignerKeys::check(ctx, signer_keys(ctx, &own, &commitments, &responder)?)?;
         let signable = SignableTransaction::assemble(ctx, &membership, &range, &keys)?;
 

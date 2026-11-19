@@ -50,14 +50,16 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
+use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
-use shekyl_crypto_pq::output::{construct_output, sign_emission_backing_for_output, OutputData};
+use shekyl_crypto_pq::output::sign_emission_backing_for_output;
 use shekyl_crypto_pq::signature::{
     sign_emission_claim, HybridEd25519MlDsa, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
 };
 use shekyl_crypto_pq::TxKey;
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_network::NetworkId;
+use shekyl_tx_builder::outputs::{BuiltSpend, Payee, Recipient};
 use shekyl_tx_builder::{
     open_spend, prove_backing_membership, sign_transaction_with_terms,
     tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, OutputInfo,
@@ -65,7 +67,6 @@ use shekyl_tx_builder::{
 };
 use shekyl_types::{HoldingsDescriptor, PCanonicalId, SigningPayloadHash, TxSignableHash};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::tx_extra::{serialize, TxExtraField};
 use shekyl_wire::Input;
 use zeroize::Zeroizing;
 
@@ -541,64 +542,43 @@ fn assemble(
     let change_hi = change - change_lo;
 
     // Step 6: three vouts to P's base address — the reward vout loud, the
-    // change vouts confidential. The reward commit the auth digest binds is
-    // vout 0's commitment; the post-sign cross-check below holds it equal
-    // to the signer's.
+    // change vouts confidential — through the builder the engine's claim
+    // uses, at the positions the key derives (R-24). The reward commit the
+    // auth digest binds is the reward vout's commitment, wherever it sits;
+    // the post-sign cross-check below holds it equal to the signer's.
+    // Step 7: tx_extra is the builder's, as the engine's is.
     let vout_amounts = [total_reward, change_lo, change_hi];
-    let constructed: Vec<OutputData> = vout_amounts
-        .iter()
-        .enumerate()
-        .map(|(idx, amount)| {
-            construct_output(
-                tx_key,
-                &keys.x25519_pk,
-                &keys.ml_kem_ek,
-                keys.spend_pk.as_canonical_bytes(),
-                *amount,
-                idx as u64,
-            )
-            .expect("claim-output construction")
-        })
-        .collect();
+    let label = sentinel_plaintext();
+    let recipients = vout_amounts.map(|amount| Recipient {
+        payee: Payee::Single {
+            spend_key: keys.spend_pk.as_canonical_bytes(),
+            view_x25519: &keys.x25519_pk,
+            ml_kem_ek: &keys.ml_kem_ek,
+            label_plaintext: &label,
+        },
+        amount,
+    });
+    let built = BuiltSpend::build(tx_key, &recipients).expect("claim-output construction");
+    let reward_position = built.position_of(0).expect("the reward vout's position");
+    let reward = &built.outputs()[reward_position];
     let reward_commits = vec![RewardCommit {
-        commitment: constructed[0].commitment,
+        commitment: reward.commitment,
         amount_plain: total_reward,
-        one_time_key: constructed[0].output_key,
+        one_time_key: reward.output_key,
     }];
-    let output_infos: Vec<OutputInfo> = constructed
-        .iter()
-        .zip(vout_amounts)
-        .map(|(od, amount)| OutputInfo {
-            dest_key: od.output_key,
-            amount: AtomicUnits::from_raw(amount),
-            commitment_mask: od.z,
-            enc_amount: od.enc_amount_wire(),
-            enc_label: od.enc_label_wire(),
+    let output_infos: Vec<OutputInfo> = built.outputs().iter().map(|b| b.info.clone()).collect();
+    let output_keys: Vec<[u8; 32]> = built.outputs().iter().map(|b| b.output_key).collect();
+    let view_tags: Vec<Option<u8>> = built.outputs().iter().map(|b| Some(b.view_tag)).collect();
+    let output_amounts: Vec<u64> = (0..vout_amounts.len())
+        .map(|position| {
+            if position == reward_position {
+                total_reward
+            } else {
+                0
+            }
         })
         .collect();
-    let output_keys: Vec<[u8; 32]> = constructed.iter().map(|od| od.output_key).collect();
-    let view_tags: Vec<Option<u8>> = constructed
-        .iter()
-        .map(|od| Some(od.view_tag_prefilter))
-        .collect();
-    let output_amounts: Vec<u64> = vec![total_reward, 0, 0];
-
-    // Step 7: tx_extra — the tx pubkey, the per-output KEM blobs, the 0x07
-    // leaf entries (`Extra::for_hybrid_transfer` + `push_pqc_leaf_entries`,
-    // field for field).
-    let mut kem_blob = Vec::new();
-    let mut leaf_blob = Vec::new();
-    for od in &constructed {
-        kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
-        kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
-        leaf_blob.extend_from_slice(&od.pqc_leaf.entry_bytes());
-    }
-    let tx_extra = serialize(&[
-        TxExtraField::PubKey(tx_key.public_bytes()),
-        TxExtraField::PqcKemCiphertext(kem_blob),
-        TxExtraField::PqcLeafEntries(leaf_blob),
-    ])
-    .expect("extra serializes");
+    let tx_extra = built.extra().to_vec();
 
     // Step 8: the fee spends — `KI = x·Hp(O)`, the output-derived hybrid
     // key, descending key-image order (`prepare_funding_inputs`).
@@ -709,7 +689,7 @@ fn assemble(
         )
         .expect("the fee side proves");
     assert_eq!(
-        signed.commitments.first(),
+        signed.commitments.get(reward_position),
         Some(&reward_commits[0].commitment),
         "the signer's reward commitment is the auth-bound commit"
     );

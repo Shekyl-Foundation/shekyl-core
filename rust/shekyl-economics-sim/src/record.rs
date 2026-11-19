@@ -178,8 +178,11 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
     // The fee here is a test-vector input, not a model of what users pay:
     // the fixture exists so the engine reproduces the burn and split from a
     // recorded fee total, and any total serves. It stays on the flat arm so
-    // the committed vectors do not move with the run's fee arm.
-    let sim = SimParams::section_12_14_control();
+    // the committed vectors do not move with the run's fee arm, and on the
+    // steady control's traffic so they do not move with the sim's standard
+    // traffic either (§5.35): its job in `shekyl-engine-core` is arithmetic
+    // agreement.
+    let sim = SimParams::section_12_14_control().on_steady();
     let config = scenario_1_baseline(&sim);
     assert!(
         sim.fee.flat_per_tx_atomic().is_some(),

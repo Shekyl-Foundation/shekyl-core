@@ -17,9 +17,6 @@ There is no V3.1 / V3.2 / V3.x release train.
 - **The frozen shard-fill chain stays in the tree unless `CF-4a` replaces and deletes it.** `shekyl-harness-spender/vectors/shard-fill.bin` (11.5 MB, signed under the harness id) is frozen at its pinned hash and closed to new consumers (`scripts/ci/check_shard_fill_frozen.py`). `CF-4a` (`CF-R23`) forges a chain that covers everything its listed readers test today, function by function, moves each of them, and deletes the file and its gate with the last. Falsify by: a checkout of `CF-4a`'s merge in which the file and the gate's reader list are both gone.
   - Owner: the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md) (`CF-R17`, `CF-R23`, `CF-4a`)
   - Target: pre-genesis
-- **`SalSigningParams::new` takes each input's rerandomization seed from its caller until multisig slice 4a-1 derives it.** The seed sets the input's rerandomization blinds (`r_o`, `r_i`, `r_r_i`), and two inputs sharing it would link inputs to outputs. The seedable-RNG gate lists the site as G1 under a provisional marker naming 4a-1 (`check_seedable_rng.py` `PROVISIONAL`; `CHAIN_FORGE.md` §5.5, `CF-R26`). When 4a-1 lands, the parameter becomes the derived type: the per-input HKDF expansion under `shekyl/multisig-intent-rerandomize-v1` of a `shekyl-crypto-pq` `kem_randomness_seed` type (`PQC_MULTISIG.md` §9.5; the 4a brief §2.2, §2.3, amendment B). The marker is removed, and a test shows two inputs of one intent never get the same blinds. The gate is red once that label is registered in `CRYPTO_DOMAIN_REGISTRY.tsv` with the marker still present. Falsify by: 4a-1's merge, in which `SalSigningParams::new` takes the derived type, the marker is gone, and the distinct-blinds test passes.
-  - Owner: the multisig lane — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§9.5, R-14; slice 4a-1)
-  - Target: pre-genesis (trigger: slice 4a-1 lands)
 - **The block path's gated benches have no multisig shape: nothing builds a scheme-2 spend a validator admits.** `DAEMON_REDB_STORE.md` §1.3a.7's shape 3 is the multisig container at its maximum signers, the heaviest post-quantum signature kind. `shekyl-harness-spender` signs single-signer inputs only, so `shekyl-chain-ingest`'s block-path fixtures (`bench_fixture_tests.rs`) cannot list one. Named blocker: a builder of a scheme-2 spend (the multisig completion's spend path). When it exists, the shape is one `Shape` entry and two regenerated fixtures.
   - Owner: the daemon benchmarks — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (BA-T2)
   - Target: pre-genesis (trigger: a scheme-2 spend builder lands)
@@ -491,15 +488,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: the wallet lane — [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q63, with IG-Q29's loader
   - Target: pre-genesis
 
-- **The Linux packages create no `shekyl` account, though the shipped unit runs as it (`INPUT_GRAMMAR.md` IG-F12).** `contrib/packaging/linux/shekyld.service` sets `User=shekyl`, and `deb-after-install.sh` only reloads systemd, so on a fresh install the unit cannot start. IG-Q64, RULED 2026-10-22, is the fix (`INPUT_GRAMMAR.md` §22); the packaging is unbuilt on `dev`. Falsify by a fresh `.deb` and RPM install whose `id shekyl` succeeds before the unit first starts.
-  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
-  - Target: pre-genesis
-
-- **No installer creates the daemon's configuration directory (`INPUT_GRAMMAR.md` IG-F13).** Nothing creates `/etc/shekyl/` (R2) on Linux, and the Windows installer does not create `%ProgramData%\shekyl\`, which IG-13 says only the installer creates. IG-Q64, RULED 2026-10-22, is the fix (`INPUT_GRAMMAR.md` §22); the packaging is unbuilt on `dev`. Falsify by a fresh install that leaves the configuration directory that question names.
-  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
-  - Target: pre-genesis
-
-- **The shipped systemd unit runs mainnet only (`INPUT_GRAMMAR.md` IG-F16).** `contrib/packaging/linux/shekyld.service` passes no `--network`, so a package cannot run testnet, the network every alpha release runs, without an operator's own unit. IG-Q64, RULED 2026-10-22, is the fix (`INPUT_GRAMMAR.md` §22); the packaging is unbuilt on `dev`. Falsify by a packaged unit whose `ExecStart` passes `--network` for the instance and still pairs `--data-dir` and `--log-file` with `StateDirectory` and `LogsDirectory`.
+- **The Windows installer does not create the daemon's machine-wide root (`INPUT_GRAMMAR.md` IG-F13).** IG-13 says only the installer creates `%ProgramData%\shekyl\`, and it creates it when the daemon runs as a Windows service. That waits on RT-W14 (`INPUT_GRAMMAR.md` §22, IG-Q64). The Linux half is built: the packages declare `/etc/shekyl/`. Falsify by a Windows install with `service` that leaves `%ProgramData%\shekyl\`.
   - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
   - Target: pre-genesis
 
@@ -1319,6 +1308,10 @@ Exceptional deferral with a named blocker. This list stays tiny.
 - **Multisig: an online mailbox for ceremony files.** DEFERRED (rule 23, R-9 ruled 2026-11-12): files are the only transport and the wallet moves no bytes; the three-relay, operator-directory and heartbeat design is removed from `PQC_MULTISIG.md` §12.4. Named blocker: evidence that file-based sessions are what stops groups from spending. Reopen from an outbound-only mailbox over Tor with a per-intent drop-box address. Zero code exists.
   - Target: post-genesis
   - Owner: the multisig protocol — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§12.4, R-9)
+
+- **Multisig: a rate limit on proposals.** DEFERRED (rule 23, R-19 ruled 2026-11-15): `PQC_MULTISIG.md` §11.6's per-signing-key limit is deleted; under file transport a proposal costs work only when a human imports it, files are size-capped and inputs are reserved by one live intent at a time. Named blocker: a transport that delivers files without a human (a mailbox or relay), where unattended verification work is the cost again. Zero code exists.
+  - Target: post-genesis
+  - Owner: the multisig protocol — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§11.6, R-19)
 
 - **Multisig: 1-of-N with provable attribution.** DEFERRED (rule 23, R-11 ruled 2026-11-12): either of two people can spend with separate keys, and it is provable which one did. E′ refuses `m < 2` and cannot deliver this honestly: the dealer generated every member's keys, and whoever built an output (for change, a group member) can derive every member's per-output signing key for it, so the attribution is forgeable by either party. Named blocker: per-output keys only the recipient can derive (the sender-known-seed round in core). Zero code exists.
   - Target: post-genesis

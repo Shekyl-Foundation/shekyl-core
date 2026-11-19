@@ -851,13 +851,33 @@ jobs:
         run: python3 -I scripts/kat/multisig_fingerprint_oracle.py
 
       - name: Run the multisig intent oracle
-        # R-5, R-13: a spend intent's canonical bytes carry the signer set
-        # and the responder, and its hash is Keccak-256 of them. This writes
-        # the layout from the spec, hashes with an anchored Keccak, and
-        # requires docs/test_vectors/MULTISIG_INTENT_V2.json to equal its
+        # R-5, R-7, R-13: a spend intent's canonical bytes carry the signer
+        # set, the responder and each recipient's kind, and its hash is
+        # Keccak-256 of them. This writes the layout from the spec, hashes
+        # with an anchored Keccak, and
+        # requires docs/test_vectors/MULTISIG_INTENT_V3.json to equal its
         # output; exit 1 on a mismatch, 2 when the file pins nothing (rule 47).
         if: '!cancelled()'
         run: python3 -I scripts/kat/multisig_intent_oracle.py
+
+      - name: Run the multisig intent derivation oracle
+        # R-14: every value a member derives from an intent's seed (the
+        # transaction key, the pseudo-out blinds with the last balancing,
+        # the rerandomization seeds, the replay fingerprint), recomputed
+        # with hand-written HKDF-SHA-512 and Ed25519, anchored; requires
+        # docs/test_vectors/MULTISIG_INTENT_DERIVE_V1.json to equal its
+        # output; exit 1 on a mismatch, 2 when the file pins nothing.
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/multisig_intent_derive_oracle.py
+
+      - name: Run the transaction output order oracle
+        # R-24: the permutation a transaction key derives for its outputs
+        # (an unbiased Fisher-Yates over an HKDF-SHA-512 stream), recomputed
+        # with hand-written HKDF and Ed25519, anchored; requires
+        # docs/test_vectors/TX_OUTPUT_ORDER_V1.json to equal its output;
+        # exit 1 on a mismatch, 2 when the file pins nothing.
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/tx_output_order_oracle.py
 
       - name: Run clatter production-graph gate
         # clatter is an independent implementation of the RPC channel's

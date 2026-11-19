@@ -37,9 +37,10 @@ mod place;
 
 pub use place::{
     account_dir, console_leg_place, data_home, file_name, service_file_name, service_record_path,
-    Record, ServiceChannel, ServiceRecord, CHANNEL_BUNDLE_FILE, CHANNEL_KEY_FILE, CONSOLE_KEY_FILE,
-    CONSOLE_PIPE_FILE, CONSOLE_PIPE_PREFIX, CONSOLE_SOCKET_FILE, PIPE_PREFIX, RECORD_FORMAT,
-    RENDEZVOUS_DIR, SERVICE_RECORD_FORMAT,
+    service_rendezvous, Record, ServiceChannel, ServiceRecord, CHANNEL_BUNDLE_FILE,
+    CHANNEL_KEY_FILE, CONSOLE_KEY_FILE, CONSOLE_PIPE_FILE, CONSOLE_PIPE_PREFIX,
+    CONSOLE_SOCKET_FILE, PIPE_PREFIX, RECORD_FORMAT, RENDEZVOUS_DIR, SERVICE_DATA_HOME,
+    SERVICE_RECORD_FORMAT,
 };
 
 /// cSHAKE256 customization of [`rendezvous_name`].
