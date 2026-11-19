@@ -4,7 +4,7 @@
     - a body's fee under the penalty it adds;
     - the block's limit.
 
-    It also records the bodies it listed past the penalty-free weight, their fees, and the block's penalty, all from production's `Fill`. Nothing a fold computes changes.
+    It also records the bodies it listed past the penalty-free weight, their fees, and the block's penalty. The split and the refusal are `Fill::admit_up_to`'s own; the block keeps the last refusal, the marginal cohort. Nothing a fold computes changes.
   - **`--growth-trace`.** It folds the baseline to year 40 at seed 1, on standard traffic and on `steady`, in the inherited and the re-derived zone. By period, it prints:
     - the medians and the effective median against its surge ceiling;
     - the stop reasons;
@@ -15,7 +15,7 @@
     - every listed fee per block;
     - the Standard body's weight and fee.
 
-    Its narration is pinned on demand.
+    Its narration is pinned on demand. It refuses every other mode, including the fee ladder, the fee floor, the secret draws, `--gate7` and `--fb1c-c2`.
   - **What it read** (§5.36.1).
     - In the inherited zone the median rests where half the blocks stop at the penalty: 68–69 bodies against a mean of 50.
     - Each body past the free weight pays its penalty, at about 0.01 % of the reward minted at rest.
