@@ -258,6 +258,10 @@ ARMED=(
   # Red with the pre-fix fee choice: -29119, fault balance-self-check (the
   # TRC-1 wallet's intermittent failure). Green 167 s.
   engine::regtest_e2e::balance::a_change_below_dust_balances
+  # WSS-Q16's one seam: a real daemon whose block reply is altered in
+  # transit. The P-scan's archival step catches the running total its
+  # block's bound lengths do not add up to.
+  engine::regtest_e2e::body_fill::e2e_a_running_total_altered_in_transit_fails_the_archival_step
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
@@ -317,6 +321,14 @@ ARMED_SLOW=(
   # before the door connected it): the joiner stood at one height with the
   # door reporting no room, as the F-B subjects did at 724 of 762.
   engine::regtest_e2e::sync::a_node_syncs_fifteen_spans_from_a_peer
+  # The persona body-store fill (WSS-Q4, WSS-Q15..Q18), each closing
+  # shards with real wallet spends through `regtest_e2e_shard.rs`:
+  # a CompleteTree bond filled, posted, served, its next shard pulled,
+  # a corrupt body and a deleted store repaired, and the fill refused past
+  # the discard boundary; and a market bond refused on a shard that is not
+  # final, then filled, posted and served.
+  engine::regtest_e2e::body_fill::e2e_complete_tree_bond_fills_serves_pulls_and_reconciles
+  engine::regtest_e2e::body_fill::e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves
 )
 
 # Deliberately never run here, with the reason recorded (rule 23: a decided

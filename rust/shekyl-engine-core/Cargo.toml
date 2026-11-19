@@ -311,6 +311,11 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils", "se
 # `SF-D4` forbids the client on a wallet production graph, and
 # `check_p_fetch_dep_cut.py` does not follow this edge.
 shekyl-p-loopback = { path = "../shekyl-p-loopback" }
+# The body fill's live suite (`engine::regtest_e2e_body_fill`): a draw on a
+# filled shard answered through the production provider over the persona
+# body store (`StoreShardProvider`), as the serving host builds it. Dev-only;
+# the serving side is already on the wallet graph through `shekyl-p-host`.
+shekyl-p-serve = { path = "../shekyl-p-serve" }
 # Slice 7 commit 5's live-lane parity test (`engine::regtest_e2e`): the
 # Rust producer builds a block at exactly the consensus weight bound and
 # the C++ daemon judges it (CEN-F14), so the producer crate and the rules

@@ -4482,6 +4482,7 @@ dependencies = [
  "shekyl-operator-alarm",
  "shekyl-p-host",
  "shekyl-p-loopback",
+ "shekyl-p-serve",
  "shekyl-p-store",
  "shekyl-p-transport",
  "shekyl-p2p-transport",

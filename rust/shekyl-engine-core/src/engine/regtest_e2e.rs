@@ -7231,6 +7231,9 @@ mod balance;
 #[path = "regtest_e2e_shard.rs"]
 mod shard;
 
+#[path = "regtest_e2e_body_fill.rs"]
+mod body_fill;
+
 #[path = "regtest_e2e_sync.rs"]
 mod sync;
 
