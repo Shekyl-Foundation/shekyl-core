@@ -682,4 +682,15 @@ async fn nothing_staking_leaves_on_a_fat_volume() {
         0,
         "no staking bytes leave a FAT volume"
     );
+
+    // Close the wallet before its directory: on FAT a file still open
+    // cannot be removed, and a dropped `TempDir` would leave the directory
+    // behind silently.
+    drop(driver);
+    drop(store);
+    let engine = Arc::try_unwrap(arc)
+        .unwrap_or_else(|_| panic!("the test holds the only reference to the engine"))
+        .into_inner();
+    engine.close(&creds).await.expect("close the wallet");
+    tmp.close().expect("the wallet's directory is removed");
 }
