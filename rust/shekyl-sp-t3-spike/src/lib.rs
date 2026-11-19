@@ -79,7 +79,7 @@
 #![deny(unsafe_code)]
 
 /// DEMO BASE ONLY (Brief C): the value the freshness demo's pull requests disagree on (burst push 2).
-pub const FRESHNESS_DEMO: u32 = 1;
+pub const FRESHNESS_DEMO: u32 = 2;
 
 pub mod capacity;
 pub mod ceiling;
