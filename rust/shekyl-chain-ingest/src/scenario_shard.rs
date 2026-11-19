@@ -55,17 +55,19 @@ pub const EPOCH_BLOCKS: u64 = 20;
 /// The levered reorg cap, in blocks. It sits inside [`EPOCH_BLOCKS`].
 pub const REORG_CAP_BLOCKS: u64 = 10;
 
+/// The levered schedule: [`EPOCH_BLOCKS`] and [`REORG_CAP_BLOCKS`].
+pub fn levered_epoch() -> CappedEpoch {
+    CappedEpoch::new(
+        SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
+        BlockCount::from_raw(REORG_CAP_BLOCKS),
+    )
+    .expect("the cap sits inside the epoch")
+}
+
 /// Regtest rules under the levered schedule: the pair every scenario that
 /// closes a shard mines under.
 pub fn levered_rules() -> ChainRules {
-    ChainRules::harness_regtest(
-        Some(std::num::NonZeroU128::MIN),
-        CappedEpoch::new(
-            SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
-            BlockCount::from_raw(REORG_CAP_BLOCKS),
-        )
-        .expect("the cap sits inside the epoch"),
-    )
+    ChainRules::harness_regtest(Some(std::num::NonZeroU128::MIN), levered_epoch())
 }
 
 /// The settlement schedule [`levered_rules`] runs.
@@ -246,17 +248,19 @@ fn issues_every_pair(blocks: u64, pairs: u64) -> bool {
     rooms.all_clear()
 }
 
-/// Regtest rules under the settled schedule ([`settled_epoch_blocks`]),
-/// with the levered reorg cap.
-pub fn settled_rules() -> ChainRules {
-    ChainRules::harness_regtest(
-        Some(std::num::NonZeroU128::MIN),
-        CappedEpoch::new(
-            SettlementEpochBlocks::new(settled_epoch_blocks()).expect("non-zero"),
-            BlockCount::from_raw(REORG_CAP_BLOCKS),
-        )
-        .expect("the cap sits inside the settled epoch"),
+/// The settled schedule ([`settled_epoch_blocks`]), with the levered reorg
+/// cap.
+pub fn settled_epoch() -> CappedEpoch {
+    CappedEpoch::new(
+        SettlementEpochBlocks::new(settled_epoch_blocks()).expect("non-zero"),
+        BlockCount::from_raw(REORG_CAP_BLOCKS),
     )
+    .expect("the cap sits inside the settled epoch")
+}
+
+/// Regtest rules under the settled schedule ([`settled_epoch`]).
+pub fn settled_rules() -> ChainRules {
+    ChainRules::harness_regtest(Some(std::num::NonZeroU128::MIN), settled_epoch())
 }
 
 /// The settlement schedule [`settled_rules`] runs.
@@ -265,13 +269,9 @@ pub fn settled_schedule() -> SettlementSchedule {
 }
 
 /// Coinbases a shard fill spends from. Those below it stay for the posts
-/// that ride the chain: a join spends coinbase 0. The captured shard-fill
-/// chain ([`load_shard_fill`]) leaves the same coinbases unspent.
+/// that ride the chain: the forge's plan spends and joins, and a scenario's
+/// own posts on the forged shard-fill chain (`forged_fill`).
 pub const FILL_FROM_COINBASE: u64 = 10;
-const _: () = assert!(
-    FILL_FROM_COINBASE == shekyl_harness_spender::captured::SHARD_FILL_RESERVED_COINBASES,
-    "the captured chain reserves the coinbases the posts spend"
-);
 
 /// Spends listed per fill block. One driven coinbase spend measures about
 /// 13.2 KB of archival good and a little more on the wire; sixteen sit
@@ -334,94 +334,26 @@ fn next_height(chain: &[Mined]) -> BlockHeight {
         .next_height()
 }
 
-/// A fresh scenario's chain from genesis through the block that closes
-/// shard `want − 1`, connected from the captured shard-fill chain
-/// (`shekyl-harness-spender`'s `captured`; Rick's shard-fill ruling,
-/// 2026-11-11): the spends were proved once and checked in, and each block
-/// is connected verbatim through the scenario's own door, so every rule
-/// still judges it. Coinbases below [`FILL_FROM_COINBASE`] are unspent.
-///
-/// Panics if the scenario has connected anything, if the capture does not
-/// close `want` shards, or if the producer's count of closed shards after
-/// the prefix is not `want`.
-pub async fn load_shard_fill(scenario: &mut Scenario<FreeHash>, want: u64) -> (Vec<Mined>, Filled) {
-    let chain = shekyl_harness_spender::captured::CapturedChain::shard_fill();
-    let blocks = chain
-        .blocks_closing(want - 1)
-        .unwrap_or_else(|| panic!("the captured chain closes fewer than {want} shards"));
-    let mut mined: Vec<Mined> = Vec::with_capacity(blocks);
-    for (height, captured) in chain.blocks[..blocks].iter().enumerate() {
-        let mut next = scenario
-            .next_template(captured.listed.clone())
-            .await
-            .unwrap_or_else(|outcome| panic!("the template at {height}: {outcome}"));
-        assert_eq!(
-            next_height(&mined).to_raw(),
-            u64::try_from(height).expect("small"),
-            "the capture loads into a fresh scenario"
-        );
-        next.template.block = captured.block.clone();
-        mined.push(
-            scenario
-                .connect_template(next)
-                .await
-                .unwrap_or_else(|outcome| {
-                    panic!(
-                        "captured block {height} connects (capture {}): {outcome}",
-                        chain.capture_rev
-                    )
-                }),
-        );
-    }
-    assert_eq!(
-        closed_shards(scenario).await,
-        want,
-        "the prefix closes {want} shards"
-    );
-    let closed = (0..want)
-        .map(|k| ClosedShard {
-            shard: ShardId::from_raw(k),
-            close_height: BlockHeight::from_raw(
-                u64::try_from(chain.blocks_closing(k).expect("closed")).expect("small") - 1,
-            ),
-        })
-        .collect();
-    (mined, Filled { closed })
-}
-
-/// Fill the chain with real spends until `want` shards are closed. Spends
-/// coinbases from `first_coinbase` upward — the ones below it are never
-/// touched, and the caller's posts ride those — and extends `chain` in
-/// place with every block mined.
-///
-/// Panics if the chain already has `want` shards closed: the caller asked
-/// for a fill it did not need.
-pub async fn close_shards(
-    scenario: &mut Scenario<FreeHash>,
-    chain: &mut Vec<Mined>,
-    first_coinbase: u64,
-    want: u64,
-) -> Filled {
-    close_shards_drawing(scenario, chain, first_coinbase, want, || None).await
-}
-
-/// [`close_shards`] with each fill spend's randomness from `draw`: `None`
-/// is the OS's, as [`close_shards`] draws it; `Some` is that one spend's
-/// seeds (`CHAIN_FORGE.md` §5.2, S9). `draw` is called once per listed
-/// spend on this thread, in the order the block lists them, before the
-/// spend's thread starts, so which spend gets which seeds is the fill's
-/// order and never the threads' (§5.3, seam T4). The sizing spend, which
-/// is measured and never listed, draws from the OS.
+/// Fill the chain with real spends until `want` shards are closed, each
+/// spend's randomness from `draw` (`CHAIN_FORGE.md` §5.2, S9): the forge's
+/// fill. Spends coinbases from `first_coinbase` upward — the ones below it
+/// are never touched, and the posts that ride the chain spend those — and
+/// extends `chain` in place with every block mined. `draw` is called once
+/// per listed spend on this thread, in the order the block lists them,
+/// before the spend's thread starts, so which spend gets which seeds is the
+/// fill's order and never the threads' (§5.3, seam T4). The sizing spend,
+/// which is measured and never listed, draws from the OS.
 ///
 /// # Panics
 ///
-/// As [`close_shards`].
+/// If the chain already has `want` shards closed: the caller asked for a
+/// fill it did not need.
 pub async fn close_shards_drawing(
     scenario: &mut Scenario<FreeHash>,
     chain: &mut Vec<Mined>,
     first_coinbase: u64,
     want: u64,
-    mut draw: impl FnMut() -> Option<SpendSeeds>,
+    mut draw: impl FnMut() -> SpendSeeds,
 ) -> Filled {
     let have = closed_shards(scenario).await;
     assert!(
@@ -498,7 +430,7 @@ pub async fn close_shards_drawing(
         let coinbases: Vec<u64> = (next_coinbase..next_coinbase + batch as u64).collect();
         next_coinbase += batch as u64;
         // Every spend's seeds, in listing order, before any thread starts.
-        let seeds: Vec<Option<SpendSeeds>> = coinbases.iter().map(|_| draw()).collect();
+        let seeds: Vec<SpendSeeds> = coinbases.iter().map(|_| draw()).collect();
         // The proofs are the cost; build the batch across the cores.
         let built: Vec<Transaction> = std::thread::scope(|s| {
             let handles: Vec<_> = coinbases
@@ -508,13 +440,12 @@ pub async fn close_shards_drawing(
                     let spender = &spender;
                     let wallet = scenario.wallet();
                     s.spawn(move || {
-                        let height = BlockHeight::from_raw(c);
-                        match seeds {
-                            Some(seeds) => spender
-                                .drawing(seeds)
-                                .spend_coinbase(wallet, height, connecting, FEE),
-                            None => spender.spend_coinbase(wallet, height, connecting, FEE),
-                        }
+                        spender.drawing(seeds).spend_coinbase(
+                            wallet,
+                            BlockHeight::from_raw(c),
+                            connecting,
+                            FEE,
+                        )
                     })
                 })
                 .collect();

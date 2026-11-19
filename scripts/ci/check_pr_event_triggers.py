@@ -52,6 +52,12 @@ What a passing `pull_request` trigger is:
   Without the type, the draft's `skipped` would stand as the PR's pass
   until its next push. With the type and no draft condition, marking a
   PR ready re-runs every job for nothing
+* or exactly `[labeled]`, in a workflow whose expressions read the label
+  it acts on (`github.event.label.name`): an action on a label, not a
+  check of the code (`freshness.yml`, ruled 2026-11-19: the `merge-next`
+  label starts a re-test). It checks nothing a required status reads, so
+  the draft rule above does not bind it: a draft's skipped job is a
+  skipped action, not a pass
 * no expression in the file that reads `github.event.changes`; that
   object exists only on `edited`, so a reader of it is a leftover of the
   condition this gate retired. An expression is an `if` value at any
@@ -79,6 +85,9 @@ WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 TYPES = ["opened", "synchronize", "reopened"]
 # The same, for a workflow whose jobs skip a draft pull request.
 READY_TYPES = TYPES + ["ready_for_review"]
+# A workflow that acts on a label, and what its expressions must read.
+LABEL_TYPES = ["labeled"]
+_LABEL = "github.event.label.name"
 # What an expression reads to skip a draft.
 _DRAFT = "github.event.pull_request.draft"
 
@@ -181,7 +190,13 @@ def problems_in(filename: str, doc: object) -> list[str]:
     # words: `None` would read as a key with nothing under it.
     types = pr["types"] if "types" in pr else TYPES
     written = repr(pr["types"]) if "types" in pr else "absent (the default set)"
-    if skips_drafts:
+    if types == LABEL_TYPES:
+        if not any(_LABEL in text for text in expressions):
+            problems.append(
+                f"{filename}: `pull_request` types are {LABEL_TYPES} and no expression reads "
+                f"`{_LABEL}`, so every label added to a pull request runs its jobs"
+            )
+    elif skips_drafts:
         if types != READY_TYPES:
             problems.append(
                 f"{filename}: a job skips a draft pull request, and `pull_request` types are "
@@ -256,6 +271,18 @@ def selftest() -> int:
             True,
         ),
         ("ready_for_review with no draft condition", _doc(types=READY_TYPES), True),
+        (
+            "a label action reading its label, skipping drafts",
+            _doc(types=LABEL_TYPES, job={**_job(), "if": "github.event.label.name == 'x' && "
+                                                      "!github.event.pull_request.draft"}),
+            False,
+        ),
+        ("a label action that reads no label", _doc(types=LABEL_TYPES), True),
+        (
+            "a label action with a branches filter",
+            _doc(types=LABEL_TYPES, branches=["dev"], job={**_job(), "if": "github.event.label.name == 'x'"}),
+            True,
+        ),
         ("types absent", _doc(), False),
         (
             "types present with nothing under it",
@@ -338,7 +365,7 @@ def selftest() -> int:
         "types list, and an expression reading github.event.changes all "
         "fail, as do a draft-skipping job without `ready_for_review` and "
         "`ready_for_review` without one; the default types, named or absent, "
-        "the draft list with a draft-skipping job, and a prose mention pass"
+        "the draft list with a draft-skipping job, a label action that reads its label, and a prose mention pass"
     )
     return 0
 

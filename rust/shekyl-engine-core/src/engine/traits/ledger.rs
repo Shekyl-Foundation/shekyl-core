@@ -39,7 +39,7 @@
 //! the post-pass (the implementor has no `view_secret`), so the
 //! async refresh path that dispatched the merge through it skipped
 //! handle population entirely (FOLLOWUPS P1). Routing the async
-//! merge through [`Engine::apply_scan_result`] closed P1 and
+//! merge through [`Engine::apply_scan_result`](crate::engine::Engine::apply_scan_result) closed P1 and
 //! preserves the atomicity discipline
 //! (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 rejected
 //! alternative (ζ): the merge and post-pass must share one write

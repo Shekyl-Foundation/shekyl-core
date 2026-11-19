@@ -35,6 +35,8 @@ pub enum FileRefused {
     Key(PathBuf, KeyFileError),
     /// Another program held its staged file open past the wait.
     HeldOpen(HeldOpen),
+    /// Its read-only attribute is set, which refused its replace.
+    ReadOnly(PathBuf),
 }
 
 impl std::fmt::Display for FileRefused {
@@ -48,6 +50,7 @@ impl std::fmt::Display for FileRefused {
             ),
             Self::Key(path, e) => write!(f, "{}: {e}", path.display()),
             Self::HeldOpen(held) => held.fmt(f),
+            Self::ReadOnly(path) => PrivateFileError::ReadOnly(path.clone()).fmt(f),
         }
     }
 }
@@ -60,6 +63,7 @@ impl From<PrivateFileError> for FileRefused {
             PrivateFileError::Io(path, e) => Self::Io(path, e),
             PrivateFileError::Exposed(path, why) => Self::Exposed(path, why),
             PrivateFileError::HeldOpen(held) => Self::HeldOpen(held),
+            PrivateFileError::ReadOnly(path) => Self::ReadOnly(path),
         }
     }
 }
@@ -123,7 +127,36 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), FileRefused> {
 ///
 /// [`FileRefused::Io`] when a step fails.
 pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), FileRefused> {
-    Ok(private_file::replace_private(path, bytes)?)
+    note_replaced(path, &private_file::replace_private(path, bytes)?);
+    Ok(())
+}
+
+/// Log that `path` was written but its save is not confirmed to survive a
+/// power loss, and why (Rick, 2026-11-19). The daemon goes on: its
+/// supported storage is a local NTFS volume on Windows or a local disk on
+/// Unix (`INSTALLATION_GUIDE.md`, "Supported storage"), and on anything
+/// else it says so here rather than silently.
+pub fn warn_unconfirmed(path: &Path, why: &private_file::Unconfirmed) {
+    tracing::warn!(
+        target: "global",
+        "{} was written, but {why}; the daemon's supported storage is a local NTFS \
+         volume on Windows or a local disk on Unix",
+        path.display()
+    );
+}
+
+/// [`warn_unconfirmed`] when a commit of `path` is not confirmed.
+pub fn note_durability(path: &Path, durability: &private_file::Durability) {
+    if let private_file::Durability::Unconfirmed(why) = durability {
+        warn_unconfirmed(path, why);
+    }
+}
+
+/// [`note_durability`] for a replace that wrote `path`.
+pub fn note_replaced(path: &Path, replaced: &private_file::Replaced) {
+    if let private_file::Replaced::Written(durability) = replaced {
+        note_durability(path, durability);
+    }
 }
 
 /// The enrolled set's store at `path`, made ready for redb: created empty

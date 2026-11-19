@@ -51,7 +51,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
-use shekyl_chain_ingest::corpus::CorpusWriter;
 use shekyl_chain_ingest::fetch::fetch_corpus;
 use shekyl_chain_ingest::height_digests;
 use shekyl_chain_ingest::metrics::Metrics;
@@ -62,6 +61,7 @@ use shekyl_chain_ingest::trace::Trace;
 use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::store::{ChainStore, Horizons};
+use shekyl_corpus::CorpusWriter;
 use shekyl_hash_budget::Budget;
 use shekyl_hasher::Hasher;
 use shekyl_network::Network;

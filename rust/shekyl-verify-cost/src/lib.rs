@@ -5,9 +5,9 @@
 
 //! Verification-cost instruments.
 //!
-//! Pool admission ([`relay`], `DAEMON_RELAY_PRIVACY.md` §72), the pool
-//! door's whole sequence ([`door`], BA-T1) and cold-block connect
-//! ([`connect`], GAP-7). The benches and the pins call these modules, so
+//! Pool admission ([`relay`](shekyl_types::relay), `DAEMON_RELAY_PRIVACY.md` §72), the pool
+//! door's whole sequence (`door`, BA-T1) and cold-block connect
+//! (`connect`, GAP-7). The benches and the pins call these modules, so
 //! the wall-clock benches, the instruction-count gate and the pins measure
 //! one set of fixtures.
 //!

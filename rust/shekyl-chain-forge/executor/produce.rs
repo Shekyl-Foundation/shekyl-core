@@ -34,10 +34,9 @@ use shekyl_archival_fetch_sched::{FetchScheduler, ReadFailure};
 use shekyl_archival_retention::{sign_bundle_commitment_seeded, BUNDLE_SIGNATURE_LEN};
 use shekyl_bundle_producer::{RingDraws, WitnessRing};
 use shekyl_chain_forge::Role;
-use shekyl_chain_ingest::bundle_producer::{
-    run, run_drawing, ProducerParts, ProducerProgress, ProducerSeat, ReadFn,
-};
+use shekyl_chain_ingest::bundle_producer::{run, run_drawing, ProducerParts, ProducerProgress};
 use shekyl_chain_ingest::connector::{TipChanged, WatchTip, FILED_FEED_CAPACITY};
+use shekyl_chain_ingest::producer_seat::{ProducerSeat, ReadFn};
 use shekyl_chain_ingest::scenario::{FreeHash, Scenario};
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
@@ -222,11 +221,7 @@ impl Producing {
                 }
             })
         });
-        let seat = ProducerSeat {
-            witness: Arc::clone(ring),
-            read,
-            start_spread,
-        };
+        let seat = ProducerSeat::new(Arc::clone(ring), read, start_spread);
         let parts = ProducerParts {
             connector: scenario.connector().clone(),
             filed: tokio::sync::broadcast::Sender::new(FILED_FEED_CAPACITY),

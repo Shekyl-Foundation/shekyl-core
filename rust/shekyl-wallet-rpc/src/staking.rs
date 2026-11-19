@@ -15,11 +15,11 @@
 //! [`shekyl_engine_core::StakeFacade`] when reachable.
 //!
 //! `get_balance` / `get_wallet_info` snapshot-then-read through the engine's
-//! own `StakeFacade::balance_snapshot_with` — nested `ledger.read()` under a live
-//! [`shekyl_engine_core::LedgerReadGuard`] deadlocks, so the guard-drop
-//! choreography and the degrade/loud split live in engine-core, once, for
-//! this server and the desktop wallet alike; [`map_balance_view`] is the
-//! only balance-side mapping left here.
+//! own `StakeFacade::balance_snapshot_with` — nested `ledger.read()` under a
+//! live [`shekyl_engine_core::engine::LedgerReadGuard`] deadlocks, so the
+//! guard-drop choreography and the degrade/loud split live in engine-core,
+//! once, for this server and the desktop wallet alike; [`map_balance_view`] is
+//! the only balance-side mapping left here.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -110,8 +110,8 @@ pub(crate) async fn staking_info(
 /// off-the-worker discipline and the error mapping below have one home
 /// rather than a copy per caller.
 ///
-/// **Do not call this while a [`shekyl_engine_core::LedgerReadGuard`] is
-/// live.** `staking_read_view` takes its own brief `ledger.read()` for
+/// **Do not call this while a [`shekyl_engine_core::engine::LedgerReadGuard`]
+/// is live.** `staking_read_view` takes its own brief `ledger.read()` for
 /// `staking_enabled`; nesting that under a held guard deadlocks on
 /// non-reentrant `std::sync::RwLock`. Callers that already observed the flag
 /// under a ledger guard must drop that guard and use

@@ -5,8 +5,9 @@
 
 //! The trace artifact (§3.9): round trips, pinned layout facts, every
 //! refusal observed; and `fetch_corpus` against a scripted transport — in
-//! particular RD-F15's pruned answer. The corpus's own tests live in
-//! `corpus_tests.rs`.
+//! particular RD-F15's pruned answer. The codec's laws live in
+//! `shekyl-corpus`. `corpus_tests.rs` is the replay adapter: sequenced
+//! events, the rewind, and the bundle section on the candidate.
 
 use std::io::Cursor;
 
@@ -398,7 +399,9 @@ mod fetch {
     use shekyl_types::{BlockHeight, TxHash};
 
     use super::three_blocks;
-    use crate::corpus::{CorpusFault, CorpusReader, CorpusWriter};
+    use shekyl_corpus::{CorpusFault, CorpusWriter};
+
+    use crate::corpus::CorpusSource;
     use crate::fetch::{fetch_corpus, FetchFault};
     use crate::source::Source;
     use shekyl_network::Network;
@@ -540,7 +543,7 @@ mod fetch {
             ]
         );
         let bytes = w.finish().expect("count").into_inner();
-        let mut r = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+        let mut r = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
         let mut n = 0;
         while r.next().expect("record").is_some() {
             n += 1;

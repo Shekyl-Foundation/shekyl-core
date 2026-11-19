@@ -45,7 +45,7 @@ use shekyl_crypto_pq::archival_p::PersonaDestination;
 /// **Capability object.** Holding a `StakeEngineHandle` *is* the authority to
 /// drive the staking actor. It is `pub(crate)` and never exported to the RPC
 /// tier; that confinement is the control, made a compile-time guarantee by the
-/// visibility bound (mirrors [`KeyEngineHandle`](super::key_actor::KeyEngineHandle)).
+/// visibility bound (mirrors [`KeyEngineHandle`](crate::engine::key_actor::KeyEngineHandle)).
 #[derive(Clone)]
 pub(crate) struct StakeEngineHandle {
     /// Strong reference to the stake actor's mailbox.
@@ -95,7 +95,7 @@ impl StakeEngineHandle {
     /// task; spawning one *requires* a Tokio runtime. `spawn` asserts an ambient
     /// runtime is present rather than hosting an engine-owned nested runtime
     /// (the drop-panic / abandoned-task hazard documented for
-    /// [`KeyEngineHandle::spawn`](super::key_actor::KeyEngineHandle::spawn)).
+    /// [`KeyEngineHandle::spawn`](crate::engine::key_actor::KeyEngineHandle::spawn)).
     ///
     /// # Panics
     ///
@@ -349,7 +349,7 @@ impl StakeEngineHandle {
     }
 
     /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
-    /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`]
+    /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`](crate::engine::Engine::assemble_bond_post)
     /// (WI-2 §3.3), so this carries no suppression. Go-live still needs
     /// **both** SP-R0 / 2d-1 pruning **and** the RPC stake entry — neither
     /// alone (half (a) landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
@@ -487,7 +487,7 @@ impl StakeEngineHandle {
 /// `MailboxFull` and `Timeout` are present only for match exhaustiveness and are
 /// **unreachable on this path**: the actor uses kameo's default *unbounded*
 /// mailbox (so the awaiting `ask` back-pressures the sender rather than
-/// returning `MailboxFull`, mirroring [`KeyEngine`](super::key_actor)) and the
+/// returning `MailboxFull`, mirroring [`KeyEngine`](crate::engine::key_actor)) and the
 /// handle sets no `ask` timeout (so no `Timeout` is produced). Collapsing them
 /// to the terminal error is therefore a dead arm, not a misclassification of a
 /// live transient. **Reversion clause:** if PR 2c+ introduces a bounded mailbox

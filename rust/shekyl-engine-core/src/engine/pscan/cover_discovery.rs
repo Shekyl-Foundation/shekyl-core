@@ -204,7 +204,7 @@ impl CoverDiscovery {
     ///
     /// **Gate-first** (the funding-side "absence concludable only within `covered`"):
     /// `AbsentVerified` is returned **only** when the whole `cover_window` lies within
-    /// `covered` (the window is non-empty by construction — [`BlockRange`](super::scan_step::BlockRange)
+    /// `covered` (the window is non-empty by construction — [`BlockRange`]
     /// enforces it). A window reaching beyond the verified frontier is `Incomplete` (wait),
     /// never `AbsentVerified` — otherwise a source could induce a re-fund by serving an
     /// exhaustive range that simply does not reach the cover's height.

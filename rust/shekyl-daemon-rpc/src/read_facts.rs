@@ -8,12 +8,9 @@
 //! `chain_alt`, `chain_coinbase_sum`, `pow`, `curve_show`,
 //! `archival_claim_show` and `shard_coverage`.
 //!
-//! **Staged.** One implementor, [`StoreFacts`](crate::store_facts::StoreFacts),
-//! over the Rust chain store; the handlers in [`crate::read_methods`] are
-//! built and tested and not routed. The server answers these methods from
-//! the C++ table until the flip connects the store (PR 2's router, then the
-//! flip), and no FFI implementor is written: the C++ side is deleted at the
-//! flip, so a second implementor here would be built only to be removed.
+//! [`StoreFacts`](crate::store_facts::StoreFacts) implements it over the
+//! Rust chain store, and the handlers in [`crate::reads`] serve these
+//! methods from it.
 //!
 //! The values are typed chain facts. The handlers own the wire: hex, the
 //! 128-bit triples, the status strings and the refusals.

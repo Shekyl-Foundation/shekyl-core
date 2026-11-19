@@ -81,6 +81,10 @@ pub use shekyl_tor_control_client::control::onion::OnionPow;
 pub use shekyl_tor_control_client::control::{ControlError, EventSink, ServiceId, TorExit};
 #[doc(inline)]
 pub use shekyl_tor_control_client::onion_identity::OnionIdentity;
+// Where this crate's tor writes its notice log, inside the configured data
+// directory: a wallet that shows or keeps that log names it from here.
+#[doc(inline)]
+pub use shekyl_tor_control_client::control::LOG_FILE_NAME;
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
 /// watch, owned by the supervisor, outliving every incarnation (the §3b

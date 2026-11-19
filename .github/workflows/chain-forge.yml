@@ -29,6 +29,17 @@ name: chain-forge
 #   negative controls (each source of randomness drawn from the OS, the chain
 #   must differ), and the producer audit (two processes at the plan's spread,
 #   then the live settlement comparison). A red nightly reaches `report-dev-red`.
+# - The hosted chains (§10.4, CF-4a). Nightly, both legs forge the shard-fill
+#   plan in two processes at dev's HEAD and hold it to its committed
+#   blocks.txt and to every layer its pin in chains/hosted.toml names: red
+#   means a merged change moved the chain without re-publishing it. And
+#   `hosted-pull` pulls every pinned digest fresh and checks each layer
+#   (scripts/ci/fetch_test_chain.py --all --fresh): red means the cache is
+#   gone or damaged. The fetch script's selftest runs in `scope` on every
+#   pull request in scope. Cost (CF-4a, 2026-11-18): one shard-fill forging
+#   is 257 s on a 16-vCPU build VM, about 6 minutes on the hosted x86_64
+#   runner and about 4 on aarch64, so the regeneration is nightly only; the
+#   pull check is under a minute.
 #
 # Scope: the Rust tree and `config/`, because a forged chain's bytes depend
 # on the consensus rules, the store, the driver and the crypto beneath them,
@@ -44,6 +55,7 @@ on:
       - 'config/**'
       - '.github/workflows/chain-forge.yml'
       - '.github/actions/install-rust/**'
+      - 'scripts/ci/fetch_test_chain.py'
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
@@ -51,15 +63,19 @@ on:
       - 'config/**'
       - '.github/workflows/chain-forge.yml'
       - '.github/actions/install-rust/**'
+      - 'scripts/ci/fetch_test_chain.py'
   schedule:
     - cron: "35 3 * * *"
   workflow_dispatch:
 
 # A scheduled or dispatched run is its own group: a push landing mid-night
 # must not cancel the nightly whose red is the issue.
+# A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
+# one runs and one waits, and a newer push replaces the waiting one, so the
+# run that finishes covers every merge since the last (06-branching.mdc).
 concurrency:
   group: chain-forge-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -95,6 +111,8 @@ jobs:
           fi
           echo "crypto=$crypto" >> "$GITHUB_OUTPUT"
           echo "the change touches the crypto beneath a chain: $crypto"
+      - name: the fetch script refuses what it must (selftest)
+        run: python3 scripts/ci/fetch_test_chain.py --selftest
 
   x86_64:
     name: "chain forge: determinism (x86_64)"
@@ -138,6 +156,9 @@ jobs:
       - name: a live producer run settles as the planned one (nightly)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: bash scripts/ci/ignored_set_chain_forge.sh --run producer_audit::a_live_producer_run_settles_as_the_planned_one
+      - name: the shard-fill plan forges its pinned hosted chain (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_shard_fill_plan_forges_its_pinned_chain_in_two_processes
 
   aarch64:
     name: "chain forge: determinism (aarch64)"
@@ -166,10 +187,25 @@ jobs:
         run: cargo test --locked --release -p shekyl-chain-forge --test primitives_across_architectures
       - name: the small plan, forged in two processes, is the committed chain
         run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_small_plan_forges_the_same_bytes_in_two_processes
+      - name: the shard-fill plan forges its pinned hosted chain (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_shard_fill_plan_forges_its_pinned_chain_in_two_processes
+
+  hosted-pull:
+    name: "chain forge: every pinned hosted chain still pulls and matches"
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.FORGE_REF }}
+      - name: pull every pinned digest fresh, and check each layer against its pin
+        run: python3 scripts/ci/fetch_test_chain.py --all --fresh
 
   report-dev-red:
-    needs: [scope, x86_64, aarch64]
-    if: ${{ !cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    needs: [scope, x86_64, aarch64, hosted-pull]
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
     permissions:
       actions: read
       contents: read

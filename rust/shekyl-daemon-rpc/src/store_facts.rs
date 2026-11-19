@@ -6,7 +6,8 @@
 //! The store-backed facts: [`ChainFacts`] and [`InfoFacts`] over the Rust
 //! chain store (`DRS_X_STORE_FLIP.md` DX-Q3; RK-D7). The handlers and the
 //! in-process console call this. The C++ chain-facts shim is gone. The
-//! protocol handler's sync reads stay on [`crate::chain_facts::FfiP2pFacts`].
+//! network's reads come from the node's
+//! [`P2pFacts`](crate::chain_facts::P2pFacts) handle.
 //!
 //! **One snapshot per facts call.** Every method opens one
 //! [`ReadSnapshot`] and reads everything it returns from it, so a reply

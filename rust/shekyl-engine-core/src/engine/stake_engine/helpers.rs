@@ -41,8 +41,8 @@ pub(crate) struct PreparedInput {
 }
 
 /// One constructed vout batch to `P`'s base address — the shared
-/// output-construction loop of [`AssembleBond`] (two confidential change
-/// vouts) and [`AssembleEmissionClaim`] (loud reward + two change vouts):
+/// output-construction loop of [`AssembleBond`](super::bond::AssembleBond) (two confidential change
+/// vouts) and [`AssembleEmissionClaim`](super::claim::AssembleEmissionClaim) (loud reward + two change vouts):
 /// per output, the transfer path's `build_output`, then the transaction's
 /// `tx_extra` through its `build_tx_extra`. Both
 /// change vouts return to `P`'s base spend key (the pscan
@@ -193,7 +193,7 @@ impl DerivedSpendParts {
 
 /// Re-derive spend bundles for the selected funding inputs, compute key
 /// images, and build the tx-builder [`SpendInput`]s — the shared spend-side
-/// leg of [`AssembleBond`] and [`AssembleEmissionClaim`] (rule 36: secrets are
+/// leg of [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond) and [`AssembleEmissionClaim`](crate::engine::stake_engine::claim::AssembleEmissionClaim) (rule 36: secrets are
 /// re-derived from each record's `(ciphertext, index)` inside the actor,
 /// never carried in the message).
 ///
@@ -318,7 +318,7 @@ pub(crate) fn derive_p_source_secrets_bundle(
 /// derivation), and the DQ-F fire harness — derives through here, so the
 /// construction cannot diverge between the watch and the sweep. A divergence
 /// would mean derived watch key images stop matching on-chain spends, prunes
-/// never fire, and the stale-record poison [`SpentRecordsDurablyPruned`]
+/// never fire, and the stale-record poison [`SpentRecordsDurablyPruned`](crate::engine::bond_assembly::SpentRecordsDurablyPruned)
 /// precludes returns — which is why this is one function, not three copies.
 ///
 /// The derived intermediates are `Zeroizing`; only the key image leaves.

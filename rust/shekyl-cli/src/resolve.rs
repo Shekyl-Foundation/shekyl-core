@@ -463,7 +463,7 @@ pub enum ResolvedCommand {
 
     // -- Unknown --
     /// An unrecognized command token (the `other` catch-all). Rendered as
-    /// "Unknown command: <cmd>. Type help ...".
+    /// `"Unknown command: <cmd>. Type help ..."`.
     Unknown {
         cmd: String,
     },
@@ -481,8 +481,8 @@ pub enum ResolvedCommand {
 ///
 /// This is the message grammar for `sign` / `verify`: the message binds
 /// into the signature byte-for-byte, so internal whitespace must survive
-/// exactly as typed — [`trailing_message`]'s re-join would collapse it
-/// and make a genuine signature unverifiable. The REPL trims the line
+/// exactly as typed — re-joining the tokens would collapse it and make a
+/// genuine signature unverifiable. The REPL trims the line
 /// before parsing, so there is no trailing-whitespace ambiguity to
 /// resolve here. `None` when fewer than `n` tokens exist or nothing
 /// follows them.

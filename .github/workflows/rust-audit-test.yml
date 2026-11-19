@@ -282,11 +282,10 @@ jobs:
         # has a chance to populate ~/.cargo/bin first.
         run: cargo install cargo-audit --locked
       - name: install cargo-nextest
-        # Same cache behaviour as cargo-audit above. Pinned: the runner
-        # decides which tests run and what counts as a pass, so a new
-        # version is a change to the gate and comes in its own commit.
-        # 0.9.138 needs Rust 1.91; the workspace pins 1.94.0.
-        run: cargo install cargo-nextest --locked --version 0.9.138
+        # Same cache behaviour as cargo-audit above. The pinned version is
+        # scripts/ci/rust_scoped_tests.sh's, shared with the freshness
+        # re-test, so both run the tests under the same runner.
+        run: bash scripts/ci/rust_scoped_tests.sh install-nextest
       - name: cargo audit
         working-directory: rust
         run: |
@@ -423,59 +422,22 @@ jobs:
       - name: "WP: probe sheet and probe suite agree"
         run: python3 scripts/ci/check_probe_registry.py
 
-      - name: rustdoc -D warnings (persona serving path)
+      - name: rustdoc -D warnings (every lib crate, private items included)
         working-directory: rust
-        # These crates' docs carry load-bearing security contracts (shekyl-tor-control-wallet's
-        # trust gate, §3c supervisor posture and pin-time/runtime split;
-        # shekyl-p-serve's wire-indistinguishability invariants; shekyl-p-host's
-        # custody boundary and endpoint-lifetime invariant), and reviews here
-        # repeatedly turned up public→private intra-doc links that only a
-        # `-D warnings` doc build catches. Each crate joins this list in the PR
-        # that lands it, while it is known clean — retrofitting a gate over
-        # accumulated warnings is the task that never happens. Still scoped
-        # rather than `--workspace` because other crates carry pre-existing
-        # rustdoc warnings; widening to the whole workspace is a separate
-        # hygiene task, tracked in FOLLOWUPS.
-        #
-        # `shekyl-crypto-pq` is here though it is not on the serving path: its
-        # module docs state the hybrid schemes' contracts, and it joined when
-        # hybrid scheme 3 landed and its eight older warnings were cleared.
-        #
-        # `shekyl-onion-key` and `shekyl-heap-secret` joined with the onion
-        # split. The keypair's contract and the buffer's contract are these
-        # docs, and both were clean when they landed.
-        #
-        # `shekyl-hasher` joined when it landed: its crate docs are the
-        # hashing actor's contract (the cap, the queue, the lending types,
-        # and why it has no end for `Node::ended`).
-        #
-        # `shekyl-tor-status` joined when it landed: its docs state the wire
-        # contract every client of the Tor status reads.
-        #
-        # `shekyl-wire` joined after the switch (`SO-D12` 4b) deleted
-        # `Input::ServeCredit` and left the crate doc linking it, which no
-        # gate saw: its docs name the consensus encodings, and a link to a
-        # deleted or private item is a claim about the wire nobody checked.
-        #
-        # `shekyl-tx-weight` and `shekyl-tx-builder` joined with multisig
-        # slice 4a-1, which cleared their eight warnings (a link to a test
-        # module, links to private items, a link to a method on another type,
-        # and byte ranges read as links): their docs state the fee model and
-        # the one builder every spend's outputs come from.
-        #
-        # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
-        # compiles to nothing on this runner, so documenting it would gate an
-        # empty crate and pass forever. Its rustdoc gate runs on the Windows
-        # job in build.yml, where its docs exist.
-        run: >-
-          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
-          -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
-          -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
-          -p shekyl-capped-stream -p shekyl-crypto-pq -p shekyl-miner -p shekyl-hash-budget
-          -p shekyl-hasher
-          -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
-          -p shekyl-onion-key -p shekyl-heap-secret -p shekyl-tor-status
-          -p shekyl-wire -p shekyl-tx-weight -p shekyl-tx-builder
+        # Every doc link must resolve. The docs are written for maintainers,
+        # so private items are documented and a doc may link to one; the only
+        # rustdoc lint allowed is `rustdoc::private_intra_doc_links`. A link to
+        # a renamed, deleted or test-only item is a claim about the code that
+        # nothing checks, and it fails here. Every workspace lib crate is
+        # documented except the ones `scripts/ci/check_rustdoc.py` excludes by
+        # name, each with its reason (`shekyl-win-sec` is `cfg(windows)`; the
+        # Windows job in build.yml runs this gate on it), so a new crate is
+        # gated the day it lands. The selftest holds the policy: a missing name
+        # fails in a public doc and in a private one, and a link to a private
+        # item passes.
+        run: |
+          python3 ../scripts/ci/check_rustdoc.py --selftest
+          python3 ../scripts/ci/check_rustdoc.py
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
@@ -536,20 +498,11 @@ jobs:
         # the decision, and a package name that no longer exists fails the
         # expression instead.
         if: ${{ needs.changes.outputs.rust_tests != 'none' }}
+        # The commands are scripts/ci/rust_scoped_tests.sh's, shared with the
+        # freshness re-test (freshness.yml), so both run the same selection.
         env:
           RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
-        run: |
-          set -u
-          if [ "$RUST_TESTS" = all ]; then
-            echo "scope: every workspace test"
-            cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential
-          else
-            expr=""
-            for pkg in $RUST_TESTS; do expr="${expr:+$expr + }rdeps($pkg)"; done
-            echo "scope: $expr"
-            cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential \
-              --no-tests=pass -E "$expr"
-          fi
+        run: bash ../scripts/ci/rust_scoped_tests.sh nextest
       - name: doctests (workspace crates in scope)
         working-directory: rust
         # nextest does not run doctests. They run whether or not a test
@@ -561,16 +514,7 @@ jobs:
         env:
           RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
           RUST_DOC_PKGS: ${{ needs.changes.outputs.rust_doc_pkgs }}
-        run: |
-          set -u
-          if [ "$RUST_TESTS" = all ]; then
-            cargo test --locked --doc --workspace --exclude shekyl-randomx-differential
-          elif [ -z "$RUST_DOC_PKGS" ]; then
-            echo "scope: no package in scope has a library target; no doctests"
-          else
-            echo "scope: cargo test --doc $RUST_DOC_PKGS"
-            cargo test --locked --doc $RUST_DOC_PKGS
-          fi
+        run: bash ../scripts/ci/rust_scoped_tests.sh doctests
       - name: report flaky and slow tests
         # Flaky tests (failed, then passed on the retry) to the job summary
         # and as warnings on the pull request; then the slowest tests and
@@ -662,7 +606,11 @@ jobs:
         #
         # --release is mandatory (the binary refuses debug: a debug-profile
         # latency measurement is meaningless). Thresholds are x86-derived
-        # and live beside the floor ones in the example source.
+        # and live beside the floor ones in the example source. They are
+        # wall clock on GitHub's hosted runners, and the step fails only
+        # there (RUNNER_ENVIRONMENT=github-hosted); the same step run on a
+        # fleet build VM reports its cells over threshold and passes
+        # (Rick, 2026-11-18).
         run: cargo run --locked --release -p shekyl-shard-visual --example budget_matrix -- x86-smoke
       - name: "cargo clippy: test-only features off, as production builds them (lib only)"
         working-directory: rust
@@ -859,15 +807,6 @@ jobs:
         if: always()
         run: mkdir -p rust/target/tests/target
 
-  # A red push run on `dev` opens or threads a tracking issue
-  # (`report-dev-red.yml`). `needs` lists every other job in this file, so
-  # a red in any of them reports; scripts/ci/check_dev_red_reporter.py
-  # holds the list and this condition to the file. Only a push run on
-  # `dev` reports: a pull request's red is read on the pull request. A job
-  # past its `timeout-minutes` is cancelled, not failed, and `failure()`
-  # does not see it, so the condition reads each needed job's result: a
-  # failed or cancelled one reports, unless the whole run was cancelled
-  # (a newer merge superseded it), which `!cancelled()` leaves out.
   economics-sim-narrations:
     name: 'Economics sim: narration pins'
     needs: changes
@@ -915,20 +854,45 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
     steps:
       - uses: actions/checkout@v5
         with:
-          sparse-checkout: scripts/ci/workflow_pass.py
+          sparse-checkout: |
+            scripts/ci/workflow_pass.py
+            scripts/ci/freshness_status.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: every job succeeded or was skipped by scope
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/ci/workflow_pass.py --decide --scope changes
+      # Brief C: a merge to `dev` that shares a test with this pull request
+      # marks its head stale (freshness.yml), and the `merge-next` label
+      # re-tests it against the new `dev`; both report `fresh-against-dev`
+      # on the head. Absent or green passes; stale, re-testing or red fails,
+      # so a stale pull request cannot merge untested. freshness.yml re-runs
+      # this job when the verdict changes.
+      - name: fresh against dev (absent or green)
+        if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/freshness_status.py check "${{ github.event.pull_request.head.sha }}"
 
+  # Every push run on `dev` reports to `report-dev-red.yml`: a red job
+  # opens or threads its own tracking issue, and a job green again closes
+  # its issue. `needs` lists every other job in this file, so a red in any
+  # of them reports; scripts/ci/check_dev_red_reporter.py holds the list
+  # and this condition to the file. Only a push run on `dev` reports: a
+  # pull request's red is read on the pull request. A job past its
+  # `timeout-minutes` is cancelled, not failed, and the reporter counts it
+  # red. A run cancelled as a whole (a newer merge superseded it) reports
+  # nothing, which `!cancelled()` leaves out.
   report-dev-red:
     needs: [changes, rust-audit-and-test, economics-sim-narrations, pass]
-    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
     permissions:
       actions: read
       contents: read

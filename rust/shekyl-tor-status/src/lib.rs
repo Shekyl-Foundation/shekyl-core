@@ -9,7 +9,7 @@
 //! The shape and every name are `INPUT_GRAMMAR.md` §23 as amended by Part G
 //! (IG-Q95…IG-Q101). Each closed set has an `Unknown { tag }` arm: a
 //! keyword this build does not know decodes into it, so a newer node's
-//! reply is read whole, and [`render`] says that the node reports something
+//! reply is read whole, and [`fn@render`] says that the node reports something
 //! this version does not know.
 //!
 //! An unknown keyword never reads as the node hiding its address: the one

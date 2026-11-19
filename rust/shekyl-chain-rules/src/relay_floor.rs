@@ -130,7 +130,7 @@ pub fn relay_floor_at<'id, V: ChainView<'id>>(
 }
 
 /// [`relay_floor_at`] under `policy` (its `w_ref`). Production passes
-/// [`relay_policy`]; a test or a fold passes its own.
+/// [`fn@relay_policy`]; a test or a fold passes its own.
 ///
 /// # Errors
 ///
@@ -197,7 +197,7 @@ pub fn relay_floor_window<'id, V: ChainView<'id>>(
 
 /// [`relay_floor_window`] under `policy`: its lookback `G` sets the depth,
 /// and each floor is priced under it ([`relay_floor_under`]). Production
-/// passes [`relay_policy`].
+/// passes [`fn@relay_policy`].
 ///
 /// # Errors
 ///

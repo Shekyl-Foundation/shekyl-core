@@ -11,10 +11,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::newest_admissible_reference;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
+use shekyl_crypto_pq::held_key_image::{
+    held_key_image, HeldKeyImage, HoldingSpendKey, KeyImageOutput,
+};
+use shekyl_crypto_pq::kem::SharedSecret;
 use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
-use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss, scan_output};
+use shekyl_crypto_pq::output::{
+    compute_output_key_image, recover_combined_ss, scan_output, KeyImageResult, ScannedOutput,
+};
 #[cfg(feature = "seeded-rng")]
 use shekyl_crypto_pq::tx_key::TX_KEY_LEN;
+use shekyl_crypto_pq::CryptoError;
 use shekyl_crypto_pq::TxKey;
 use shekyl_curve_tree::{
     AssembleInput, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock, TargetKind,
@@ -29,7 +36,10 @@ use shekyl_tx_builder::{
 };
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::tx_extra::{admitted_leaf_blob, parse, pqc_kem_per_output, TxExtraField};
+use shekyl_wire::transaction::CT_ENC_FIELD_LEN;
+use shekyl_wire::tx_extra::{
+    admitted_leaf_blob, parse, pqc_kem_per_output, KemCiphertext, TxExtraField,
+};
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::bond::PostedBond;
@@ -48,6 +58,111 @@ pub struct Sourced {
     /// The id of the network whose chain the path is through: what a spend
     /// of this output signs and proves under (the signing envelope §2.2).
     pub network: shekyl_network::NetworkId,
+}
+
+/// What an owner reads off one output: the combined shared secret, the
+/// scanned output and the output's key image.
+struct Recovered {
+    combined_ss: SharedSecret,
+    scanned: ScannedOutput,
+    key_image: KeyImageResult,
+}
+
+/// One paying output, as the wire lays it out: the hybrid ciphertext, the
+/// output key and view tag, and the encrypted amount and label.
+struct PayingOutput {
+    kem: KemCiphertext,
+    output_key: [u8; 32],
+    view_tag: u8,
+    commitment: [u8; 32],
+    enc_amount: [u8; CT_ENC_FIELD_LEN],
+    enc_label: [u8; CT_ENC_FIELD_LEN],
+}
+
+/// Output `index_in_tx` of `tx`, or why `tx` is not a paying transaction.
+fn paying_output(tx: &Transaction, index_in_tx: u64) -> Result<PayingOutput, CryptoError> {
+    let at = usize::try_from(index_in_tx).expect("small");
+    let not_paying =
+        |what: &str| CryptoError::InvalidInput(format!("not a paying transaction: {what}"));
+    let fields = parse(&tx.prefix.extra).map_err(|_| not_paying("its extra does not parse"))?;
+    let kem_blob = fields
+        .iter()
+        .find_map(|f| match f {
+            TxExtraField::PqcKemCiphertext(bytes) => Some(bytes.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| not_paying("no KEM ciphertexts"))?;
+    let kem =
+        pqc_kem_per_output(&kem_blob).map_err(|_| not_paying("the ciphertexts do not split"))?;
+    let kem = kem
+        .get(at)
+        .ok_or_else(|| not_paying("no ciphertext for the output"))?
+        .clone();
+    let output = &tx.prefix.outputs[at];
+    let base = match &tx.ct {
+        Ct::Null(base) | Ct::Fcmp { base, .. } => base,
+    };
+    Ok(PayingOutput {
+        kem,
+        output_key: output.key,
+        view_tag: output.view_tag,
+        commitment: base.commitments[at],
+        enc_amount: base.enc_amounts[at],
+        enc_label: base.enc_labels[at],
+    })
+}
+
+/// The ciphertext and its tag. The scan takes the eight body bytes and the
+/// tag as separate arguments; the wire field is the two concatenated.
+fn ciphertext_and_tag(field: &[u8; CT_ENC_FIELD_LEN]) -> ([u8; 8], u8) {
+    let (tag, body) = field
+        .split_last()
+        .expect("an encrypted field carries its tag");
+    (body.try_into().expect("8-byte ciphertext"), *tag)
+}
+
+/// The scanner's path over output `index_in_tx` of `tx` for `owner`:
+/// decapsulate, derive, verify, decrypt, then `I = x·Hp(O)`. An `Err` is an
+/// output `owner` does not own, or a transaction that is not a paying one.
+fn recover(
+    owner: &Owner<'_>,
+    tx: &Transaction,
+    index_in_tx: u64,
+) -> Result<Recovered, CryptoError> {
+    let paying = paying_output(tx, index_in_tx)?;
+    let (enc_amount, amount_tag) = ciphertext_and_tag(&paying.enc_amount);
+    let (enc_label, label_tag) = ciphertext_and_tag(&paying.enc_label);
+    let combined_ss = recover_combined_ss(
+        owner.x25519_sk,
+        owner.ml_kem_dk,
+        &paying.kem.x25519,
+        &paying.kem.ml_kem,
+    )?;
+    let scanned = scan_output(
+        owner.x25519_sk,
+        owner.ml_kem_dk,
+        &paying.kem.x25519,
+        &paying.kem.ml_kem,
+        &paying.output_key,
+        &paying.commitment,
+        &enc_amount,
+        amount_tag,
+        &enc_label,
+        label_tag,
+        paying.view_tag,
+        owner.spend_public,
+        index_in_tx,
+    )?;
+    let hp_of_o = shekyl_curve_generators::biased_hash_to_point(paying.output_key)
+        .compress()
+        .to_bytes();
+    let key_image =
+        compute_output_key_image(&combined_ss.0, index_in_tx, owner.spend_secret, &hp_of_o)?;
+    Ok(Recovered {
+        combined_ss,
+        scanned,
+        key_image,
+    })
 }
 
 /// A watched output found in a pushed block: the transaction that listed
@@ -551,50 +666,16 @@ impl Spender {
         connecting: BlockHeight,
     ) -> Sourced {
         let at = usize::try_from(index_in_tx).expect("small");
-        let fields = parse(&tx.prefix.extra).expect("the transaction's extra parses");
-        let kem_blob = fields
-            .iter()
-            .find_map(|f| match f {
-                TxExtraField::PqcKemCiphertext(bytes) => Some(bytes.clone()),
-                _ => None,
-            })
-            .expect("a paying transaction carries its KEM ciphertexts");
-        let kem = pqc_kem_per_output(&kem_blob).expect("one ciphertext per output");
-        let kem = &kem[at];
         let output = &tx.prefix.outputs[at];
         let base = match &tx.ct {
             Ct::Null(base) | Ct::Fcmp { base, .. } => base,
         };
         let commitment = base.commitments[at];
-        let enc_amount = base.enc_amounts[at];
-        let enc_label = base.enc_labels[at];
-
-        // The scanner's path: decapsulate, derive, verify, decrypt.
-        let combined_ss =
-            recover_combined_ss(owner.x25519_sk, owner.ml_kem_dk, &kem.x25519, &kem.ml_kem)
-                .expect("the owner's KEM keys decapsulate the output");
-        let scanned = scan_output(
-            owner.x25519_sk,
-            owner.ml_kem_dk,
-            &kem.x25519,
-            &kem.ml_kem,
-            &output.key,
-            &commitment,
-            enc_amount[..8].try_into().expect("8-byte ciphertext"),
-            enc_amount[8],
-            enc_label[..8].try_into().expect("8-byte ciphertext"),
-            enc_label[8],
-            output.view_tag,
-            owner.spend_public,
-            index_in_tx,
-        )
-        .expect("the owner owns the output");
-        let hp_of_o = shekyl_curve_generators::biased_hash_to_point(output.key)
-            .compress()
-            .to_bytes();
-        let ki =
-            compute_output_key_image(&combined_ss.0, index_in_tx, owner.spend_secret, &hp_of_o)
-                .expect("key image");
+        let Recovered {
+            combined_ss,
+            scanned,
+            key_image: ki,
+        } = recover(owner, tx, index_in_tx).expect("the owner owns the output");
 
         // The path, from the wallet-side tree at the reference height.
         let reference_height =
@@ -888,6 +969,40 @@ impl Spender {
             twist: Twist::default(),
         }
         .spend(sourced)
+    }
+
+    /// The key image of block `height`'s coinbase when `wallet` holds it.
+    ///
+    /// One ML-KEM decapsulation, then the output-key check
+    /// ([`held_key_image`]). [`HeldKeyImage::NotHeld`] is a coinbase that
+    /// opened and is not this wallet's. `Err` is a coinbase that did not
+    /// open — a missing ciphertext, a low-order point, a decapsulation
+    /// failure — and a replay must not treat that as "not mine".
+    pub fn coinbase_key_image(
+        &self,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+    ) -> Result<HeldKeyImage, CryptoError> {
+        // A coinbase pays its one output at index 0.
+        const COINBASE_OUTPUT: u64 = 0;
+        let coinbase = &self.coinbases[usize::try_from(height.to_raw()).expect("small")];
+        let paying = paying_output(coinbase, COINBASE_OUTPUT)?;
+        let owner = Owner::miner(wallet);
+        held_key_image(
+            &HoldingSpendKey {
+                x25519_sk: owner.x25519_sk,
+                ml_kem_dk: owner.ml_kem_dk,
+                spend_public: owner.spend_public,
+                spend_secret: owner.spend_secret,
+            },
+            &KeyImageOutput {
+                kem_ct_x25519: &paying.kem.x25519,
+                kem_ct_ml_kem: &paying.kem.ml_kem,
+                output_key: &paying.output_key,
+                view_tag: paying.view_tag,
+                output_index: COINBASE_OUTPUT,
+            },
+        )
     }
 
     /// Block `height`'s coinbase sourced for the miner, for a spend

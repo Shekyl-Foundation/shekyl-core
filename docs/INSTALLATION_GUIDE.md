@@ -34,6 +34,25 @@ of them stops at the account walk's `compile_error!` in `shekyl-daemon-config`.
 The daemon has no iOS or Android arm either: no CI or gitian job builds a node
 for them.
 
+### Supported storage
+
+The wallet and the daemon keep their files on a local disk: a local NTFS
+volume on Windows, a local disk on Unix (Rick, 2026-11-19). Network shares
+are not a supported configuration.
+
+- **The wallet**, on any other storage (a FAT32 or exFAT drive, a network
+  share), still saves its files, but refuses to send or to stake: no save
+  there is confirmed to survive a power cut, so the transaction it would
+  need to remember could be lost after it left. The refusal is the
+  wallet RPC code for the cause (`SAVE_DURABILITY_UNCONFIRMED`,
+  `SAVE_ON_NETWORK_DRIVE`, and the others in `docs/api/wallet_rpc.yaml`),
+  and its message says why and what to change.
+- **The daemon**, on such storage, still starts. A file it replaces at
+  start (its network marker, its rendezvous record, its console key, the
+  service bundle) is written, but not confirmed to survive a power cut,
+  and the daemon logs a warning naming the file, why, and the supported
+  storage.
+
 ### Practical baseline
 
 If you are starting fresh, prefer:
@@ -48,18 +67,15 @@ If you are starting fresh, prefer:
 
 The dependency matrix is maintained in `README.md` and includes:
 
-- compiler/tooling: GCC, CMake, pkg-config
-- core libs: Boost, OpenSSL, libsodium
-- optional libs/tools: readline, gtest, ccache, doxygen/graphviz
+- the Rust toolchain `rust/rust-toolchain.toml` pins, with `cargo`;
+- CMake, and a C compiler for the crates whose build scripts compile C
+  (no C or C++ library is linked from the system: no Boost, OpenSSL,
+  libsodium or readline).
 
 ### Rust integration behavior
 
-Rust modules are integrated via `cmake/BuildRust.cmake`:
-
-- if `cargo` is found, Rust workspace under `rust/` is built and linked
-- if `cargo` is not found, build continues with Rust modules disabled
-
-Install Rust toolchain when you want full Rust-enabled builds:
+Every binary is Rust. `cmake/BuildRust.cmake` runs `cargo` for the
+workspace under `rust/`, so a build needs the Rust toolchain:
 
 ```bash
 curl https://sh.rustup.rs -sSf | sh
@@ -144,9 +160,7 @@ Open MSYS2 MinGW shell and install toolchain + dependencies (64-bit example):
 
 ```bash
 pacman -Syu
-pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake \
-  mingw-w64-x86_64-boost mingw-w64-x86_64-openssl \
-  mingw-w64-x86_64-libsodium
+pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake
 ```
 
 Then:

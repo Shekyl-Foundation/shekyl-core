@@ -7,7 +7,7 @@
 //! confidential vouts to `P`'s base, and the bond slot signed by the
 //! caller's key.
 //!
-//! [`AssembleBond`] and [`AssembleRelease`] are debit/credit twins of one
+//! [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond) and [`AssembleRelease`](crate::engine::stake_engine::release::AssembleRelease) are debit/credit twins of one
 //! wire shape. The prove / phase-1 / spend-slot / encode sequence is
 //! [`shekyl_tx_builder::open_spend`]. What stays here is the bond-post
 //! policy: the funding floor, which term is a debit and which a credit,

@@ -69,6 +69,16 @@ impl Profile {
     }
 }
 
+/// Whether this run is on a GitHub-hosted runner, the one place the x86
+/// smoke's wall-clock thresholds hold (Rick, 2026-11-18). GitHub sets
+/// `RUNNER_ENVIRONMENT` to `github-hosted` there. A fleet build VM running
+/// the CI job's steps is slower and shared, so its cells read the host's
+/// speed and load: there the smoke reports and does not fail. A gate that
+/// holds on every host is an instruction count, not a wall clock.
+fn github_hosted() -> bool {
+    std::env::var("RUNNER_ENVIRONMENT").is_ok_and(|runner| runner == "github-hosted")
+}
+
 fn main() {
     if cfg!(debug_assertions) {
         eprintln!(
@@ -86,6 +96,16 @@ fn main() {
         }
     };
 
+    if matches!(profile, Profile::X86Smoke) {
+        println!(
+            "x86 smoke: {}",
+            if github_hosted() {
+                "a GitHub-hosted runner, so a cell over its threshold fails"
+            } else {
+                "not a GitHub-hosted runner, so a cell over its threshold is reported, not failed"
+            }
+        );
+    }
     println!(
         "shard-visual render matrix: profile={}, {} timed runs per cell (median), 1 warm-up, \
          single-threaded, arch={} os={}",
@@ -153,12 +173,19 @@ fn main() {
         (Profile::X86Smoke, 0) => {
             println!("shard-visual-x86-smoke PASS — {X86_SMOKE_DISCLAIMER}");
         }
-        (Profile::X86Smoke, n) => {
+        (Profile::X86Smoke, n) if github_hosted() => {
             println!(
                 "shard-visual-x86-smoke FAIL — {n} cell(s) over the x86 smoke threshold; \
                  {X86_SMOKE_DISCLAIMER}"
             );
             std::process::exit(1);
+        }
+        (Profile::X86Smoke, n) => {
+            println!(
+                "shard-visual-x86-smoke REPORT — {n} cell(s) over the x86 smoke threshold, \
+                 not failed: this is not a GitHub-hosted runner, and the thresholds are \
+                 wall clock on GitHub's runners; {X86_SMOKE_DISCLAIMER}"
+            );
         }
         (Profile::Floor, 0) => {
             println!(

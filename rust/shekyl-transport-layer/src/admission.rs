@@ -7,7 +7,7 @@
 //! Bans on that table are [`bans`].
 //!
 //! Accept compares the process-wide inbound occupancy — every connector's
-//! inbound row, summed — with [`InboundCeiling`](shekyl_peer_policy::InboundCeiling)
+//! inbound row, summed — with [`InboundCeiling`]
 //! and increments that row in the same lock. Close removes the socket once.
 //! A second close does not decrement again.
 

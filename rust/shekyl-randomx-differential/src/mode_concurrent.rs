@@ -112,9 +112,9 @@ use crate::corpus_random::{
 
 /// Per R1-D9 close: 4 production + 1 reserve workers = 5 total.
 ///
-/// Matches Phase 2F R1-D5's daemon parallel-verification fanout
-/// formula `min(get_max_concurrency(), m_max_prepare_blocks_threads)
-/// + 1` on the GitHub Actions `ubuntu-latest` runner class (4
+/// Matches Phase 2F R1-D5's daemon parallel-verification fanout formula
+/// `min(get_max_concurrency(), m_max_prepare_blocks_threads) + 1` on the
+/// GitHub Actions `ubuntu-latest` runner class (4
 /// vCPU; per F5 R1-D12 close). The §3.15.3 `--workers=<N>` flag's
 ///   default mirrors this constant.
 pub const DEFAULT_WORKER_COUNT: usize = 5;

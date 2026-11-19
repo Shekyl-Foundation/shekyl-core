@@ -472,23 +472,25 @@ pub(crate) enum BroadcastSubmitError {
     /// The pairing was sound; the delegated submit failed.
     #[error(transparent)]
     Submit(#[from] SubmitterError),
-    /// The pending-store save that sealed these bytes was applied, and its
-    /// durability was not confirmed ([`super::error::PersistenceError`]
-    /// says why and names the fix). Nothing was sent. The sealed record
-    /// stays; a later load may resend it.
+    /// The pending-store save that would seal these bytes failed, or was
+    /// applied and its durability not confirmed
+    /// ([`super::error::PersistenceError`] says which and names the fix).
+    /// Nothing was sent, and the seal was taken back
+    /// ([`PendingPostStore::seal_reporting`](super::pscan::dispatch::PendingPostStore::seal_reporting)).
     #[error("nothing was sent: {0}")]
-    SealUnconfirmed(#[source] super::error::PersistenceError),
+    SealNotSaved(#[source] super::error::PersistenceError),
 }
 
-/// A [`PBoundBytes`](super::bond_assembly::PBoundBytes) whose record is
+/// A [`PBoundBytes`] whose record is
 /// durable enough to broadcast.
 ///
 /// [`Self::Fresh`] carries the durability the pending-store save just
-/// returned. [`Self::Loaded`] is a record read back from that store.
+/// returned. [`Self::Loaded`] is a record read back from that store while a
+/// save of it confirmed in this process covered it.
 pub(crate) enum BoundForSend {
     /// Sealed by the save that returned this durability.
     Fresh(PBoundBytes, shekyl_engine_file::Durability),
-    /// Read back from the pending store.
+    /// Read back from the pending store, under its coverage.
     Loaded(super::bond_assembly::LoadedSeal),
 }
 
@@ -656,7 +658,7 @@ impl<D: DaemonEngine> BroadcastSubmitter<D> {
         }
         let tx = handoff.into_durable().map_err(|error| {
             tracing::warn!(%error, "submit_bound: the seal was not confirmed; nothing was sent");
-            BroadcastSubmitError::SealUnconfirmed(error)
+            BroadcastSubmitError::SealNotSaved(error)
         })?;
         Ok(self.submit(tx).await?)
     }

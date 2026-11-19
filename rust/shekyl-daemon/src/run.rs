@@ -112,7 +112,8 @@ impl StartEnd {
 
     /// A start fault of the RPC's set-up, at its open (before the node) or
     /// its start (after it): a file held open past the wait
-    /// (`config.replace.held-open`) and a missing or exposed rendezvous key
+    /// (`config.replace.held-open`), a read-only one
+    /// (`config.replace.read-only`) and a missing or exposed rendezvous key
     /// (`config.service.rendezvous-key`) are refusals; anything else fails
     /// with `context` before its words.
     fn rpc_fault(
@@ -127,6 +128,9 @@ impl StartEnd {
                     &held, data_dir,
                 )])
             }
+            shekyl_daemon_rpc::run::StartFault::ReadOnly(path) => {
+                self.refuse(&[shekyl_daemon_config::replace::read_only_refusal(&path)])
+            }
             shekyl_daemon_rpc::run::StartFault::Refused(why) => {
                 self.fail(format!("{context}: {why}"))
             }
@@ -137,7 +141,7 @@ impl StartEnd {
     }
 }
 
-/// The load step of the sequence: [`load`] in the daemon.
+/// The load step of the sequence: [`fn@load`] in the daemon.
 pub type LoadStep = fn(Cli, &Platform) -> Result<Loaded, Vec<Diagnostic>>;
 
 /// The whole sequence, returning the exit status. `platform` is the
@@ -148,7 +152,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     main_loading(args, platform, load)
 }
 
-/// [`main`], with its load step named. The daemon's is [`load`]. A test
+/// [`main`], with its load step named. The daemon's is [`fn@load`]. A test
 /// that names no configuration file passes
 /// [`shekyl_daemon_config::load_default_file_unread`]: `platform` gives it
 /// its own roots, but on Unix the default file's path is the machine's, and
@@ -244,9 +248,13 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         Ok(l) => l,
         Err(d) => return end.refuse(&[d]),
     };
-    if let Err(d) = marker::check_or_write(&lock, network, network_id) {
-        return end.refuse(&[d]);
-    }
+    // A marker written on storage the daemon does not support is logged once
+    // the logger runs, below (Rick, 2026-11-19).
+    let marker_unconfirmed = match marker::check_or_write(&lock, network, network_id) {
+        Ok(marker::MarkerOutcome::Written(why)) => why,
+        Ok(marker::MarkerOutcome::Matched) => None,
+        Err(d) => return end.refuse(&[d]),
+    };
     // The console key's reset (IG-Q88): under the lock just taken, held
     // through the whole replacement, so it cannot run beside a daemon and a
     // start waits on it (`RPC_CHANNEL.md` §5). It touches no other
@@ -309,6 +317,12 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         }));
     let lines = announced.into_lines();
     announce_all(&lines);
+    if let Some(why) = &marker_unconfirmed {
+        shekyl_daemon_rpc::channel::files::warn_unconfirmed(
+            &lock.data_dir().join(marker::MARKER_FILE),
+            why,
+        );
+    }
 
     // The RPC's runtime and the owner's leg, dialled and bound before the
     // node opens: a second daemon of this account, network and instance

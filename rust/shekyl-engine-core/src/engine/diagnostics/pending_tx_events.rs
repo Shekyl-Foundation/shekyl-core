@@ -138,7 +138,7 @@ pub enum BuildErrorKind {
 ///   [`TxRecipient`](crate::engine::pending::TxRecipient) entries in the
 ///   request.
 /// - `priority` — the requested
-///   [`FeePriority`](crate::engine::pending::FeePriority) tier (already
+///   [`FeePriority`] tier (already
 ///   public-API by virtue of being on the caller-facing request).
 ///
 /// Bounded numeric + bounded enum projections; no caller-attacker
@@ -626,7 +626,7 @@ pub enum PendingTxDiagnostic {
 /// Emit one [`PendingTxDiagnostic`] event onto the given sink.
 ///
 /// Helper parallel to the inline `sink.emit(event)` pattern PR 4's
-/// `LocalRefresh` body uses for [`RefreshDiagnostic`]; consolidating
+/// `LocalRefresh` body uses for [`RefreshDiagnostic`](crate::engine::RefreshDiagnostic); consolidating
 /// the dispatch behind a free function makes the C5 emission-site
 /// rewrites a search-and-call rather than a search-and-method-
 /// rewrite (and forecloses sink-method-name drift between the

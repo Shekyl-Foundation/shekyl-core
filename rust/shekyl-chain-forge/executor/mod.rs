@@ -41,12 +41,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use shekyl_chain_forge::{
-    sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord, Line, Manifest,
-    Plan, PlanRef, ScheduleRecord, MANIFEST_FORMAT_VERSION,
+    close_event, sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord, Line,
+    Manifest, Plan, PlanRef, ScheduleRecord, MANIFEST_FORMAT_VERSION,
 };
 use shekyl_chain_ingest::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use shekyl_chain_ingest::archival_driver::{ENDPOINT, FEE};
-use shekyl_chain_ingest::corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
 use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::PipelineConfig;
 use shekyl_chain_ingest::rebaseline::{baseline, ReplayFault};
@@ -59,6 +58,7 @@ use shekyl_chain_ingest::scenario_shard::{
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, CenRow, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
 use shekyl_harness_spender::{Persona, Recipient, Spender};
 use shekyl_network::Network;
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
@@ -191,6 +191,55 @@ struct Joined {
     join_height: BlockHeight,
 }
 
+/// A block [`Forge::write_new`] appended, and the corpus record it occupies.
+///
+/// The record is assigned as the block is written. A rewind earlier in the
+/// corpus makes the record differ from the height; counting back from the
+/// tip would name the wrong record.
+struct WrittenBlock {
+    height: BlockHeight,
+    record: u64,
+}
+
+/// One `shard-<k>-closed` event per close whose block is in `written`
+/// (`CHAIN_FORGE.md` §11.2). The event's record is that block's record.
+///
+/// When the forging stopped early, closes past the last block written are
+/// left unnamed: the manifest is not what a stopped forging publishes.
+/// A close missing from a forging that ran to the end of the fill is an
+/// invariant break.
+fn close_events(
+    closes: &[ClosedShard],
+    written: &[WrittenBlock],
+    stopped_early: bool,
+) -> Vec<EventRecord> {
+    let mut events = Vec::with_capacity(closes.len());
+    for closed in closes {
+        let height = closed.close_height;
+        let Some(record) = written
+            .iter()
+            .rev()
+            .find(|block| block.height == height)
+            .map(|block| block.record)
+        else {
+            if stopped_early {
+                break;
+            }
+            panic!(
+                "shard {} closed at {height}, and this fill did not write that block",
+                closed.shard
+            );
+        };
+        events.push(EventRecord {
+            name: close_event(closed.shard.to_raw()),
+            height: height.to_raw(),
+            branch: Branch::Main.to_string(),
+            record,
+        });
+    }
+    events
+}
+
 /// One forging's state: the live scenario and its chain, the corpus being
 /// written, and what the plan has built so far.
 pub struct Forge {
@@ -292,13 +341,17 @@ impl Forge {
     /// first block that differed from the committed ledger
     /// ([`Options::stop_at_difference`]); the forging stopped there.
     ///
+    /// A fill's closes are events the step itself returns, one per shard,
+    /// taken from the corpus record [`write_new`] assigned that block.
+    ///
     /// # Errors
     ///
     /// [`ForgeFault`].
     pub async fn run(&mut self, plan: &Plan) -> Result<Option<Difference>, ForgeFault> {
         for step in &plan.steps {
             if self.stopped.is_none() {
-                self.step(&step.action).await?;
+                let named = self.step(&step.action).await?;
+                self.events.extend(named);
             }
             if let Some(difference) = self.stopped.take() {
                 return Ok(Some(difference));
@@ -421,7 +474,11 @@ impl Forge {
     /// Write every block of the chain not yet in the corpus, and its line.
     /// With a committed ledger to stop at, the first line that differs from
     /// it ends the run ([`Outcome::Differed`]).
-    fn write_new(&mut self) -> Result<(), ForgeFault> {
+    ///
+    /// Each returned block carries the corpus record it was written at, so a
+    /// later event names that record instead of counting back from the tip.
+    fn write_new(&mut self) -> Result<Vec<WrittenBlock>, ForgeFault> {
+        let mut written_blocks = Vec::new();
         while self.written < self.chain.len() {
             let mined = &self.chain[self.written];
             let block = mined.template.block.serialize();
@@ -443,7 +500,12 @@ impl Forge {
                 .collect();
             self.corpus
                 .append_carrying(&block, &listed, &references, &bodies)?;
+            let record = self.records;
             self.records += 1;
+            written_blocks.push(WrittenBlock {
+                height: mined.height,
+                record,
+            });
             self.transactions += u64::try_from(listed.len()).expect("a block's list fits");
             let line = Line {
                 height: mined.height.to_raw(),
@@ -460,21 +522,22 @@ impl Forge {
                         ours: Some(line),
                         theirs: committed.lines().get(at - 1).copied(),
                     });
-                    return Ok(());
+                    return Ok(written_blocks);
                 }
             }
         }
-        Ok(())
+        Ok(written_blocks)
     }
 
-    async fn step(&mut self, action: &Action) -> Result<(), ForgeFault> {
+    async fn step(&mut self, action: &Action) -> Result<Vec<EventRecord>, ForgeFault> {
+        let mut closes = Vec::new();
         match action {
             Action::Mine { blocks } => {
                 let mined = self.scenario().mine(*blocks).await;
                 self.chain.extend(mined);
             }
             Action::Spend { inputs } => self.spend(*inputs).await?,
-            Action::FillShards { count } => self.fill(*count).await,
+            Action::FillShards { count } => closes = self.fill(*count).await,
             Action::Join { persona, shards } => self.join(*persona, shards).await?,
             Action::Serve { persona } => self.serve(*persona).await?,
             Action::Claim { persona } => claim::step(self, *persona).await?,
@@ -490,7 +553,8 @@ impl Forge {
                 produce::step(self, *persona, spread).await?;
             }
         }
-        self.write_new()
+        let written = self.write_new()?;
+        Ok(close_events(&closes, &written, self.stopped.is_some()))
     }
 
     /// The miner spends `inputs` kept coinbases in one transaction.
@@ -520,8 +584,9 @@ impl Forge {
         Ok(())
     }
 
-    /// Real spends until `count` shards are closed (S9).
-    async fn fill(&mut self, count: u64) {
+    /// Real spends until `count` shards are closed (S9). The new closes, in
+    /// the order the fold counted them.
+    async fn fill(&mut self, count: u64) -> Vec<ClosedShard> {
         let seeds = Arc::clone(&self.seeds);
         let mut next = self.spends;
         let mut chain = std::mem::take(&mut self.chain);
@@ -533,13 +598,14 @@ impl Forge {
             || {
                 let index = next;
                 next += 1;
-                Some(seeds.fill_spend(index))
+                seeds.fill_spend(index)
             },
         )
         .await;
         self.chain = chain;
         self.spends = next;
-        self.closed.extend(filled.closed);
+        self.closed.extend(filled.closed.iter().copied());
+        filled.closed
     }
 
     /// Persona `slot` joins `shards`, funded by a kept coinbase.
@@ -753,5 +819,53 @@ impl Forge {
             manifest,
             blocks: self.ledger,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(height: BlockHeight, record: u64) -> WrittenBlock {
+        WrittenBlock { height, record }
+    }
+
+    fn close(shard: u64, close_height: BlockHeight) -> ClosedShard {
+        ClosedShard {
+            shard: ShardId::from_raw(shard),
+            close_height,
+        }
+    }
+
+    fn at(height: u64) -> BlockHeight {
+        BlockHeight::from_raw(height)
+    }
+
+    #[test]
+    fn a_close_takes_the_record_of_the_block_that_closed_it() {
+        // Height 11's record is 12: a rewind record sits between it and the
+        // block at height 10. Counting back from the tip would name record
+        // 11 for the first close.
+        let written = vec![block(at(10), 10), block(at(11), 12)];
+        let events = close_events(&[close(0, at(10)), close(1, at(11))], &written, false);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].name, "shard-0-closed");
+        assert_eq!(events[0].height, 10);
+        assert_eq!(events[0].record, 10);
+        assert_eq!(events[1].name, "shard-1-closed");
+        assert_eq!(events[1].height, 11);
+        assert_eq!(events[1].record, 12);
+        assert_eq!(events[0].branch, "main");
+    }
+
+    #[test]
+    fn a_forging_that_stopped_names_only_the_closes_it_wrote() {
+        let events = close_events(
+            &[close(0, at(10)), close(1, at(11))],
+            &[block(at(10), 10)],
+            true,
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].record, 10);
     }
 }

@@ -196,6 +196,17 @@ jobs:
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
 
+      - name: Cache the hosted test chains, by their pins
+        # CHAIN_FORGE.md §10.4 (CF-4a): keyed by the pin file, so a runner
+        # pulls each pinned digest once; the fetch checks every layer
+        # against the pin whether it pulled or found it here.
+        uses: actions/cache@v5
+        with:
+          path: |
+            rust/shekyl-chain-forge/chains/*/hosted
+            ${{ runner.temp }}/shekyl-oras
+          key: test-chains-${{ hashFiles('rust/shekyl-chain-forge/chains/hosted.toml') }}
+
       - name: Run the bundle producer's gate
         # The subject and its assertion are scripts/ci/producer_gate.sh, in
         # the tree under test.
@@ -343,6 +354,17 @@ jobs:
 
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
+
+      - name: Cache the hosted test chains, by their pins
+        # CHAIN_FORGE.md §10.4 (CF-4a): keyed by the pin file, so a runner
+        # pulls each pinned digest once; the fetch checks every layer
+        # against the pin whether it pulled or found it here.
+        uses: actions/cache@v5
+        with:
+          path: |
+            rust/shekyl-chain-forge/chains/*/hosted
+            ${{ runner.temp }}/shekyl-oras
+          key: test-chains-${{ hashFiles('rust/shekyl-chain-forge/chains/hosted.toml') }}
 
       - name: Run the chain-ingest ignored set
         # The set and its assertions are scripts/ci/ignored_set_chain_ingest.sh,

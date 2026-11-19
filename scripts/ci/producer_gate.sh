@@ -41,6 +41,10 @@ for subject in "${subjects[@]}"; do
   fi
 done
 
+# The forged shard-fill chain both build on (CHAIN_FORGE.md CF-4a), pulled
+# by its pin and checked layer by layer before anything reads it.
+python3 ../scripts/ci/fetch_test_chain.py shard-fill
+
 START=$(date +%s)
 for subject in "${subjects[@]}"; do
   cargo test --locked --release -p shekyl-chain-ingest --lib -- --ignored --exact "${subject}" --nocapture

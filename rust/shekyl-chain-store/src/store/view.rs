@@ -67,9 +67,9 @@
 //! # One body, two transactions
 //!
 //! The decode / verify / classify work is not here: it is
-//! [`chain_reads`](super::chain_reads), generic over the transaction and
+//! [`chain_reads`], generic over the transaction and
 //! shared with the read snapshot (S-CHAIN-R, SCR-13). This type contributes
-//! exactly one thing to each read — **what a fault does** ([`Self::arm`]):
+//! exactly one thing to each read — **what a fault does** ([`BatchView::arm`]):
 //! an **invariant** fault (SI-7 — a hole below the tip, an undecodable row,
 //! a blob that does not hash to its recorded identity) **arms the batch's
 //! poison**, so a verdict minted over the corrupt read cannot commit; an

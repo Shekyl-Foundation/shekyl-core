@@ -103,9 +103,9 @@ pub(super) async fn close_shard_through_the_daemon(
 ///    walk that shortens its epoch to make this cheap must still expect
 ///    its bond two epochs after the pricing epoch, never one.
 ///
-/// This is `shekyl-chain-ingest`'s `close_shards` through the daemon's
-/// front door: the ingest harness drives the connector in-process with a
-/// spender over fixture coinbases; here every spend is a production wallet
+/// This is `shekyl-chain-ingest`'s shard fill (`close_shards_drawing`, the
+/// forge's) through the daemon's front door: the ingest harness drives the
+/// connector in-process with a spender over fixture coinbases; here every spend is a production wallet
 /// transfer over RPC and every block the daemon's own template. `W` is the
 /// production constant and nothing here is a lever, so the cost is a few
 /// hundred real proofs — minutes in a debug build — which is why every

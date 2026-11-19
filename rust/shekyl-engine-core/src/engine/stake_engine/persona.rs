@@ -136,7 +136,7 @@ impl Message<PersonaIdentityOf> for StakeEngine {
 /// that is the custody ruling rather than a convenience. §7.2(iii): the
 /// wallet's HKDF siblings all descend from `master_seed`, so a serving role
 /// holding a seed is one edit away from holding `bond_spend`'s authority. The
-/// seed never exists outside `shekyl-crypto-pq`: the actor's [`ArchivalPKeys`]
+/// seed never exists outside `shekyl-crypto-pq`: the actor's [`ArchivalPKeys`](shekyl_crypto_pq::archival_p::ArchivalPKeys)
 /// holds the keypair, and what crosses the actor boundary is a value
 /// authorizing exactly one thing: publishing this onion.
 ///

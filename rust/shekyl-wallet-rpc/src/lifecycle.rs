@@ -720,7 +720,7 @@ struct StakeParams {
     /// [`StakePostureParam::SupportCompleteTree`], ignored for market.
     ///
     /// Not a validation nicety — the refusal it guards *is* the warning
-    /// (see [`FOUNDATION_POSTURE_WARNING`]), so a client either shows the
+    /// (see [`FOUNDATION_POSTURE_WARNING`](crate::FOUNDATION_POSTURE_WARNING)), so a client either shows the
     /// operator those terms or deliberately echoes an acknowledgment it
     /// was handed. The GUI never sends this field, which is what keeps the
     /// foundation posture off that surface by construction rather than by
@@ -918,6 +918,13 @@ pub(crate) async fn stake(
                 E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
                 // W2: durable slot may exist without a post — a `stake` re-invoke
                 // resumes. Say so in the operator-facing text (rule 82).
+                // The post's seal was not confirmed on disk: nothing was
+                // sent, the seal was removed, and the save's cause answers
+                // (Rick, 2026-11-19).
+                E::SealNotSaved(error) => shekyl_wallet_contract::error::from_unsaved_send(
+                    &error,
+                    shekyl_wallet_contract::error::SaveOf::Staking,
+                ),
                 E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
                     "stake failed mid-flow ({d}); call stake again to resume"
                 )),

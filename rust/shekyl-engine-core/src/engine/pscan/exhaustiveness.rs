@@ -18,7 +18,7 @@
 //! ## Recompute-from-received, not compare-to-claimed
 //!
 //! The load-bearing discipline: continuity recomputes `hash(block[N])` **from the
-//! received material** — [`Block::hash`] rebuilds `tx_tree_hash` from the inline
+//! received material** — [`Block::hash`](shekyl_wire::block::Block::hash) rebuilds `tx_tree_hash` from the inline
 //! miner body + the received `transaction_hashes`, reforms the `pow_blob`, and
 //! hashes it — then checks that against `block[N+1].previous`. Comparing
 //! `block[N+1].previous` against a *stored* or *source-claimed* hash of `N` would
@@ -36,7 +36,7 @@
 //!   that binding, so reading the bound identity here *is* the recompute —
 //!   what remains to check is that it is the identity this block committed to
 //!   at this index. The miner tx is covered automatically — its body is inline
-//!   and its hash is the first Merkle leaf in [`Block::hash`].
+//!   and its hash is the first Merkle leaf in [`Block::hash`](shekyl_wire::block::Block::hash).
 //!
 //! - **Archival step (`WSS-Q16`):** each block's reported running total
 //!   (`archival_cumulative`) equals the previous block's checked total plus the
@@ -325,7 +325,7 @@ fn archival_step(fold: &ArchivalFold, sb: &ScannableBlock) -> Option<ArchivalSte
 /// re-hashing the last block.
 ///
 /// Each block's `previous` is checked against the running recomputed hash (the
-/// `anchor` for the first, [`Block::hash`] of the prior for the rest), and every
+/// `anchor` for the first, [`Block::hash`](shekyl_wire::block::Block::hash) of the prior for the rest), and every
 /// fetched body is checked against its committed hash. The first failure stops
 /// verification with an [`ExhaustivenessError`] — the caller advances the cursor
 /// only over the returned range, never past a refusal.

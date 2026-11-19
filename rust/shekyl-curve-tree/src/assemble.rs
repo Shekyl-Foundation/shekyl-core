@@ -131,7 +131,7 @@ pub struct PathParts {
 /// the batch holds that tree once ([`Self::tree`]) and no path carries its
 /// own, so a reader has no agreement between paths to check. Tests build
 /// one from parts only under the TEST_ONLY `test-paths` feature
-/// ([`Self::from_parts_unchecked`]).
+/// (`AssembledPaths::from_parts_unchecked`).
 ///
 /// A batch cannot be written out by hand:
 ///
@@ -676,9 +676,9 @@ impl CurveTreeClient {
     /// comparison the capture key, the rollback and the backfill share — and
     /// then its contents are fixed and come from the table. Otherwise it is
     /// the rightmost chunk at its layer, still open, and its children are the
-    /// snapshot's [`Frontier::open_branches`] entry for that layer. Layer 0
+    /// snapshot's [`Frontier::open_branches`](crate::frontier::Frontier::open_branches) entry for that layer. Layer 0
     /// is the exception in the open case. The snapshot persists that chunk's
-    /// scalars and [`Frontier::open_branches`] does not return them: it hashes
+    /// scalars and [`Frontier::open_branches`](crate::frontier::Frontier::open_branches) does not return them: it hashes
     /// them into the parent. The path types take sibling *points*, so the
     /// identities come from a ranged read of the chunk's own positions — at
     /// most `SELENE_CHUNK_WIDTH - 1` rows. That read is the open-leaf-chunk
