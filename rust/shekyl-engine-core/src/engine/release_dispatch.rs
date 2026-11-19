@@ -308,11 +308,12 @@ impl ReleaseRequestError {
 /// pins that the release call sits behind exactly this predicate.
 fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
     // Nothing left the wallet: a persona mismatch, or a seal whose
-    // durability was not confirmed. The just-taken seal is
-    // released so the lane can be retried.
+    // durability was not confirmed, which `seal_reporting` has already
+    // removed (Rick, 2026-11-19). The just-taken seal is released so the
+    // lane can be retried.
     matches!(
         e,
-        BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealUnconfirmed(_)
+        BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealNotSaved(_)
     )
 }
 
@@ -604,15 +605,27 @@ where
             terminal: None,
         };
         let (admission, durability) = store
-            .mutate_reporting(move |block| {
-                // One locked decision, shared with the bond-post/claim/drain
-                // seams: persona dedup first (remedy: wait), then cross-kind
-                // gindex overlap (remedy: retry), then the generation guard.
-                let admission = block.seal_release(sealed, dispatch_tip, snapshot_generation);
-                (admission == SealAdmission::Admit, admission)
-            })
+            .seal_reporting(
+                move |block| {
+                    // One locked decision, shared with the bond-post/claim/drain
+                    // seams: persona dedup first (remedy: wait), then cross-kind
+                    // gindex overlap (remedy: retry), then the generation guard.
+                    let admission = block.seal_release(sealed, dispatch_tip, snapshot_generation);
+                    (admission == SealAdmission::Admit, admission)
+                },
+                move |block| block.remove_release(&persona).is_some(),
+            )
             .await
-            .map_err(|e| ReleaseRequestError::state("pending-release seal", e))?;
+            .map_err(|e| match e {
+                // The seal's save failed: nothing was sent, and the exit
+                // answers the save's cause (Rick, 2026-11-19).
+                super::pscan::pending_store::SealError::NotSaved(cause) => {
+                    ReleaseRequestError::Submit(BroadcastSubmitError::SealNotSaved(cause))
+                }
+                super::pscan::pending_store::SealError::Store(e) => {
+                    ReleaseRequestError::state("pending-release seal", e)
+                }
+            })?;
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(ReleaseRequestError::ReleasePending),
@@ -634,6 +647,10 @@ where
         //   the wallet and no daemon gave a verdict, so the seal this call
         //   just took is released (`remove_release`: byte-prune +
         //   reservation release + generation bump in one seal).
+        // - `SealNotSaved`: the seal's save was not confirmed, so nothing
+        //   was sent; `seal_reporting` removed the seal under its own guard,
+        //   so the removal here finds nothing, and the exit answers with the
+        //   save's own code (Rick, 2026-11-19).
         // - A definite `RejectedTerminal` is recorded on the record, which
         //   stays sealed with its reservation. "Never admitted, never
         //   relayed" holds only for an honest daemon: a lying one keeps valid
@@ -739,6 +756,16 @@ mod tests {
             submitter_persona: PCanonicalId::from_bytes([2; 32]),
         };
         assert!(released_on_first_send_failure(&mismatch));
+
+        let unconfirmed = BroadcastSubmitError::SealNotSaved(
+            super::super::error::PersistenceError::DurabilityUnconfirmed(
+                shekyl_engine_file::Unconfirmed::ClassicRename,
+            ),
+        );
+        assert!(
+            released_on_first_send_failure(&unconfirmed),
+            "an unconfirmed seal sent nothing: the lane reopens (Rick, 2026-11-19)"
+        );
 
         let retryable = BroadcastSubmitError::Submit(SubmitterError::RejectedRetryable {
             cause: RetryableRejectCause::StaleRoot,
@@ -854,7 +881,13 @@ mod tests {
         let guard_at = code
             .find(guard)
             .expect("the release must be gated on the tested predicate, not inlined");
-        let release_at = code.find(release_call).expect("checked non-empty above");
+        // The seal's own unseal (`seal_reporting`) also calls it, before the
+        // send; the release this pin is about is the first one after the
+        // predicate.
+        let release_at = guard_at
+            + code[guard_at..]
+                .find(release_call)
+                .expect("the predicate's branch releases the sealed record");
         let record_at = code.find(record_call).expect("checked non-empty above");
         assert!(
             guard_at < release_at && release_at < record_at,

@@ -20,7 +20,7 @@ use crate::pow::Pow;
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_types::{BlockCount, BlockHeight};
 
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, RunReport};
 use crate::schedule::ChainRules;
@@ -121,7 +121,7 @@ where
 {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
-    let source = CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let source = CorpusSource::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
     replay_open(manifest, substrate, policy, tag, source, trace).await
 }

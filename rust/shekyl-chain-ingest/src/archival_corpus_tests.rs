@@ -22,7 +22,7 @@ use shekyl_types::{BlockCount, BlockHeight, PCanonicalId};
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::Input;
 
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::source::{IngestEvent, Source};
 use crate::vectors_tests::captured_chains;
 
@@ -61,7 +61,7 @@ enum Archival {
 fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+        CorpusSource::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut height = reader.first_height();
     let mut found = Vec::new();
     while let Some(event) = reader.next().expect("corpus reads") {

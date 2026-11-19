@@ -46,7 +46,6 @@ use shekyl_chain_forge::{
 };
 use shekyl_chain_ingest::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use shekyl_chain_ingest::archival_driver::{ENDPOINT, FEE};
-use shekyl_chain_ingest::corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
 use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::PipelineConfig;
 use shekyl_chain_ingest::rebaseline::{baseline, ReplayFault};
@@ -59,6 +58,7 @@ use shekyl_chain_ingest::scenario_shard::{
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, CenRow, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
 use shekyl_harness_spender::{Persona, Recipient, Spender};
 use shekyl_network::Network;
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};

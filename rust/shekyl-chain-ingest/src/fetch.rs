@@ -31,7 +31,7 @@ use shekyl_rpc_types::kinds::{Bytes, Height};
 use shekyl_rpc_types::wire::shared::{ArchivedState, OrArchived, Slot, SlotState};
 use shekyl_types::{BlockHeight, TxHash};
 
-use crate::corpus::{CorpusFault, CorpusWriter};
+use shekyl_corpus::{CorpusFault, CorpusWriter};
 
 /// Why the corpus could not be fetched.
 #[derive(Debug, thiserror::Error)]
@@ -139,7 +139,8 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
             }
             // The section's bodies in section order, each the one its
             // reference names. A body the daemon no longer holds cannot be
-            // replayed, so the capture stops there (`corpus.rs`, version 4).
+            // replayed, so the capture stops there. The record's layout is
+            // `shekyl-corpus`'s (`CORPUS_FORMAT_VERSION`).
             let references: Vec<Vec<u8>> = block.section.into_iter().map(Bytes::into_vec).collect();
             let carried: Vec<Vec<u8>> = block
                 .section_body

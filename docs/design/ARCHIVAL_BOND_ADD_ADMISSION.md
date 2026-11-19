@@ -8,7 +8,7 @@ was grounded at `dev` = `6c41bf820` (the #790 merge) and re-based onto
 `fbc92287a` (the #795–#798 `PDM` sweep and #786 S-TX).
 
 **Provenance.** This is `WSS-22`, the one remainder of the wallet-side store
-round ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5.5), delivered to the
+round ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5.6), delivered to the
 lane that owns the predicate. The finding is the wallet lane's; the rule is
 steering's; the implementation is the daemon lane's.
 
@@ -196,9 +196,11 @@ length rows (S-CHAIN-W) and S-PRUNE's `b_*` forward pass, with
 `close_height(k)` searched over `cumulative_tx_count`. Dissolved.
 `PDM-Q6` item 5 withdraws A4, and `SHT-Q2` keys the frontier by
 `shard_of(cumulative_archival_len)` (`CHAIN_RULES_SLICE_8.md` §3.4). The
-wallet fill still wants `b_*` and `close_height(k)` as readable daemon
-facts (§5). Admission reads the fold, the price, and the viability check
-above.
+wallet fill reads the cumulative archival length per block and checks it
+by the increment (`WALLET_SIDE_STORE.md` §6.4.3, `WSS-Q16`). `close_height(k)`
+is already readable as `shard_coverage`'s `freeze_height`. The field lands
+with the fill build. Admission reads the fold, the price, and the viability
+check above.
 
 **Rule 94.** This document mints no family. The answer's family is `CEN-J15`
 (#983), stamped on this document's row in
@@ -211,10 +213,11 @@ at the lane, and the lane's row points back.
 
 - **`WSS-22`** — the wallet round's finding, delivered.
 - **`WSS-Q6` / `WSS-Q10`'s daemon-lane halves.** The admission rule those
-  halves were waiting on is `CEN-J15` (§4). What remains is `b_*` and
-  `close_height(k)` as readable daemon facts for the wallet fill
-  ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)). The A4 / S-PRUNE gate
-  those halves were also waiting on is dissolved (§4.1).
+  halves were waiting on is `CEN-J15` (§4), built. What remains for the
+  wallet fill is the per-block cumulative length (`WSS-Q16`,
+  [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.4.3), landing with that
+  build. `close_height(k)` is already readable as `shard_coverage`'s
+  `freeze_height`. The A4 / S-PRUNE gate is dissolved (§4.1).
 - **`CompleteTree`'s *owed* set** is *"every closed, final shard"*
   (`WALLET_SIDE_STORE.md` `WSS-Q10`), the same predicate the admission guard
   applies — one definition, two consumers.

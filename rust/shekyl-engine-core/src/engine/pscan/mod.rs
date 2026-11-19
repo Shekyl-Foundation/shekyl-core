@@ -46,6 +46,7 @@ pub(crate) mod cover_discovery;
 pub(crate) mod dispatch;
 pub(crate) mod end_date;
 pub(crate) mod exhaustiveness;
+pub(crate) mod pending_store;
 pub(crate) mod persona_scanner;
 pub(crate) mod reconcile;
 pub(crate) mod scan_step;

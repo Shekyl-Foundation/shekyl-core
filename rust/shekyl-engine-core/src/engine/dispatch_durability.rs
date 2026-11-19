@@ -34,7 +34,8 @@
 //! - [`DurableTxBytes::from_fresh_seal`] — a claim, drain, release or bond
 //!   post whose pending-store save just returned [`Durability::Confirmed`].
 //! - [`DurableTxBytes::from_loaded_seal`] — a resend of bytes
-//!   [`PBoundBytes::from_pending`] read back out of that store.
+//!   [`PBoundBytes::from_pending`] read back out of that store while a save
+//!   of it confirmed in this process covered them.
 //!
 //! The watchdog's probe and the user's resend of a held send
 //! (`held_sends.rs`) re-offer bytes read back from the saved journal row
@@ -94,8 +95,13 @@ impl DurableTxBytes {
 
     /// Bytes [`PBoundBytes::from_pending`] read back from the sealed store.
     ///
-    /// The load is the witness: the store returned the record. A fresh
-    /// assembly does not construct a [`LoadedSeal`].
+    /// The witness is the store's coverage, not the load: a [`LoadedSeal`]
+    /// is built only with the store's
+    /// [`Covered`](super::pscan::pending_store::Covered), minted when a save
+    /// of the whole seal confirmed in this process covers the record (Rick,
+    /// 2026-11-19). A record the process only loaded, or whose last save was
+    /// not confirmed, is never sent. A fresh assembly does not construct a
+    /// [`LoadedSeal`].
     pub(crate) fn from_loaded_seal(seal: LoadedSeal) -> Self {
         Self(seal.into_bytes())
     }
