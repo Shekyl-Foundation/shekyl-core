@@ -25,8 +25,9 @@ zeroize = { workspace = true }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-# The local application data folder, the account's root on Windows, and a
-# private file's owner-only, labelled descriptor.
+# The local application data folder, the account's root on Windows, the
+# per-account root's owner-only create the daemon makes too, and a private
+# file's owner-only, labelled descriptor.
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]

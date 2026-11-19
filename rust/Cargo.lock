@@ -5308,6 +5308,7 @@ dependencies = [
  "serde_json",
  "shekyl-crypto-hash",
  "shekyl-network",
+ "shekyl-os-account",
  "shekyl-win-sec",
 ]
 
