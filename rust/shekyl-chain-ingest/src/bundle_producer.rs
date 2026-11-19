@@ -19,7 +19,7 @@
 //!    where `D` is;
 //! 3. starts every read whose height has come, while the client has a
 //!    free slot, each through the one fetch path
-//!    ([`ReadFn`]),
+//!    ([`ReadFn`](crate::producer_seat::ReadFn)),
 //!    after its start delay, and feeds each outcome back;
 //! 4. offers every block that is ready to the queue
 //!    ([`OfferBundle`](crate::connector::OfferBundle)).
