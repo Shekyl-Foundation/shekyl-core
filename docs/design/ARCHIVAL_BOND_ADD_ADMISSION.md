@@ -8,7 +8,7 @@ was grounded at `dev` = `6c41bf820` (the #790 merge) and re-based onto
 `fbc92287a` (the #795–#798 `PDM` sweep and #786 S-TX).
 
 **Provenance.** This is `WSS-22`, the one remainder of the wallet-side store
-round ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5.5), delivered to the
+round ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5.6), delivered to the
 lane that owns the predicate. The finding is the wallet lane's; the rule is
 steering's; the implementation is the daemon lane's.
 

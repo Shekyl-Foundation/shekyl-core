@@ -1263,8 +1263,8 @@ immutable):
   store. The pull can start at finality, at most `D_max` blocks into the
   freeze epoch, leaving `≥ SEB − D_max` blocks of window. (This supersedes
   `WSS-Q4`'s deadline — *"the next epoch's open, which may be one block
-  away"* — the window is the whole freeze epoch; the wallet lane re-keys
-  §6.5.)
+  away"* — the window is the whole freeze epoch; re-keyed in
+  [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5, Round 2, 2026-11-19.)
 - **One `JoinMarket` per batch of closed shards.** An archiver on the
   `Market` leg bonds the shards that closed in an epoch as one post at the
   end of their freeze epoch (or earlier, once pulled); **`holdings` are
