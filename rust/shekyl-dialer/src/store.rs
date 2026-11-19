@@ -9,14 +9,15 @@
 //!
 //! The owner loop writes the file at [`STORE_INTERVAL_NANOS`] while it
 //! runs, and the dialer writes it once more when it stops. A write
-//! replaces the file in one rename, so a crash mid-write leaves the
-//! previous file. A file this build cannot read is dropped whole: the
+//! replaces the file in one rename, synced before and after, so a crash
+//! mid-write leaves the previous file. A file this build cannot read is dropped whole: the
 //! lists start empty and the next write replaces it.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use shekyl_os_account::private_file::{self, Access};
 use shekyl_peerlist::address_file::{self, AddressFileError};
 use shekyl_peerlist::NetworkAddress;
 
@@ -61,16 +62,20 @@ impl AddressStore {
         address_file::decode(&bytes).map_err(LoadError::Dropped)
     }
 
-    /// Write `addresses` as the file, replacing what was there in one
-    /// rename. The directory is created when it is not there.
+    /// Write `addresses` as the file through the one replace (Rick,
+    /// 2026-11-18): staged beside it, synced, renamed over it, and the
+    /// directory synced. The directory is created when it is not there.
     pub fn write(&self, addresses: &[NetworkAddress]) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             if !dir.as_os_str().is_empty() {
                 fs::create_dir_all(dir)?;
             }
         }
-        let staged = self.path.with_extension("tmp");
-        fs::write(&staged, address_file::encode(addresses))?;
-        fs::rename(&staged, &self.path)
+        private_file::replace(
+            &self.path,
+            &address_file::encode(addresses),
+            Access::Default,
+        )?;
+        Ok(())
     }
 }

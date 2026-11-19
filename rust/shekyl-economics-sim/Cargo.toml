@@ -52,6 +52,12 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 thiserror.workspace = true
 serde = { workspace = true }
 serde_json = "1"
+# Standard traffic's draw (`rng::block_interval`, `rng::rung_arrivals`;
+# ECONOMICS_SIM_PRODUCTION_REBASE.md §5.35): `exp` and `log` in pure Rust,
+# the same bits on every host, where std's call the platform's C runtime.
+# Already in the lockfile through `num-traits`. Default features off: the
+# `arch` feature only reaches x87 on 32-bit x86 without SSE.
+libm = { version = "0.2.16", default-features = false }
 
 [dev-dependencies]
 # The armed regeneration guard (rule 50): a committed narration moves only

@@ -46,6 +46,7 @@ use shekyl_rpc_types::kinds::Bytes;
 use shekyl_rpc_types::wire::rpc::{self as wire_rpc, CeilingWord};
 
 use crate::authority::Authority;
+use crate::run::StartFault;
 use sessions::Sessions;
 use store::{Enroller, Enrollment, Store, StoreError};
 
@@ -169,7 +170,7 @@ pub struct Channel {
     pub(crate) sessions: Arc<Sessions>,
     pub(crate) budget: HandshakeBudget,
     /// Where a service publishes its rendezvous record, when it listens.
-    pub(crate) service_rendezvous: Option<PathBuf>,
+    pub(crate) service_rendezvous: Option<shekyl_rpc_rendezvous::ServiceRecordAt>,
     /// A service's data directory, where its console leg is bound
     /// ([`console_leg`]); `None` for a daemon run as its user.
     pub(crate) console_dir: Option<PathBuf>,
@@ -183,16 +184,17 @@ impl Channel {
     ///
     /// # Errors
     ///
-    /// The refusal, in the operator's words.
-    pub fn open(setup: &ChannelSetup) -> Result<Arc<Self>, String> {
+    /// [`StartFault::HeldOpen`] when another program held a staged file
+    /// open past the wait; otherwise the refusal, in the operator's words.
+    pub fn open(setup: &ChannelSetup) -> Result<Arc<Self>, StartFault> {
         let dir = &setup.data_dir;
         let key_path = dir.join(files::KEY_FILE);
-        let key = match files::read_key(&key_path).map_err(|e| e.to_string())? {
+        let key = match files::read_key(&key_path)? {
             Some(key) => key,
             None => {
                 let key = StaticKeypair::generate()
                     .map_err(|e| format!("the RPC channel's key could not be made: {e}"))?;
-                files::write_private(&key_path, &key.to_key_file()).map_err(|e| e.to_string())?;
+                files::write_private(&key_path, &key.to_key_file())?;
                 tracing::info!(
                     target: "global",
                     "the RPC channel's key was made at {}",
@@ -205,14 +207,13 @@ impl Channel {
             &dir.join(files::BUNDLE_FILE),
             &bundle(&key),
         )
-        .map_err(files::FileRefused::from)
-        .map_err(|e| e.to_string())?;
+        .map_err(files::FileRefused::from)?;
         let store = Store::open(dir).map_err(|e| e.to_string())?;
         // The console key's file and its cell are one change. A start
         // finishes a commit the last process did not rename, and only then
         // makes a key when the service has none (§5).
         if setup.service {
-            match console::reconcile(dir, &store).map_err(|e| e.to_string())? {
+            match console::reconcile(dir, &store)? {
                 console::Reconcile::Consistent => {}
                 console::Reconcile::Placed => tracing::info!(
                     target: "global",
@@ -220,7 +221,7 @@ impl Channel {
                     dir.join(files::CONSOLE_KEY_FILE).display()
                 ),
                 console::Reconcile::Absent => {
-                    let path = console::install(dir, &store, None).map_err(|e| e.to_string())?;
+                    let path = console::install(dir, &store, None)?;
                     tracing::info!(
                         target: "global",
                         "the service's console key was made at {}",
@@ -245,9 +246,7 @@ impl Channel {
             store,
             sessions: Arc::new(Sessions::default()),
             budget: HandshakeBudget::new(Instant::now()),
-            service_rendezvous: setup.service_rendezvous.as_deref().map(|dir| {
-                shekyl_rpc_rendezvous::service_record_path(dir, &setup.network_id, &setup.instance)
-            }),
+            service_rendezvous: service_record_at(setup),
             console_dir: setup.service.then(|| setup.data_dir.clone()),
         }))
     }
@@ -417,10 +416,34 @@ pub fn unpadded_submission() -> RpcError {
 ///
 /// # Errors
 ///
-/// The refusal, in the operator's words.
-pub fn reset_console_key(data_dir: &Path) -> Result<PathBuf, String> {
+/// [`StartFault::HeldOpen`] when another program held the journal open past
+/// the wait; otherwise the refusal, in the operator's words.
+pub fn reset_console_key(data_dir: &Path) -> Result<PathBuf, StartFault> {
     let store = Store::open(data_dir).map_err(|e| e.to_string())?;
-    console::install(data_dir, &store, Some(now())).map_err(|e| e.to_string())
+    Ok(console::install(data_dir, &store, Some(now()))?)
+}
+
+/// Where a service publishes its record: the file in the walk's checked
+/// rendezvous directory on Linux, FreeBSD and macOS; on Windows the value
+/// under `HKLM\SOFTWARE\Shekyl\Rendezvous` (Rick, 2026-11-18). `None` for a
+/// daemon run as its user.
+fn service_record_at(setup: &ChannelSetup) -> Option<shekyl_rpc_rendezvous::ServiceRecordAt> {
+    #[cfg(windows)]
+    {
+        setup.service.then(|| {
+            shekyl_rpc_rendezvous::ServiceRecordAt::registry(
+                shekyl_win_sec::registry::RENDEZVOUS_KEY,
+                &setup.network_id,
+                &setup.instance,
+            )
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        setup.service_rendezvous.as_deref().map(|dir| {
+            shekyl_rpc_rendezvous::ServiceRecordAt::file(dir, &setup.network_id, &setup.instance)
+        })
+    }
 }
 
 /// The public bundle as it travels: the X25519 key, then the ML-KEM-768

@@ -470,6 +470,9 @@ pub fn run_esr10(
     base: &SimParams,
     scenarios: &[String],
 ) -> Result<Vec<SummaryRow>, fmt::Error> {
+    if let Some(traffic) = base.traffic.report_line() {
+        writeln!(out, "{traffic}")?;
+    }
     narrate(out, base, &arms(base), &cells(m_star_from(base)), scenarios)
 }
 
@@ -1006,13 +1009,16 @@ mod tests {
         /// `economics-sim-ignored`), because the full set does not fit its
         /// budget beside the lane's other tests.
         Nightly,
+        /// The nightly scope on the `steady` control's traffic: the
+        /// regression anchor (§5.35, STD-2), nightly.
+        NightlySteady,
     }
 
     impl Committed {
         fn scenarios(self) -> Vec<String> {
             match self {
                 Self::Full => every_scenario(&SimParams::default()),
-                Self::Nightly => [BASELINE_STEADY_STATE, STUFFING_ATTACK]
+                Self::Nightly | Self::NightlySteady => [BASELINE_STEADY_STATE, STUFFING_ATTACK]
                     .map(String::from)
                     .to_vec(),
             }
@@ -1028,12 +1034,23 @@ mod tests {
                     env!("CARGO_MANIFEST_DIR"),
                     "/tests/fixtures/esr10_narration_nightly.txt"
                 ),
+                Self::NightlySteady => concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/esr10_narration_steady_nightly.txt"
+                ),
+            }
+        }
+
+        fn params(self) -> SimParams {
+            match self {
+                Self::Full | Self::Nightly => SimParams::default(),
+                Self::NightlySteady => SimParams::default().on_steady(),
             }
         }
 
         fn narration(self) -> String {
             let mut narration = String::new();
-            run_esr10(&mut narration, &SimParams::default(), &self.scenarios())
+            run_esr10(&mut narration, &self.params(), &self.scenarios())
                 .expect("String sink is infallible");
             narration
         }
@@ -1066,7 +1083,16 @@ mod tests {
         Committed::Nightly.assert_matches();
     }
 
-    /// Regenerate both committed narrations, armed (rule 50). Ignored by
+    /// The nightly scope on the `steady` control against its committed
+    /// copy: the regression anchor (§5.35, STD-2).
+    #[test]
+    #[ignore = "--esr10's nightly scope on steady traffic — nightly economics-sim-ignored; run with --release --ignored; fixture generated and checked on Linux x86-64"]
+    fn esr10_steady_nightly_narration_matches_the_committed_fixture() {
+        Committed::NightlySteady.assert_matches();
+    }
+
+    /// Regenerate the committed narrations, the steady control's among
+    /// them, armed (rule 50). Ignored by
     /// default; run with `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD
     /// <rationale>" cargo test --release -p shekyl-economics-sim -- --ignored
     /// regen_esr10_narration_fixtures`, the date naming the
@@ -1084,6 +1110,10 @@ mod tests {
                 Output {
                     path: Committed::Nightly.path(),
                     build: || Committed::Nightly.narration(),
+                },
+                Output {
+                    path: Committed::NightlySteady.path(),
+                    build: || Committed::NightlySteady.narration(),
                 },
             ],
         );
