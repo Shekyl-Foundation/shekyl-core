@@ -1,0 +1,131 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# A merge to `dev` re-tests the open pull requests it can break (Brief C,
+# option (a), ruled 2026-11-19).
+#
+# A pull request's CI runs on its head merged onto the `dev` of its last
+# push. When another pull request merges first, the one still open was
+# never tested against it, and each green alone can be red together
+# (#1404 and #1409, #1425 and #1426, #1440 and #1447). After each push to
+# `dev`:
+#
+#   overlap  (seconds) scripts/ci/freshness_overlap.py lists the open,
+#            non-draft pull requests from this repository and keeps those
+#            whose tests reach a crate the push changed. A draft is tested
+#            by its own run when it is marked ready; a fork is not
+#            re-tested here, since its code would run in a push run on
+#            `dev`, which holds write tokens.
+#   mark     posts `fresh-against-dev` = pending on each kept head, naming
+#            the merge and the shared crates, and re-runs its `rust-pass`,
+#            which then fails: the pull request cannot merge while it is
+#            being re-tested.
+#   re-test  freshness-retest.yml, one call per kept pull request: its
+#            head merged with the new `dev`, its own scoped tests, and the
+#            result posted on the head (with a comment when red) and
+#            `rust-pass` re-run to read it.
+#
+# Limits. The cap is one re-test per pull request
+# (freshness-retest.yml's concurrency group, `freshness-pr-<N>`): a newer
+# merge's re-test of the same pull request cancels the older, so a burst of
+# merges is tested at its newest, and the re-tests running at once are at
+# most the open pull requests the merges reach. Expected peak: 8, the open
+# non-draft pull requests a merge reached on 2026-11-19 (of 11 open; 6
+# reach every crate through a workflow or script file). There is no
+# `max-parallel`: GitHub applies it within one run, and each push is its
+# own run, so it bounds nothing across merges, and a re-test it holds back
+# enters its pull request's group late and cancels a newer merge's re-test.
+# Which result stands is decided by `dev`'s order, not by arrival
+# (scripts/ci/freshness_status.py).
+#
+# Each push gets its own run of this workflow, unsuperseded: the overlap
+# and mark jobs are seconds, and the re-tests supersede each other per pull
+# request, not per run.
+
+name: ci/freshness
+
+on:
+  push:
+    branches: [dev]
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  overlap:
+    name: which open pull requests the merge reaches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API calls, one fetch, one dependency graph read
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      retests: ${{ steps.plan.outputs.retests }}
+      merged: ${{ steps.plan.outputs.merged }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 scripts/ci/freshness_overlap.py --plan --merge "${{ github.sha }}"
+          --before "${{ github.event.before }}" --base "${{ github.ref_name }}"
+
+  mark:
+    name: mark the re-tested heads pending
+    needs: overlap
+    if: needs.overlap.outputs.retests != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/ci/freshness_status.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          FRESHNESS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEV: ${{ github.sha }}
+          MERGED: ${{ needs.overlap.outputs.merged }}
+          RETESTS: ${{ needs.overlap.outputs.retests }}
+        run: python3 scripts/ci/freshness_status.py mark
+
+  retest:
+    # Named by the pull request: the report finds its re-test job as
+    # `#<pr> / re-test` (freshness_status.py).
+    name: '#${{ matrix.pr }}'
+    needs: [overlap, mark]
+    # Whatever `mark` did: a head it marked pending before failing still
+    # gets its re-test and a final status, and a report posts only where
+    # this run's status is the head's newest.
+    if: always() && needs.overlap.result == 'success' && needs.overlap.outputs.retests != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.overlap.outputs.retests) }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+      statuses: write
+    uses: ./.github/workflows/freshness-retest.yml
+    with:
+      pr: ${{ matrix.pr }}
+      head: ${{ matrix.head }}
+      dev: ${{ github.sha }}
+      merged: ${{ needs.overlap.outputs.merged }}
+      crates: ${{ join(matrix.crates, ', ') }}
+      rust_tests: ${{ matrix.rust_tests }}
+      rust_doc_pkgs: ${{ matrix.rust_doc_pkgs }}
