@@ -176,6 +176,9 @@ path = "src/bin/shekyl-chain-replay.rs"
 required-features = ["replay-cli"]
 
 [dependencies]
+# A trace and a digest table are replaced through the tree's one replace
+# (Rick, 2026-11-18).
+shekyl-os-account = { path = "../shekyl-os-account" }
 # form (stateless) / validate (view-bound), Substrate, Candidate, the
 # verdict and fault types. The validator, never re-derived here.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }

@@ -27,8 +27,12 @@ use zeroize::Zeroizing;
 /// §5.7.9). Matches the cSHAKE256 discipline used for [`crate::handle`].
 pub const RECEIVE_LABEL_DISPLAY_HASH_CUSTOMIZATION: &[u8] = b"shekyl/receive-label-hash-v1";
 
+/// The length of an output's label plaintext block, the bytes its
+/// `enc_label` encrypts.
+pub const LABEL_PLAINTEXT_LEN: usize = 8;
+
 /// Normative sentinel plaintext: no cooperative label (launch default).
-pub const SENTINEL_PLAINTEXT: [u8; 8] = [0xFF; 8];
+pub const SENTINEL_PLAINTEXT: [u8; LABEL_PLAINTEXT_LEN] = [0xFF; LABEL_PLAINTEXT_LEN];
 
 /// Wire version for meaningful (non-sentinel) tags.
 pub const LABEL_WIRE_VERSION: u8 = 0x01;
@@ -38,7 +42,7 @@ pub const LABEL_KIND_REQUEST: u8 = 0x01;
 
 /// Return the 8-byte sentinel plaintext block (always encrypted on wire).
 #[must_use]
-pub fn sentinel_plaintext() -> [u8; 8] {
+pub fn sentinel_plaintext() -> [u8; LABEL_PLAINTEXT_LEN] {
     SENTINEL_PLAINTEXT
 }
 

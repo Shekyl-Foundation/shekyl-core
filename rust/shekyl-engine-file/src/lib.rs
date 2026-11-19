@@ -58,7 +58,7 @@ pub mod paths;
 pub mod payload;
 pub mod secrets_transitional;
 
-pub use atomic::Durability;
+pub use atomic::{Durability, Unconfirmed};
 pub use capability::Capability;
 pub use error::WalletFileError;
 pub use handle::{CreateParams, OpenOutcome, SealedKeysEnvelope, WalletFile};
@@ -75,3 +75,6 @@ pub use shekyl_address::Network;
 // Re-export the envelope error [`WalletFileError::Envelope`] carries, so a
 // consumer can name its variants without depending on `shekyl-crypto-pq`.
 pub use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
+// Re-export what [`WalletFileError::HeldOpen`] carries, so a consumer can
+// read it without depending on `shekyl-os-account`.
+pub use shekyl_os_account::private_file::HeldOpen;

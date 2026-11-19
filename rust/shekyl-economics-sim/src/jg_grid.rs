@@ -320,6 +320,10 @@ pub struct HonestRow {
     /// fill: its mean, and the share of blocks at the derived median less
     /// one and at the derived median.
     median_count: Option<MedianCount>,
+    /// Year 1's room against its arrivals after the window's first fill:
+    /// the cap, the share of blocks overflowed by their own arrivals, the
+    /// share leaving a backlog, and the medians offered and carried (§5.35).
+    capacity: crate::honest_step::CapacityRead,
 }
 
 /// A median arm's measured honest count (§5.34), beside the derived one.
@@ -441,6 +445,7 @@ fn honest_row(
         step_m_r: (up.before, up.after),
         step_settles_blocks: up.settles,
         median_count,
+        capacity: step.capacity,
     }
 }
 

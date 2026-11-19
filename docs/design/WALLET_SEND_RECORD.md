@@ -307,7 +307,9 @@ only, never the read path.
   (`save_state`) under one write guard before the bytes can leave; only
   that save mints the `DurableTxBytes` the submitter takes
   (`dispatch_durability.rs`). A failed save undoes the record under the
-  same guard and sends nothing (`-29120 SEND_NOT_SAVED`). The verdict's
+  same guard and sends nothing (`-29120 SEND_NOT_SAVED` when the wallet's
+  folder is not writable, and one code per other cause, `-29128` to
+  `-29133`, a save Windows cannot confirm among them). The verdict's
   changes are saved again before the submit returns. A crash between the
   dispatch save and the verdict leaves a `Dispatched` row with no
   baseline: open locks its inputs at its dispatch height

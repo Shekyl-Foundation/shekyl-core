@@ -184,7 +184,7 @@ pub struct BranchLayer {
 ///
 /// The wallet constructs this from the output being spent, the per-output
 /// key derivation, and the Merkle path it assembles locally from its
-/// block-derived leaf stream (`shekyl_curve_tree::CurveTreeClient::assemble_path`).
+/// block-derived leaf stream (`shekyl_curve_tree::CurveTreeClient::assemble_paths`).
 /// The daemon serves no per-output path (`PHASE_2A_SEND_PATH.md` §3.0.1).
 ///
 /// Carries the spend's signing secrets (`spend_key_x`, `spend_key_y`,

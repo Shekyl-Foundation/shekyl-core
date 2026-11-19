@@ -8,7 +8,7 @@
 //!   block IDs, `pqc_signing_payload_hashes`; (b) cross-party multisig
 //!   contracts with no consensus role but multiple independent signers
 //!   pinned to these bytes by spec —
-//!   `intent_hash` / the chain-state fingerprint (`shekyl-multisig/src/intent.rs`).
+//!   `intent_hash` / the chain-state fingerprint (`shekyl-multisig/src/intent/mod.rs`).
 //!   Class (b) migrates to cSHAKE only via its owning spec, never unilaterally
 //!   (FOLLOWUPS, "residual consensus-parity Keccak"). They are un-domained
 //!   because the thing they must match is un-domained.

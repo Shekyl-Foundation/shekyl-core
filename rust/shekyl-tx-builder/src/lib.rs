@@ -79,6 +79,7 @@ compile_error!(
 
 mod assemble;
 mod error;
+pub mod outputs;
 mod sign;
 pub mod types;
 mod validate;
@@ -101,7 +102,8 @@ pub use sign::{
     ProofSeeds,
 };
 pub use types::{
-    LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION,
+    LeafEntry, OutputInfo, PqcAuth, PqcScheme, SignedProofs, SpendInput, TreeContext,
+    PQC_AUTH_VERSION,
 };
 
 /// Cleartext balance terms, re-exported so `sign_transaction_with_terms`

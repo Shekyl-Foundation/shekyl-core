@@ -186,10 +186,10 @@ edge to that leaf and its `marker` reads `sync_dir` from it;
 
 ### 3.6 The fixed service paths
 
-The service's data home is `shekyl-daemon-config`'s
-(`paths.rs:34`, `SERVICE_DATA_HOME`, under `shekyl-process`'s
+The service's data home is named in `shekyl-rpc-rendezvous`
+(`place.rs`, `SERVICE_DATA_HOME`, under `shekyl-process`'s
 `fixed_service_parent`); its rendezvous directory is
-`shekyl-process::service_rendezvous` and `shekyl-daemon-config`'s
+`shekyl-rpc-rendezvous::service_rendezvous` and `shekyl-daemon-config`'s
 `owner_socket::service_rendezvous`; the record's name is
 `shekyl-rpc-rendezvous`'s (`service_file_name` over `rendezvous_name`)
 and its form `ServiceRecord`; the console key's file name is
