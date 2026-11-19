@@ -41,6 +41,7 @@
 //! [`PScanHandle`]: super::pscan::start::PScanHandle
 //! [`AlarmCondition::ChainProgress`]: shekyl_operator_alarm::AlarmCondition::ChainProgress
 
+mod body_store;
 mod claim;
 mod outcomes;
 mod serving;
@@ -65,8 +66,10 @@ use super::submit_lifecycle::WatchdogHost;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
 
+use self::body_store::BodyStoreLeg;
 use self::serving::ServingLivenessLeg;
 use self::submit::SubmitLifecycleLeg;
+use super::body_reconcile::{ShardAlarm, ShardAlarms};
 
 pub(crate) use self::claim::EpochClaimLeg;
 #[cfg(test)]
@@ -210,6 +213,8 @@ pub struct CadenceHandle {
     join: Option<JoinHandle<()>>,
     alarms: Arc<OperatorAlarms>,
     serving: ServingSlot,
+    /// The body-store leg's shard alarms (`WSS-Q17`), shared with the leg.
+    shard_alarms: ShardAlarms,
 }
 
 impl CadenceHandle {
@@ -269,6 +274,15 @@ impl CadenceHandle {
         self.serving_status().and_then(|status| status.posture)
     }
 
+    /// The shard alarms this session's body-store passes have raised
+    /// (`WSS-Q17`, the `shard_alarm` read): what the persona's bond owes
+    /// that its body store did not hold or could not verify, and what the
+    /// refill did about it. Re-derived each open; never persisted.
+    #[must_use]
+    pub fn shard_alarms(&self) -> Vec<ShardAlarm> {
+        self.shard_alarms.list()
+    }
+
     /// Fire the cancel token. Idempotent. The task observes it at the next
     /// poll (or mid-`select!`) and exits after any in-flight leg completes.
     pub fn cancel(&self) {
@@ -323,6 +337,7 @@ pub(crate) fn spawn_cadence_loop<Sched, TipFn, TipFut>(
     alarms: Arc<OperatorAlarms>,
     stall_horizon: Duration,
     serving: ServingSlot,
+    shard_alarms: ShardAlarms,
 ) -> CadenceHandle
 where
     Sched: ScanSchedule,
@@ -343,6 +358,7 @@ where
         join: Some(join),
         alarms,
         serving,
+        shard_alarms,
     }
 }
 
@@ -366,6 +382,7 @@ pub(crate) fn production_legs<S, D, L, E, R, P>(
     daemon: &shekyl_rpc_transport::DaemonTarget,
     serving: &ServingSlot,
     alarms: &Arc<OperatorAlarms>,
+    shard_alarms: &ShardAlarms,
 ) -> Vec<Box<dyn CadenceLeg>>
 where
     S: EngineSignerKind + Send + Sync + 'static,
@@ -392,10 +409,19 @@ where
             logged: Arc::default(),
         }),
         Box::new(EpochClaimLeg {
-            engine,
+            engine: Weak::clone(&engine),
             daemon: daemon.clone(),
             alarms: Arc::clone(alarms),
             state: Arc::default(),
+        }),
+        // Last: its pass runs on a task of its own, so its place in the
+        // order costs the legs before it nothing.
+        Box::new(BodyStoreLeg {
+            engine,
+            daemon: daemon.clone(),
+            alarms: shard_alarms.clone(),
+            state: Arc::default(),
+            running: Arc::default(),
         }),
     ]
 }
@@ -475,7 +501,14 @@ where
     ) -> CadenceHandle {
         let serving = ServingSlot::default();
         let alarms = Arc::new(OperatorAlarms::new());
-        let legs = production_legs(Arc::downgrade(self_arc), daemon, &serving, &alarms);
+        let shard_alarms = ShardAlarms::default();
+        let legs = production_legs(
+            Arc::downgrade(self_arc),
+            daemon,
+            &serving,
+            &alarms,
+            &shard_alarms,
+        );
         let weak = Arc::downgrade(self_arc);
         let poll = move || {
             let weak = weak.clone();
@@ -502,6 +535,7 @@ where
             alarms,
             CHAIN_STALL_HORIZON,
             serving,
+            shard_alarms,
         )
     }
 }

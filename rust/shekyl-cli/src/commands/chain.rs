@@ -134,6 +134,48 @@ pub fn cmd_shard_list_mine(_rpc: &crate::rpc_client::RpcSession) -> CommandResul
     )
 }
 
+/// `shard alarm` — the shards this wallet's bond owes that its body store
+/// did not hold or could not verify this session, and what the refill did
+/// (`WSS-Q17`).
+pub fn cmd_shard_alarm(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
+    match rpc.call("shard_alarm", json!({})) {
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to read the shard alarms", &e)),
+    }
+}
+
+pub(crate) fn show_shard_alarm(val: &Value) {
+    let Some(alarms) = val.as_array() else {
+        println!("(the wallet's answer was not a list)");
+        return;
+    };
+    if alarms.is_empty() {
+        println!("Every shard your bond owes is held and checks out.");
+        return;
+    }
+    println!("Shards your bond owes that needed attention:");
+    for alarm in alarms {
+        let shard = alarm.get("shard").and_then(Value::as_u64).unwrap_or(0);
+        let what = match alarm.get("alarm").and_then(Value::as_str).unwrap_or("") {
+            "missing" => "was not in the body store",
+            "corrupt" => "did not check out in the body store",
+            _ => "(a problem this version does not know)",
+        };
+        let refill = match alarm.get("refill").and_then(Value::as_str).unwrap_or("") {
+            "pending" => "being refilled from your node",
+            "refilled" => "refilled from your node and checked",
+            "discarded" => {
+                "your node has discarded it, and a node cannot yet read shards below its \
+                 horizon: it cannot be refilled until one can"
+            }
+            "failed" => "the refill failed; the wallet tries again as the chain advances",
+            _ => "(an outcome this version does not know)",
+        };
+        println!("  Shard {shard} {what}: {refill}.");
+    }
+}
+
 /// `shard show <id>` — one row of the daemon's `shard_coverage` reply,
 /// printed as the wire serializes it.
 pub fn cmd_shard_show(

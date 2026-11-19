@@ -20,8 +20,9 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletRpcError;
 use crate::types::{
     BuildPendingTxResult, GetBalanceResult, ReceiveAttributionKind, ReceiveAttributionView,
-    RefreshResult, RescanBlockchainResult, SubmitPendingTxResult, SubmitVerdictView,
-    TransferDirection, TransferState, TransferView, TxAlarmCause, TxAlarmView,
+    RefreshResult, RescanBlockchainResult, ShardAlarmCauseView, ShardAlarmView, ShardRefillView,
+    SubmitPendingTxResult, SubmitVerdictView, TransferDirection, TransferState, TransferView,
+    TxAlarmCause, TxAlarmView,
 };
 
 /// Serialize the engine's one-glance balance ([`BalanceView`]) as the
@@ -318,6 +319,25 @@ pub fn submit_pending_tx_result(receipt: &SubmitReceipt) -> SubmitPendingTxResul
     }
 }
 
+/// Project one shard alarm to `shard_alarm`'s element. Exhaustive, so a
+/// new cause or refill outcome cannot reach the wire unnamed.
+pub fn shard_alarm_view(alarm: &shekyl_engine_core::ShardAlarm) -> ShardAlarmView {
+    use shekyl_engine_core::{ShardAlarmCause as C, ShardRefill as F};
+    ShardAlarmView {
+        shard: alarm.shard,
+        alarm: match alarm.alarm {
+            C::Missing => ShardAlarmCauseView::Missing,
+            C::Corrupt => ShardAlarmCauseView::Corrupt,
+        },
+        refill: match alarm.refill {
+            F::Pending => ShardRefillView::Pending,
+            F::Refilled => ShardRefillView::Refilled,
+            F::Discarded => ShardRefillView::Discarded,
+            F::Failed => ShardRefillView::Failed,
+        },
+    }
+}
+
 /// Project one held send to `tx_alarm`'s element. The one mapping from the
 /// engine's alarm reasons to the contract's keywords; exhaustive, so a new
 /// reason cannot reach the wire unnamed.
@@ -500,6 +520,35 @@ mod tests {
     /// Every engine alarm reason has its own `tx_alarm` keyword (the
     /// mapping is exhaustive; no two reasons share a keyword), and the
     /// element carries the id and the height the send left at.
+    #[test]
+    fn shard_alarm_view_names_every_cause_and_outcome() {
+        use shekyl_engine_core::{ShardAlarm, ShardAlarmCause, ShardRefill};
+        let wire = |alarm, refill| {
+            serde_json::to_value(shard_alarm_view(&ShardAlarm {
+                shard: 7,
+                alarm,
+                refill,
+            }))
+            .expect("serialize")
+        };
+        assert_eq!(
+            wire(ShardAlarmCause::Missing, ShardRefill::Pending),
+            serde_json::json!({"shard": 7, "alarm": "missing", "refill": "pending"})
+        );
+        assert_eq!(
+            wire(ShardAlarmCause::Corrupt, ShardRefill::Refilled),
+            serde_json::json!({"shard": 7, "alarm": "corrupt", "refill": "refilled"})
+        );
+        assert_eq!(
+            wire(ShardAlarmCause::Missing, ShardRefill::Discarded)["refill"],
+            "discarded"
+        );
+        assert_eq!(
+            wire(ShardAlarmCause::Missing, ShardRefill::Failed)["refill"],
+            "failed"
+        );
+    }
+
     #[test]
     fn tx_alarm_view_names_every_reason() {
         use shekyl_engine_core::engine::{HeldSend, WatchdogAlarmReason as R};

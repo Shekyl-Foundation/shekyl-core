@@ -388,6 +388,9 @@ pub enum ResolvedCommand {
         png: Option<String>,
         size: Option<u32>,
     },
+    /// `shard alarm`: the shards this wallet's bond owes that its body
+    /// store did not hold or could not verify this session (`WSS-Q17`).
+    ShardAlarm,
 
     // -- Fees (WI-RPC-1) --
     Fee {

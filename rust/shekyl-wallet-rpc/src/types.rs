@@ -669,6 +669,43 @@ pub struct TxAlarmView {
     pub sent_height: i64,
 }
 
+/// What the reconcile found wrong with a shard the bond owes (`shard_alarm`,
+/// `WSS-Q17`). Keywords per IG-Q86.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShardAlarmCauseView {
+    /// The body store does not hold it.
+    Missing,
+    /// The body store holds it, and its body does not verify.
+    Corrupt,
+}
+
+/// What the refill an alarm started did (`shard_alarm`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShardRefillView {
+    /// Not finished yet.
+    Pending,
+    /// Refilled from the node; held and verified.
+    Refilled,
+    /// The node has discarded the shard and does not yet read below its
+    /// horizon, so it cannot be refilled.
+    Discarded,
+    /// Failed for another reason; the next pass retries.
+    Failed,
+}
+
+/// One shard the bond owes that needs the operator (`shard_alarm`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShardAlarmView {
+    /// The shard's id.
+    pub shard: u64,
+    /// What was wrong.
+    pub alarm: ShardAlarmCauseView,
+    /// What the refill did about it.
+    pub refill: ShardRefillView,
+}
+
 /// `discard_pending_tx` result (empty object).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DiscardPendingTxResult {}

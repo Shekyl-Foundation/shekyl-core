@@ -200,26 +200,33 @@ pub(crate) enum MarketFillError {
 }
 
 /// What a fill reads before it fills: the loopback transport, the store, the
-/// scan's fold and frontier, and the finality horizon.
-struct FillContext {
+/// scan's fold and frontier, and the finality horizon. The reconcile
+/// (`body_reconcile`) reads the same, so the two cannot disagree about what
+/// is final or where a shard's blocks are.
+pub(crate) struct FillContext {
     rpc: LocalNodeRpc,
-    bodies: BodyStoreHandle,
-    fold: ArchivalFold,
-    scanned: BlockHeight,
+    pub(crate) bodies: BodyStoreHandle,
+    pub(crate) fold: ArchivalFold,
+    pub(crate) scanned: BlockHeight,
     /// Exclusive: a shard whose close is below this is final.
-    final_horizon: BlockHeight,
+    pub(crate) final_horizon: BlockHeight,
 }
 
 impl FillContext {
+    /// The persona's loopback transport to the wallet's own node.
+    pub(crate) fn rpc(&self) -> &LocalNodeRpc {
+        &self.rpc
+    }
+
     /// Whether `shard` is closed and final, by the scan's fold.
-    fn is_final(&self, shard: ShardId) -> bool {
+    pub(crate) fn is_final(&self, shard: ShardId) -> bool {
         self.fold
             .close(shard)
             .is_some_and(|close| close.height < self.final_horizon)
     }
 
     /// Every final shard, ascending: what a `CompleteTree` bond owes.
-    fn final_shards(&self) -> Vec<ShardId> {
+    pub(crate) fn final_shards(&self) -> Vec<ShardId> {
         (0..self.fold.closed_count())
             .map(ShardId::from_raw)
             .take_while(|shard| self.is_final(*shard))
@@ -237,15 +244,22 @@ impl FillContext {
             if held {
                 continue;
             }
-            let span = self.fold.span(shard).ok_or(FillFailure::DaemonMismatch {
-                shard,
-                detail: "the scan's fold has no record of this shard's close".to_owned(),
-            })?;
-            fill_shard(&self.rpc, &self.bodies, shard, span)
-                .await
-                .map_err(failure_of)?;
+            self.fill_one(shard).await?;
         }
         Ok(())
+    }
+
+    /// Fill `shard` from the node, whether or not the store holds it: a
+    /// held row is replaced whole (`put_shard` is one transaction). The
+    /// reconcile's refill; [`Self::fill`] skips held shards before it.
+    pub(crate) async fn fill_one(&self, shard: ShardId) -> Result<(), FillFailure> {
+        let span = self.fold.span(shard).ok_or(FillFailure::DaemonMismatch {
+            shard,
+            detail: "the scan's fold has no record of this shard's close".to_owned(),
+        })?;
+        fill_shard(&self.rpc, &self.bodies, shard, span)
+            .await
+            .map_err(failure_of)
     }
 }
 
@@ -277,7 +291,7 @@ where
     /// Read what a fill needs: the loopback transport to `daemon`, the
     /// stake engine's body store, the scan's sealed fold, and the finality
     /// horizon at the daemon's claimed tip.
-    async fn fill_context(
+    pub(crate) async fn fill_context(
         self_arc: Arc<RwLock<Self>>,
         daemon: &DaemonTarget,
     ) -> Result<FillContext, FillFailure> {

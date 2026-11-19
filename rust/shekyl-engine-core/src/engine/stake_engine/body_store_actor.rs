@@ -255,6 +255,49 @@ impl Message<HoldsShard> for BodyStoreActor {
     }
 }
 
+/// A shard's whole stored frame, every chunk opened under the store key
+/// (`WSS-Q17`'s body check). One message, so the reconcile's read of a
+/// shard is one turn of the actor rather than one per chunk.
+pub(crate) struct ReadShardFrame {
+    pub shard_id: ShardId,
+}
+
+/// What a whole-frame read found.
+#[derive(Debug)]
+pub(crate) enum StoredFrame {
+    /// The store holds no row for the shard.
+    NotHeld,
+    /// The frame, every chunk authenticated.
+    Frame(Vec<u8>),
+    /// The row is there and a chunk is missing or fails authentication:
+    /// the bytes on disk are not the ones written.
+    Unreadable,
+}
+
+impl Message<ReadShardFrame> for BodyStoreActor {
+    type Reply = Result<StoredFrame, StoreError>;
+
+    async fn handle(
+        &mut self,
+        msg: ReadShardFrame,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let store = self.store();
+        let Some(held) = store.open_shard(msg.shard_id)? else {
+            return Ok(StoredFrame::NotHeld);
+        };
+        let mut frame = Vec::with_capacity(usize::try_from(held.len()).unwrap_or(0));
+        for index in 0..held.chunk_count() {
+            match store.read_chunk(&held, index) {
+                Ok(chunk) => frame.extend_from_slice(&chunk),
+                Err(StoreError::Corrupt { .. }) => return Ok(StoredFrame::Unreadable),
+                Err(other) => return Err(other),
+            }
+        }
+        Ok(StoredFrame::Frame(frame))
+    }
+}
+
 /// `Clone` handle on the body-store actor: a mailbox address, not a share of
 /// the store. The stake engine's handle carries one and erases through it;
 /// the serving path gets [`Self::reads`], which does not keep the actor
@@ -317,6 +360,19 @@ impl BodyStoreHandle {
     pub(crate) async fn holds(&self, shard_id: ShardId) -> Result<bool, String> {
         self.actor
             .ask(HoldsShard { shard_id })
+            .await
+            .map_err(|e| format!("persona body store read failed: {e:?}"))
+    }
+
+    /// `shard_id`'s whole frame, every chunk authenticated.
+    ///
+    /// # Errors
+    ///
+    /// A store fault other than an unreadable chunk (I/O), or an owner that
+    /// has stopped, as a diagnostic.
+    pub(crate) async fn read_frame(&self, shard_id: ShardId) -> Result<StoredFrame, String> {
+        self.actor
+            .ask(ReadShardFrame { shard_id })
             .await
             .map_err(|e| format!("persona body store read failed: {e:?}"))
     }

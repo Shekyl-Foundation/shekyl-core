@@ -205,6 +205,7 @@ pub mod balance_view;
 /// affordability check only — a guarded module the M1 import-check arm keeps
 /// blind to the per-output reward vector.
 pub(crate) mod block_fetch;
+pub(crate) mod body_reconcile;
 /// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
 /// `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
 /// funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
@@ -493,6 +494,7 @@ pub use submit::SubmitReceipt;
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
+pub use body_reconcile::{ShardAlarm, ShardAlarmCause, ShardRefill};
 pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome, StakePosture};
 pub use holdings_fill::{CompleteTreeFillError, FillFailure};
 // F-D2 aggregate drain-balance read error: two-armed (transient "syncing" vs.
