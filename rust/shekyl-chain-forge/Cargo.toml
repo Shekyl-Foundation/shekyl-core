@@ -34,6 +34,8 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 # the executor builds every block through it. This edge is `forge`'s one
 # enabler.
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", features = ["forge"] }
+# The corpus the executor writes, through the format's one writer.
+shekyl-corpus = { path = "../shekyl-corpus" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 # The executor's other edges: the spender's seeded spends, the per-source
 # proof seeds, the consensus types it plans with, the trace's hasher and

@@ -480,12 +480,14 @@ fn commit(staged: Staged) -> io::Result<()> {
                 shekyl_os_account::private_file::HeldOpen {
                     held: match held {
                         Held::Staged => staged.partial,
-                        Held::Live | Held::LiveOrUnwritable => staged.dest.clone(),
+                        Held::Live => staged.dest.clone(),
                     },
                     live: staged.dest,
-                    or_unwritable: held == Held::LiveOrUnwritable,
                 },
             )),
+            Err(ReplaceError::ReadOnly) => {
+                Err(shekyl_os_account::private_file::CommitError::ReadOnly(staged.dest).into())
+            }
         }
     }
 }

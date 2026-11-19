@@ -11,7 +11,11 @@
 //!    `.wallet.pending` sibling seal serializes on the one async mutex held
 //!    here, exactly as the bare `Arc<Mutex<()>>` it replaces did. The
 //!    [`PendingPostStore`](super::pscan::dispatch::PendingPostStore) is the
-//!    sole consumer of the lock; nothing else takes it.
+//!    sole consumer of the lock; nothing else takes it. The lock guards the
+//!    store's [`Coverage`] too: whether the seal's current contents are
+//!    covered by a save confirmed in this process (Rick, 2026-11-19). The
+//!    stores are rebuilt per call, so the flag lives here, once per wallet,
+//!    and only a holder of the lock reads or writes it.
 //! 2. **The foreground session** (`ENGINE_CADENCE_DRIVER.md` §3, "user work
 //!    always wins"): user-initiated pending-post operations — the closed
 //!    set [`UserPendingPost`] — register themselves for their whole
@@ -52,28 +56,60 @@ pub(crate) enum UserPendingPost {
     FirstStake,
 }
 
+/// Whether the pending seal's current contents are covered by a save
+/// confirmed in this process (Rick, 2026-11-19).
+///
+/// Any confirmed save of the file covers every record in it; a save whose
+/// durability is not confirmed uncovers it. A gate starts
+/// [`Coverage::Uncovered`]: what a process loads from disk is covered only
+/// once a save of it confirms here, which the open's one save
+/// (`PendingPostStore::cover_at_open`) attempts before any driver sends.
+/// Records read back from an uncovered seal are never sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Coverage {
+    /// The last save of the seal in this process was confirmed.
+    Covered,
+    /// No save of the seal's current contents has been confirmed in this
+    /// process.
+    Uncovered,
+}
+
 /// Per-wallet coordination for the pending-post family: the seal write lock
 /// plus the foreground-operation gauge. See the module docs for both roles.
 pub(crate) struct PendingPostGate {
-    /// The WI-3 §3.3 writer mutex over the `.wallet.pending` seal.
-    write_lock: tokio::sync::Mutex<()>,
+    /// The WI-3 §3.3 writer mutex over the `.wallet.pending` seal, and the
+    /// seal's [`Coverage`] it guards.
+    write_lock: tokio::sync::Mutex<Coverage>,
     /// Count of user-initiated pending-post operations currently in flight
     /// (assemble→seal span). Read by the epoch-claim leg's yield rule.
     foreground_ops: AtomicUsize,
 }
 
 impl PendingPostGate {
-    /// A fresh gate: lock free, gauge zero. One per wallet, minted at engine
-    /// construction and cloned (as an `Arc`) into every store and facade.
+    /// A fresh gate: lock free, seal uncovered, gauge zero. One per wallet,
+    /// minted at engine construction and cloned (as an `Arc`) into every
+    /// store and facade.
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
-            write_lock: tokio::sync::Mutex::new(()),
+            write_lock: tokio::sync::Mutex::new(Coverage::Uncovered),
             foreground_ops: AtomicUsize::new(0),
         })
     }
 
-    /// Take the pending-seal write lock (load→modify→seal critical section).
-    pub(crate) async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+    /// A gate whose seal the open's one save covered: what a driver test
+    /// seeds stands for records a confirmed save covers. Never a production
+    /// constructor; production gates start [`Coverage::Uncovered`].
+    #[cfg(test)]
+    pub(crate) fn covered_for_test() -> Arc<Self> {
+        Arc::new(Self {
+            write_lock: tokio::sync::Mutex::new(Coverage::Covered),
+            foreground_ops: AtomicUsize::new(0),
+        })
+    }
+
+    /// Take the pending-seal write lock (load→modify→seal critical section),
+    /// which holds the seal's [`Coverage`].
+    pub(crate) async fn lock(&self) -> tokio::sync::MutexGuard<'_, Coverage> {
         self.write_lock.lock().await
     }
 

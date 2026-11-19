@@ -86,6 +86,9 @@ pub enum StartFault {
     /// open past the wait ([`shekyl_os_account::private_file::REPLACE_WAIT`]).
     /// The daemon names it with its own refusal code.
     HeldOpen(shekyl_os_account::private_file::HeldOpen),
+    /// A file could not be replaced: its read-only attribute is set. The
+    /// daemon names it with its own refusal code.
+    ReadOnly(std::path::PathBuf),
     /// The refusal, in the operator's words.
     Refused(String),
     /// The service's rendezvous key (Windows) is missing or exposed: the
@@ -103,6 +106,9 @@ impl std::fmt::Display for StartFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::HeldOpen(held) => held.fmt(f),
+            Self::ReadOnly(path) => {
+                shekyl_os_account::private_file::PrivateFileError::ReadOnly(path.clone()).fmt(f)
+            }
             Self::Refused(why) => f.write_str(why),
             Self::RendezvousKey { key, found } => {
                 write!(
@@ -122,9 +128,13 @@ impl From<String> for StartFault {
 
 impl From<crate::channel::files::FileRefused> for StartFault {
     fn from(error: crate::channel::files::FileRefused) -> Self {
+        use crate::channel::files::FileRefused;
         match error {
-            crate::channel::files::FileRefused::HeldOpen(held) => Self::HeldOpen(held),
-            other => Self::Refused(other.to_string()),
+            FileRefused::HeldOpen(held) => Self::HeldOpen(held),
+            FileRefused::ReadOnly(path) => Self::ReadOnly(path),
+            other @ (FileRefused::Io(..) | FileRefused::Exposed(..) | FileRefused::Key(..)) => {
+                Self::Refused(other.to_string())
+            }
         }
     }
 }

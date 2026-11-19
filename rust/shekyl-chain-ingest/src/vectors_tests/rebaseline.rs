@@ -17,7 +17,7 @@ use shekyl_types::BlockHeight;
 
 use super::replay::replay_open;
 use super::{captured_chains, mock_with_the_real_clock, Manifest};
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::pipeline::RunReport;
 use crate::rebaseline::trace_of;
 use crate::test_support::TestPath;
@@ -43,7 +43,7 @@ async fn replay_corpus(
     trace: Trace,
     tag: &str,
 ) -> (RunReport, TestPath) {
-    let source = CorpusReader::open(std::io::Cursor::new(corpus)).expect("open corpus");
+    let source = CorpusSource::open(std::io::Cursor::new(corpus)).expect("open corpus");
     let (report, path, _rules) = replay_open(
         manifest,
         mock_with_the_real_clock(),

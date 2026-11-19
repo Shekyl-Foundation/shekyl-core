@@ -9,6 +9,8 @@ use shekyl_chain_rules::Candidate;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, SectionRoot};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
+use shekyl_corpus::{CorpusWriter, MAX_SECTION_BLOB};
+
 use super::*;
 use crate::test_support::coinbase;
 
@@ -65,6 +67,17 @@ fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
     (Candidate::new(block, bodies), block_blob, tx_blobs)
 }
 
+/// The edit that makes this red: move `MAX_SECTION_BLOB` or
+/// `DEFAULT_MAX_PACKET_SIZE` and not the other. A section blob is allocated
+/// at the same ceiling command 2017 reads a bundle body at.
+#[test]
+fn the_section_blob_ceiling_is_the_bundle_body_packet_ceiling() {
+    assert_eq!(
+        u64::try_from(MAX_SECTION_BLOB).expect("the ceiling fits u64"),
+        shekyl_levin::DEFAULT_MAX_PACKET_SIZE
+    );
+}
+
 fn write(records: &[(Vec<u8>, Vec<Vec<u8>>)]) -> Vec<u8> {
     let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
         .expect("header");
@@ -81,7 +94,7 @@ fn a_corpus_round_trips_as_an_extend_only_source_in_height_order() {
     let (c2, b2, t2) = blobs(2, 1);
     let bytes = write(&[(b0, t0), (b1, t1), (b2, t2)]);
 
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    let mut reader = CorpusSource::open(Cursor::new(bytes)).expect("open");
     assert_eq!(reader.net(), Network::Regtest);
     assert_eq!(reader.declared(), 3);
     let mut seen = Vec::new();
@@ -106,288 +119,35 @@ fn a_corpus_round_trips_as_an_extend_only_source_in_height_order() {
     assert!(reader.next().expect("clean end").is_none());
 }
 
-#[test]
-fn the_writer_refuses_a_pruned_sources_shortfall_by_height() {
-    // RD-F15: a pruned node returns fewer bodies than the header lists and
-    // says nothing. The writer says it, naming the height, and writes no
-    // record for it.
-    let (_, b0, t0) = blobs(0, 0);
-    let (_, b1, mut t1) = blobs(1, 2);
-    t1.pop();
-    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Testnet, BlockHeight::ZERO)
-        .expect("header");
-    w.append(&b0, &t0).expect("genesis");
-    let refused = w.append(&b1, &t1).expect_err("one body short");
-    assert!(
-        matches!(
-            refused,
-            CorpusFault::IncompleteBodies {
-                height,
-                listed: 2,
-                present: 1
-            } if height == BlockHeight::from_raw(1)
-        ),
-        "{refused}"
-    );
-    // Nothing landed for height 1: the finished corpus has one record.
-    let bytes = w.finish().expect("finish").into_inner();
-    let reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    assert_eq!(reader.declared(), 1);
-}
-
-#[test]
-fn trailing_bytes_inside_a_length_prefix_are_malformed_not_verified() {
-    // The corpus holds complete blobs. `Block::read` / `Transaction::read`
-    // are streaming parsers and would drop a trailing byte; from_bytes
-    // refuses it, so a padded source cannot land and a padded artifact
-    // cannot be read as the canonical body.
-    let (_, mut block, txs) = blobs(0, 0);
-    block.push(0x00);
-    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
-        .expect("header");
-    let refused = w.append(&block, &txs).expect_err("padded block");
-    assert!(
-        matches!(refused, CorpusFault::Malformed { what: "block", .. }),
-        "{refused}"
-    );
-
-    let (_, block, mut txs) = blobs(0, 1);
-    txs[0].push(0x00);
-    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Mainnet, BlockHeight::ZERO)
-        .expect("header");
-    let refused = w.append(&block, &txs).expect_err("padded body");
-    assert!(
-        matches!(
-            refused,
-            CorpusFault::Malformed {
-                what: "transaction",
-                ..
-            }
-        ),
-        "{refused}"
-    );
-}
-
-#[test]
-fn the_writer_refuses_bodies_out_of_header_order() {
-    let (_, b, mut t) = blobs(0, 2);
-    t.swap(0, 1);
-    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Mainnet, BlockHeight::ZERO)
-        .expect("header");
-    let refused = w.append(&b, &t).expect_err("reordered");
-    assert!(
-        matches!(refused, CorpusFault::BodyMismatch { index: 0, .. }),
-        "{refused}"
-    );
-}
-
-#[test]
-fn the_reader_re_verifies_and_refuses_a_tampered_body() {
-    // The writer verified it; someone edited the artifact afterwards. The
-    // reader does not trust the write-time check — it re-derives it.
-    let (_, b0, t0) = blobs(0, 0);
-    let (_, b1, t1) = blobs(1, 1);
-    let body = t1.last().expect("block 1 lists a transaction").clone();
-    let mut bytes = write(&[(b0, t0), (b1, t1)]);
-    // Flip the last byte of the second record's only body. The body is not
-    // the file's last bytes since format 4: the record's bundle section
-    // follows it.
-    let at = bytes
-        .windows(body.len())
-        .rposition(|window| window == body.as_slice())
-        .expect("the body is in the second record")
-        + body.len()
-        - 1;
-    bytes[at] ^= 0x01;
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    reader.next().expect("genesis is intact");
-    let refused = reader.next().expect_err("tampered");
-    assert!(
-        matches!(
-            refused,
-            CorpusFault::BodyMismatch { .. } | CorpusFault::Malformed { .. }
-        ),
-        "{refused}"
-    );
-}
-
-#[test]
-fn the_reader_refuses_a_foreign_magic_and_a_foreign_version() {
-    let (_, b0, t0) = blobs(0, 0);
-    let bytes = write(&[(b0, t0)]);
-    let mut wrong_magic = bytes.clone();
-    wrong_magic[0] ^= 0xff;
-    assert!(matches!(
-        CorpusReader::open(Cursor::new(wrong_magic)).err(),
-        Some(CorpusFault::BadMagic)
-    ));
-    let mut wrong_version = bytes;
-    wrong_version[8..12].copy_from_slice(&(CORPUS_FORMAT_VERSION + 1).to_le_bytes());
-    assert!(matches!(
-        CorpusReader::open(Cursor::new(wrong_version)).err(),
-        Some(CorpusFault::UnsupportedVersion { found }) if found == CORPUS_FORMAT_VERSION + 1
-    ));
-}
-
-#[test]
-fn an_unfinished_corpus_is_refused_by_count() {
-    // Write two records but never `finish`: the header still says zero.
-    let (_, b0, t0) = blobs(0, 0);
-    let (_, b1, t1) = blobs(1, 0);
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        Network::Stagenet,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
-    w.append(&b0, &t0).expect("one");
-    w.append(&b1, &t1).expect("two");
-    // Reach in without finishing: the cursor holds the bytes.
-    let bytes = {
-        let CorpusWriter { out, .. } = w;
-        out.into_inner()
-    };
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    let refused = reader.next().expect_err("declared 0, records present");
-    assert!(
-        matches!(
-            refused,
-            CorpusFault::CountMismatch {
-                declared: 0,
-                present: 1
-            }
-        ),
-        "{refused}"
-    );
-}
-
-#[test]
-fn the_reader_refuses_a_crafted_tx_count_before_reading_bodies() {
-    // The file's `tx_count` is untrusted. The header lists zero transactions;
-    // a `u32::MAX` count must refuse as IncompleteBodies without allocating
-    // 2^32 pointer slots (the wire parser's own "no pre-allocation against
-    // n_tx" discipline, applied to the corpus record).
-    let (_, b0, t0) = blobs(0, 0);
-    let mut bytes = write(&[(b0.clone(), t0)]);
-    // MAGIC ‖ version ‖ net ‖ first_height ‖ count ‖ tag ‖ height ‖ block_len ‖ block ‖ tx_count
-    const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
-    let tx_count_at = HEADER_LEN + 1 + 8 + 4 + b0.len();
-    bytes[tx_count_at..tx_count_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    let refused = reader.next().expect_err("crafted count");
-    assert!(
-        matches!(
-            refused,
-            CorpusFault::IncompleteBodies {
-                listed: 0,
-                present,
-                ..
-            } if present == u32::MAX as usize
-        ),
-        "{refused}"
-    );
-}
-
-#[test]
-fn a_truncated_corpus_is_refused_by_count_not_read_as_a_short_chain() {
-    // Wherever the cut falls inside the second record — its tag, its
-    // height, its body — the reader names one whole record present, never
-    // a bare I/O error that reads as a broken disk.
-    let (_, b0, t0) = blobs(0, 0);
-    let (_, b1, t1) = blobs(1, 0);
-    let whole = write(&[(b0.clone(), t0.clone()), (b1, t1)]);
-    let first_record_end = write(&[(b0, t0)]).len();
-    for keep in [
-        first_record_end,     // cut before the second record's tag
-        first_record_end + 1, // inside its height
-        first_record_end + 4, // still inside its height
-        whole.len() - 5,      // inside its body
-    ] {
-        let mut reader = CorpusReader::open(Cursor::new(whole[..keep].to_vec())).expect("open");
-        reader.next().expect("first is whole");
-        let refused = reader.next().expect_err("truncated second");
-        assert!(
-            matches!(
-                refused,
-                CorpusFault::CountMismatch {
-                    declared: 2,
-                    present: 1
-                }
-            ),
-            "cut at {keep}: {refused}"
-        );
-    }
-}
-
-#[test]
-fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
-    // A corpus may legitimately hold height u64::MAX. What it cannot do is
-    // carry an `extend` after it: the writer refuses the append, and the
-    // reader refuses the record that would need the height before reading
-    // any of it. (The header's count cannot say this at `open` — a `rewind`
-    // occupies no height, so the count is not a span.)
-    let last = BlockHeight::from_raw(u64::MAX);
-    let (_, b_last, t_last) = blobs(u64::MAX, 0);
-    let mut w =
-        CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, last).expect("header");
-    w.append(&b_last, &t_last)
-        .expect("the last height is representable");
-    let (_, b_more, t_more) = blobs(0, 0);
-    let refused = w.append(&b_more, &t_more).expect_err("no height follows");
-    assert!(
-        matches!(refused, CorpusFault::HeightExhausted { after } if after == last),
-        "{refused}"
-    );
-    let bytes = w.finish().expect("finish").into_inner();
-    // One record, readable.
-    let mut reader = CorpusReader::open(Cursor::new(bytes.clone())).expect("open");
-    assert_eq!(reader.declared(), 1);
-    reader
-        .next()
-        .expect("the u64::MAX record")
-        .expect("present");
-    assert!(reader.next().expect("clean end").is_none());
-    // The same bytes with a second `extend` record spliced in and the
-    // header claiming two: the first reads, the second is refused before
-    // its height is consulted — as HeightExhausted, not as a gap at some
-    // wrapped height.
-    const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
-    let mut crafted = bytes.clone();
-    crafted.extend_from_slice(&bytes[HEADER_LEN..]);
-    crafted[21..29].copy_from_slice(&2u64.to_le_bytes());
-    let mut reader = CorpusReader::open(Cursor::new(crafted)).expect("open");
-    reader.next().expect("first").expect("present");
-    let refused = reader.next().expect_err("no height follows");
-    assert!(
-        matches!(refused, CorpusFault::HeightExhausted { after } if after == last),
-        "{refused}"
-    );
-    // A writer near the top with a rewind: three records over two heights,
-    // and the reader takes them — the count is records, not a span.
-    let (_, b_prev, t_prev) = blobs(u64::MAX - 1, 0);
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        Network::Regtest,
-        BlockHeight::from_raw(u64::MAX - 1),
-    )
-    .expect("header");
-    w.append(&b_prev, &t_prev).expect("MAX - 1");
-    w.append(&b_last, &t_last).expect("MAX");
-    w.rewind(BlockHeight::from_raw(u64::MAX - 1))
-        .expect("backward, inside the corpus");
-    let bytes = w.finish().expect("finish").into_inner();
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("three records, two heights");
-    assert_eq!(reader.declared(), 3);
-    let mut n = 0;
-    while reader.next().expect("record").is_some() {
-        n += 1;
-    }
-    assert_eq!(n, 3);
-}
-
 // ---------------------------------------------------------------------------
 // The rewind record (RD-Q13, §7 commit 8c)
 // ---------------------------------------------------------------------------
+
+/// The codec's refusals reach a replay unchanged: the adapter adds no
+/// fault of its own and swallows none.
+#[test]
+fn the_codecs_refusal_is_the_sources() {
+    let (_, b0, t0) = blobs(0, 0);
+    let mut bytes = write(&[(b0, t0)]);
+    bytes[0] ^= 0xff;
+    assert!(matches!(
+        CorpusSource::open(Cursor::new(bytes)).err(),
+        Some(CorpusFault::BadMagic)
+    ));
+    let (_, b0, t0) = blobs(0, 0);
+    let (_, b1, t1) = blobs(1, 0);
+    let whole = write(&[(b0.clone(), t0.clone()), (b1, t1)]);
+    let cut = write(&[(b0, t0)]).len() + 1;
+    let mut source = CorpusSource::open(Cursor::new(whole[..cut].to_vec())).expect("open");
+    source.next().expect("the first record is whole");
+    assert!(matches!(
+        source.next(),
+        Err(CorpusFault::CountMismatch {
+            declared: 2,
+            present: 1
+        })
+    ));
+}
 
 #[test]
 fn a_corpus_with_a_rewind_round_trips_as_events() {
@@ -397,7 +157,7 @@ fn a_corpus_with_a_rewind_round_trips_as_events() {
     let floor = crate::test_support::FIRST_SPEND_HEIGHT;
     let r = reorg(floor + 2, floor - 1, 3);
     let bytes = corpus_of_reorg(&r);
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    let mut reader = CorpusSource::open(Cursor::new(bytes)).expect("open");
     assert_eq!(
         reader.declared(),
         (floor + 2) + 1 + 3,
@@ -420,86 +180,11 @@ fn a_corpus_with_a_rewind_round_trips_as_events() {
     assert_eq!(kinds, expected);
 }
 
-#[test]
-fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
-    let (_, b0, t0) = blobs(0, 0);
-    let (_, b1, t1) = blobs(1, 1);
-    let (_, b2, t2) = blobs(2, 1);
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        Network::Regtest,
-        BlockHeight::from_raw(0),
-    )
-    .expect("header");
-    assert!(matches!(
-        w.rewind(BlockHeight::from_raw(0)).expect_err("no tip"),
-        CorpusFault::RewindOnEmpty
-    ));
-    w.append(&b0, &t0).expect("0");
-    w.append(&b1, &t1).expect("1");
-    w.append(&b2, &t2).expect("2");
-    let refused = w.rewind(BlockHeight::from_raw(2)).expect_err("tip");
-    assert!(
-        matches!(refused, CorpusFault::RewindNotBackward { to, tip } if to.to_raw() == 2 && tip.to_raw() == 2),
-        "{refused}"
-    );
-    // A corpus starting at 5 cannot rewind to 4.
-    let (_, b5, t5) = blobs(5, 0);
-    let (_, b6, t6) = blobs(6, 0);
-    let mut w5 = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        Network::Regtest,
-        BlockHeight::from_raw(5),
-    )
-    .expect("header");
-    w5.append(&b5, &t5).expect("5");
-    w5.append(&b6, &t6).expect("6");
-    let refused = w5
-        .rewind(BlockHeight::from_raw(4))
-        .expect_err("below first");
-    assert!(
-        matches!(refused, CorpusFault::RewindOutOfCorpus { to, first_height } if to.to_raw() == 4 && first_height.to_raw() == 5),
-        "{refused}"
-    );
-    // The reader applies the same law to a hand-built rewind-to-tip record,
-    // and after a rewind the next extend must carry `to + 1`.
-    w.rewind(BlockHeight::from_raw(1)).expect("backward");
-    let mut bytes = w.finish().expect("count").into_inner();
-    // Patch the rewind's `to` (last 8 bytes) to 2 = the tip it followed.
-    let n = bytes.len();
-    bytes[n - 8..].copy_from_slice(&2u64.to_le_bytes());
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    let mut last = Ok(None);
-    for _ in 0..4 {
-        last = reader.next();
-        if !matches!(last, Ok(Some(_))) {
-            break;
-        }
-    }
-    assert!(
-        matches!(last, Err(CorpusFault::RewindNotBackward { .. })),
-        "{last:?}"
-    );
-    // An unknown tag is refused as such, and `0x03` (version 3's
-    // out-of-band serve-credit record) is unknown to version 4.
-    const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
-    for tag in [0x03, 0x7f] {
-        let mut junk = write(&[(b0.clone(), t0.clone())]);
-        junk[HEADER_LEN] = tag;
-        let mut reader = CorpusReader::open(Cursor::new(junk)).expect("open");
-        let refused = reader.next().expect_err("tag");
-        assert!(
-            matches!(refused, CorpusFault::UnknownTag(t) if t == tag),
-            "{tag:#04x}: {refused:?}"
-        );
-    }
-}
-
 /// A block's bundle section rides its record (version 4, the switch's C4):
 /// the references and, in section order, each one's body come back on the
 /// candidate a replay judges. A body that is not its reference's is refused
 /// before the record is written. Red edit: drop the body check in
-/// `verified_section` — the swapped body is written.
+/// `shekyl-corpus`'s `verified_section` — the swapped body is written.
 #[test]
 fn a_record_carries_its_bundle_section_and_refuses_a_body_that_is_not_its_own() {
     use shekyl_chain_rules::harness::bundle::BundleWorld;
@@ -548,7 +233,7 @@ fn a_record_carries_its_bundle_section_and_refuses_a_body_that_is_not_its_own() 
     .expect("the section holds");
     let bytes = w.finish().expect("finish").into_inner();
 
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    let mut reader = CorpusSource::open(Cursor::new(bytes)).expect("open");
     let IngestEvent::Extend(candidate) =
         reader.next().expect("one record").expect("a record").event
     else {
