@@ -83,7 +83,7 @@
 //!    which step 4 below makes unnecessary.
 //!
 //! A lock is held on an *inode*, and `.wallet.keys` is replaced by a
-//! fresh inode on every password rotation (`atomic_write_file`: tmp,
+//! fresh inode on every password rotation (`atomic_write_file`: staged,
 //! fsync, rename). A lock left on the old inode would guard nothing once
 //! the path names the new one — a second `open` would succeed. So the
 //! rotation locks the staged file **before** it is renamed into place

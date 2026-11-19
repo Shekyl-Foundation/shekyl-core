@@ -70,8 +70,9 @@ struct HeightDigestFile {
 }
 
 /// Replace `path` with the digest at every height in `digests`, ascending.
-/// The bytes are published by renaming a sibling, so a short write never
-/// truncates a table the caller already has.
+/// The bytes are published through the tree's one replace, a staged file
+/// renamed over `path`, so a short write never truncates a table the caller
+/// already has.
 ///
 /// # Errors
 ///
