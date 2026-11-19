@@ -6,6 +6,8 @@
 //! The embargo and its reshape (`DAEMON_RELAY_PRIVACY.md` §12, §14.7; RX-1
 //! and RX-2, Rick 2026-10-29). Each test names the edit that turns it red.
 
+#![cfg(test)]
+
 use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::RecoveryBudget;
 use shekyl_relay_privacy::params::{origin_retry_one_in, DandelionParams};
