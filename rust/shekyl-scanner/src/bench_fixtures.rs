@@ -392,6 +392,7 @@ fn assemble_scannable_block(
         block,
         transactions: vec![bound(&tx)],
         first_output_index: Some(0),
+        archival_cumulative: shekyl_types::ArchivalLength::ZERO,
     }
 }
 

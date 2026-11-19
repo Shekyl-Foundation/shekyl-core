@@ -21,7 +21,7 @@ use std::io;
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash, TxHash};
 
-use crate::transaction::{Ct, Transaction};
+use crate::transaction::{Ct, Transaction, TxidParts};
 
 /// A transaction in a synced block body.
 #[derive(Clone, PartialEq, Eq)]
@@ -90,7 +90,15 @@ impl SkeletonTx {
                 "shekyl-wire: the skeleton's bytes and operands hash to {mixed}, not {txid}"
             )));
         }
-        Ok(BoundTx { tx, txid })
+        Ok(BoundTx {
+            tx,
+            parts: TxidParts {
+                hash: txid,
+                pqc_auth_hash: self.pqc_auth_hash,
+                prunable_hash: self.prunable_hash,
+                archival_len: self.archival_len,
+            },
+        })
     }
 
     /// The parsed body and the identity its supplied operands mix to.
@@ -142,7 +150,10 @@ impl SkeletonTx {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BoundTx {
     tx: Transaction,
-    txid: TxHash,
+    /// The identity and the operands it was bound with: for a skeleton,
+    /// the supplied digests and archival length the mix accepted, which are
+    /// the accepted transaction's, not the pruned body's own.
+    parts: TxidParts,
 }
 
 impl BoundTx {
@@ -155,7 +166,18 @@ impl BoundTx {
     /// The identity the body was bound to.
     #[must_use]
     pub fn txid(&self) -> TxHash {
-        self.txid
+        self.parts.hash
+    }
+
+    /// The identity and the operands it was bound with. Each operand is
+    /// the accepted transaction's, bound through the txid: a supplier that
+    /// changed one would have reached another identity, and the binding
+    /// refused it. So [`TxidParts::archival_len`] here is a length the
+    /// holder can place in the archival partition (`SHT-Q2`) without
+    /// trusting the supplier.
+    #[must_use]
+    pub fn parts(&self) -> TxidParts {
+        self.parts
     }
 
     /// The body, unbound.
@@ -175,8 +197,8 @@ impl BoundTx {
     #[cfg(feature = "test-fixtures")]
     #[must_use]
     pub fn whole(tx: Transaction) -> Self {
-        let txid = tx.hash();
-        Self { tx, txid }
+        let parts = tx.txid_parts();
+        Self { tx, parts }
     }
 
     /// Edit the body and rebind it to what the edited whole body hashes
@@ -184,7 +206,7 @@ impl BoundTx {
     #[cfg(feature = "test-fixtures")]
     pub fn modify(&mut self, edit: impl FnOnce(&mut Transaction)) {
         edit(&mut self.tx);
-        self.txid = self.tx.hash();
+        self.parts = self.tx.txid_parts();
     }
 }
 

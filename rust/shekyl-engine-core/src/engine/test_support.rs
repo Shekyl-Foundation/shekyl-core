@@ -964,6 +964,7 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: BlockHash) -> Scann
         },
         transactions: vec![],
         first_output_index: None,
+        archival_cumulative: shekyl_types::ArchivalLength::ZERO,
     }
 }
 
