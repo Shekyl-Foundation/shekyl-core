@@ -1,32 +1,44 @@
 # Cover traffic restoration — audit, plan, and status
 
-**Status: steps 1–4 landed (#498, #508, #513, #515).** Step 5 is **blocked**
-on a daemon/p2p cutover this series excludes (§2.9a). The C++ covert
-restructure (§2.1 stages 1–3) is not being pursued; stage 4 enablement is
-not startable. See §2.9 for the series, §3 for what has landed.
+**Status: the restoration is complete. Cover is on by default (#1431,
+2026-11-18); the pass mark is not yet measured. Last verified 2026-11-19.**
+The carrier this document audited and kept from deletion is the node's cover
+on every encrypted session whose timing a watcher can see, Tor's included.
+The rulings, the residuals and what reopens before genesis are in
+[`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) (`CVR-R1`–`CVR-R10`, Rick,
+2026-11-15 and 2026-11-18). In short:
 
-> **REOPENED 2026-11-15 — Tor-zone cover is this document's subject again.**
-> The 2026-09-12 update that took the Tor zone out of this carrier's scope
-> rested on [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) (TRC): operator
-> relay volume as Tor's cover. TRC-1 measured it and found no cover
-> ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md);
-> TRC banner), so TRC §8 step 3 is met and the carrier's scope is open again
-> for every encrypted link, Tor included. How the carrier covers each link was
-> ruled 2026-11-15 in the cover-traffic lane's Round 0; this document records it with that lane's build. **The machinery is retained**; §1.6 is
-> **not** triggered. Each place below that confines the carrier to zones
-> other than Tor, or calls Tor's wire-observer cell posture-conditional, is
-> marked REOPENED and no longer holds.
+- **On by default, with an operator opt-out** (`relay-cover`). The
+  development switch of §3.1 (`--carrier-development`, then
+  `dev-relay-cover`) is deleted.
+- **Scope:** a session that is encrypted and whose connector declares its
+  timing visible. There is no cover class and no "zones other than Tor".
+- **Budget:** 8,192 B/s per node, the one stated number (Axis 2's figure);
+  the cadence is memoryless at a 5 s mean derived from it.
+- **Embargo:** derived with every stem hop carrier-paced; 1638 s on Tor,
+  inside Axis 1's 30-minute limit, which stays.
+- **In the stem phase a transaction leaves a covered session only inside a
+  window**, and a node never broadcasts its own transaction.
+- **Axis 3 stands:** relay co-location does not retire the carrier. The
+  measurement that tested the opposite found no cover
+  ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md)).
 
-> **UPDATED 2026-08-29: the mechanism now HAS its production caller** — see
-> §3.1a. It is still **inert by default**, behind a development opt-in, so the
-> do-not-delete argument below stands unchanged in force; what changed is that
-> "no caller" is no longer the reason a caller grep comes up empty.
+**The sections below are the dated record of the restoration (2026-08 to
+2026-09) and of its signed measurements. They are kept as that record, and
+describe the carrier as it was on each date.** Names in them that no longer
+exist: `NOISE_MIN_DELAY_MS` and `NOISE_DELAY_JITTER_MS` (the bounded cadence,
+now memoryless); `PER_NODE_CEILING_BYTES_PER_SEC` (16 KiB/s, now
+`PER_NODE_BUDGET_BYTES_PER_SEC`, 8,192 B/s); `PER_NODE_PEAK_BYTES_PER_SEC`
+and `PER_CIRCUIT_PEAK_BYTES_PER_SEC` (a memoryless cadence has no peak);
+`PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC` (now `PER_CHANNEL_BYTES_PER_SEC`);
+`CEILING_ZONES`; `noise_windows_in_epoch`; and the epoch-window check on
+`MAX_FRAGMENTS` (replaced by the epoch tail). The current values and their
+bases are `DAEMON_RELAY_PRIVACY.md` §97's carrier rows.
 
 This document exists because the cover mechanism was **deliberately inert,
 fully built, and had no production caller** — which is indistinguishable, to a
 dead-code sweep or a new maintainer, from abandoned scaffolding. It was not.
-`DAEMON_RELAY_PRIVACY.md` §42 remains the carrier's architecture. Its scope
-on the Tor zone is open again (**REOPENED 2026-11-15**, banner).
+`DAEMON_RELAY_PRIVACY.md` §42 remains the carrier's architecture.
 
 > **DO NOT DELETE ANY COMPONENT IN §1 ON "NO CALLERS" GROUNDS.** This was
 > written when the absence of a production caller was *the current state of a
@@ -65,7 +77,7 @@ by:
    records why turning it back on naively would be wrong.
 
 **Restoring cover traffic is, mechanically, changing (1).** *(Tor-zone
-application SUPERSEDED 2026-09-12, TRC; **REOPENED 2026-11-15 (banner).**)* Everything below is what that change would wake up.
+application SUPERSEDED 2026-09-12, TRC; **No longer holds: since 2026-11-18 the carrier covers Tor sessions (Status).**)* Everything below is what that change would wake up.
 
 ### 1.2 C++ inventory
 
@@ -191,9 +203,8 @@ it*, because a replacement exists and is tested.
 [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) removes the Tor zone from this
 carrier's cover-mechanism role and **retains the mechanism** for other
 encrypted layers. That is a scope restatement. Deletion still requires
-abandoning §42 as a design for those remaining layers. **REOPENED
-2026-11-15 (banner):** the Tor zone is in scope again, so nothing here
-narrows.
+abandoning §42 as a design for those remaining layers. **Since 2026-11-18 the Tor zone is in scope
+(Status), so nothing here narrows.**
 
 Not "no callers". Deletion requires **abandoning §42 as a design**, which means
 re-opening, in writing:
@@ -203,7 +214,7 @@ re-opening, in writing:
   wire; without it the wire-observer row of §32.6 is undefended — is
   **SUPERSEDED for Tor 2026-09-12**
   ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)). Design A is not re-ruled
-  here. On Tor that row is posture-conditional, not undefended-without-carrier. **REOPENED 2026-11-15 (banner).**
+  here. On Tor that row is posture-conditional, not undefended-without-carrier. **No longer holds: since 2026-11-18 the carrier covers Tor sessions (Status).**
   **On encrypted zones other than Tor** cover traffic remains what defends it.
 - **§42.4** — the carrier's narrowed job (deny the count of *originations*).
   **Re-opened 2026-08-23** (§42.4a): the narrowing's "4.3× over capacity" was
@@ -214,7 +225,7 @@ re-opening, in writing:
 - **§32.6's grid** — the wire-observer recall cell. Cover is the only
   mechanism addressing it **on encrypted zones other than Tor**. On Tor the
   cell is **SUPERSEDED as a protocol default 2026-09-12 (TRC)** — posture-
-  conditional. **REOPENED 2026-11-15 (banner).**
+  conditional. **No longer holds: since 2026-11-18 the carrier covers Tor sessions (Status).**
 - **Q-11 Unit 2** — `conformance/linkage.rs` is its substrate.
 
 **The symmetry, added 2026-08-23: §1.7 states the conditions under which
@@ -249,7 +260,7 @@ The carrier buys **§20.9's charter: wire-observer recall goes to zero for
 originations** — §32.6's top-left cell, held as a **structural** property rather
 than a statistical one. **On the Tor zone this charter is SUPERSEDED 2026-09-12**
 ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §6): that cell is
-posture-conditional, not a protocol default. **REOPENED 2026-11-15 (banner).** **On encrypted zones other than
+posture-conditional, not a protocol default. **No longer holds: since 2026-11-18 the carrier covers Tor sessions (Status).** **On encrypted zones other than
 Tor the charter still holds**, and the carrier remains the only mechanism
 addressing that cell there (§1.6). At a window sized to the maximum
 admissible transaction, §42.4's narrowing no longer applies (re-opened
@@ -321,7 +332,7 @@ wallet can ask rather than guess.
 >
 > **The burst is not the same number.** 16 KiB/s is the *signed sustained
 > cap*, ruled when two encrypted networks (four channels) existed. The
-> emitter's live burst is `carrier::PER_NODE_PEAK_BYTES_PER_SEC` =
+> emitter's live burst (as of 2026-08-28; the peak constants are deleted, Status) is `carrier::PER_NODE_PEAK_BYTES_PER_SEC` =
 > **12,290 B/s**: Tor, two channels, ~1.50× the 8,192 B/s that posture
 > sustains, and under the cap. A *circuit* carries one channel and wants
 > `PER_CIRCUIT_PEAK_BYTES_PER_SEC` = **6,145 B/s**; sizing a circuit against
@@ -359,7 +370,7 @@ confirm it holds** *(was 2.72 KiB/s pre-#546, then 3.20 KiB/s — corrected 2026
 and now 4 KiB/s after the 2026-08-28 cadence change; a circuit carries ONE
 noise channel, so the per-channel figure is the one a circuit probe needs:
 `carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC` and
-`carrier::PER_CIRCUIT_PEAK_BYTES_PER_SEC`, which exist as named constants for
+`carrier::PER_CIRCUIT_PEAK_BYTES_PER_SEC` (as of 2026-08-28; now `PER_CHANNEL_BYTES_PER_SEC`, and no peak: Status), which exist as named constants for
 exactly this reason. The signed node cap is 16 KiB/s. The live node peak is
 12,290 B/s across Tor's two channels. Neither is what this probe sizes. The burst figure is **6,145**,
 not "6 KiB/s" — the exact rate is 6 144.61 B/s, so a 6,144 cap is 0.61 B/s
@@ -369,12 +380,12 @@ to this axis we do not have.
 > **This spec has now gone stale three times, each time silently, because it
 > transcribes a rate the constants derive.** Every cadence or window change
 > moves it, and nothing reds. Whoever runs the rig should read
-> `carrier::WINDOW_BYTES`, `MEAN_CADENCE_MS` and `NOISE_MIN_DELAY_MS` at the
-> time of the run rather than the numbers above.
+> `carrier::WINDOW_BYTES` and `MEAN_CADENCE_MS` at the time of the run rather
+> than the numbers above.
 
-#### Axis 3 — relay co-location does NOT retire the carrier. **Ruled 2026-08-23; SUPERSEDED for the Tor zone 2026-09-12 (TRC); REOPENED 2026-11-15 (banner)**
+#### Axis 3 — relay co-location does NOT retire the carrier. **Ruled 2026-08-23; stands (withdrawn for Tor 2026-09-12, restored by measurement 2026-11-15)**
 
-**REOPENED 2026-11-15 (banner).** Volume cover does not replace this carrier
+**No longer holds: since 2026-11-18 the carrier covers Tor sessions (Status).** Volume cover does not replace this carrier
 on Tor: TRC-1 measured relay volume and found no cover. The 2026-09-12
 supersession below no longer holds, so this section's ruling holds again on
 every encrypted link, Tor included. That Tor takes the carrier's envelope is
@@ -390,7 +401,7 @@ against an assumption of relay cover (TRC §5).
 
 **Relay cover cannot substitute for the carrier at any measured relay traffic
 level** *(SUPERSEDED as a Tor-zone conclusion 2026-09-12; retained as the
-reason the carrier stays for encrypted zones other than Tor; **REOPENED 2026-11-15 (banner).**)*, and the reason
+reason the carrier stays for encrypted zones other than Tor; **No longer holds: since 2026-11-18 the carrier covers Tor sessions (Status).**)*, and the reason
 is the mission hierarchy rather than a number:
 
 - **Relay operation is optional.** A wire-observer guarantee that holds only for
@@ -414,7 +425,7 @@ carrier rate because relay operators have cover underneath it"* — and that
 is the back door mission priority 2 still forbids on any zone the carrier
 still covers. Held, co-location benefit is a bonus nothing depends on.
 
-**Scope of the 2026-08-23 ruling, as of 2026-09-12.** **REOPENED 2026-11-15 (banner).** What remains foreclosed
+**Scope of the 2026-08-23 ruling, as of 2026-09-12.** **No longer holds: since 2026-11-18 the carrier covers Tor sessions (Status).** What remains foreclosed
 is relay cover **licensing a weaker carrier constant** on zones the carrier
 still covers. What is **withdrawn for the Tor zone** is relay cover being
 unable to *substitute* for the carrier there —
@@ -428,8 +439,8 @@ and [`docs/TOR_RELAY.md`](../TOR_RELAY.md). The four constraints below are
 the 2026-08-23 wording; they are preserved (path selection, non-exit, opt-in,
 separate process) and are not a second authority. "Separate process" means
 separate from `shekyld`. The relay is Tor payback, not cover: no relay
-topology mixes a node's own cells into cover (**REOPENED 2026-11-15**,
-banner).
+topology mixes a node's own cells into cover (measured 2026-11-15;
+Status).
 
 Recommended, and separate from every remaining carrier guarantee:
 
@@ -1167,7 +1178,7 @@ rides the carrier. The paragraphs below named what that measurement should
 show *before* anyone ran it, so the first reading could not be read as
 either confirmation or a defect after the fact.
 
-**The arithmetic is not what is in question.** `PER_NODE_CEILING_BYTES_PER_SEC`
+**The arithmetic is not what is in question.** `PER_NODE_CEILING_BYTES_PER_SEC` (as of 2026-09-12; now `PER_NODE_BUDGET_BYTES_PER_SEC`, Status)
 is a `const` assert at exact equality: `20 480 × 4 ÷ 5 s = 16 384 B/s` holds by
 construction or the build fails. Measuring it would only re-derive it.
 
@@ -1192,7 +1203,7 @@ rather than an impression to leave:
   no path to exceed its own mean, so this would mean the cadence is not drawing
   what it is documented to draw.
 - **per-circuit rate above 6 145 B/s sustained.** That is
-  `PER_CIRCUIT_PEAK_BYTES_PER_SEC`, the shortest interval; a *sustained* rate
+  `PER_CIRCUIT_PEAK_BYTES_PER_SEC` (as of 2026-09-12; deleted, Status), the shortest interval; a *sustained* rate
   at the peak means the jitter is not being applied.
 - **a rate that varies with queue depth.** This is the CV-4 breach the whole
   separation exists to prevent, and it is the one measurement worth running
@@ -1217,7 +1228,7 @@ uncommitted local patch, which is the one shape a pre-registered measurement
 must not have: nobody else can re-run it, so the reading is an impression
 again.
 
-`shekyld --carrier-development` arms it. **HIDDEN** — parsed, never in
+`shekyld --carrier-development` armed it (as of 2026-09-05; the switch is deleted and cover is on by default behind `relay-cover`, Status). **HIDDEN** — parsed, never in
 `--help` — because §3.1 ruled this a development switch and visibility is
 exactly what would make it an operator setting. `check_carrier_flag_hidden.sh`
 pins the registration site and the default; moving one `add_arg` argument is
@@ -1681,7 +1692,7 @@ that exists.
 | measured honest Tor-only (seedusw 2026-09-12, SIGNED) | idle **7128 B/s** (~18.5 GB/month); loaded **7809 B/s** (~20.2 GB/month) |
 
 **It holds at exact equality, and the ceiling is now a build break rather than
-a table entry.** `params::carrier::PER_NODE_CEILING_BYTES_PER_SEC` carries it
+a table entry.** `params::carrier::PER_NODE_CEILING_BYTES_PER_SEC` (as of 2026-08-28; now `PER_NODE_BUDGET_BYTES_PER_SEC`, 8,192 B/s, Status) carries it
 with a `const` assert beside the constants it divides, so shortening the
 cadence, widening the window, or adding a third encrypted zone does not go
 quietly — it fails to compile.

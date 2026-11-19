@@ -12,12 +12,14 @@ A measurement of a node using its own relay's Tor found no cover:
 - an observer of those connections picks out the node's own transaction
   sends.
 
-No Tor configuration hides when a node sends today. That was measured
-with a relay; without one, a client's guard connections carry only its own
-traffic, so the same holds. The protocol's cover traffic is being
-redesigned. Run a relay
-to contribute to the Tor network (see Reciprocity), not to protect the
-node.
+No Tor configuration hides when a node sends. That was measured with a
+relay; without one, a client's guard connections carry only its own
+traffic, so the same holds. What hides it is the node's cover traffic, on
+by default (`relay-cover`; `ANONYMITY_NETWORKS.md`). Run a relay to
+contribute to the Tor network (see Reciprocity), not to protect the node.
+Run it as a separate Tor from the node's, preferably on a different host: a
+relay's uptime is public, and on the node's host it can link the node's
+onion address to the host's IP.
 
 ## What to run
 

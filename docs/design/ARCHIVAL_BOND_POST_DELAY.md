@@ -411,7 +411,7 @@ constant and its golden vector.
    - **A wallet without its own node** still reaches its daemon over
      clearnet by default (§2), and that daemon sees the submission.
 
-   **TRC-1 reported 2026-11-15** (`TOR_COVER_POSTURE.md` banner, REOPENED):
+   **TRC-1 reported 2026-11-15** (`TOR_COVER_POSTURE.md`; since 2026-11-18 the cover carrier runs on Tor sessions by default, its pass mark not yet measured):
    the operator-relay posture does not hide originated cells either. An
    observer of the guard connections of a node using its own relay's Tor
    picked out the node's sends: in 100 ms windows, a window holding a send

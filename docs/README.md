@@ -145,7 +145,7 @@ There is no V3.1 / V3.2 / V3.x release train. Allowed FOLLOWUPS / plan `Target:`
 | Principal stake lifecycle | [design/PRINCIPAL_STAKE_LIFECYCLE.md](design/PRINCIPAL_STAKE_LIFECYCLE.md) |
 | Reward emission | [design/REWARD_EMISSION_LEG.md](design/REWARD_EMISSION_LEG.md) |
 | Address format (operator) | [USER_GUIDE.md](USER_GUIDE.md); message-signing / address v2: [design/WALLET_MESSAGE_SIGNING.md](design/WALLET_MESSAGE_SIGNING.md) |
-| Tor cover posture | [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md) — REOPENED 2026-11-15: relay volume is not cover; the relay is Tor payback (TRC) |
+| Tor cover posture | [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md) — cover traffic on every encrypted session, on by default; the relay is Tor payback (TRC, CVR) |
 | Daemon chain-store invariants (`SI-`) | [design/STORE_INVARIANT_REGISTER.md](design/STORE_INVARIANT_REGISTER.md) — what the Rust store must hold regardless of consensus; never a consensus rule (C2-R8) |
 | Daemon consensus validation (`shekyl-chain-rules`) | [design/CHAIN_RULES_CRATE.md](design/CHAIN_RULES_CRATE.md) — the crate that judges a block against the census's rules and mints the `ChainValid` the store connects; no store handle (DRS-E6) |
 | Staker operations | [STAKER_OPERATOR_GUIDE.md](STAKER_OPERATOR_GUIDE.md) |

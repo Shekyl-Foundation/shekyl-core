@@ -1,172 +1,142 @@
-# Tor cover posture — relay contribution, not a protocol carrier — REOPENED 2026-11-15
+# Tor cover posture — cover on every encrypted session; the relay is Tor payback
 
-**Status: OPEN — reopened 2026-11-15 (Rick). Relay volume is not cover on
-Tor.** The redesign was ruled the same day in the cover-traffic lane's
-Round 0; this document records those rulings with the lane's build.
-§8 step 3 is met. TRC-1's guard-connection reading
+**Status: RULED 2026-11-15 and 2026-11-18 (Rick). The mechanism
+(`CVR-R1`–`CVR-R6`) is built in #1431; the pass mark (`CVR-R7`) is not yet
+measured. Last verified 2026-11-19.** Identifier families `TRC-1…TRC-n` (the
+relay posture and its measurement) and `CVR-R1…CVR-R10` (the cover rulings),
+both in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md). Decision
+authority: Rick.
+
+**What this document records.** A node's cover against a watcher of its
+links is the relay's cover carrier, on by default, on every encrypted
+session whose timing a watcher can see, Tor's included. Running a Tor relay
+is not cover. It is how Shekyl pays Tor back for what it uses (§4).
+
+**Why.** Until 2026-11-15 this document recorded the opposite for Tor: that a
+node whose Tor client was also a non-exit relay was covered by the relay's
+volume, and needed no carrier. TRC-1's guard-connection reading
 ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md),
-#1388) watched the relay's three
-entry-guard connections. Every SOCKS and onion-service circuit the node
-builds for itself goes through them, and they carried 0.47 % of the
-relay's bytes. Summed over the three, in 100 ms windows, the window
-holding one of the node's own transactions ranks above a random other
-window 93 % of the time (AUC 0.928), and 82.6 % of those windows are
-above the other windows' 99th percentile. At 1 s and 10 s the AUC is
-0.93 and 0.82, with 3.2 % and 6.2 % above the 99th percentile. Limits:
+#1388) measured it and found no cover. Every circuit a node builds for itself
+goes through its three entry-guard connections, and those carried 0.47 % of
+the relay's bytes. Summed over the three, in 100 ms windows, the window
+holding one of the node's own transactions ranks above a random other window
+93 % of the time (AUC 0.928), and 82.6 % of those windows are above the other
+windows' 99th percentile. At 1 s and 10 s the AUC is 0.93 and 0.82. Limits:
 one relay and one daemon on a quiet testnet, kernel counters read every
-100 ms, six guard epochs over 38.7 h.
-- **No longer holds:** §1's ruling, §2's restriction of the carrier to
-  layers other than Tor, §2.1's withdrawal of the carrier as Tor's cover,
-  §3, §5's requirement that the node's client be the relay's Tor, §6 and
-  §7 (they describe a cover the measurement did not find), and §9's
-  rejection of the carrier on the Tor zone. **A node on Tor has no
-  wire-observer cover today, relay or not.** The reading measured a node
-  with a relay. Without one, a client's guard connections carry only its
-  own traffic, so the same follows by reasoning, not by measurement.
-- **Stands:** §4. The relay is Tor payback and nothing more. §2's
-  retention of the carrier machinery stands. §5's non-exit
-  rule, its separate process from `shekyld`, and path selection staying
-  Tor's also stand.
-- **Not Tor only** (Rick, 2026-11-15): encryption hides content, not when
-  a send happens or how big it is, so the same holds on every encrypted
-  link, clearnet included. The redesign is the cover-traffic lane's, its
-  own lane and not on the alpha.12 critical path. Until its build records
-  the rulings here, the sections below are the 2026-09-04 ruling as
-  recorded, each marked where it no longer holds.
+100 ms, six guard epochs over 38.7 h. The reading measured a node with a
+relay; without one, a client's guard connections carry only its own traffic,
+so the same follows by reasoning.
 
-RULED 2026-09-04, recorded 2026-09-12. UPDATE 2026-10-08: own transactions
-ride a stem slot (§1). Identifier family `TRC-1…TRC-n` (index row registered
-at birth per rule 94 §1). Decision authority: Rick. This document records a
-decision that was reached in design conversation and never written; the
-ruling is not new, its record is.
-
-That class — **ruled-but-unwritten** — is why the record exists. Ruled-and-
-written is fine. Unruled-and-unwritten presents as open and gets decided.
-Ruled-but-unwritten is the dangerous one: every surface says "open" while the
-decision is real, so a grep finds nothing and the next pass re-derives, possibly
-differently. Rule 23 cannot catch it; the four disposition classes all assume
-the decision reached a document.
+Terms: a *channel* is one stem slot's emission stream. A *window* is one
+emission, always `WINDOW_BYTES`, real or dummy. *Cover* is the carrier
+running on a channel. A *watcher* is anyone observing a link without being
+the peer on it.
 
 ---
 
-## 1. The ruling — REOPENED 2026-11-15: volume is not cover (banner)
+## 1. The ruling
 
-**On the Tor zone, wire-observer resistance is obtained by operator posture —
-running a non-exit Tor relay in the same Tor process the node uses as its
-client, not by a protocol-level cover-traffic carrier.**
+**The goal: a watcher must never be able to tell that a stem was sent. The
+receiving peer knows; nobody else does.**
 
-Cover comes from *volume on that process's OR connections*: a relay's uplink
-already carries thousands of fixed-size, per-hop-encrypted cells per second,
-and the node's own originated cells are indistinguishable among them **only
-when they share those connections**. An 8 KiB stem is seventeen cells inside a
-stream doing thousands. A second Tor for the daemon's SOCKS/onion — including
-the default managed ephemeral instance — keeps originated cells on their own
-OR connections; a wire observer can still separate that burst from relay
-volume. The node stops emitting a constant-rate envelope of its own and stops
-paying for one.
+Encryption hides what a send says. It does not hide when a send happens or
+how big it is, and that holds on every encrypted link, clearnet under Noise
+as much as Tor. So the cover is a carrier that makes a stem's send
+indistinguishable from the sends around it, on each such link.
 
-Three consequences follow immediately:
+- **`CVR-R1` — cover is on by default, with an operator opt-out**
+  (`relay-cover`, `on` unless set `off`). Cover starts as soon as a stem
+  slot holds a covered peer; it does not wait for sync. A node that opts out
+  relays no stems: a stem it receives is broadcast at once. Its own
+  transactions still stem, bare, and it warns on every start. Whether the
+  opt-out survives is decided before genesis (§8).
+- **`CVR-R2` — the relay reads the connector's `local_observer_visibility`
+  cell.** There is no cover class. The class stored the 2026-09-04 ruling
+  that Tor's volume was its cover as a fact of the connector.
+- **`CVR-R3` — cover runs on a session that is encrypted and whose
+  connector declares its timing visible, and on no other condition.** Tor
+  sessions carry cover, the own-origin slot included. A plaintext clearnet
+  session carries none while `dev-clearnet-encrypt` exists. The carrier adds
+  no encryption; what it needs from the record layer under it is in
+  [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md), "What cover needs from
+  the record layer".
+- **`CVR-R4` — the cadence is memoryless, with no admission threshold.** The
+  wait before a channel's next window does not depend on the time since its
+  last. A one-window message is sent whole or not at all. After each epoch
+  boundary a channel sends `MAX_FRAGMENTS − 1` more windows to the peer it
+  was bound to, starting nothing, then takes its new peer, so a message that
+  started before the boundary finishes on its own peer, and the switch comes
+  at the same point whether or not one was in flight. Peer loss still
+  restarts a half-sent message.
+- **`CVR-R5` — the cover budget is 8,192 B/s per node, the one stated
+  number.** The mean cadence is derived from it: channels × window ÷ budget,
+  5 s. A channel holds at most one full-size message pending
+  (`MAX_FRAGMENTS` windows). The embargo is derived with every stem hop
+  carrier-paced, at a channel's expected occupancy on a network of at least
+  100 nodes (an Assumption): 1638 s on Tor and 1320 s on clearnet, inside
+  the 30-minute limit. A `p2p-upload-max` below the cover rate refuses the
+  start.
+- **`CVR-R6` — in the stem phase, a transaction leaves a covered session
+  only inside a window.** A node's own transaction always waits for its
+  window; it is never broadcast as a fallback and never sent bare on a
+  covered session. A relayed stem that cannot get a window ends its stem
+  phase there and is broadcast. The embargo's reshape goes through the
+  alternate's channel, or the stem phase ends. The emission tick does not
+  wait on relay work. Broadcast (fluff) is outside the rule: it uses the
+  ordinary connection to every peer, uncovered. Where no cover runs the rule
+  does not apply, and a stem to a plaintext session goes bare. A node with
+  no connector configured makes its own transaction public at once; a node
+  whose peers are all down holds it, because mining its own unbroadcast
+  transaction and publishing the block would attribute it to that node.
+- **Own transactions ride a stem slot** (Rick, 2026-10-08;
+  `DAEMON_RELAY_PRIVACY.md` §95.3, §98). When a node has hidden-address
+  sessions, slot 0 is reserved for them and the local source pins on its
+  peer. A link that carried only originated traffic was ProxyMark's root
+  cause.
 
-- **Stems go out over the ordinary connection, immediately.** No fixed slots, no
-  waiting for the next cadence tick.
-- **Two draws.** Relayed stems draw uniformly over every outbound session.
-  The own-edge draws uniformly over the hidden-address outbound sessions.
-  Both re-draw per epoch. A hidden-address pool of one is a degraded state
-  the node reports (`hop-0 edge cannot rotate`), not a configuration it
-  accepts quietly. **UPDATE 2026-10-07:** that pool's target is
-  `MIN_PROVISIONED_OUT_PEERS` (12). The report is a pool of one, an info
-  line (`DAEMON_RELAY_PRIVACY.md` §98.5), and it does not name a target. *Records-was: the managed Tor zone opens
-  `HOP0_OUTBOUND_TARGET` (4) outbound connections so that pool has the
-  paper's degree to rotate over.*
-  `--out-peers` does not change the address-hiding target. A live own-edge is not
-  re-pointed; a dead one is replaced from the peers still up. No cover
-  on Tor by ruling; on cover-bearing links the own-edge is slot-aligned.
-  Tor's cover class is `Volume`. **Measured 2026-11-15, that ruling is
-  falsified (banner).**
-  *Records-was as of 2026-10-08: this bullet is what the code does today.
-  The ruling below removes the separate draw.*
-- **UPDATE 2026-10-08 (Rick). Own transactions ride a stem slot.** A node's
-  originated transactions take one of its Dandelion++ stem slots, which also
-  carries relayed traffic, per Dandelion++ §4 ("along the same outbound edge
-  in the anonymity graph"). When the node has hidden-address sessions, one
-  stem slot is drawn uniformly from them, the other uniformly from all
-  outbound except that one, and the local source maps to the hidden slot.
-  Inbound sources map as the stem map does. When every outbound session is
-  hidden, this is the paper's rule unchanged. `own_edge()` as a separate
-  draw sends originated traffic on a link that carries no relayed traffic,
-  which is ProxyMark's root cause
-  (`DAEMON_RELAY_PRIVACY.md` §95.3). The confirming measurement is that
-  section. **UPDATE 2026-10-09:** PR-1 (#1018) shipped it: slot 0 is
-  reserved for the hidden outbound sessions, the local source pins on
-  its peer plus one alternate (`DAEMON_RELAY_PRIVACY.md` §98, D-PR1-1
-  (c′)), and `own_edge()` is deleted. *Records-was: "The relay lane's
-  deletion of `own_edge()` waits on review of the run; it is not in the
-  measurement change."*
-- **Every fixed-slot artifact stops having a subject on this zone** —
-  fragmentation, `MAX_FRAGMENTS`, epoch-miss arithmetic, the in-flight
-  remainder, the length leak, the empty-message wedge.
-- **The anon embargo loses its largest inherited term.** The ~50-minute figure
-  was an artifact of a cadence constant, not a derived requirement.
+## 2. What is built
 
-## 2. What is preserved — the machinery stands; its "other than Tor" scope is REOPENED 2026-11-15 (banner)
+The carrier lives in `shekyl-relay-privacy` (`params::carrier`, the cadence
+and the embargo derivation) and `shekyl-relay` (the schedule, the queue and
+the task that sends). Each node runs two channels, one per stem slot,
+whatever connectors its sessions ride; a second network adds no channel and
+no bytes. Every window is 20,480 bytes, sized to hold the modal transaction
+whole at any tree depth. The carrier's schedule, each channel's binding and
+tail, its queue and the session writers it sends on run in their own task,
+so a busy relay owner delays what it hands the carrier and never a window:
+on 2026-11-05 an owner blocked behind the pool's commit stopped the cover on
+both channels for 28 s and 32 s.
 
-**The carrier mechanism is retained.** `shekyl-relay-privacy`, `params::carrier`,
-the noise-slot machinery and its tests stay in the tree and stay maintained.
+The values, their bases and what would re-measure them are
+`DAEMON_RELAY_PRIVACY.md` §97's rows ("Carrier cadence", "Smallest network
+the embargo is sized for", "Carrier backlog cap").
 
-This ruling **narrows the carrier's scope**; it does not abandon it.
-**REOPENED 2026-11-15:** the narrowing to layers other than Tor no longer
-holds (banner). The carrier
-remains the cover mechanism for encrypted network layers other than Tor, where
-no relay-volume equivalent exists and where substitution cover is the only
-available construction. A future encrypted zone that ships without a
-volume-cover story inherits the carrier as built.
-
-Because the mechanism is retained,
-[`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md) §1.6's
-abandonment clause is **not** triggered by this ruling. The carrier's
-do-not-delete argument stands, with its scope restated. What must change in that
-document and its neighbours is the claim that the carrier is the Tor zone's
-cover mechanism — see §10.
-
-### 2.1 What this reopens — COVER_TRAFFIC §1.7 Axis 3 — REOPENED 2026-11-15: the Tor-zone withdrawal no longer holds (banner)
+### 2.1 COVER_TRAFFIC §1.7 Axis 3 stands
 
 [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md) §1.7 Axis 3
-(**Ruled 2026-08-23**) said relay cover cannot substitute for the carrier at
-any measured relay traffic level, because a guarantee that holds only for
-operators who relay is **privacy as a setting**, which mission priority 2
-forbids. That substitution foreclosure is **reopened for the Tor zone** by this
-document.
+(ruled 2026-08-23) said relay cover cannot substitute for the carrier at any
+measured relay traffic level. Between 2026-09-04 and 2026-11-15 this document
+withdrew that for Tor; the measurement restored it. Its standing rule is
+unchanged: **no protocol constant may be derived against an assumption of
+relay cover.**
 
-The mission-2 objection is real. It is the cost named in §6, not a refutation
-of Axis 3's reasoning. Axis 3's remaining standing rule — **no protocol
-constant may be derived against an assumption of relay cover** — is
-**preserved** (§5: not load-bearing on any protocol path). What is withdrawn
-is only the claim that the carrier must therefore remain the Tor zone's cover
-mechanism.
+## 3. Why a carrier, on Tor as on clearnet
 
-## 3. Why volume rather than substitution, on Tor specifically — REOPENED 2026-11-15 (banner)
+Substitution cover — an envelope the node emits whether or not anything is
+happening — gives a watcher nothing to tell a stem from, by construction.
+The alternative considered for Tor was volume: a relay's cells hiding the
+node's own. It fails on where the cells travel. A node's own circuits enter
+Tor through its guard connections, and relayed traffic rides other
+connections, so the volume is not on the links the node's sends are on
+(the reading above). Nothing a node can configure moves it there.
 
-Substitution cover — a constant-rate envelope the node emits whether or not
-anything is happening — gives wire-observer recall of exactly zero. That is a
-structural property, and it is strictly stronger in kind than what volume cover
-provides. It is also, on Tor, the expensive way to buy a property the network
-already sells.
+### 3.1 What cover costs
 
-Tor's cell format does the work substitution was simulating. Cells are 514
-bytes, uniform, and encrypted per hop, and a relay carries its own client
-circuits over the same OR connections it already holds to other relays. An
-observer of **those** connections cannot separate relayed cells from originated
-ones. That claim is false of a sidecar client Tor: originated circuits then
-have their own OR connections, and the relay's volume is unused as cover. The
-protocol does not need to manufacture the indistinguishability; it needs the
-node's client circuits to ride the relay process. Operator form:
-[`docs/TOR_RELAY.md`](../TOR_RELAY.md).
-
-Against 3 KiB per 12.5 s of manufactured envelope, a modest relay's throughput
-is not a close comparison. **That comparison is not the measurement §8 owes.**
-Earlier figures (including a ~180 KiB/s burst-floor null result used as a
-circuit-throughput stand-in) are not pins of sustained client-circuit
-throughput and must not be quoted as such.
+8,192 B/s sent per node while it has covered stem peers, and as much
+received from the peers that stem to it: about 0.7 GB a day each way. A
+transaction's stem takes a mean of 5 s per hop to leave. The origin's retry
+interval, the embargo's 1-in-10 quantile, is 3770 s where it was 1176 s
+without cover.
 
 ## 4. Reciprocity — a net contributor, not a consumer
 
@@ -193,12 +163,11 @@ Two mechanisms, and the first does not depend on operator uptake:
 - **Operator-run non-exit relays**, documented as the cover posture and as a
   contribution, adopted per operator.
 
-**Sizing is owed, not inherited.** Earlier consumption figures were derived for
-a constant-rate carrier at a candidate cadence. That load profile no longer
-applies: without the carrier, Tor consumption is bursty onion-service and fetch
-traffic rather than a non-idling floor. The offset commitment is the durable
-part; the number that satisfies it must be re-derived against the actual
-profile before it is quoted anywhere. See §8.
+**Sizing is owed, not inherited.** With cover on by default, a node's Tor
+consumption has a floor that does not idle: the carrier's 8 KiB/s on its stem
+sessions, on top of onion-service and fetch traffic. The offset commitment is
+the durable part; the number that satisfies it is derived from the testnet
+measurement (§8, `CVR-R9`) before it is quoted anywhere.
 
 **Path selection stays entirely Tor's.** Never route Shekyl traffic through
 Shekyl-operated relays, and never prefer them (`COVER_TRAFFIC_RESTORATION.md`
@@ -206,203 +175,167 @@ Shekyl-operated relays, and never prefer them (`COVER_TRAFFIC_RESTORATION.md`
 acquires relay positions *on Shekyl circuits*, which is the worst outcome
 available here.
 
-## 5. Constraints on the relay posture
+## 5. Constraints on the relay
+
+A relay is opt-in. It is payback, not cover, and nothing in the protocol
+reads whether an operator runs one.
 
 **Non-exit only.** Middle or guard relay, no exit policy. Stated explicitly
-wherever this is recommended, because "run a relay" without the qualifier will
-get an operator an exit relay and an abuse complaint. Exit operation carries
-abuse-handling and legal exposure the project does not ask of its operators and
-does not need for cover.
+wherever this is recommended, because "run a relay" without the qualifier
+will get an operator an exit relay and an abuse complaint.
 
-**Separate process from `shekyld`, same Tor process as the node's client.**
-**REOPENED 2026-11-15:** the same-process half was the cover topology and
-loses its reason (banner); separate from `shekyld` stands.
-The relay must not share a process with the daemon. Relay throughput and
-uptime are externally measurable by design — that is how bandwidth authorities
-work — so a relay co-located in the daemon process turns the daemon's uptime
-into a remotely probeable signal. The same principle applies to any other
-externally measured relay property. The operator must be able to restart
-`shekyld` without restarting the relay, and the reverse. **Separate from
-`shekyld` is not a second Tor for Shekyl circuits.** Mixing is cells on the
-relay process's OR connections; the daemon's SOCKS outbound and onion inbound
-must be that process (operator `--tx-proxy` / `--anonymous-inbound` against
-it, which yields the default ephemeral spawn). Putting the relay *inside* the
-daemon-spawned managed Tor remains rejected (§9).
+**A separate Tor from the node's, preferably on a different host**
+(`CVR-R9`). A relay's throughput and uptime are externally measurable by
+design — that is how bandwidth authorities work — so a relay on the node's
+host can link the node's onion address to the host's IP by uptime, and a
+relay in the daemon's process turns the daemon's uptime into a remotely
+probeable signal. The daemon's managed Tor stays client-only; relay flags
+are never added to it.
 
-**Not load-bearing on any protocol path.** No consensus rule, no mechanism, and
-no default behaviour may assume the node's operator runs a relay. The posture
-improves an operator's position; it is never an input a protocol check reads.
+**Not load-bearing on any protocol path.** No consensus rule, no mechanism
+and no default behaviour may assume the node's operator runs a relay.
 
 **Never prefer Shekyl-operated relays.** Path selection stays Tor's (§4).
 
-## 6. What this discharges, and for whom — REOPENED 2026-11-15: the posture discharges nothing (banner)
+## 6. What this discharges, and for whom
 
-Stated plainly because it is the cost of the ruling, not a caveat on it.
+With cover on, which is the default: for every node, on each of its
+encrypted stem sessions, a watcher of that link cannot tell a window that
+carries a stem from one that carries nothing, subject to the pass mark (§8).
+Not for a node that opted out, and not on a plaintext clearnet session.
+Any document that claims more must be corrected rather than reinterpreted.
 
-The carrier would have discharged the wire-observer objective **for every node
-by default**. The relay posture discharges it **for operators who adopt it, and
-not at all for those who do not**.
+## 7. Known residuals
 
-That is a real reduction in what the protocol guarantees, and it is the reason
-this is a reclassification — cover moves from a *protocol mechanism* to an
-*operator posture* — rather than a swap of one mechanism for a better one. Any
-document that claims a default wire-observer property on the Tor zone must be
-corrected rather than reinterpreted.
+Stated here and in the user documents.
 
-## 7. Accepted trades and residuals — REOPENED 2026-11-15 (banner)
+- **Cover marks a link as running Shekyl.** Fixed-size windows at a
+  recognisable rate are a signature.
+- **On clearnet, a watcher sees which of a node's connections are stems**,
+  because cover runs on those and nowhere else, **and knows the last stem
+  hop of a broadcast transaction**: the broadcast starts when the stem
+  arrives. Earlier hops stay hidden. A hold before the broadcast would blur
+  this; it is not built, and reopens before genesis (§8).
+- **On Tor a watcher cannot separate a node's connections**, so neither of
+  those applies there.
+- **A transaction of two or more windows completes its stem less often than
+  a one-window one.** The embargo is sized for one window per hop.
+- **A transaction dropped mid-stem takes longer to recover than without
+  cover.** The embargo and the origin's retry are sized for carrier-paced
+  hops.
+- **An opted-out node's own sends are visible to a watcher**, and it gives
+  no stem privacy to others.
 
-**Structural becomes statistical.** Constant-rate cover made the observer's
-question unanswerable. Relay cover makes it a question the observer can attempt:
-"is this burst relayed or originated?" We expect to win that question at any
-realistic relay volume, but it is a question we must keep winning rather than a
-property we hold.
+## 8. The pass mark, what reopens, and the measurement behind this ruling
 
-**The cover is not the node's to verify.** Nothing inside the daemon can
-determine whether the uplink currently provides cover. A relay at 04:00 with low
-consensus weight may be nearly idle. The node therefore cannot refuse to act
-when uncovered, which a carrier-based design could have done.
+**The pass mark (`CVR-R7`), fixed before measuring.**
 
-**It ramps.** A new relay carries little for days while consensus weight builds,
-so a fresh install has no cover precisely during the window in which it is most
-identifiable as a new participant.
+- Deciding test: real against dummy windows at 100 ms, scored from each
+  window's emission time. Pass: AUC upper 95 % bound ≤ 0.55, and the share
+  of real windows above the dummies' 99th percentile has an upper 95 % bound
+  ≤ 2 %.
+- Timing test, same bound: the interval before a real window against the
+  interval before a dummy.
+- At least 2,000 real sends.
+- Labels come from the carrier through the measurement-spans feature only. A
+  default build never logs them.
+- Valid only if the instrument can see: with cover off, under the same load,
+  transaction-carrying windows against all others give AUC ≥ 0.80. Otherwise
+  the run is void. Own against relayed (cover off) is reported separately.
+- Reported, not deciding: 1 s and 10 s, each guard alone, the quiet run, the
+  receiving side, both ends together, the inbound-to-outbound matcher, and
+  the two reopen measurements below.
+- Per network: Tor sums the guard connections of the managed client-only
+  Tor. Clearnet is per stem-peer connection, and waits for encryption to be
+  on.
+- Real and dummy windows produce the same Tor cell count.
 
-**It is Tor's decision, not ours.** Path-selection weights, flag assignment and
-load are outside the project's control and can change without notice.
+The instrument and its record are their own change after the mechanism.
+`PM-3` stays a check under its own row, not the acceptance test
+(`CVR-R8`). `DAEMON_RELAY_PRIVACY.md` §96 item 4's test is this pass mark.
 
-**Enumerability residual.** A relay IP in the consensus advertises "runs Tor,"
-not "runs Shekyl," and the relay set is a poor candidate list. Emit-attribution
-on the anon zone is structurally unavailable, so the onion↔IP adjacency is not
-newly reachable by this posture. **Publishing overlay inbound from that same
-listed process is the mixing topology for inbound, not a protocol
-requirement** — inbound on a second Tor is uncovered inbound. The residual that
-remains: if Shekyl operators adopt relaying disproportionately, the population
-correlation strengthens over time. This is why the posture is documented as a
-contribution and a recommendation and is never made a default or a
-requirement.
+**Reopen before genesis** (one row in
+[`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md)), decided together with
+the measurement in hand:
 
-## 8. Falsifiers and reopen criteria — step 3 MET 2026-11-15: the ruling reopened (banner)
+- whether cover stays opt-out or becomes always-on;
+- a hold before a broadcast, to blur the last stem hop on clearnet
+  (`CVR-R10`, ruled and removed on 2026-11-18 when the build was cut back to
+  its core);
+- the budget and cadence;
+- the 30-minute embargo limit;
+- whether cover is kept at all, if the pass mark fails.
 
-**The measurement this ruling rested on has been taken, and it found no
-cover** (banner). Its subject was a Shekyl node whose Tor **client is the
-same process as** a modest non-exit relay, and how much traffic that process
-carries across hours and consensus weights. A sidecar client Tor was not its
-subject — originated cells would not be on the relay's OR connections. It
-was the one input that could not be reasoned to.
+Two measurements feed it, reported with the `CVR-R7` run: how well a
+clearnet watcher picks the predecessor that delivered a broadcast
+transaction, split by the node's count of stem predecessors; and how often a
+stem of two or more windows completes, against the 90 % the embargo is sized
+for at one window.
 
-Falsifier chain, in the [`PWD-E8`](P2P_2_ENDPOINT_ROUND.md) shape — the subject
-must exist before the measurement can:
+**The Tor Project is told after the testnet measurement and before mainnet**
+(`CVR-R9`), through the existing private channel. The run records: bytes
+read and written per day on the managed Tor; cover bytes sent and received;
+the hop count as a stated assumption, checked against the circuit types in
+use; and the Foundation relays' own byte counts.
 
-1. The posture is documented (`docs/TOR_RELAY.md`: shared-instance bind) and
-   that operator topology is running. **MET 2026-10-06**
+**The measurement the earlier ruling rested on** (the `TRC-1` falsifier
+chain), kept as the record of why the ruling changed:
+
+1. The relay posture was documented and that operator topology was running.
+   **Met 2026-10-06**
    ([`trc1_relay_posture_20261006.md`](../benchmarks/trc1_relay_posture_20261006.md)).
-2. Carried traffic is measured across hours and weights. **MET 2026-11-11**
+2. Carried traffic was measured across hours and weights. **Met 2026-11-11**
    ([`trc1_carried_traffic_20261012.md`](../benchmarks/trc1_carried_traffic_20261012.md)).
-3. If measured cover at ordinary operator scale is insufficient to make
-   originated cells indistinguishable, **this ruling reopens** and the carrier's
-   scope re-expands to the Tor zone. **MET 2026-11-15** (banner).
+3. If measured cover at ordinary operator scale was insufficient to make
+   originated cells indistinguishable, the ruling reopened. **Met
+   2026-11-15** (the guard-connection reading, above).
 
-**What the TRC-1 measurement leaves, with its disposition (2026-11-15):**
-- **Which step 2 series is an ordinary operator** (that record's ruling 3):
-  moot. No relay scale is cover, so the question gates nothing.
-- **The `PM-3` watermark test** stays open under its own row
-  (`PM-1…PM-3`) as a check, not the cover redesign's acceptance test
-  (Rick, 2026-11-15). It tests an active watermark, which the guard
-  reading did not. The acceptance test is `DAEMON_RELAY_PRIVACY.md` §96
-  item 4's, restated the same day.
-- **A sidecar client Tor:** covered by §9's second-Tor rejection, and moot
-  with the reopening.
-- **Reciprocity:** the falsifier below is open and is not met by any of
-  this.
-
-**Reciprocity falsifier.** Consumption is re-derived against the post-carrier
-profile (§4) and Foundation relay capacity is sized above it. If measured
-consumption exceeds contributed capacity for a sustained period, capacity is
-added; the commitment is not satisfied by intent.
-
-**Scope falsifier.** If an encrypted zone ships with its own volume-cover story,
-the carrier's retention argument (§2) weakens for that zone and should be
-re-examined there — not here.
+**Reciprocity falsifier.** Consumption is derived from the testnet
+measurement (§4) and Foundation relay capacity is sized above it. If
+measured consumption exceeds contributed capacity for a sustained period,
+capacity is added; the commitment is not satisfied by intent.
 
 ## 9. Rejected alternatives
 
-**Every node relays, as the protocol's cover mechanism.** Rejected. Making
-relaying a default puts every node's IP in a public directory and creates
-same-host correlation with a hidden service dialling peers. The escape hatch
-closes: an unadvertised relay carries no traffic and provides no cover, so
-advertised-and-listed is the only configuration that works.
+**Relay volume as Tor's cover.** Rejected by measurement (2026-11-15): the
+volume is not on the node's guard connections. A second Tor, a shared Tor
+and the managed Tor are alike in this; no Tor configuration is cover.
 
-**Exit relay.** Rejected. Abuse-handling and legal exposure the project does not
-ask of operators, for no additional cover.
+**Every node relays.** Rejected. Making relaying a default puts every node's
+IP in a public directory and creates same-host correlation with a hidden
+service dialling peers.
 
-**Carrier on the Tor zone. REOPENED 2026-11-15** (§8 step 3 met, banner).
-Rejected as the Tor-zone mechanism. Cover by
-substitution forces fixed slots, which force fragmentation, which produced the
-cadence, `MAX_FRAGMENTS`, epoch-miss, the discard-on-rebind defect, the length
-leak, the empty-message wedge, and the inherited embargo. Retained for other
-encrypted layers, where no volume alternative exists (§2).
+**Exit relay.** Rejected. Abuse-handling and legal exposure the project does
+not ask of operators.
 
-**Relay co-located in the daemon process.** Rejected. Externally measurable
-relay properties become a remote probe of daemon state (§5). The daemon-spawned
-managed Tor stays client-only; do not add relay flags to it.
+**A relay in the daemon's process, or in its managed Tor.** Rejected (§5).
 
-**A second Tor process for the daemon's SOCKS/onion, as cover.**
-**REOPENED 2026-11-15:** no Tor configuration is cover (banner). Rejected as a
-cover configuration. Originated cells then travel that client's own OR
-connections. The default managed ephemeral Tor is that second process.
-`--anonymous-inbound` against the operator relay yields it.
-`--tx-proxy` names that relay's SOCKS and does not: the per-boot
-onion still publishes on the managed Tor. `--no-ephemeral-tor` is
-what turns the publish off.
-This is not a new ruling — it is the §3 mixing claim stated so "separate
-process" cannot be read as a sidecar client Tor.
+**An admission threshold for multi-window messages.** Rejected 2026-11-18
+for the epoch tail (`CVR-R4`), which removes restarts at an epoch end
+without a probability to choose.
 
-**Preferring Shekyl-operated relays for Shekyl circuits.** Rejected (§4). Path
-selection stays Tor's.
+**A backlog bound derived against the embargo limit.** Rejected 2026-11-18
+for a simple cap: at the 8,192 B/s budget every queued window adds about
+1,000 s to an embargo sized with it present at every hop.
+
+**Preferring Shekyl-operated relays for Shekyl circuits.** Rejected (§4).
 
 ## 10. Same-change doc tasks (rule 91)
 
-Discharged in the 2026-09-12 recording change that landed this document.
+Discharged with the mechanism's change, #1431:
 
-- Register `TRC-1…TRC-n` in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md)
-  at birth (rule 94 §1), after the prefix uniqueness gate.
-- [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md): restate the
-  carrier's scope as encrypted zones other than Tor. §1.6 is **not** triggered;
-  the do-not-delete argument stands with narrowed scope. Correct any text
-  presenting the carrier as the Tor zone's cover mechanism. §1.7 Axis 3 is
-  SUPERSEDED for the Tor-zone substitution question; its no-constant-from-
-  relay-cover standing rule is preserved.
-- [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md): correct any wire-observer
-  claim that assumes a default carrier on the Tor zone; the property is now
-  posture-conditional (§6).
-- Operator documentation: [`docs/TOR_RELAY.md`](../TOR_RELAY.md) — the non-exit
-  relay recommendation, with §5's constraints and §7's trades stated, so
-  adoption is a choice rather than a default. **UPDATE 2026-09-12:** the
-  operator form names the shared-instance bind (daemon SOCKS/onion on that
-  same relay process). A sidecar client Tor is uncovered; this is the §3
-  claim, not a new ruling.
-- [`FOLLOWUPS.md`](../FOLLOWUPS.md): one pre-genesis row for the §8 measurement,
-  blocker named as the falsifier chain's first link.
-
-Discharged in the 2026-11-15 reopening change (#1390), which withdraws the
-claim and does not restate the design:
-
-- This document's banner and line-local REOPENED statuses; the TRC index
-  rows; [`docs/TOR_RELAY.md`](../TOR_RELAY.md), the user guide,
-  [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) and the docs index.
-- [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md) and
-  [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md): REOPENED banners, and
-  a marker on each Tor-zone SUPERSEDED note; `DAEMON_RELAY_PRIVACY.md` §96
-  item 4 met on its second branch.
-- [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md)'s cover-class cell and
-  [`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)'s TRC-1 input
-  to BD-Q4.
-- [`FOLLOWUPS.md`](../FOLLOWUPS.md): the §8 row removed; a post-genesis row
-  for the carrier's reliance on Tor's classical encryption.
-
-What replaces the withdrawn text was ruled 2026-11-15 in the cover-traffic lane's Round 0, and
-this document records it with that lane's build. The Rust doc comments
-that describe `CoverClass::Volume` go with that class, which the build
-deletes.
+- This document, restated as the current ruling.
+- [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md): the
+  carrier's scope, budget and status.
+- [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md): the Cover bullet,
+  §93.2, and §97's carrier rows.
+- [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md): what cover needs from
+  the record layer.
+- [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) and the generated option table:
+  `relay-cover`.
+- The user documents' residuals, and
+  [`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md)'s reopen row.
+- [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md): `CVR-R1…CVR-R10`.
 
 ## 11. A complete-tree fetch can show a holding set — reported 2026-10-22
 

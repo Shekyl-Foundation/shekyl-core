@@ -977,11 +977,29 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 > **Status: Experimental.** There are known metadata leak vectors. See
 > [ANONYMITY_NETWORKS.md](ANONYMITY_NETWORKS.md) for the full threat matrix.
 
-> **Tor hides your IP address from peers, not when you send.** Someone
-> watching your connection to the Tor network can tell when your node sends
-> its own transaction. Running a Tor relay does not change that
-> ([TOR_RELAY.md](TOR_RELAY.md)). Cover traffic is being redesigned
-> ([design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md)).
+> **Tor hides your IP address from peers. Cover traffic hides when you
+> send.** Your node sends a fixed-size window about every five seconds on
+> each encrypted connection it relays transactions privately over, whether or
+> not it has one to send, so someone watching the connection cannot tell
+> when it sends its own. It is on by default (`relay-cover`), costs about
+> 8 KiB/s of upload, and its effect is not yet measured. Running a Tor relay
+> is not cover ([TOR_RELAY.md](TOR_RELAY.md)). What cover does not hide:
+>
+> - **Cover marks your node's link as running Shekyl.** Fixed-size bursts at
+>   a steady rate are recognisable.
+> - **Without Tor, a watcher sees which of your connections carry private
+>   relaying**, and can tell which of them delivered a transaction your node
+>   then broadcast. Hops before that stay hidden.
+> - **Over Tor a watcher cannot tell your connections apart**, so neither of
+>   those applies.
+> - **A large transaction (two or more windows) completes its private relay
+>   less often than a small one.**
+> - **A transaction dropped on its way takes longer to recover than without
+>   cover**: up to about an hour before your node tries another route.
+>
+> Setting `relay-cover off` turns it off: your node then sends its own
+> transactions where a watcher can see them, and relays none privately for
+> others.
 
 Shekyl can broadcast transactions over Tor so that peers do not learn
 your IP address from your transactions. I2P is not a network this

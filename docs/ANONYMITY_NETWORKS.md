@@ -1,14 +1,28 @@
 # Anonymity Networks with Shekyl
 
-> **No wire-observer cover on Tor today, with a relay or without one
-> (2026-11-15).** An observer of a node's entry-guard connections can tell
-> when the node sends its own transaction. That was measured on a node
-> using its own relay's Tor; without a relay, a client's guard connections
-> carry only its own traffic, so the same holds. A relay is Tor payback, not cover
-> ([`TOR_RELAY.md`](TOR_RELAY.md)). Cover traffic is being redesigned
-> ([`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md)). This
+> **Cover traffic is on by default** (`relay-cover`, 2026-11-18). On each
+> encrypted connection a node relays transactions privately over, it sends a
+> fixed-size window about every five seconds, whether or not it has a
+> transaction to send, so someone watching the connection cannot tell when
+> it sends one. Its effect is not yet measured
+> ([`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md) §8). A Tor
+> relay is Tor payback, not cover ([`TOR_RELAY.md`](TOR_RELAY.md)). This
 > file's remaining body is the Tor P2P usage matrix. I2P is not a network
 > this daemon dials.
+>
+> **What cover does not hide:**
+>
+> - **Cover marks your node's link as running Shekyl.** Fixed-size bursts at
+>   a steady rate are recognisable.
+> - **Without Tor, a watcher sees which of your connections carry private
+>   relaying**, and can tell which of them delivered a transaction your node
+>   then broadcast. Hops before that stay hidden.
+> - **Over Tor a watcher cannot tell your connections apart**, so neither of
+>   those applies.
+> - **A large transaction (two or more windows) completes its private relay
+>   less often than a small one.**
+> - **A transaction dropped on its way takes longer to recover than without
+>   cover**: up to about an hour before your node tries another route.
 
 Tor is the anonymity network this daemon dials. I2P is not. The usage of
 Tor is still considered experimental - there are a few pessimistic
@@ -41,8 +55,10 @@ Practical consequences for anonymity relay:
   transaction is a burst of about 27 to 35 cells, and the largest about 196.
   In TRC-1's guard-connection reading (#1388) every send was 13,619 bytes,
   at least 28 cells.
-- Nothing pads or hides that burst on mainnet today. The cover carrier runs
-  only under a testnet development flag and is being redesigned.
+- Cover traffic hides that burst on an encrypted connection: the
+  transaction leaves inside the fixed-size windows the node sends anyway
+  (`relay-cover`, on by default). A node with `relay-cover off` sends it
+  bare.
 
 ### Known Leak Vectors vs Mitigations Matrix
 
@@ -52,7 +68,7 @@ Practical consequences for anonymity relay:
 | ISP link timing (intermittent sync) | Medium | Keep `shekyld` running continuously | Users who sync-send-quit are linkable |
 | Active bandwidth shaping | High | No second anonymity network is integrated | Tor circuits remain vulnerable |
 | Stream reuse (2+ tx same circuit) | Medium | Outgoing-only selection, 5-min rotation, 20-min change lock time | Small fixed outgoing pool → non-trivial reuse probability |
-| v3 tx size burst (new) | High | None on mainnet: the cover carrier is a testnet development flag, being redesigned | A guard-connection observer picks out the node's own sends (`TOR_COVER_POSTURE.md` banner) |
+| v3 tx size burst (new) | High | Cover traffic, on by default on encrypted connections (`relay-cover`); its pass mark is not yet measured (`TOR_COVER_POSTURE.md` §8) | With `relay-cover off`, or on plaintext clearnet, an observer of the node's connections picks out its own sends. With cover on: the residuals listed at the top of this file |
 | Levin 8-byte signature (DPI) | Low | Noise (`Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`) behind `dev-clearnet-encrypt`: testnet, stagenet and regtest only, off by default | Clearnet is plaintext Levin until the flag becomes the default; with it on, each connection still opens with a fixed eight-byte prefix per network, so clearnet traffic stays identifiable |
 
 ### Recommended Pre-Mainnet Testing
