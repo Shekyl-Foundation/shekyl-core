@@ -29,9 +29,11 @@
 //!
 //! # What is logged
 //!
-//! A filing, with its height, draws and passes; once per block, "no
-//! receipt scheme on the serving side yet" when a read met the identity
-//! scheme (the live serving host until 4b); a refusal of this daemon's own
+//! A filing, with its height, draws and passes; each read that did not
+//! pass, with its height, draw, attempt and the answer that ended it
+//! (`ReadFailure`'s message, which never names the endpoint); once per
+//! block, "no receipt scheme on the serving side yet" when a read met the
+//! identity scheme (the live serving host until 4b); a refusal of this daemon's own
 //! bundle, which is a producer defect, with its row; each block lost; and
 //! at stop, one line per block in flight, whose draws expire in flight
 //! because the ring is memory only. Never a seed, a nonce or a key
@@ -113,8 +115,12 @@ where
             let key = due.key;
             match shekyl_bundle_producer::read::attempt_due(&scheduler, &due).await {
                 Ok(record) => ReadOutcome::Pass(Box::new(record)),
+                // At `info`, beside the filing line: that line says how many
+                // draws passed, this one why a read did not. A draw is read
+                // at most `CHALLENGE_READS` times, so this is a few lines an
+                // epoch, and a node logging at its default level keeps them.
                 Err(failure) => {
-                    tracing::debug!(
+                    tracing::info!(
                         h = key.h.to_raw(),
                         draw = key.draw,
                         attempt = key.attempt,

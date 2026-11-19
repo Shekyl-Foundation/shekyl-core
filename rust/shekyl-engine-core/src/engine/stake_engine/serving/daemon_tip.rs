@@ -855,6 +855,47 @@ mod tests {
         }
     }
 
+    /// The daemon the emission walk's persona serves through (2026-11-17,
+    /// shekyl-dev `data/so-d12-walk-2026-11-17/`): the miner, on a closed
+    /// peer list over Tor, mining its own chain. Its chain sync read
+    /// `Synced` from open ("declared Closed") and it posts a template only
+    /// while it does, so it reports `synchronized` and not `syncing`; it is
+    /// online and not degraded; from 21:20 to the end it held two outbound
+    /// Tor sessions and no inbound one, so it is `peered`. Its Tor status
+    /// line at start, "holding its own transactions. It is not syncing.",
+    /// is the transport's sentence, not a member this gate reads. At the
+    /// first draw its tip was 6_338.
+    ///
+    /// That daemon is followed: the cache holds its tip, which is the height
+    /// `anchor_within_gate` (`shekyl-p-serve`) centres on, so a read at that
+    /// tip is answered rather than refused as a lookup failure (the 503 an
+    /// unstamped cache renders). Rick's question of 2026-11-18, settled.
+    #[tokio::test]
+    async fn the_walks_mining_daemon_on_its_closed_peer_list_is_followed() {
+        const MINER_TIP: u64 = 6_338;
+        let miner = reply(&json!({
+            "height": MINER_TIP,
+            "synchronized": true,
+            "syncing": false,
+            "offline": false,
+            "degraded": false,
+            "peered": true,
+            "peer_outbound_count": 2,
+            "peer_inbound_count": 0,
+        }));
+        let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+        assert_eq!(
+            refresh_tip_once(&CannedRpc::replying(&miner), &tip).await,
+            TipReading::Synced(BlockHeight::from_raw(MINER_TIP)),
+            "the walk's miner is following the chain it mines"
+        );
+        assert_eq!(
+            tip.height(),
+            Some(BlockHeight::from_raw(MINER_TIP)),
+            "the gate has a height to centre on"
+        );
+    }
+
     /// Through the real producer, not just the parse: a peerless daemon
     /// CLEARS a held tip rather than refreshing it. The stale height must
     /// not be stamped fresh.

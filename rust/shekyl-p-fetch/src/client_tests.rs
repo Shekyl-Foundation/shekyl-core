@@ -1046,6 +1046,53 @@ async fn a_proxy_that_is_not_listening_is_a_dial_stall() {
     assert!(matches!(stall(out), Stall::Dial(_)));
 }
 
+/// A failed fetch's message is what the bundle producer logs at `info`
+/// for a challenge read that did not pass (`read_through` in
+/// `shekyl-chain-ingest`). It says how the exchange ended and never where
+/// it went: a node's log is something an operator shares, and the
+/// endpoint is the persona's onion. Each way a fetch fails before or
+/// after `P` answers is checked against the endpoint's address.
+#[tokio::test]
+async fn a_failed_fetch_names_how_it_ended_and_never_the_onion() {
+    let keys = keys();
+    let empty = "content-type: application/octet-stream\r\ncontent-length: 0";
+    let mut messages = Vec::new();
+    for script in [
+        Script::RefuseConnect,
+        Script::Silent,
+        Script::CloseBeforeHead,
+        Script::EndlessHead,
+        Script::Respond(head_only("HTTP/1.1 404 Not Found", empty)),
+        Script::Respond(head_only("HTTP/1.1 503 Service Unavailable", empty)),
+        Script::Respond(head_only("HTTP/1.1 418 I'm a teapot", empty)),
+    ] {
+        let (out, _) = run(script, Arc::new(DiscardTxs), &keys).await;
+        messages.push(out.expect_err("a failed fetch").to_string());
+    }
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap()
+    };
+    let out = PFetchClient::with_timeouts(closed, fast())
+        .fetch(&target(&keys), &header(), &expected(), Arc::new(DiscardTxs))
+        .await;
+    messages.push(out.expect_err("no proxy").to_string());
+
+    let onion = endpoint().onion_address();
+    let host = onion.as_str();
+    let label = host.trim_end_matches(".onion");
+    for message in &messages {
+        assert!(
+            !message.contains(label) && !message.contains(".onion"),
+            "a failed fetch's message names the endpoint: {message}"
+        );
+    }
+    assert!(
+        messages.iter().any(|m| m.contains("404")) && messages.iter().any(|m| m.contains("503")),
+        "the messages say how P answered: {messages:#?}"
+    );
+}
+
 /// A client that reads its proxy at each fetch (the managed Tor's route,
 /// `TSR-F10`) follows the route as it appears, moves and goes. With no
 /// route a fetch is [`Stall::NoRoute`], a stall that retries the same `P`
