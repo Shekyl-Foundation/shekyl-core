@@ -197,7 +197,7 @@ struct Joined {
 /// corpus makes the record differ from the height; counting back from the
 /// tip would name the wrong record.
 struct WrittenBlock {
-    height: u64,
+    height: BlockHeight,
     record: u64,
 }
 
@@ -215,7 +215,7 @@ fn close_events(
 ) -> Vec<EventRecord> {
     let mut events = Vec::with_capacity(closes.len());
     for closed in closes {
-        let height = closed.close_height.to_raw();
+        let height = closed.close_height;
         let Some(record) = written
             .iter()
             .rev()
@@ -232,7 +232,7 @@ fn close_events(
         };
         events.push(EventRecord {
             name: close_event(closed.shard.to_raw()),
-            height,
+            height: height.to_raw(),
             branch: Branch::Main.to_string(),
             record,
         });
@@ -481,7 +481,6 @@ impl Forge {
         let mut written_blocks = Vec::new();
         while self.written < self.chain.len() {
             let mined = &self.chain[self.written];
-            let height = mined.height.to_raw();
             let block = mined.template.block.serialize();
             let listed: Vec<Vec<u8>> = mined
                 .template
@@ -503,7 +502,10 @@ impl Forge {
                 .append_carrying(&block, &listed, &references, &bodies)?;
             let record = self.records;
             self.records += 1;
-            written_blocks.push(WrittenBlock { height, record });
+            written_blocks.push(WrittenBlock {
+                height: mined.height,
+                record,
+            });
             self.transactions += u64::try_from(listed.len()).expect("a block's list fits");
             let line = Line {
                 height: mined.height.to_raw(),
@@ -824,15 +826,19 @@ impl Forge {
 mod tests {
     use super::*;
 
-    fn block(height: u64, record: u64) -> WrittenBlock {
+    fn block(height: BlockHeight, record: u64) -> WrittenBlock {
         WrittenBlock { height, record }
     }
 
-    fn close(shard: u64, height: u64) -> ClosedShard {
+    fn close(shard: u64, close_height: BlockHeight) -> ClosedShard {
         ClosedShard {
             shard: ShardId::from_raw(shard),
-            close_height: BlockHeight::from_raw(height),
+            close_height,
         }
+    }
+
+    fn at(height: u64) -> BlockHeight {
+        BlockHeight::from_raw(height)
     }
 
     #[test]
@@ -840,8 +846,8 @@ mod tests {
         // Height 11's record is 12: a rewind record sits between it and the
         // block at height 10. Counting back from the tip would name record
         // 11 for the first close.
-        let written = vec![block(10, 10), block(11, 12)];
-        let events = close_events(&[close(0, 10), close(1, 11)], &written, false);
+        let written = vec![block(at(10), 10), block(at(11), 12)];
+        let events = close_events(&[close(0, at(10)), close(1, at(11))], &written, false);
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].name, "shard-0-closed");
         assert_eq!(events[0].height, 10);
@@ -854,7 +860,11 @@ mod tests {
 
     #[test]
     fn a_forging_that_stopped_names_only_the_closes_it_wrote() {
-        let events = close_events(&[close(0, 10), close(1, 11)], &[block(10, 10)], true);
+        let events = close_events(
+            &[close(0, at(10)), close(1, at(11))],
+            &[block(at(10), 10)],
+            true,
+        );
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].record, 10);
     }
