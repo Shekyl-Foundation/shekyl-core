@@ -77,7 +77,7 @@ pub(crate) fn seat(
     config: &DaemonConfig,
     scheduler: Option<&Arc<Scheduler>>,
     witness: &Arc<shekyl_bundle_producer::WitnessRing>,
-) -> Option<shekyl_chain_ingest::bundle_producer::ProducerSeat> {
+) -> Option<shekyl_chain_ingest::producer_seat::ProducerSeat> {
     config.mine.address.as_ref()?;
     let Some(scheduler) = scheduler else {
         tracing::info!(
@@ -85,11 +85,11 @@ pub(crate) fn seat(
         );
         return None;
     };
-    Some(shekyl_chain_ingest::bundle_producer::ProducerSeat {
-        witness: Arc::clone(witness),
-        read: shekyl_chain_ingest::bundle_producer::read_through(Arc::clone(scheduler)),
-        start_spread: shekyl_bundle_producer::READ_START_SPREAD,
-    })
+    Some(shekyl_chain_ingest::producer_seat::ProducerSeat::new(
+        Arc::clone(witness),
+        shekyl_chain_ingest::bundle_producer::read_through(Arc::clone(scheduler)),
+        shekyl_bundle_producer::READ_START_SPREAD,
+    ))
 }
 
 /// What `shard_fetch` reads: a view desk over the scheduler, or the Tor-off

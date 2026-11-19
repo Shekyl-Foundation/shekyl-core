@@ -15,9 +15,11 @@
 //!
 //! # Type-placement disposition
 //!
-//! The **computation** `I = x · H_p(O)` is transform-shaped and lives in
-//! this crate's [`output`](crate::output) module
-//! ([`scan_output_recover`](crate::output::scan_output_recover)). The
+//! The **computation** `I = x · H_p(O)` is transform-shaped. The signing
+//! path, which also returns `x`, is
+//! [`compute_output_key_image`](crate::output::compute_output_key_image).
+//! The image alone is [`held_key_image`](crate::held_key_image::held_key_image):
+//! it multiplies by the same scalar and does not encode `x`. The
 //! **name** lives in [`shekyl_types`] (`docs/design/CHAIN_RULES_CRATE.md`
 //! §3.4) so the consensus-validation crate can mention a key image without
 //! acquiring this crate's dependency graph; two same-named newtypes in two

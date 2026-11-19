@@ -55,9 +55,10 @@ use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use tokio::sync::watch;
 
 use crate::archival_driver::{ENDPOINT, FEE};
-use crate::bundle_producer::{run, ProducerParts, ProducerProgress, ProducerSeat};
+use crate::bundle_producer::{run, ProducerParts, ProducerProgress};
 use crate::connector::{TipChanged, WatchTip};
 use crate::forged_fill::{self, FIRST_POST_COINBASE};
+use crate::producer_seat::ProducerSeat;
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_shard::{first_admissible_compact_join, mine_to};
@@ -194,7 +195,7 @@ async fn start(
     ));
     let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
     let ended_by_reads = Arc::clone(&ended);
-    let read: crate::bundle_producer::ReadFn = Arc::new(move |due| {
+    let read: crate::producer_seat::ReadFn = Arc::new(move |due| {
         let scheduler = Arc::clone(&scheduler);
         let ended = Arc::clone(&ended_by_reads);
         Box::pin(async move {
@@ -213,11 +214,7 @@ async fn start(
             }
         })
     });
-    let seat = ProducerSeat {
-        witness: Arc::clone(ring),
-        read,
-        start_spread: START_SPREAD,
-    };
+    let seat = ProducerSeat::new(Arc::clone(ring), read, START_SPREAD);
     let parts = ProducerParts {
         connector: scenario.connector().clone(),
         filed: tokio::sync::broadcast::Sender::new(crate::connector::FILED_FEED_CAPACITY),
