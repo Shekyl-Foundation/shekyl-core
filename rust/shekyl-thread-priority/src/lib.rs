@@ -77,6 +77,14 @@ impl std::error::Error for NotLowered {
     }
 }
 
+/// Whether this platform has a per-thread lowering arm.
+///
+/// `false` on the BSDs and every other target outside Linux, Apple and
+/// Windows: there [`lower_current_thread`] always returns
+/// [`NotLowered::Unsupported`], so a caller that counts refusals counts
+/// every thread it starts.
+pub const LOWERS_THREADS: bool = platform::LOWERS;
+
 /// Lower the calling thread's CPU priority, keeping its scheduling class.
 ///
 /// Idempotent: a second call on the same thread sets the same value.
@@ -92,6 +100,8 @@ pub fn lower_current_thread() -> Result<(), NotLowered> {
 mod platform {
     use super::{NotLowered, SERVING_NICE};
 
+    pub(super) const LOWERS: bool = true;
+
     pub(super) fn lower() -> Result<(), NotLowered> {
         // SAFETY: `setpriority` takes three integers and touches no memory
         // of ours. `who = 0` names the calling thread on Linux.
@@ -106,6 +116,8 @@ mod platform {
 #[cfg(target_vendor = "apple")]
 mod platform {
     use super::NotLowered;
+
+    pub(super) const LOWERS: bool = true;
 
     pub(super) fn lower() -> Result<(), NotLowered> {
         // SAFETY: the call takes a class and a relative priority by value
@@ -126,6 +138,8 @@ mod platform {
         GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST,
     };
 
+    pub(super) const LOWERS: bool = true;
+
     pub(super) fn lower() -> Result<(), NotLowered> {
         // SAFETY: `GetCurrentThread` returns a pseudo-handle that is never
         // closed, and `SetThreadPriority` takes it by value.
@@ -140,6 +154,8 @@ mod platform {
 #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
 mod platform {
     use super::NotLowered;
+
+    pub(super) const LOWERS: bool = false;
 
     pub(super) fn lower() -> Result<(), NotLowered> {
         Err(NotLowered::Unsupported)
@@ -188,6 +204,18 @@ pub fn current_thread_nice() -> io::Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_platform_is_unsupported_exactly_where_it_does_not_lower() {
+        let answer = std::thread::spawn(lower_current_thread)
+            .join()
+            .expect("thread");
+        assert_eq!(
+            matches!(answer, Err(NotLowered::Unsupported)),
+            !LOWERS_THREADS,
+            "{answer:?}"
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

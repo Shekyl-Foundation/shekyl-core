@@ -34,11 +34,12 @@ pub mod owner_socket;
 pub mod paths;
 pub mod platform;
 mod probe;
+pub mod replace;
 pub mod resolve;
 pub mod sections;
 pub mod table;
 
-pub use load::{after_file, load, load_default_file_unread, AfterFile, Loaded};
+pub use load::{after_file, load, load_default_file_unread, AfterFile, ConfigFileFate, Loaded};
 pub use lock::Lock;
 pub use marker::{MarkerOutcome, MarkerRead, NetworkId};
 pub use network::Network;

@@ -18,14 +18,14 @@ use super::super::{
     CAPTURED_IDENTITY_CM_X_AT, CAPTURED_IDENTITY_COMMITMENT_AT, CAPTURED_IDENTITY_OUTPUT_KEY_AT,
     CURVE_ELEMENT_BYTES,
 };
-use super::{lock_count, reference_at};
+use super::{lock_count, only_path, reference_at};
 use crate::store::CapturedChunk;
 use crate::types::{
-    AssembleInput, AssembledPath, BlockHeight, ChunkLeaf, CommitmentBytes, Gindex, OneTimePubkey,
-    ReferenceBlock, TargetKind,
+    AssembleInput, BlockHeight, ChunkLeaf, CommitmentBytes, Gindex, OneTimePubkey, ReferenceBlock,
+    TargetKind,
 };
-use crate::CurveTreeClient;
 use crate::TreePosition;
+use crate::{AssembledPaths, CurveTreeClient, PathParts};
 use shekyl_fcmp::tree::{
     key_image_generator, selene_point_to_helios_scalar, HELIOS_CHUNK_WIDTH, SELENE_CHUNK_WIDTH,
 };
@@ -327,7 +327,7 @@ fn a_captured_chunk_equals_what_assembly_builds() {
     let (twin, _) = drained_chunks(&[]);
     let reference = reference_at(&twin, tip);
 
-    let path = rebuilt_path(&twin, OWNED_POSITION, &reference);
+    let (path, _) = rebuilt_path(&twin, OWNED_POSITION, &reference);
 
     let held = held_at(&client, OWNED_POSITION);
     assert_eq!(
@@ -340,7 +340,7 @@ fn a_captured_chunk_equals_what_assembly_builds() {
     // Layer 0: the siblings as a path carries them.
     assert_eq!(
         decode_identities(&body_at(&held, 0)),
-        path.leaf_chunk,
+        path.leaf_chunk.as_slice(),
         "the captured leaf chunk must be the leaf chunk assembly builds"
     );
 
@@ -1289,7 +1289,7 @@ fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
         .iter()
         .position(|e| e.gindex.to_raw() == REMOVED)
         .expect("the re-registered output drained");
-    let path = rebuilt_path(
+    let (path, _) = rebuilt_path(
         &twin,
         u64::try_from(position).expect("a position fits u64"),
         &reference,
@@ -1300,7 +1300,7 @@ fn a_reorg_past_creation_retires_the_registration_and_rebinds_it() {
         - 1;
     assert_eq!(
         decode_identities(&body_at(&held_at(&client, end_leaf), 0)),
-        path.leaf_chunk,
+        path.leaf_chunk.as_slice(),
         "the capture at the new position must be the leaf chunk assembly builds \
          from the post-reorg tree"
     );
@@ -1405,13 +1405,13 @@ fn an_early_registration_does_not_claim_a_strangers_output() {
 /// Written out with the tree primitives rather than through anything in
 /// `assemble.rs`, so the comparison crosses mechanisms: production reads
 /// captures and the snapshot; this builds the whole layer stack and slices
-/// it. The `tree` context is the reference's, as production's is, so
-/// equality asserts every branch and the leaf chunk and nothing cosmetic.
+/// it. Returned as the path's parts and the tree's depth; [`rebuilt_batch`]
+/// makes the one-input batch production's is compared with.
 fn rebuilt_path(
     client: &CurveTreeClient,
     position: u64,
     reference: &ReferenceBlock,
-) -> AssembledPath {
+) -> (PathParts, u8) {
     use shekyl_fcmp::tree::{
         build_layers, chunk_width, helios_point_to_selene_scalar, layer_is_selene,
         selene_point_to_helios_scalar,
@@ -1464,16 +1464,28 @@ fn rebuilt_path(
         }
         node = parent;
     }
-    AssembledPath {
-        leaf_chunk,
-        c1_layers,
-        c2_layers,
-        tree: crate::types::TreeContext {
-            reference_block: reference.block_hash,
-            tree_root: reference.curve_tree_root,
-            tree_depth: depth,
+    (
+        PathParts {
+            leaf_chunk,
+            c1_layers,
+            c2_layers,
         },
-    }
+        depth,
+    )
+}
+
+/// `input`'s one-path batch at `position`, rebuilt: the oracle a batch the
+/// assembler made is compared with. The reference and the depth are the
+/// batch's own, as production's are, so equality asserts every branch and
+/// the leaf chunk and nothing cosmetic.
+fn rebuilt_batch(
+    client: &CurveTreeClient,
+    position: u64,
+    input: &AssembleInput,
+    reference: &ReferenceBlock,
+) -> AssembledPaths {
+    let (parts, depth) = rebuilt_path(client, position, reference);
+    AssembledPaths::from_parts_unchecked(*reference, depth, vec![(*input, parts)])
 }
 
 /// The input for the leaf at `position` on `client`, read from its entries.
@@ -1540,14 +1552,14 @@ fn a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone() {
         reference.curve_tree_root,
         "the anchor is the store tier's root over the whole tree"
     );
-    let full = rebuilt_path(&twin, OWNED_POSITION, &reference);
+    let full = rebuilt_batch(&twin, OWNED_POSITION, &input, &reference);
     assert_eq!(
-        crate::assemble::verify_path_against_its_branches(&full),
+        crate::assemble::verify_path_against_its_branches(only_path(&full), &full.tree()),
         Ok(()),
         "the test-side rebuild must fold to the reference root, or it is no oracle"
     );
     assert!(
-        full.leaf_chunk.len() > 1,
+        only_path(&full).leaf_chunk().len() > 1,
         "the owned leaf's real chunk holds its siblings; a one-leaf chunk here would \
          mean the fixture, not the mechanism, is doing the work"
     );
@@ -1559,7 +1571,7 @@ fn a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone() {
     late.reconcile_captures().expect("reconciliation runs");
     keep_only(&mut late, input.gindex);
     let sparse = late
-        .assemble_path(&input, &reference)
+        .assemble_paths(std::slice::from_ref(&input), &reference)
         .expect("state 3: assembly succeeds with every foreign leaf gone");
     assert_eq!(
         sparse, full,
@@ -1570,7 +1582,7 @@ fn a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone() {
     let (mut early, _) = drained_chunks(&[OWNED_POSITION]);
     keep_only(&mut early, input.gindex);
     let sparse = early
-        .assemble_path(&input, &reference)
+        .assemble_paths(std::slice::from_ref(&input), &reference)
         .expect("state 3: assembly succeeds with every foreign leaf gone");
     assert_eq!(
         sparse, full,
@@ -1592,7 +1604,7 @@ fn captures_are_the_read_site_not_the_leaf_table() {
     let (twin, tip) = drained_chunks(&[]);
     let reference = reference_at(&twin, tip);
     let input = input_at(&twin, tip, OWNED_POSITION);
-    let full = rebuilt_path(&twin, OWNED_POSITION, &reference);
+    let full = rebuilt_batch(&twin, OWNED_POSITION, &input, &reference);
 
     let (mut client, _) = drained_chunks(&[OWNED_POSITION]);
     keep_only(&mut client, input.gindex);
@@ -1620,7 +1632,7 @@ fn captures_are_the_read_site_not_the_leaf_table() {
         .expect("rows drop");
 
     let sparse = client
-        .assemble_path(&input, &reference)
+        .assemble_paths(std::slice::from_ref(&input), &reference)
         .expect("assembly must not need a foreign leaf row for a closed chunk");
     assert_eq!(sparse, full, "the captured path is the rebuilt path");
 }
@@ -1652,9 +1664,9 @@ fn an_owned_leaf_in_the_open_leaf_chunk_assembles_from_the_tail() {
     );
     let reference = reference_at(&twin, tip);
     let input = input_at(&twin, tip, position);
-    let full = rebuilt_path(&twin, position, &reference);
+    let full = rebuilt_batch(&twin, position, &input, &reference);
     assert_eq!(
-        full.leaf_chunk.len(),
+        only_path(&full).leaf_chunk().len(),
         into_tail,
         "the open chunk is the tail"
     );
@@ -1671,7 +1683,7 @@ fn an_owned_leaf_in_the_open_leaf_chunk_assembles_from_the_tail() {
     );
     keep_only(&mut client, input.gindex);
     let sparse = client
-        .assemble_path(&input, &reference)
+        .assemble_paths(std::slice::from_ref(&input), &reference)
         .expect("the open chunk assembles from the tail and the snapshot");
     assert_eq!(sparse, full, "the open-tail path is the rebuilt path");
 }
@@ -1688,7 +1700,7 @@ fn a_reference_outside_the_ring_is_refused() {
     let input = input_at(&client, tip, OWNED_POSITION);
     let reference = reference_at(&client, tip);
     client
-        .assemble_path(&input, &reference)
+        .assemble_paths(std::slice::from_ref(&input), &reference)
         .expect("inside the ring the capture path assembles");
 
     // Push the tip past the horizon with empty blocks, so `tip` falls out.
@@ -1700,7 +1712,7 @@ fn a_reference_outside_the_ring_is_refused() {
         "the fixture must have evicted the reference height's row"
     );
 
-    match client.assemble_path(&input, &reference) {
+    match client.assemble_paths(std::slice::from_ref(&input), &reference) {
         Err(crate::ClientError::ReferenceOutsideSnapshotRing { height }) => {
             assert_eq!(height, tip, "the refusal names the height");
         }
@@ -1724,7 +1736,7 @@ fn a_missing_capture_is_refused_not_rebuilt() {
         .drop_capture_row_for_test(TreePosition::from_raw(OWNED_POSITION))
         .expect("row drops");
 
-    match client.assemble_path(&input, &reference) {
+    match client.assemble_paths(std::slice::from_ref(&input), &reference) {
         Err(crate::ClientError::CaptureMissing { end_leaf, layer }) => {
             assert_eq!(end_leaf, OWNED_POSITION, "the refusal names the key");
             assert_eq!(layer, 0, "the leaf chunk is read first");
@@ -1884,7 +1896,7 @@ fn an_unregistered_input_is_refused_not_rebuilt() {
     let (client, tip) = drained_chunks(&[]);
     let input = input_at(&client, tip, OWNED_POSITION);
     let reference = reference_at(&client, tip);
-    match client.assemble_path(&input, &reference) {
+    match client.assemble_paths(std::slice::from_ref(&input), &reference) {
         Err(crate::ClientError::OutputNotRegistered { gindex, .. }) => {
             assert_eq!(gindex, input.gindex, "the refusal names the input");
         }
@@ -1917,12 +1929,14 @@ fn a_captured_child_that_is_not_a_point_is_refused_not_a_panic() {
         .replace_capture_row_for_test(TreePosition::from_raw(OWNED_POSITION), &row)
         .expect("the row is replaced verbatim");
 
-    match client.assemble_path(&input, &reference) {
+    match client.assemble_paths(std::slice::from_ref(&input), &reference) {
         Err(crate::ClientError::Store(crate::store::StoreError::CorruptMeta(_))) => {}
         other => panic!("expected CorruptMeta for a non-point child, got {other:?}"),
     }
     assert!(
-        client.assemble_path(&input, &reference).is_err(),
+        client
+            .assemble_paths(std::slice::from_ref(&input), &reference)
+            .is_err(),
         "still refusing, still live: the client was not poisoned by the refusal"
     );
 }

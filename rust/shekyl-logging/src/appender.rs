@@ -327,6 +327,11 @@ impl SizeRollingWriter {
         let suffix = utc_rotation_suffix();
         let rotated = pick_nonexistent_rotated_path(&self.dir, &self.prefix, &suffix)?;
 
+        // CLIPPY: disallowed_methods — log rotation, not a replace.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "log rotation: moves the live log to a rotated name chosen not to exist; not a file replace"
+        )]
         fs::rename(&live, &rotated)?;
 
         // From here, `self.file` still points at the renamed inode on
@@ -483,6 +488,51 @@ impl Write for SizeRollingWriter {
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()
     }
+}
+
+/// Append `lines` to the log file at `path` before the logger runs: the
+/// lines of a daemon start that ends before logging starts (Rick,
+/// 2026-11-18). The file is the logger's own live file, opened as the
+/// logger opens it (created at mode `0600`, appended to); its directory is
+/// never created, so a log that cannot be opened is left unwritten.
+///
+/// The open never blocks and the handle is checked, not the path: on Unix
+/// it is non-blocking, so a FIFO with no reader refuses it at once rather
+/// than hanging the refused start, and whatever the handle opened must be
+/// a regular file before a byte is written (a path that changes between a
+/// check and the open cannot slip a FIFO or a device in). Its mode is set
+/// through the handle.
+///
+/// # Errors
+///
+/// The file could not be opened or written, or it is not a regular file.
+pub fn append_before_start(path: &Path, lines: &[String]) -> io::Result<()> {
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600).custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file = opts.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the log file is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(line);
+        text.push('\n');
+    }
+    file.write_all(text.as_bytes())?;
+    file.sync_data()
 }
 
 /// Open `path` for appending, creating it at mode `0600` and

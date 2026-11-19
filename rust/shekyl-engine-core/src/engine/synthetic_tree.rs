@@ -119,7 +119,7 @@ type SyntheticPath = (Vec<Vec<[u8; 32]>>, Vec<Vec<[u8; 32]>>, CurveTreeRoot);
 ///
 /// Returns `(c1_layers, c2_layers, tree_root)`, shared by every input of the tx
 /// (the inputs all sit in the one leaf chunk). Branch index 0 (tree layer 1) is
-/// C2 (Helios), alternating upward, matching `shekyl_curve_tree::assemble_path`
+/// C2 (Helios), alternating upward, matching `shekyl_curve_tree`'s assembler
 /// and the prover's "curve_2_layers populated before curve_1_layers".
 #[must_use]
 pub(crate) fn consistent_synthetic_path(leaf_chunk: &[LeafEntry], depth: u8) -> SyntheticPath {

@@ -7,6 +7,7 @@ error[E0599]: no function or associated item named `from_bytes` found for struct
 note: if you're trying to build a new `TxKey` consider using one of the following associated functions:
       TxKey::random
       TxKey::from_genesis_seed
+      TxKey::from_intent_seed
       TxKey::seeded
       TxKey::open
   --> src/tx_key.rs
@@ -16,6 +17,9 @@ note: if you're trying to build a new `TxKey` consider using one of the followin
 ...
    |     pub fn from_genesis_seed(name: &NameId, recipients: &[u8]) -> Self {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   |     pub fn from_intent_seed(seed: &IntentSeed) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
    |     pub fn seeded(bytes: [u8; TX_KEY_LEN]) -> Self {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

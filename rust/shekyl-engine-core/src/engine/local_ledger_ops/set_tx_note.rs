@@ -121,7 +121,7 @@ impl<
                     state.ledger.tx_meta.restore_note(previous);
                 })?;
                 // A note does not broadcast. An applied write stands.
-                super::super::dispatch_durability::accept_applied(durability);
+                super::super::dispatch_durability::accept_applied(&durability);
                 Ok(stored)
             }
         }

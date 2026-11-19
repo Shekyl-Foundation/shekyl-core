@@ -23,7 +23,7 @@
 //!
 //! This test builds a *real* multi-layer Selene/Helios curve tree from real
 //! outputs via the production [`shekyl_curve_tree::CurveTreeClient`], assembles
-//! a membership path for one spent output via the production `assemble_path`,
+//! a membership path for one spent output via the production `assemble_paths`,
 //! signs the spend via the production [`shekyl_tx_builder::sign_transaction`],
 //! and verifies the whole proof via [`shekyl_fcmp::proof::verify`].
 //!
@@ -305,12 +305,15 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     client
         .sync_owned(&[(target.gindex, target.output_key)])
         .expect("register the spent output");
-    let path = client
-        .assemble_path(&target, &reference)
+    let paths = client
+        .assemble_paths(std::slice::from_ref(&target), &reference)
         .expect("assemble membership path");
+    let tree = paths.tree();
+    let (_, path) = paths.into_paths().next().expect("one input, one path");
+    let path = path.into_parts();
     assert_eq!(
         path.c1_layers.len() + path.c2_layers.len() + 1,
-        usize::from(path.tree.tree_depth),
+        usize::from(tree.tree_depth),
         "C3 invariant: c1 + c2 + 1 (leaf) == tree_depth"
     );
     assert!(
@@ -339,8 +342,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers,
+        c2_layers: path.c2_layers,
     };
 
     // ── 5. Two destination outputs: a payment + change ────────────────────
@@ -375,7 +378,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         OutputInfo {
             dest_key: out.output_key,
             amount: AtomicUnits::from_raw(amount),
-            commitment_mask: out.z,
+            commitment_mask: out.commitment_mask(),
             enc_amount: out.enc_amount_wire(),
             enc_label: out.enc_label_wire(),
         }
@@ -387,9 +390,9 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 6. Sign via the production transaction builder ────────────────────
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
-        tree_depth: path.tree.tree_depth,
+        reference_block: tree.reference_block,
+        tree_root: tree.tree_root,
+        tree_depth: tree.tree_depth,
     };
     // Bind the proof + PQC auths to the *real* transaction prefix, exactly as
     // the production send path does (`sign_bridge.rs` via

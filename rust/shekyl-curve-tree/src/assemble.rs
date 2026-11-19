@@ -5,21 +5,21 @@
 
 //! Membership-path assembly (CT-4).
 //!
-//! Given a drained leaf, produce the [`AssembledPath`] an FCMP++ membership
-//! proof consumes (the full child chunk of each path node from leaf to root
-//! at the reference height). Gated behind a correct root at the reference
-//! height: a path assembled against a wrong tree is a wrong proof, so
-//! assembly applies the integrity gate (§3.3) before building. The gate is
-//! [`CurveTreeClient::root_and_depth_at`]: one reading supplies the root and
-//! the depth both routes stamp. A registered batch reads its branches from
-//! the capture table and the frontier snapshot. An unregistered batch
-//! rebuilds layers from replay-held `CurveTreeClient::entries` via
-//! [`assemble_leaf_stream`] (CT-4). Pruned frozen segments may not retain a
-//! complete drained byte stream, and the engine registrant is not yet the
-//! caller of registration, so that rebuild is the route production batches
-//! take. The gate does not see those branches.
-//! `verify_path_against_its_branches` folds each assembled path onto the
-//! root it claims and refuses a path whose branches came from somewhere else.
+//! Given a transaction's drained leaves, produce the [`AssembledPaths`] an
+//! FCMP++ membership proof consumes: one batch holding the reference block,
+//! the tree's depth there, and each input's [`AssembledPath`] (the full child
+//! chunk of each path node from leaf to root at the reference height). Gated
+//! behind a correct root at the reference height: a path assembled against a
+//! wrong tree is a wrong proof, so assembly applies the integrity gate (§3.3)
+//! before building. The gate is [`CurveTreeClient::root_and_depth_at`]: one
+//! reading supplies the root and the depth the batch is stamped with. A batch
+//! reads its branches from the capture table and the frontier snapshot; an
+//! input not registered is refused by name. The gate does not see those
+//! branches, so `verify_path_against_its_branches` folds each assembled path
+//! onto the batch's root and refuses a path whose branches came from
+//! somewhere else. That fold is the sealing step, the one place an
+//! [`AssembledPath`] is made (R-25), and [`CurveTreeClient::assemble_paths`]
+//! is the one place a batch is (R-26).
 //!
 //! ## Path layout (pinned to the FCMP++ prover at source)
 //!
@@ -34,8 +34,8 @@
 //!   not excluded); the prover pads each chunk to the layer width, so only the
 //!   real children are emitted here.
 //! - The topmost branch is the root node's children; the root *point* itself
-//!   is excluded (it is supplied separately as [`TreeContext::tree_root`], the
-//!   prover's `TreeRoot`). The C3 invariant
+//!   is excluded (it is supplied separately as the batch's
+//!   [`TreeContext::tree_root`], the prover's `TreeRoot`). The C3 invariant
 //!   `c1_layers.len() + c2_layers.len() + 1 == tree_depth` then holds (the
 //!   leaf layer is the `+1`).
 //!
@@ -48,14 +48,224 @@ use crate::client::{
 };
 use crate::store::StoreError;
 use crate::types::{
-    AssembleInput, AssembledPath, ChunkLeaf, CommitmentBytes, LeafEntry, OneTimePubkey,
-    ReferenceBlock, TreeContext, TreePosition,
+    AssembleInput, ChunkLeaf, CommitmentBytes, LeafEntry, OneTimePubkey, ReferenceBlock,
+    TreeContext, TreePosition,
 };
 use shekyl_fcmp::tree::{
     chunk_width, hash_grow_helios, hash_grow_selene, helios_hash_init,
     helios_point_to_selene_scalar, key_image_generator, layer_is_selene, selene_hash_init,
     selene_point_to_helios_scalar, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
+
+/// A locally-assembled FCMP++ membership path for one owned output, public
+/// material only (no secrets, no `ZeroizeOnDrop`). The secret-bearing
+/// `shekyl_tx_builder::types::SpendInput` is a *different* type; the
+/// engine/2A signer maps this path into a `SpendInput` by adding secrets.
+///
+/// **A path only comes from the checked assembler (R-25).** Its fields are
+/// private and its one constructor is this module's sealing step, which
+/// only [`CurveTreeClient::assemble_paths`] reaches, and only inside an
+/// [`AssembledPaths`] batch. So every path carries two checks: its branches
+/// fold to the batch's root ([`ClientError::PathRootMismatch`]), and that
+/// root is the reference block's header root as the wallet's own tree
+/// computes it ([`ClientError::RootMismatch`]). No public constructor takes
+/// the parts, checked or not: a self-consistent path to a made-up tree is
+/// what this rules out. A path holds no tree of its own: the batch holds
+/// the one tree all its paths are to ([`AssembledPaths::tree`]).
+///
+/// `c1_layers`/`c2_layers` are node x-coordinate scalars, each layer the
+/// **full chunk including the path node** (siblings are not excluded),
+/// ordered bottom-to-top, matching the FCMP++ prover's `Path`. The C3
+/// invariant `c1_layers.len() + c2_layers.len() + 1 == tree_depth` holds on
+/// a successful assembly (the leaf layer is the `+1`; the root layer is
+/// excluded — it is the prover's `TreeRoot`).
+///
+/// A path is read, never built, outside this crate:
+///
+/// ```
+/// fn branches(path: &shekyl_curve_tree::AssembledPath) -> usize {
+///     path.c1_layers().len() + path.c2_layers().len()
+/// }
+/// ```
+///
+/// and a path cannot be written out from its parts:
+///
+/// ```compile_fail,E0451
+/// use shekyl_curve_tree::AssembledPath;
+///
+/// let made_up = AssembledPath {
+///     leaf_chunk: Vec::new(),
+///     c1_layers: Vec::new(),
+///     c2_layers: Vec::new(),
+/// };
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AssembledPath {
+    /// The path leaf node's outputs (including the target), in chunk order.
+    leaf_chunk: Vec<ChunkLeaf>,
+    /// Selene-node chunks as x-coordinate scalars, bottom-to-top.
+    c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios-node chunks as x-coordinate scalars, bottom-to-top.
+    c2_layers: Vec<Vec<[u8; 32]>>,
+}
+
+/// An [`AssembledPath`] taken apart by [`AssembledPath::into_parts`]: plain
+/// data, which no public function turns back into a path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PathParts {
+    /// The path leaf node's outputs (including the target), in chunk order.
+    pub leaf_chunk: Vec<ChunkLeaf>,
+    /// Selene-node chunks as x-coordinate scalars, bottom-to-top.
+    pub c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios-node chunks as x-coordinate scalars, bottom-to-top.
+    pub c2_layers: Vec<Vec<[u8; 32]>>,
+}
+
+/// Every membership path of one transaction, as the assembler made them
+/// (R-26): the [`ReferenceBlock`] they were assembled against, the tree's
+/// depth there, and each input's path beside the input it was asked for,
+/// in the order the inputs were asked for.
+///
+/// Built only by [`CurveTreeClient::assemble_paths`], which the curve-tree
+/// actor alone calls. Every path in a batch is to one tree by construction:
+/// the batch holds that tree once ([`Self::tree`]) and no path carries its
+/// own, so a reader has no agreement between paths to check. Tests build
+/// one from parts only under the TEST_ONLY `test-paths` feature
+/// ([`Self::from_parts_unchecked`]).
+///
+/// A batch cannot be written out by hand:
+///
+/// ```compile_fail,E0451
+/// use shekyl_curve_tree::{AssembledPaths, BlockHash, BlockHeight, CurveTreeRoot, ReferenceBlock};
+///
+/// let made_up = AssembledPaths {
+///     reference: ReferenceBlock {
+///         height: BlockHeight::from_raw(1),
+///         curve_tree_root: CurveTreeRoot::EMPTY,
+///         block_hash: BlockHash::NULL,
+///     },
+///     tree_depth: 1,
+///     paths: Vec::new(),
+/// };
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AssembledPaths {
+    /// The block every path was assembled against.
+    reference: ReferenceBlock,
+    /// The tree's depth at the reference block, from the same reading as
+    /// the root the reference was checked against.
+    tree_depth: u8,
+    /// Each input and its path, in the order the inputs were asked for.
+    paths: Vec<(AssembleInput, AssembledPath)>,
+}
+
+impl AssembledPaths {
+    /// The block every path was assembled against.
+    #[must_use]
+    pub fn reference(&self) -> &ReferenceBlock {
+        &self.reference
+    }
+
+    /// The one tree every path in the batch is to: the reference block's
+    /// hash, its header root and the tree's depth there.
+    #[must_use]
+    pub fn tree(&self) -> TreeContext {
+        tree_at(&self.reference, self.tree_depth)
+    }
+
+    /// The number of paths, one per input asked for.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    /// Whether the batch holds no path.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// Each input and its path, in the order the inputs were asked for.
+    pub fn paths(&self) -> impl ExactSizeIterator<Item = (&AssembleInput, &AssembledPath)> {
+        self.paths.iter().map(|(input, path)| (input, path))
+    }
+
+    /// Each input and its path, for a reader that consumes them (a signer
+    /// moving the branches into its spend inputs).
+    pub fn into_paths(self) -> impl ExactSizeIterator<Item = (AssembleInput, AssembledPath)> {
+        self.paths.into_iter()
+    }
+
+    /// A batch written from its parts with none of the assembler's checks,
+    /// for tests only: compiled for this crate's own tests and under the
+    /// TEST_ONLY `test-paths` feature, which only dev-dependency edges
+    /// enable (`scripts/ci/check_test_only_features.py`).
+    #[cfg(any(test, feature = "test-paths"))]
+    #[must_use]
+    pub fn from_parts_unchecked(
+        reference: ReferenceBlock,
+        tree_depth: u8,
+        paths: Vec<(AssembleInput, PathParts)>,
+    ) -> Self {
+        Self {
+            reference,
+            tree_depth,
+            paths: paths
+                .into_iter()
+                .map(|(input, parts)| {
+                    (
+                        input,
+                        AssembledPath {
+                            leaf_chunk: parts.leaf_chunk,
+                            c1_layers: parts.c1_layers,
+                            c2_layers: parts.c2_layers,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The tree a batch assembled against `reference` at `depth` is to.
+fn tree_at(reference: &ReferenceBlock, depth: u8) -> TreeContext {
+    TreeContext {
+        reference_block: reference.block_hash,
+        tree_root: reference.curve_tree_root,
+        tree_depth: depth,
+    }
+}
+
+impl AssembledPath {
+    /// The path leaf node's outputs (including the target), in chunk order.
+    #[must_use]
+    pub fn leaf_chunk(&self) -> &[ChunkLeaf] {
+        &self.leaf_chunk
+    }
+
+    /// Selene-node chunks as x-coordinate scalars, bottom-to-top.
+    #[must_use]
+    pub fn c1_layers(&self) -> &[Vec<[u8; 32]>] {
+        &self.c1_layers
+    }
+
+    /// Helios-node chunks as x-coordinate scalars, bottom-to-top.
+    #[must_use]
+    pub fn c2_layers(&self) -> &[Vec<[u8; 32]>] {
+        &self.c2_layers
+    }
+
+    /// The path's parts, for a reader that consumes them (a signer moving
+    /// the branches into its spend input).
+    #[must_use]
+    pub fn into_parts(self) -> PathParts {
+        PathParts {
+            leaf_chunk: self.leaf_chunk,
+            c1_layers: self.c1_layers,
+            c2_layers: self.c2_layers,
+        }
+    }
+}
 
 /// Which step `verify_path_against_its_branches` refused.
 ///
@@ -116,7 +326,10 @@ pub enum PathRootFault {
 ///
 /// [`PathRootFault`] names the step that refused. The caller reports it as
 /// [`ClientError::PathRootMismatch`].
-pub(crate) fn verify_path_against_its_branches(path: &AssembledPath) -> Result<(), PathRootFault> {
+pub(crate) fn verify_path_against_its_branches(
+    path: &AssembledPath,
+    tree: &TreeContext,
+) -> Result<(), PathRootFault> {
     const ZERO: [u8; 32] = [0u8; 32];
 
     // Layer 0: the leaf chunk hashes to a Selene point.
@@ -133,7 +346,7 @@ pub(crate) fn verify_path_against_its_branches(path: &AssembledPath) -> Result<(
     // branch hashes to the parent.
     let mut c1 = path.c1_layers.iter();
     let mut c2 = path.c2_layers.iter();
-    for layer in 1..path.tree.tree_depth {
+    for layer in 1..tree.tree_depth {
         let selene = layer_is_selene(layer);
         let branch = if selene { c1.next() } else { c2.next() }.ok_or(PathRootFault::ShortPath)?;
 
@@ -159,7 +372,7 @@ pub(crate) fn verify_path_against_its_branches(path: &AssembledPath) -> Result<(
     if c1.next().is_some() || c2.next().is_some() {
         return Err(PathRootFault::LongPath);
     }
-    if point != path.tree.tree_root.to_bytes() {
+    if point != tree.tree_root.to_bytes() {
         return Err(PathRootFault::RootDisagrees);
     }
     Ok(())
@@ -291,38 +504,32 @@ fn refuse_identity_mismatch(
     Ok(())
 }
 
-/// Stamp the dispatcher's depth, then fold the path onto the root it claims.
+/// Fold the path onto the batch's tree, the dispatcher's root and depth.
 ///
-/// One seal for both routes. The artifact check is
+/// The one seal. The artifact check is
 /// [`verify_path_against_its_branches`]; a fault is
 /// [`ClientError::PathRootMismatch`].
 fn seal_path(
     leaf_chunk: Vec<ChunkLeaf>,
     c1_layers: Vec<Vec<[u8; 32]>>,
     c2_layers: Vec<Vec<[u8; 32]>>,
-    reference: &ReferenceBlock,
-    depth: u8,
+    tree: &TreeContext,
 ) -> Result<AssembledPath, ClientError> {
     // C3: the leaf layer is the `+1`; the root point is excluded. Holds by
     // construction of the walk `1..depth`. A violation is a logic bug.
     debug_assert_eq!(
         c1_layers.len() + c2_layers.len() + 1,
-        usize::from(depth),
+        usize::from(tree.tree_depth),
         "assembled path depth must match the tree depth"
     );
     let assembled = AssembledPath {
         leaf_chunk,
         c1_layers,
         c2_layers,
-        tree: TreeContext {
-            reference_block: reference.block_hash,
-            tree_root: reference.curve_tree_root,
-            tree_depth: depth,
-        },
     };
-    verify_path_against_its_branches(&assembled).map_err(|fault| {
+    verify_path_against_its_branches(&assembled, tree).map_err(|fault| {
         ClientError::PathRootMismatch {
-            claimed: assembled.tree.tree_root,
+            claimed: tree.tree_root,
             fault,
         }
     })?;
@@ -330,44 +537,31 @@ fn seal_path(
 }
 
 impl CurveTreeClient {
-    /// Assemble the FCMP++ membership path for one owned output at a
-    /// reference block.
-    ///
-    /// `input` resolves the owned leaf by its **`gindex`** — the tree's unique
-    /// key, equal to the wallet's `TransferDetails.global_output_index` (X3,
-    /// CT-5c). Resolution by `gindex` is total (an owned output is always a
-    /// drained leaf), so there is no `(output_key, commitment)` collision case;
-    /// the carried `(output_key, commitment)` is used only to *verify* the
-    /// resolution after the fact ([`ClientError::IdentityMismatch`]), catching
-    /// a tree-vs-scanner numbering desync rather than performing the lookup.
-    ///
-    /// The block hash threaded into [`TreeContext::reference_block`] (for the
-    /// eventual `CtSig.referenceBlock`) is [`ReferenceBlock::block_hash`] — the
-    /// caller supplies the full consensus anchor (height, root, hash) as one
-    /// value. Reference-block *selection* (the validity-horizon arithmetic in
-    /// [`crate::reference`], e.g. [`crate::reference::select_reference_height`])
-    /// is the caller's, against its own chain view; it is landed and pure
-    /// height arithmetic, not a `ReferenceBlock` constructor (§5).
-    ///
-    /// This is [`Self::assemble_paths`] of one input. The gate, what `n`
-    /// counts, and the errors are that function's.
-    pub fn assemble_path(
-        &self,
-        input: &AssembleInput,
-        reference: &ReferenceBlock,
-    ) -> Result<AssembledPath, ClientError> {
-        let mut paths = self.assemble_paths(std::slice::from_ref(input), reference)?;
-        Ok(paths.pop().expect("one input yields one path"))
-    }
-
     /// Assemble every membership path for one transaction (`CT-6` increment 3,
-    /// closeout row (a), with increment 5's capture route).
+    /// closeout row (a), with increment 5's capture route), as one sealed
+    /// [`AssembledPaths`] batch (R-26): the reference block, the tree's depth
+    /// there, and each input's path in the order of `inputs`.
     ///
-    /// # Why this is the primitive and `assemble_path` the special case
+    /// Each input resolves its owned leaf by its **`gindex`** — the tree's
+    /// unique key, equal to the wallet's `TransferDetails.global_output_index`
+    /// (X3, CT-5c). The carried `(output_key, commitment)` only *verifies*
+    /// the resolution after the fact ([`ClientError::IdentityMismatch`]),
+    /// catching a tree-vs-scanner numbering desync rather than performing
+    /// the lookup.
+    ///
+    /// The caller supplies the full consensus anchor (height, root, hash) as
+    /// one [`ReferenceBlock`], and the batch holds it. Reference-block
+    /// *selection* (the validity-horizon arithmetic in [`crate::reference`],
+    /// e.g. [`crate::reference::select_reference_height`]) is the caller's,
+    /// against its own chain view; it is pure height arithmetic, not a
+    /// `ReferenceBlock` constructor (§5).
+    ///
+    /// # One batch, not one path at a time
     ///
     /// Each path needs the position of one `gindex` and the branch at every
     /// layer above it. Only the position is per-input, so the batch is one
-    /// gate and then one route. Assembling per input used to pay the rebuild
+    /// gate and then one route, and every path in it is to the one tree that
+    /// gate read. Assembling per input used to pay the rebuild
     /// once per input — `k · n`, where `k` is the input count and `n` the
     /// drained leaf count. The rebuild route pays `n` once. The capture
     /// route pays the chunks the paths actually touch.
@@ -376,16 +570,16 @@ impl CurveTreeClient {
     ///
     /// [`Self::root_and_depth_at`] runs once, before any input work. It
     /// supplies the root the reference is checked against
-    /// ([`ClientError::RootMismatch`] returns no paths) and the depth both
-    /// routes stamp on [`TreeContext::tree_depth`].
+    /// ([`ClientError::RootMismatch`] returns no paths) and the depth the
+    /// batch holds.
     ///
     /// When every input has a resolved owned position, the batch is assembled
     /// from the capture table and the frontier snapshot at the reference
     /// height. A closed chunk is the table row. An open chunk at layer 1 and
     /// above is the snapshot's open branch. An open layer-0 chunk is a ranged
     /// read of its own tail, at most `SELENE_CHUNK_WIDTH - 1` rows. Each path
-    /// carries its own branches, and `seal_path` folds them onto the root the
-    /// path claims ([`ClientError::PathRootMismatch`], `CT6_PROVING_STATE.md`
+    /// carries its own branches, and `seal_path` folds them onto the batch's
+    /// root ([`ClientError::PathRootMismatch`], `CT6_PROVING_STATE.md`
     /// §11.6).
     ///
     /// When any input is unregistered, the batch is rebuilt from replay-held
@@ -423,8 +617,8 @@ impl CurveTreeClient {
     ///
     /// [`ClientError::RootMismatch`] if the root at `reference.height` does
     /// not match `reference.curve_tree_root`.
-    /// [`ClientError::PathRootMismatch`] if the assembled path's own branches
-    /// do not commit to the root it claims, or if the rebuild's layer count
+    /// [`ClientError::PathRootMismatch`] if an assembled path's own branches
+    /// do not commit to the batch's root, or if the rebuild's layer count
     /// disagrees with the dispatcher's depth; [`PathRootFault`] names the
     /// step. [`ClientError::OutputNotDrained`] if a `gindex` is not a drained
     /// leaf at the reference height. [`ClientError::IdentityMismatch`] if the
@@ -437,7 +631,7 @@ impl CurveTreeClient {
         &self,
         inputs: &[AssembleInput],
         reference: &ReferenceBlock,
-    ) -> Result<Vec<AssembledPath>, ClientError> {
+    ) -> Result<AssembledPaths, ClientError> {
         // The integrity gate and the depth from ONE dispatcher: the ring
         // snapshot where it covers the height, the count-keyed store path
         // otherwise. Reading depth beside it from a second derivation would
@@ -455,7 +649,13 @@ impl CurveTreeClient {
         // the frontier snapshot, and nothing here reads `entries`. An input
         // reaches this registered — the curve-tree actor syncs a batch's
         // inputs before assembling — or it is refused by name.
-        self.assemble_from_captures(inputs, reference, depth)
+        let tree = tree_at(reference, depth);
+        let paths = self.assemble_from_captures(inputs, reference, &tree)?;
+        Ok(AssembledPaths {
+            reference: *reference,
+            tree_depth: depth,
+            paths: inputs.iter().copied().zip(paths).collect(),
+        })
     }
 
     /// Assemble a batch from the **captured** chunks over each input and the
@@ -506,8 +706,9 @@ impl CurveTreeClient {
         &self,
         inputs: &[AssembleInput],
         reference: &ReferenceBlock,
-        depth: u8,
+        tree: &TreeContext,
     ) -> Result<Vec<AssembledPath>, ClientError> {
+        let depth = tree.tree_depth;
         let mut positions = Vec::with_capacity(inputs.len());
         for input in inputs {
             match self
@@ -599,9 +800,7 @@ impl CurveTreeClient {
                 push_branch(layer, &children, &mut c1_layers, &mut c2_layers)?;
             }
 
-            paths.push(seal_path(
-                leaf_chunk, c1_layers, c2_layers, reference, depth,
-            )?);
+            paths.push(seal_path(leaf_chunk, c1_layers, c2_layers, tree)?);
         }
         Ok(paths)
     }

@@ -472,11 +472,12 @@ pub(crate) enum BroadcastSubmitError {
     /// The pairing was sound; the delegated submit failed.
     #[error(transparent)]
     Submit(#[from] SubmitterError),
-    /// The pending-store save that sealed these bytes was applied, and
-    /// the parent-directory fsync did not confirm it. Nothing was sent.
-    /// The sealed record stays; a later load may resend it.
-    #[error("the pending seal was applied but its crash-durability was not confirmed")]
-    SealUnconfirmed,
+    /// The pending-store save that sealed these bytes was applied, and its
+    /// durability was not confirmed ([`super::error::PersistenceError`]
+    /// says why and names the fix). Nothing was sent. The sealed record
+    /// stays; a later load may resend it.
+    #[error("nothing was sent: {0}")]
+    SealUnconfirmed(#[source] super::error::PersistenceError),
 }
 
 /// A [`PBoundBytes`](super::bond_assembly::PBoundBytes) whose record is
@@ -655,7 +656,7 @@ impl<D: DaemonEngine> BroadcastSubmitter<D> {
         }
         let tx = handoff.into_durable().map_err(|error| {
             tracing::warn!(%error, "submit_bound: the seal was not confirmed; nothing was sent");
-            BroadcastSubmitError::SealUnconfirmed
+            BroadcastSubmitError::SealUnconfirmed(error)
         })?;
         Ok(self.submit(tx).await?)
     }

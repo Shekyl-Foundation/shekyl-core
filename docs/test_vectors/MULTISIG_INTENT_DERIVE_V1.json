@@ -1,0 +1,93 @@
+{
+  "description": "Multisig intent derivations (R-14, PQC_MULTISIG.md \u00a79.5): from an intent's kem_randomness_seed, the transaction key, each input's pseudo-out blind (the last balancing the output masks) and rerandomization seed, and the seed's replay fingerprint. Written by scripts/kat/multisig_intent_derive_oracle.py; checked by shekyl-crypto-pq tests/kat_multisig_intent_derive.rs (the derived values) and shekyl-ct-balance tests/kat_pseudo_out_blinds.rs (the balanced blinds).",
+  "vectors": [
+    {
+      "seed_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "inputs": 1,
+      "output_masks_hex": [
+        "0700000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "tx_key_secret_hex": "860a06745170fce6277a92ccff7da0e59f29e3794215038f5fb5c170ff7af209",
+        "tx_key_public_hex": "1ba97529a1851eb3c5c8f82a3502429bee3597f18266b678f60314f7a6b10734",
+        "pseudo_out_blinds_hex": [
+          "0700000000000000000000000000000000000000000000000000000000000000"
+        ],
+        "rerandomization_seeds_hex": [
+          "b65321191793b2185bcfb09ba747d0b774fcbb7fc9db27272929436a9233db05"
+        ],
+        "seed_fingerprint_hex": "46dfe151770a577b523413547a087b530a0ffb3ef00a3aee8d0c5857227c493b"
+      }
+    },
+    {
+      "seed_hex": "5151515151515151515151515151515151515151515151515151515151515151",
+      "inputs": 2,
+      "output_masks_hex": [
+        "0700000000000000000000000000000000000000000000000000000000000000",
+        "0b00000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "tx_key_secret_hex": "86c6a834b2b30354d44398dddd7d2db2fad45dcd0dba8060022ce1ff9cc33b02",
+        "tx_key_public_hex": "64c0208f8d45d233b10ba1d8b7e755b6665f822a04db7dacef8c8e7c8dd612bc",
+        "pseudo_out_blinds_hex": [
+          "33820a00698ee1f83dfe038e63e454ed241f848299589ddd5dede4f54e4cc409",
+          "cc51eb5cb1d4305f989ef3147b158a27dbe07b7d66a76222a2121b0ab1b33b06"
+        ],
+        "rerandomization_seeds_hex": [
+          "d25ec7563f6e497b85e7de085a532503f46746d20d40ce7204d8bc1d19273e01",
+          "f9e66f0877d8208726244ee934b1d264010f9bf1ce6cac453d008f6708f84da8"
+        ],
+        "seed_fingerprint_hex": "3c6efc83130fa756f974bcc18e8fd5c810841b990ff5a174f9e3c3c908521d46"
+      }
+    },
+    {
+      "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "inputs": 3,
+      "output_masks_hex": [
+        "0500000000000000000000000000000000000000000000000000000000000000",
+        "0900000000000000000000000000000000000000000000000000000000000000",
+        "0d00000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "tx_key_secret_hex": "3cdd16305ef3d486e865515dbe20620f99934bd045a74e89aff523dc1b072202",
+        "tx_key_public_hex": "1c5a687733a86a2ed7055606c6789a2b6d83b4bf56a242650c787560ec80e60e",
+        "pseudo_out_blinds_hex": [
+          "e87da6127127ced43eab9fd70198bbb4421f1f1e4d16a853ecfb46bcfc976605",
+          "18f72e47cf6723d34b2f9a38a2817b6da9bc31e427dcfa8dbf7a7400a7453f0b",
+          "f5321660f4363308225fb53519da86071424affd8a0d5d1e548944435c225a0f"
+        ],
+        "rerandomization_seeds_hex": [
+          "e5003333dec2d57b415d2b4746ff947eb2460da862979cf22c4e704e9364745a",
+          "58dec9441d164175bee4cc4d779edf9b2b96161db418e5169eb88c688fe2bc07",
+          "d25601458702e615e348a6de83863719d2b255344fa1403e8045bd4336330785"
+        ],
+        "seed_fingerprint_hex": "7c720d04cffc59d677850128465fe2a01ef15bf8bf1625d876e8cd19fa3de197"
+      }
+    },
+    {
+      "seed_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "inputs": 4,
+      "output_masks_hex": [
+        "ecd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+        "0300000000000000000000000000000000000000000000000001000000000000"
+      ],
+      "expected": {
+        "tx_key_secret_hex": "b40fbd1871674ca66134fa2a4149b1932082ce24102f4fc742821460ac898803",
+        "tx_key_public_hex": "5005a0e80d1f6c10ca2660e4d5b584a1b390cce6b42bf1be10b2c6c8e7df9939",
+        "pseudo_out_blinds_hex": [
+          "846b49b21506eec8f66f7cd648e067fa3f91cb115e7e65409e34ddac79c27605",
+          "fd3e633028e45d545f091a6e41b9c1031d8606d9e4be9cc5f187d3241a451d0b",
+          "e03c9c47a2687261978620b6d0b1f98db80acda52306b1584aaeda3e2c177906",
+          "7bc0a28f54736631bf39384b62a89a9deadd606f99bc4ca1259674ef3fe1f208"
+        ],
+        "rerandomization_seeds_hex": [
+          "6c0c015c127b09440c2021d015a1c15828bbceb4c5c842e22da0aeea93bd58fe",
+          "a8d2e30585503bb6b1da814733ea4f2fed25913f017dd7377d0dea28e226d1f1",
+          "ec3446877f66763784a4362918be0d185516d50a29f807ca5ea5c6ee03696756",
+          "d48524218bf9e2b01154d1ae845c5f5430fce72d5725b7ab548712484de888ab"
+        ],
+        "seed_fingerprint_hex": "d8302e71a2c511f1a00bf87b599dce31798ea7487a228bd049c3a5cb53c553a3"
+      }
+    }
+  ]
+}

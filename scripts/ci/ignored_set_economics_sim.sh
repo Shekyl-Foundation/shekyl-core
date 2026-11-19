@@ -12,8 +12,8 @@
 # on 2026-10-15 stayed named on main's copy). Each branch now judges
 # itself, and the `workflow_dispatch` `ref` input proves a branch's own set.
 #
-# The tests run here are the narration pins, the ESR-11 timing set and the
-# per-mode reader test (each field a mode declares moves its report). The
+# The tests run here are the narration pins, the steady control's pins, the
+# ESR-11 timing set and the per-mode reader test (each field a mode declares moves its report). The
 # regeneration helpers, `regen_baseline_fixture`,
 # `regen_stage2_narration_fixtures` and `regen_esr10_narration_fixtures`,
 # WRITE the committed fixtures: they are named as helpers and never run
@@ -80,7 +80,16 @@ stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
 esr10::tests::esr10_nightly_narration_matches_the_committed_fixture
 eup4::tests::eup4_nightly_narration_matches_the_committed_fixture
 jg_grid::tests::jg_grid_nightly_narration_matches_the_committed_fixture'
+# The steady control's pins: each narration at the per-PR scope on the
+# `steady` traffic every block offered its demand, the regression anchor
+# beside standard traffic (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.35). They
+# run nightly, not per PR: a change that moves them moves the standard pins
+# first.
+steady_pins='stage2::tests::stage2_steady_narrations_match_the_committed_fixtures
+esr10::tests::esr10_steady_nightly_narration_matches_the_committed_fixture
+eup4::tests::eup4_steady_nightly_narration_matches_the_committed_fixture'
 run_tests="$narration_pins
+$steady_pins
 secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders
 baseline::tests::every_declared_reader_moves_its_report"
 helpers='record::tests::regen_baseline_fixture

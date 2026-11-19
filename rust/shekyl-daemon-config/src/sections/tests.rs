@@ -174,6 +174,42 @@ fn shekyl_onion_v3_hostname() -> String {
     shekyl_onion_v3::v3_onion_hostname(&b)
 }
 
+/// **A child that asks for nothing confirms a parent that refuses it**
+/// (Rick, 2026-11-18). `clearnet off` with `clearnet-listen none` or
+/// `clearnet-advertise none` is no clearnet, said twice, on the command
+/// line or in the file. `p2p-peer none` and `p2p-closed-peer none` beside
+/// both connectors off confirm the same way. An endpoint under an off
+/// connector is still a request and a conflict (the test below). Red edit:
+/// in `Value::bearing`, classify an empty list as `Request`.
+#[test]
+fn an_absence_confirms_a_parent_that_refuses_the_row() {
+    let c = build_from(
+        &[
+            "--clearnet",
+            "off",
+            "--clearnet-listen",
+            "none",
+            "--clearnet-advertise",
+            "none",
+            "--p2p-peer",
+            "none",
+            "--p2p-closed-peer",
+            "none",
+            "--tor",
+            "off",
+        ],
+        "",
+    )
+    .expect("absence beside an off connector is accepted");
+    assert!(c.offline());
+    let c = build_from(
+        &["--clearnet", "off", "--tor", "off"],
+        "clearnet-listen = \"none\"\nclearnet-advertise = \"none\"\n",
+    )
+    .expect("the same from the file");
+    assert!(c.offline());
+}
+
 #[test]
 fn a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers() {
     let d = codes(build_from(
@@ -186,6 +222,11 @@ fn a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers() {
         "",
     ));
     assert_eq!(d, vec![(Code::ValueConflict, "clearnet-listen".into())]);
+    let d = codes(build_from(
+        &["--clearnet", "off", "--clearnet-advertise", "8.8.8.8:1"],
+        "",
+    ));
+    assert_eq!(d, vec![(Code::ValueConflict, "clearnet-advertise".into())]);
     let d = codes(build_from(
         &["--clearnet", "off", "--p2p-peer", "8.8.8.8:11021"],
         "",
