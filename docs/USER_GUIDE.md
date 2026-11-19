@@ -230,12 +230,13 @@ a local group.
 # The SOCKS password for clearnet-socks.
 # clearnet-socks-password = "<secret>"
 
-# The clearnet listen endpoints; `none` is dial-only on clearnet.
+# The clearnet listen endpoints; `none` is dial-only on clearnet. Beside
+# `clearnet off`, `none` confirms it.
 # Default: 0.0.0.0 and the network's p2p port.
 # clearnet-listen = ["127.0.0.1:11029"]
 
 # The clearnet endpoints peers can reach this node at; at most one per
-# address family.
+# address family. Beside `clearnet off`, `none` confirms it.
 # clearnet-advertise = ["<public-address>:11021"]
 
 # Accept peers at private addresses, for a private test network.
@@ -326,7 +327,7 @@ whether `option_set` changes it while the daemon runs.
 | `service` | switch | — | command line | no | Run as this machine's service instance, started by the service manager under the daemon's own account. Serves no owner socket. On Windows it arrives with the service-manager dispatcher (RT-W14). |
 | `owning-connection` | integer ≥ 3 | — | command line | no | The descriptor (a socket handle on Windows) of one end of a connected stream socket pair the starting process created for this daemon. The daemon writes a ready line on it once its owner's socket is served, and stops when the other end closes. For a wallet that starts its own daemon; not with service. |
 | `instance` | name (an instance name) | — | both | no | This node's name, for a second node of the same network on this machine: 1 to 16 lower-case letters, digits or hyphens. Unset is the default instance. A named instance needs its own data-dir. |
-| `config-file` | absolute path | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused. |
+| `config-file` | absolute path, or `none` | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused; `none` reads no file, for a program that starts its own daemon on the command line alone. |
 | `data-dir` | absolute path | the daemon's root and the network's subdirectory | both | no | The data directory. An explicit path is used as given. |
 | `log-file` | absolute path | the daemon's root, logs/shekyld-<network>.log | both | no | The log file. |
 | `log-level` | `error` / `warn` / `info` / `debug` / `trace` | `warn` | both | yes | The log level: error, warn, info, debug or trace. |
@@ -343,8 +344,8 @@ whether `option_set` changes it while the daemon runs.
 | `clearnet-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS proxy for clearnet dials. |
 | `clearnet-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for clearnet-socks. |
 | `clearnet-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for clearnet-socks. |
-| `clearnet-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 0.0.0.0 and the network's p2p port | both | no | The clearnet listen endpoints; `none` is dial-only on clearnet. |
-| `clearnet-advertise` | list of IP endpoint (`address:port`) (`none` for empty) | — | both | no | The clearnet endpoints peers can reach this node at; at most one per address family. |
+| `clearnet-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 0.0.0.0 and the network's p2p port | both | no | The clearnet listen endpoints; `none` is dial-only on clearnet. Beside `clearnet off`, `none` confirms it. |
+| `clearnet-advertise` | list of IP endpoint (`address:port`) (`none` for empty) | — | both | no | The clearnet endpoints peers can reach this node at; at most one per address family. Beside `clearnet off`, `none` confirms it. |
 | `p2p-local` | switch | — | both | no | Accept peers at private addresses, for a private test network. |
 | `p2p-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | Peers to connect to, by IP or onion. |
 | `p2p-closed-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | The only peers to connect to; non-empty declares a closed network. |
