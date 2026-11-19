@@ -1,9 +1,8 @@
 //! Cross-language consensus parameters from `config/consensus_constants.json`.
 //!
 //! The C++ mirror is `shekyl/consensus_constants_generated.h` (CMake configure).
-//! FCMP reference-block ages and CT wire type are also consumed by
-//! [`crate::multisig::v31::intent`] via a separate `include!` of the same
-//! generated file.
+//! The CT wire type is also consumed by `shekyl_multisig::intent` via its own
+//! `include!` of a file generated from the same JSON.
 
 include!(concat!(
     env!("OUT_DIR"),

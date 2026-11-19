@@ -35,12 +35,12 @@ use shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
 use shekyl_engine_state::pending_post_block::{end_date, EndedRelease, RecordKind, TerminalCause};
 
 pub(crate) use super::end_date::{terminal_cause, REFERENCE_MAX_AGE};
-use shekyl_engine_state::{PendingBondPost, PendingPostBlock, PendingPostState};
+use shekyl_engine_state::{PendingBondPost, PendingPostState};
 use shekyl_standoff::draw::bounded_uniform;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId};
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::pending_post_gate::PendingPostGate;
+use crate::engine::pending_post_gate::{Coverage, PendingPostGate};
 use crate::engine::stake_timing::OsRngGapAdapter;
 
 #[cfg(feature = "gf7-hooks")]
@@ -49,128 +49,9 @@ use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 use crate::engine::bond_assembly::PBoundBytes;
 use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitSuccess, SubmitterError};
 
-// ---------------------------------------------------------------------------
-// The sealed-block store (trait + locked write path)
-// ---------------------------------------------------------------------------
-
-/// The durable sink for the pending-post block — the `.wallet.pending` seal,
-/// behind a trait so the driver is testable with an in-memory store and the
-/// engine layer supplies the `WalletFile`-backed impl (same seam shape as
-/// [`PScanStore`](super::task::PScanStore)).
-///
-/// The production impl MUST delegate to `WalletFile::save_pending_posts` /
-/// `open_pending_posts` — the single write path / single payload kind the
-/// §5 gate-11 enforcement pins. No other implementation may write
-/// `.wallet.pending`.
-pub(crate) trait PendingSealStore: Send + Sync + 'static {
-    /// The store's failure type (boxed into [`DispatchError::Store`]).
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Load the sealed block, or `None` for a wallet that has never
-    /// assembled a bond post (the store then starts from
-    /// [`PendingPostBlock::empty`]). A v1 seal under the v2 binary fails
-    /// closed inside the impl's decode (`from_postcard_bytes` refuses the
-    /// version) — pre-genesis, the operator re-assembles (rule 15).
-    fn load(
-        &self,
-    ) -> impl std::future::Future<Output = Result<Option<PendingPostBlock>, Self::Error>> + Send;
-
-    /// Seal the whole block (one postcard blob → one AEAD envelope → one
-    /// atomic write; the R2-2 structural crash-atomicity). Returns the
-    /// write's [`shekyl_engine_file::Durability`]. A broadcast requires
-    /// [`shekyl_engine_file::Durability::Confirmed`].
-    fn save(
-        &self,
-        block: &PendingPostBlock,
-    ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send;
-}
-
-/// The single shared write path over the pending seal (§3.3 writer
-/// discipline): an async mutex around load→modify→seal. Both writers — the
-/// WI-2 assemble path (append) and this driver (transition/remove) — go
-/// through this handle; the lock is what makes their two cadences safe
-/// against read-modify-seal races. (Same shape as `PScanStore`, plus the
-/// lock, because unlike the pscan seal this one legitimately has two
-/// writers.)
-///
-/// **The lock is per-wallet, not per-instance.** It is injected as the
-/// engine-owned [`PendingPostGate`] (`pending_gate`), so the driver's
-/// store and the future WI-2 assemble path — which construct *independent*
-/// stateless [`PendingSealStore`] adapters over the same `.wallet.pending`
-/// file — still serialize against **one** mutex. Creating the lock inside
-/// `new` would give each writer its own, which is precisely the lost-update
-/// this discipline exists to forbid (assemble's append and the driver's
-/// transition both load, then the last save wins). Requiring the caller to
-/// pass the engine-held gate makes "one mutex per wallet" a construction
-/// invariant, not a convention.
-pub(crate) struct PendingPostStore<S> {
-    seal: S,
-    gate: Arc<PendingPostGate>,
-}
-
-impl<S: PendingSealStore> PendingPostStore<S> {
-    /// Wrap the sealed-block store in the locked write path, sharing the
-    /// engine-held gate (see the type docs: one mutex per wallet).
-    pub(crate) fn new(seal: S, gate: Arc<PendingPostGate>) -> Self {
-        Self { seal, gate }
-    }
-
-    /// Read the current block under the lock (a serialized snapshot; no
-    /// seal write). The WI-2 assemble path reads the derived reservation
-    /// set ([`PendingPostBlock::reserved_gindexes`]) through this.
-    pub(crate) async fn read<R>(
-        &self,
-        f: impl FnOnce(&PendingPostBlock) -> R,
-    ) -> Result<R, S::Error> {
-        let _guard = self.gate.lock().await;
-        let block = self
-            .seal
-            .load()
-            .await?
-            .unwrap_or_else(PendingPostBlock::empty);
-        Ok(f(&block))
-    }
-
-    /// One locked load→modify→seal cycle. The closure returns
-    /// `(changed, R)`; the seal is rewritten only when `changed` is `true`
-    /// (an unchanged tick must not burn an AEAD seal + fsync). The seal
-    /// happens **inside** the closure's critical section — a caller that
-    /// needs seal-before-send (§3.3) gets it by construction: `mutate`
-    /// returns only after the transition is durable.
-    pub(crate) async fn mutate<R>(
-        &self,
-        f: impl FnOnce(&mut PendingPostBlock) -> (bool, R),
-    ) -> Result<R, S::Error> {
-        let (out, durability) = self.mutate_reporting(f).await?;
-        // A non-broadcast edit treats an applied write as success.
-        crate::engine::dispatch_durability::accept_applied(&durability);
-        Ok(out)
-    }
-
-    /// [`Self::mutate`], and the durability of the save it performed.
-    ///
-    /// An unchanged block reports [`shekyl_engine_file::Durability::Confirmed`]:
-    /// nothing new was written. A broadcast caller refuses
-    /// [`shekyl_engine_file::Durability::Unconfirmed`].
-    pub(crate) async fn mutate_reporting<R>(
-        &self,
-        f: impl FnOnce(&mut PendingPostBlock) -> (bool, R),
-    ) -> Result<(R, shekyl_engine_file::Durability), S::Error> {
-        let _guard = self.gate.lock().await;
-        let mut block = self
-            .seal
-            .load()
-            .await?
-            .unwrap_or_else(PendingPostBlock::empty);
-        let (changed, out) = f(&mut block);
-        let durability = if changed {
-            self.seal.save(&block).await?
-        } else {
-            shekyl_engine_file::Durability::Confirmed
-        };
-        Ok((out, durability))
-    }
-}
+// The sealed-block store and its locked write path live in
+// `pscan/pending_store.rs`; the driver is one of its writers.
+pub(crate) use super::pending_store::{PendingPostStore, PendingSealStore};
 
 // ---------------------------------------------------------------------------
 // The broadcast seam
@@ -366,7 +247,7 @@ pub(crate) struct TickEvidence<'a> {
 
 /// The sweep-facing seam for the end-of-sweep dispatch tick: the driving
 /// task (`run_pscan_task`) is generic over it, so the loop tests run with
-/// the [`()`](impl@DispatchTick) no-op and never build a driver.
+/// the `impl DispatchTick for ()` no-op and never build a driver.
 /// [`DispatchDriver`] is the production impl.
 pub(crate) trait DispatchTick: Send + 'static {
     /// Run one dispatch tick at the end of a pscan sweep — see the
@@ -564,9 +445,9 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         let held = &self.held_this_session;
         let reservation_alarmed = &self.alarmed_reservations;
         let horizon = self.config.alarm_horizon_blocks;
-        let plan = self
+        let (plan, covered) = self
             .store
-            .mutate(|block| {
+            .mutate_covering(|block, coverage| {
                 let mut changed = false;
 
                 // Confirmation retire (§3.5): state-agnostic — observed
@@ -635,9 +516,14 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
 
                 // Select + mark (§3.2 part 2 / §3.3 step 2): at most one,
                 // deterministic order, sealed as `Dispatched` BEFORE any
-                // send.
-                let candidate =
-                    select_dispatch_candidate(block.posts(), tip, held).map(|p| p.persona);
+                // send. Only from a seal a save confirmed in this process
+                // covers (Rick, 2026-11-19): an uncovered seal's records
+                // are neither marked nor sent, so a volume that cannot
+                // confirm a save does not spend one per tick on them.
+                let candidate = (coverage == Coverage::Covered)
+                    .then(|| select_dispatch_candidate(block.posts(), tip, held))
+                    .flatten()
+                    .map(|p| p.persona);
                 let dispatched = candidate.map(|persona| {
                     // `mark_dispatched` returns the transitioned post from the
                     // same lookup it mutates — no second scan to re-find it.
@@ -755,6 +641,18 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         let Some((post, attempts)) = plan.dispatched else {
             return Ok(());
         };
+        // The mark's own save uncovered the seal: it was not confirmed, so
+        // the record a power loss could take is not sent. It stays
+        // `Dispatched` (maybe sent, which is safe) and goes out once a save
+        // of the seal confirms.
+        let Some(covered) = covered else {
+            tracing::warn!(
+                attempts,
+                "bond-post dispatch: the pending records' save is not confirmed; nothing \
+                 was sent, and the post goes out once a save of them confirms"
+            );
+            return Ok(());
+        };
 
         // Send-time dispersal (§3.2 part 3): an independently drawn uniform
         // delay in [0, tick_interval), fresh OS entropy per dispatch, so the
@@ -787,7 +685,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         let outcome = self
             .broadcast
             .submit_bound(crate::engine::transaction_submitter::BoundForSend::Loaded(
-                PBoundBytes::from_pending(&post),
+                PBoundBytes::from_pending(&post, covered),
             ))
             .await;
 
@@ -867,18 +765,21 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                      resubmit next tick"
                 );
             }
+            // A seal not saved refuses a fresh hand-off. This driver hands
+            // off only covered records ([`Covered`](super::pending_store::Covered)), so the arm is the
+            // type's, not this path's; were it reached, nothing was sent and
+            // the record stays for a later tick.
+            Err(BroadcastSubmitError::SealNotSaved(error)) => {
+                tracing::warn!(
+                    attempts,
+                    %error,
+                    "bond-post dispatch: the seal was not saved; nothing was sent"
+                );
+            }
             // Persona mismatch: a build-path defect (the P-1 single-mint-site
             // pin makes it unreachable from production flow). Nothing was
             // sent; the record stays held (funds-safe) and the defect is
             // loud.
-            Err(BroadcastSubmitError::SealUnconfirmed(error)) => {
-                tracing::warn!(
-                    attempts,
-                    %error,
-                    "bond-post dispatch: the seal was applied but not confirmed; nothing was \
-                     sent, and the next tick resends the stored bytes"
-                );
-            }
             Err(BroadcastSubmitError::PersonaMismatch { .. }) => {
                 tracing::error!(
                     "bond-post dispatch DEFECT: persona mismatch at the submit choke — the \

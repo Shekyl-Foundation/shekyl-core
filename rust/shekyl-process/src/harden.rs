@@ -22,7 +22,7 @@
 //!   root included, writes no core whatever the limit, and cannot be turned
 //!   back on by this process.
 //! - **macOS.** The Unix core limit only. There is no dumpable flag.
-//! - **Windows.** [`end_at_fault`], installed with
+//! - **Windows.** `end_at_fault`, installed with
 //!   `SetUnhandledExceptionFilter`, ends the process with `TerminateProcess`
 //!   and the exception's code (`0xC0000005` for an access violation,
 //!   `0xC00000FD` for a stack overflow). Windows Error Reporting's fault

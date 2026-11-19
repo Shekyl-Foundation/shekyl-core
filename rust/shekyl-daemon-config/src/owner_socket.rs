@@ -140,7 +140,7 @@ pub fn plan(
                 .map_err(|e| unusable(e.to_string()))?;
         }
         let data_home = match (&config.rpc.socket_dir, &platform.home) {
-            (None, Some(home)) => Some(shekyl_rpc_rendezvous::data_home(home)),
+            (None, Some(home)) => Some(shekyl_os_account::per_account_root_in(home)),
             _ => None,
         };
         Ok(Some(OwnerSocketPlan {

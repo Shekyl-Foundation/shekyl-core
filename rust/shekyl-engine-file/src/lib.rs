@@ -75,6 +75,7 @@ pub use shekyl_address::Network;
 // Re-export the envelope error [`WalletFileError::Envelope`] carries, so a
 // consumer can name its variants without depending on `shekyl-crypto-pq`.
 pub use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
-// Re-export what [`WalletFileError::HeldOpen`] carries, so a consumer can
-// read it without depending on `shekyl-os-account`.
-pub use shekyl_os_account::private_file::HeldOpen;
+// Re-export what [`WalletFileError::HeldOpen`] and
+// [`WalletFileError::SaveStep`] carry, so a consumer can read them without
+// depending on `shekyl-os-account`.
+pub use shekyl_os_account::private_file::{HeldOpen, Step};

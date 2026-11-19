@@ -20,7 +20,7 @@
 //! # Where it plugs in
 //!
 //! Into the **stateless stage** — [`form`](crate::form) — and not into
-//! [`validate`](crate::validate). C2-R8 Q3 projects the `ChainView` from
+//! [`validate`](fn@crate::validate). C2-R8 Q3 projects the `ChainView` from
 //! the exclusive write transaction that applies the block, so `validate`
 //! runs inside that transaction; RandomX is the most expensive call in the
 //! validator, and running it there would serialize IBD behind the write

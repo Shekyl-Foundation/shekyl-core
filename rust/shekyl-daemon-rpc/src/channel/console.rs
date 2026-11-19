@@ -112,7 +112,8 @@ pub(crate) fn install(
     // A store failure leaves the journal unnamed; the next start's
     // reconcile sets it aside.
     store.commit_console(&fingerprint, reset_at)?;
-    journal.commit().map_err(FileRefused::from)?;
+    let durability = journal.commit().map_err(FileRefused::from)?;
+    files::note_durability(&live, &durability);
     Ok(live)
 }
 
@@ -134,10 +135,11 @@ pub(crate) fn reconcile(dir: &Path, store: &Store) -> Result<Reconcile, ConsoleF
             // The same rename the install commits, directory sync included.
             // A crash after the rename and before the directory is durable
             // leaves the journal, and the next start places it again.
-            StagedWrite::<Journal>::resume(&live)
+            let durability = StagedWrite::<Journal>::resume(&live)
                 .map_err(|error| FileRefused::Io(journal.clone(), error))?
                 .commit()
                 .map_err(FileRefused::from)?;
+            files::note_durability(&live, &durability);
             Ok(Reconcile::Placed)
         }
         Step::DiscardStaged => {
@@ -203,8 +205,11 @@ fn seen(path: &Path) -> Seen {
             material: KeyMaterial::Bad(BadKey::NotAKey),
             fault: Some(error),
         },
-        // A read waits on nothing; only a commit is held open.
-        Err(error @ (FileRefused::Io(..) | FileRefused::HeldOpen(..))) => Seen {
+        // A read waits on nothing; only a commit is held open or refused
+        // for a read-only file.
+        Err(
+            error @ (FileRefused::Io(..) | FileRefused::HeldOpen(..) | FileRefused::ReadOnly(..)),
+        ) => Seen {
             material: KeyMaterial::Bad(BadKey::Unreadable),
             fault: Some(error),
         },

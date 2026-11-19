@@ -294,6 +294,8 @@ jobs:
             python3 scripts/ci/check_shard_fill_frozen.py --selftest
           run_one "The shard-fill chain is frozen, with no new consumer" \
             python3 scripts/ci/check_shard_fill_frozen.py
+          run_one "Depends fetches from the Foundation mirror, the package's path, then its alternates, and keeps only pinned bytes (selftest)" \
+            python3 scripts/ci/check_depends_fetch.py
           run_one "A feature never changes a public type's shape (selftest)" \
             python3 scripts/ci/check_feature_gated_members.py --selftest
           run_one "A feature never changes a public type's shape (rule 25)" \

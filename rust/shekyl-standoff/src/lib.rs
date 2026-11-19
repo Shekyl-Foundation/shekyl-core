@@ -53,7 +53,7 @@
 //!
 //! The crate controls the *gap*. The *anchor* (when the actor acts) is entirely
 //! consumer-side and **consensus-unenforceable** — funding is FCMP++-hidden, so
-//! nothing on-chain can police the draw. The [`conformance`] instruments are
+//! nothing on-chain can police the draw. The `conformance` instruments are
 //! therefore a demonstration plus a wallet **self-certification** tool ("here is
 //! the tool you run to prove your CSPRNG is good", paired with operator
 //! education), not something the crate prevents. The grade is on the

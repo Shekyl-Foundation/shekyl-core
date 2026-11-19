@@ -21,7 +21,6 @@ use shekyl_types::UnixSeconds;
 
 use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
 use crate::pool_door_tests::{matured, paying_the_floor, AT};
-use crate::scenario_shard::FILL_FROM_COINBASE;
 use crate::schedule::ChainRules;
 use crate::test_support::{h, tmp};
 
@@ -243,16 +242,14 @@ async fn closed_shards_lane(
     shekyl_types::BlockHeight,
     u64,
 ) {
-    use crate::archival_driver::first_spending_height;
-    use crate::scenario::{FreeHash, Scenario};
+    use crate::forged_fill;
     use crate::scenario_shard::{
-        close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, mine_to,
+        first_admissible_compact_join, inside_one_epoch, levered_epoch, mine_to,
     };
 
-    let rules = levered_rules();
-    let mut scenario = Scenario::open_under(name, FreeHash, rules);
-    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
-    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 2).await;
+    // Shards 0 and 1 closed by the forged shard-fill chain (`forged_fill`).
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect(name, levered_epoch(), 2).await;
     let shards: Vec<u64> = filled.closed.iter().map(|c| c.shard.to_raw()).collect();
     let connecting = inside_one_epoch(
         filled
@@ -304,15 +301,27 @@ fn priced_post(
 #[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn join_posts_are_accepted_through_the_rust_pool_shim() {
     use crate::archival_driver::ENDPOINT;
+    use crate::forged_fill::FIRST_POST_COINBASE;
     use crate::scenario_archival::{complete_tree, shard_set, Persona};
+    use shekyl_network::Network;
 
     let (mut scenario, mined, shards, connecting, floor) =
         closed_shards_lane("pool-submit-join").await;
-    let spender = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined);
-    let (compact, whole) = (Persona::at(1), Persona::at(2));
+    let network = scenario.network_id();
+    let spender = shekyl_harness_spender::Spender::on(network, &mined);
+    let (compact, whole) = (
+        Persona::on(Network::Regtest, 1),
+        Persona::on(Network::Regtest, 2),
+    );
     let posts = [
-        (0, compact.join(shard_set(shards), ENDPOINT)),
-        (1, whole.join(complete_tree(), ENDPOINT)),
+        (
+            FIRST_POST_COINBASE,
+            compact.join(shard_set(shards), ENDPOINT),
+        ),
+        (
+            FIRST_POST_COINBASE + 1,
+            whole.join(complete_tree(), ENDPOINT),
+        ),
     ];
     let listed: Vec<shekyl_wire::Transaction> = posts
         .iter()
@@ -338,7 +347,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                         shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
-                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &network,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -351,7 +360,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                     std::sync::Arc::new(std::sync::Mutex::new(pool)),
                     AdmissionPolicy::GENESIS,
                     || UnixSeconds::from_raw(1),
-                    shekyl_network::HARNESS_NETWORK_ID,
+                    network,
                 ),
                 DaemonTxVerifier,
             );
@@ -377,18 +386,33 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
 #[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     use crate::archival_driver::ENDPOINT;
+    use crate::forged_fill::FIRST_POST_COINBASE;
     use crate::scenario_archival::{complete_tree, shard_set, Persona};
     use shekyl_chain_rules::CenRow;
     use shekyl_mempool::{select, Admission};
+    use shekyl_network::Network;
 
     let (mut scenario, mined, shards, connecting, floor) =
         closed_shards_lane("pool-template-g10").await;
-    let spender = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined);
-    let (compact, whole) = (Persona::at(1), Persona::at(2));
+    let network = scenario.network_id();
+    let spender = shekyl_harness_spender::Spender::on(network, &mined);
+    let (compact, whole) = (
+        Persona::on(Network::Regtest, 1),
+        Persona::on(Network::Regtest, 2),
+    );
     let posts = [
-        (0, compact.join(shard_set(shards), ENDPOINT)),
-        (1, compact.join(complete_tree(), ENDPOINT)),
-        (2, whole.join(complete_tree(), ENDPOINT)),
+        (
+            FIRST_POST_COINBASE,
+            compact.join(shard_set(shards), ENDPOINT),
+        ),
+        (
+            FIRST_POST_COINBASE + 1,
+            compact.join(complete_tree(), ENDPOINT),
+        ),
+        (
+            FIRST_POST_COINBASE + 2,
+            whole.join(complete_tree(), ENDPOINT),
+        ),
     ];
     let listed: Vec<shekyl_wire::Transaction> = posts
         .iter()
@@ -412,7 +436,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
+                &network,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("open")

@@ -6,8 +6,9 @@
 //! The ingest service — the live arrival path (`DRS_X_STORE_FLIP.md` DX-Q2,
 //! PR2-Q1).
 //!
-//! [`pipeline::run`](crate::pipeline::run) drives a pulled [`Source`] to
-//! exhaustion, and a source has no path back to its producer, so it cannot
+//! [`pipeline::run`](crate::pipeline::run) drives a pulled
+//! [`Source`](crate::source::Source) to exhaustion, and a source has no path
+//! back to its producer, so it cannot
 //! answer an arrival. The live daemon's arrivals come here instead: a
 //! long-running service that owns the connector actor, the `form` workers
 //! and the router, behind **one door**.
@@ -488,9 +489,9 @@ struct Accepted {
     bundle_bodies: Vec<Vec<u8>>,
 }
 
-/// The service's knobs, each with its reason. How many `form` workers hash
-/// at once is not one: it is the daemon's one hasher [`Budget`], handed to
-/// [`Service::start`].
+/// The service's knobs, each with its reason. How many `form` workers hash at
+/// once is not one: it is the daemon's one hasher
+/// [`Budget`](shekyl_hash_budget::Budget), handed to [`Service::start`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServiceConfig {
     /// The arrival window: arrivals accepted and not yet answered, at most.
@@ -1195,8 +1196,7 @@ pub struct Follow {
     pub pool: Option<PoolWiring>,
     /// The bundle producer, when the node mines and has a fetch path
     /// (`SO-D12` increment 4c). It files from the job seat's ring.
-    #[cfg(feature = "producer")]
-    pub producer: Option<crate::bundle_producer::ProducerSeat>,
+    pub producer: Option<crate::producer_seat::ProducerSeat>,
     /// Wakes the tip follower when the pool's shown set changes at this
     /// tip (`DRS_X_STORE_FLIP.md` Q9). The composition root hands the same
     /// [`Notify`] the pool door's fluff hook fires. The connector fires it

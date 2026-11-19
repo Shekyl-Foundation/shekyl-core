@@ -149,7 +149,7 @@ impl BlockCount {
 
     /// Sum two spans, returning `None` on overflow.
     ///
-    /// The panicking [`Add`](core::ops::Add) impl is not const. Derived
+    /// The panicking [`Add`] impl is not const. Derived
     /// spans (`REF_ANCHOR_AGE`, and anything built from it) use this.
     #[must_use]
     pub const fn checked_add(self, rhs: Self) -> Option<Self> {
@@ -161,7 +161,7 @@ impl BlockCount {
 
     /// Difference of two spans, returning `None` when `rhs` is larger.
     ///
-    /// The panicking [`Sub`](core::ops::Sub) impl is not const. A derived
+    /// The panicking [`Sub`] impl is not const. A derived
     /// span such as the proof-validity horizon uses this so the constant
     /// names the spans it is built from.
     #[must_use]

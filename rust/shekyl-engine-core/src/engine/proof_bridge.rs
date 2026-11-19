@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Proof-generation bridge: the crypto bodies behind the [`KeyActor`]'s
+//! Proof-generation bridge: the crypto bodies behind the [`KeyActor`](crate::engine::key_actor::KeyActor)'s
 //! inbound-tx-proof and reserve-proof messages (WI-RPC-3, Phase 2c).
 //!
 //! Both proof kinds sign with actor-owned key material (view secret for

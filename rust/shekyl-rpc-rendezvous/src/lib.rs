@@ -18,8 +18,8 @@
 //!   filesystem path component or an IPC object name.
 //! - [`Instance`] and [`InstanceName`]: which node on this machine, and the
 //!   rule an operator's instance name follows.
-//! - [`file_name`], [`account_dir`], [`data_home`] and [`Record`]: the
-//!   rendezvous file in its directory, and what a Windows record says.
+//! - [`file_name`], [`account_dir`] and [`Record`]: the rendezvous file in
+//!   its directory, and what a Windows record says.
 //! - [`service_file_name`] and [`ServiceRecord`]: a service's machine-wide
 //!   record, and what it says.
 //!
@@ -36,7 +36,7 @@ use shekyl_crypto_hash::cshake256_32;
 mod place;
 
 pub use place::{
-    account_dir, console_leg_place, data_home, file_name, service_file_name, service_record_at,
+    account_dir, console_leg_place, file_name, service_file_name, service_record_at,
     service_record_path, service_rendezvous, Record, ServiceChannel, ServiceRecord,
     ServiceRecordAt, CHANNEL_BUNDLE_FILE, CHANNEL_KEY_FILE, CONSOLE_KEY_FILE, CONSOLE_PIPE_FILE,
     CONSOLE_PIPE_PREFIX, CONSOLE_SOCKET_FILE, PIPE_PREFIX, RECORD_FORMAT, RENDEZVOUS_DIR,

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! How a path becomes a [`ChainStore`](super::ChainStore).
+//! How a path becomes a [`ChainStore`].
 //!
 //! Fresh-vs-existing is one syscall: `create_new` either claims the path
 //! or fails with `AlreadyExists`. An existing file is screened on a
@@ -40,7 +40,7 @@ use crate::provenance::Provenance;
 ///
 /// [`Unpinned`](Self::Unpinned) verifies the header and does not read the
 /// body. [`Pinned`](Self::Pinned) admits `genesis` on that same read.
-/// [`GenesisPin::NONE`] pins nothing: the comparison still runs, and a tip
+/// `GenesisPin::NONE` pins nothing: the comparison still runs, and a tip
 /// the snapshot cannot read is a fault.
 #[derive(Clone, Copy)]
 pub(super) enum GenesisAdmission<'a> {

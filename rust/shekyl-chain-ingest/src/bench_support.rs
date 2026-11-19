@@ -49,7 +49,7 @@ use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
 use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::target::TargetLedger;
@@ -297,7 +297,7 @@ impl BlockPath {
 /// The corpus is not a finished extend-only corpus.
 #[must_use]
 pub fn blocks_of(corpus: &[u8]) -> Vec<Candidate> {
-    let mut reader = CorpusReader::open(Cursor::new(corpus)).expect("a corpus header");
+    let mut reader = CorpusSource::open(Cursor::new(corpus)).expect("a corpus header");
     let mut blocks = Vec::new();
     while let Some(event) = reader.next().expect("a finished corpus") {
         match event.event {

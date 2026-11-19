@@ -9,7 +9,7 @@
 //! answer with its own code: `-29800` does not verify, `-29801` the paste
 //! is corrupted, `-29802` the scheme byte is one this build does not
 //! implement. A boolean `valid: false` cannot carry those four remedies,
-//! so [`VerifyMessageError`](shekyl_engine_core::engine::message_signing::VerifyMessageError)
+//! so [`VerifyMessageError`]
 //! never becomes a success payload.
 
 use shekyl_crypto_pq::message_signing::MessageSigError;

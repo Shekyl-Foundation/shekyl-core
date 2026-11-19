@@ -95,10 +95,12 @@ impl ServiceRendezvous {
         .bytes();
         match at {
             ServiceRecordAt::File(path) => {
-                StagedWrite::<Replace>::create(path, &record, Access::WorldReadable)
-                    .map_err(FileRefused::from)?
-                    .commit()
-                    .map_err(FileRefused::from)?;
+                let durability =
+                    StagedWrite::<Replace>::create(path, &record, Access::WorldReadable)
+                        .map_err(FileRefused::from)?
+                        .commit()
+                        .map_err(FileRefused::from)?;
+                super::files::note_durability(path, &durability);
             }
             #[cfg(windows)]
             ServiceRecordAt::Registry { key, value } => {

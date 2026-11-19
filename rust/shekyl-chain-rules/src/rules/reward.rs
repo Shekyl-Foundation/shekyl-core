@@ -229,7 +229,7 @@ fn arithmetic_refusal(err: RewardArithmetic) -> InvalidBlock {
 /// F18's owed overflow at `Locus::Tx { slot: Miner }`, or G11's accrual
 /// overflow at [`Locus::Block`]. Nothing here reads the view, so there is
 /// no fault position. Rows are recorded on the passing path; a refusal
-/// carries the row and [`validate`] drops the coverage.
+/// carries the row and [`validate`](fn@crate::validate) drops the coverage.
 pub(crate) fn price(
     connecting: BlockHeight,
     emission: &Emission,

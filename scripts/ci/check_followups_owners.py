@@ -116,8 +116,10 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # and rows whose PRs merged), restated two under their current subject
 # (CEN-A7's Rust bound; the engine bench pairs the capture script omits),
 # and merged with #1362, which gave the watchdog probe-bytes row an owner,
-# the list's length.
-GRANDFATHER_CEILING = 234
+# the list's length. 228 on 2026-11-19, when the workspace rustdoc gate
+# closed the two rustdoc rows (the gate that named its crates, and the
+# blocked workspace-wide lane).
+GRANDFATHER_CEILING = 228
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

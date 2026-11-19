@@ -26,7 +26,7 @@
 //!
 //! Three fields, never conflated:
 //!
-//! - **`bonded_principal_confirmed`** — Σ [`ARCHIVAL_BOND_FLOOR_ATOMIC`] over
+//! - **`bonded_principal_confirmed`** — Σ [`ARCHIVAL_BOND_FLOOR_ATOMIC`](crate::ARCHIVAL_BOND_FLOOR_ATOMIC) over
 //!   distinct personas with a confirmed JoinMarket bond post
 //!   ([`PScanState::bond_post_matches`], `is_join_market_post_kind`) that are neither
 //!   pending-release nor retired. The bond principal is the consensus bond
@@ -429,7 +429,7 @@ impl<
     /// `staking_read_with_ledger`.
     ///
     /// Small synchronous file I/O (the same class as
-    /// [`WalletFile::open_pscan_state`]'s other callers); async callers on a
+    /// [`WalletFile::open_pscan_state`](shekyl_engine_file::WalletFile::open_pscan_state)'s other callers); async callers on a
     /// multi-threaded runtime should treat it like the other sealed-file
     /// opens.
     ///

@@ -45,6 +45,11 @@ windows-sys = { version = "0.61", features = [
     # A service's rendezvous record, a value under HKLM\SOFTWARE\Shekyl
     # (`registry`).
     "Win32_System_Registry",
+    # `NtQueryVolumeInformationFile` with `FileFsDeviceInformation`, whose
+    # `FILE_REMOTE_DEVICE` makes a network drive's replace unconfirmed
+    # (`replace`).
+    "Wdk_Storage_FileSystem",
+    "Wdk_System_SystemServices",
 ] }
 # The self-hosted listener (WP-W2) is built on tokio's named-pipe support, so
 # the crate that holds the `unsafe` `create_with_security_attributes_raw` call

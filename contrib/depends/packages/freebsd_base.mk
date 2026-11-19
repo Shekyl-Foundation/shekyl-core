@@ -1,6 +1,12 @@
 package=freebsd_base
 $(package)_version=14.4
 $(package)_download_path=https://download.freebsd.org/releases/amd64/$($(package)_version)-RELEASE/
+# FreeBSD's community mirrors, tried after the official host (Rick,
+# 2026-11-19): download.freebsd.org timed out on two gitian runs on
+# 2026-11-18. Both served this file with the pinned hash from a
+# GitHub-hosted runner and from a fleet host on 2026-11-19; ftp11, also
+# tried, did not answer from either.
+$(package)_download_path_alternates=https://ftp5.FreeBSD.org/pub/FreeBSD/releases/amd64/$($(package)_version)-RELEASE https://ftp2.uk.FreeBSD.org/pub/FreeBSD/releases/amd64/$($(package)_version)-RELEASE
 $(package)_download_file=base.txz
 $(package)_file_name=freebsd-base-$($(package)_version).txz
 $(package)_sha256_hash=769f60a6eea2938ad6b7943cfbcc17dfaf7d1f7ba59a32b869a00349302df853

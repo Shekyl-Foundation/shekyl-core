@@ -183,7 +183,8 @@ async fn each_stop_signal_closes_the_wallet() {
 /// A send whose record cannot be saved is not sent: with every save of the
 /// wallet refused ([`BlockedStateSave`](super::super::test_support::BlockedStateSave),
 /// which holds for root too) the submit is refused `-29131
-/// SAVE_IO_FAILED` (the blocked rename is the disk's error) and the
+/// SAVE_IO_FAILED` at its `rename` step (the blocked rename is the disk's
+/// error; Rick, 2026-11-19: `data.step`) and the
 /// daemon's pool stays empty; with saves possible again, the kept
 /// reservation submits and is accepted.
 #[cfg(unix)]
@@ -218,6 +219,11 @@ async fn a_send_that_cannot_be_saved_is_not_sent() {
 
     let refused = refused.expect_err("a send that cannot be saved is refused");
     assert_eq!(refused.code, -29131, "SAVE_IO_FAILED: {refused:?}");
+    assert_eq!(
+        refused.data.as_ref().and_then(|data| data.get("step")),
+        Some(&json!("rename")),
+        "the blocked rename names its step: {refused:?}"
+    );
     assert_eq!(daemon.tx_pool_size().await, 0, "nothing reached the daemon");
 
     let submitted = server.ok(

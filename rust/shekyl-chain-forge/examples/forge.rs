@@ -6,11 +6,14 @@
 //! The chain forge (`CHAIN_FORGE.md` §11.1): a plan in, a forged chain out.
 //!
 //! ```text
-//! cargo run --release -p shekyl-chain-forge --example forge -- \
+//! # from the repository root; the plan path is relative to it
+//! cargo run --manifest-path rust/Cargo.toml --release \
+//!     -p shekyl-chain-forge --example forge -- \
 //!     --plan rust/shekyl-chain-forge/plans/small.toml --out <dir> \
 //!     [--hashers N] [--swap S1,S5] [--stop-at <committed blocks.txt>]
 //!     [--live-producer] [--start-spread-ms N]
-//! cargo run -p shekyl-chain-forge --example forge -- --diff <old blocks.txt> <new blocks.txt>
+//! cargo run --manifest-path rust/Cargo.toml -p shekyl-chain-forge \
+//!     --example forge -- --diff <old blocks.txt> <new blocks.txt>
 //! ```
 //!
 //! `--diff` prints the first block where two ledgers differ, the line a

@@ -72,7 +72,7 @@ pub(crate) fn choosers(cli: &Cli) -> (Network, RunMode) {
 ///
 /// This is the one precedence. A binary with its own table — the tunnel —
 /// resolves here and reads the map itself. The daemon's sections are built
-/// only by [`crate::load`]: [`crate::sections`] keeps that build.
+/// only by [`fn@crate::load`]: [`crate::sections`] keeps that build.
 ///
 /// # Errors
 /// Every development lever given on a network its row does not name

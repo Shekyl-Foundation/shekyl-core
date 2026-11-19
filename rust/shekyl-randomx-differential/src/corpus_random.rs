@@ -60,7 +60,7 @@ pub const RANDOM_CORPUS_SEED_V1_SOURCE: &str = "shekyl-randomx-differential-corp
 ///
 /// Per §3.18 R6-D1, this equals
 /// `SHA-256(RANDOM_CORPUS_SEED_V1_SOURCE)`; the
-/// [`tests::seed_v1_matches_source_sha256`] unit test re-derives the
+/// `tests::seed_v1_matches_source_sha256` unit test re-derives the
 /// SHA-256 at runtime and asserts equality, catching any drift
 /// between the source string and the committed bytes. The runtime
 /// recompute is deliberate — a hard-coded hex pin would pass even

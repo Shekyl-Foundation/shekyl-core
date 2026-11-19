@@ -106,6 +106,9 @@ pub enum Code {
     /// program (an antivirus scanner, a search indexer) for longer than the
     /// daemon waits (Rick, 2026-11-18).
     ReplaceHeldOpen,
+    /// A file the daemon replaces at its start has its read-only attribute
+    /// set, which refused the replace (Windows; Rick, 2026-11-19).
+    ReplaceReadOnly,
     /// A Windows service's rendezvous key, `HKLM\SOFTWARE\Shekyl\Rendezvous`,
     /// is missing, or its owner, readers or writers are not the installer's
     /// (Rick, 2026-11-18).
@@ -169,6 +172,7 @@ impl Code {
             Self::SocketDirUnusable => "config.socket-dir.unusable",
             Self::SocketPathLong => "config.socket-dir.path-long",
             Self::ReplaceHeldOpen => "config.replace.held-open",
+            Self::ReplaceReadOnly => "config.replace.read-only",
             Self::ServiceRendezvousKey => "config.service.rendezvous-key",
             Self::SocketDirPlatform => "config.socket-dir.platform",
             Self::SocketRunning => "config.socket.running",
@@ -438,6 +442,10 @@ impl Diagnostic {
                 p("cause"),
                 p("remedy")
             ),
+            Code::ReplaceReadOnly => format!(
+                "{} could not be written: it is read-only; clear its read-only attribute and start the daemon again",
+                p("path")
+            ),
             Code::SocketPathLong => format!(
                 "the owner's socket path {} is {} bytes and this platform allows {}; name a shorter `--rpc-socket-dir`",
                 p("path"),
@@ -562,6 +570,7 @@ mod tests {
             Code::SocketPathLong,
             Code::SocketDirPlatform,
             Code::ReplaceHeldOpen,
+            Code::ReplaceReadOnly,
             Code::ServiceRendezvousKey,
             Code::SocketRunning,
             Code::SocketImpostor,

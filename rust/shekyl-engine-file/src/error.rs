@@ -32,15 +32,16 @@
 //!   without an explicit rotation or restore opt-in — a file-system check
 //!   alone is insufficient (rule 35: secrets must not be re-written on every
 //!   autosave path).
-//! - [`WalletFileError::AtomicWriteRename`] carries the `io::Error` from the
-//!   rename step specifically, so callers can distinguish "wrote the
-//!   staged file OK but could not atomically swap it in" from generic I/O.
+//! - [`WalletFileError::SaveStep`] carries the `io::Error` of the atomic
+//!   write's step that failed, and the step: writing the staged file,
+//!   syncing its folder, or renaming it over the target. A reader of the
+//!   error never infers the step from the error's kind.
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
 use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
-use shekyl_os_account::private_file::HeldOpen;
+use shekyl_os_account::private_file::{HeldOpen, Step};
 use std::io;
 use std::path::PathBuf;
 
@@ -115,17 +116,20 @@ pub enum WalletFileError {
     #[error("wallet is already open by another process (lock held on {path})")]
     AlreadyLocked { path: PathBuf },
 
-    /// The atomic-write sequence wrote a fresh staged file successfully but
-    /// could not rename it into place: the rename failed. Another program
-    /// holding a file past the wait is [`Self::HeldOpen`].
+    /// A step of the atomic write of `target` failed with the disk's error:
+    /// writing the staged file (removing a leftover, creating, writing and
+    /// syncing it), syncing its folder before the rename, or the rename
+    /// itself ([`Step`]). Another program holding a file past the wait is
+    /// [`Self::HeldOpen`]; a read-only target is [`Self::ReadOnly`].
     ///
     /// The original target (if any) is **untouched** — that is the
     /// guarantee. Removal of the staged file is attempted on failure, but
     /// not guaranteed: a leftover `<name>.new` sibling is possible and is
     /// clutter, never a wallet artifact, and the next write of the target
     /// removes it.
-    #[error("atomic rename into {target} failed: {source}")]
-    AtomicWriteRename {
+    #[error("saving {target} failed at its {step} step: {source}")]
+    SaveStep {
+        step: Step,
         target: PathBuf,
         #[source]
         source: io::Error,
@@ -133,13 +137,16 @@ pub enum WalletFileError {
 
     /// Another program held a file the Windows replace needs (a leftover
     /// staged file, or the target) open past the replace's wait, most
-    /// likely an antivirus scanner or a search indexer; or, on a FAT or
-    /// exFAT volume, the target may instead not be writable
-    /// ([`HeldOpen::or_unwritable`]). The target is untouched. Its own
-    /// variant because its remedy, excluding the wallet's folder from
-    /// scanning, is not the disk's (Rick, 2026-11-18).
+    /// likely an antivirus scanner or a search indexer. The target is
+    /// untouched. Its own variant because its remedy, excluding the
+    /// wallet's folder from scanning, is not the disk's (Rick, 2026-11-18).
     #[error("{0}")]
     HeldOpen(HeldOpen),
+
+    /// The target's read-only attribute is set, and the rename over it was
+    /// refused for it (Windows; Rick, 2026-11-19). The target is untouched.
+    #[error("{target} is read-only, so it could not be replaced")]
+    ReadOnly { target: PathBuf },
 
     /// The keys file decoded cleanly but declared a `network` byte that
     /// does not map to any known [`Network`]. Envelope-level validation
@@ -197,7 +204,7 @@ pub enum WalletFileError {
     /// A preferences-layer operation failed (HMAC mismatch on save,
     /// Bucket-3 field slipped through a save path, oversize body,
     /// TOML serialization failure, …). Surfaces
-    /// [`PrefsError`](shekyl_engine_prefs::PrefsError) verbatim so
+    /// [`PrefsError`] verbatim so
     /// the FFI can map each variant to an actionable user message
     /// without this crate having to mirror the prefs taxonomy.
     ///
@@ -211,11 +218,13 @@ pub enum WalletFileError {
 }
 
 impl WalletFileError {
-    /// Convenience: wraps an `io::Error` from a rename into the
-    /// dedicated variant. Centralizing the wrap here keeps the orchestrator
-    /// free of ad-hoc `Err(WalletFileError::AtomicWriteRename { … })`
-    /// construction at every call site.
-    pub(crate) fn rename(target: PathBuf, source: io::Error) -> Self {
-        Self::AtomicWriteRename { target, source }
+    /// The disk's error at `step` of writing `target`
+    /// ([`Self::SaveStep`]).
+    pub(crate) fn save_step(step: Step, target: PathBuf, source: io::Error) -> Self {
+        Self::SaveStep {
+            step,
+            target,
+            source,
+        }
     }
 }

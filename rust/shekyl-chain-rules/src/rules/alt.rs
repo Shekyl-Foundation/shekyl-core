@@ -11,7 +11,7 @@
 //! (`PopBeyondReorgCap`), not a consensus refusal. The alt tier
 //! ([`crate::alt_against`]) judges a block against the chain it extends
 //! rather than the recorded tip. Most of what it runs is the header-rule
-//! half of `validate`'s ladder, bound on a [`HeaderView`] so the stitched,
+//! half of `validate`'s ladder, bound on a [`HeaderView`](crate::HeaderView) so the stitched,
 //! unexecuted chain can answer it. The rows with no main-chain arm live
 //! here:
 //!
