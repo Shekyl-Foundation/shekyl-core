@@ -1953,6 +1953,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-options",
  "shekyl-os-account",
+ "shekyl-relay-privacy",
  "shekyl-rpc-rendezvous",
  "shekyl-win-sec",
  "toml",
