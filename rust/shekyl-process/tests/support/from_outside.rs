@@ -387,6 +387,11 @@ mod os {
             "the signed copy {} does not carry {GET_TASK_ALLOW}: {shown}",
             staged.display()
         );
+        // CLIPPY: disallowed_methods — test support.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test support: moves the signed copy of a test binary into place"
+        )]
         std::fs::rename(&staged, &copy)
             .unwrap_or_else(|e| panic!("rename {} to {}: {e}", staged.display(), copy.display()));
         copy

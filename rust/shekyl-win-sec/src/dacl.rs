@@ -35,14 +35,14 @@ use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_READ_DATA, FILE_WRITE_ATTRIBUTES,
     FILE_WRITE_DATA, FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
 };
-use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
 
 use crate::sid::{current_user_sid, sid_to_string, SidString};
 
 /// SYSTEM.
-const SYSTEM: &str = "S-1-5-18";
+pub(crate) const SYSTEM: &str = "S-1-5-18";
 /// BUILTIN\Administrators.
-const ADMINISTRATORS: &str = "S-1-5-32-544";
+pub(crate) const ADMINISTRATORS: &str = "S-1-5-32-544";
 /// NT SERVICE\TrustedInstaller, the Windows servicing account that owns
 /// the system tree: a default `C:\` grants it full control, and nothing
 /// below it is the operator's to restrict. Its SID is fixed.
@@ -72,6 +72,14 @@ impl std::fmt::Display for DaclError {
 }
 
 impl std::error::Error for DaclError {}
+
+impl DaclError {
+    /// The OS error the read failed with.
+    #[must_use]
+    pub fn code(&self) -> u32 {
+        self.0
+    }
+}
 
 /// Any write right, on a file or a directory.
 const WRITE_MASK: u32 = FILE_WRITE_DATA
@@ -143,30 +151,64 @@ impl Drop for Descriptor {
 
 fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>, DaclError> {
     let me = current_user_sid().ok();
-    let classify = |sid: *mut c_void| -> Option<Grantee> {
-        let s = sid_to_string(sid).ok()?;
+    let classify = |s: SidString| -> Grantee {
         let permitted = is_platform_principal(&s) || me.as_ref() == Some(&s);
-        Some(if permitted {
+        if permitted {
             Grantee::Permitted
         } else {
             Grantee::Other(s.as_str().to_owned())
-        })
+        }
     };
     let wide: Vec<u16> = path
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    let view = read_descriptor(&wide, SE_FILE_OBJECT)?;
+    let mut out = Vec::new();
+    if include_owner {
+        out.extend(view.owner.map(classify));
+    }
+    match view.allowed {
+        None => out.push(Grantee::Other(
+            "Everyone (no access-control list)".to_owned(),
+        )),
+        Some(allowed) => out.extend(
+            allowed
+                .into_iter()
+                .filter(|(_, ace_mask)| ace_mask & mask != 0)
+                .map(|(sid, _)| classify(sid)),
+        ),
+    }
+    Ok(out)
+}
+
+/// An object's owner and its allow and deny entries that apply to the
+/// object itself (inherit-only entries are skipped): each SID with its
+/// access mask. `allowed` is `None` for a null DACL, which grants everyone
+/// everything (and holds no deny entry).
+pub(crate) struct DescriptorView {
+    pub(crate) owner: Option<SidString>,
+    pub(crate) allowed: Option<Vec<(SidString, u32)>>,
+    pub(crate) denied: Vec<(SidString, u32)>,
+}
+
+/// Read the owner and the DACL of the object `name` (NUL-terminated wide
+/// string) of type `object`.
+pub(crate) fn read_descriptor(
+    name: &[u16],
+    object: windows_sys::Win32::Security::Authorization::SE_OBJECT_TYPE,
+) -> Result<DescriptorView, DaclError> {
     let mut owner: *mut c_void = std::ptr::null_mut();
     let mut dacl: *mut ACL = std::ptr::null_mut();
     let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    // SAFETY: `wide` is NUL-terminated and outlives the call; every
+    // SAFETY: `name` is NUL-terminated and outlives the call; every
     // out-parameter is a local; `owner` and `dacl` point into the descriptor
     // `psd`, which the guard frees after they are consumed.
     let rc = unsafe {
         GetNamedSecurityInfoW(
-            wide.as_ptr(),
-            SE_FILE_OBJECT,
+            name.as_ptr(),
+            object,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &raw mut owner,
             std::ptr::null_mut(),
@@ -179,16 +221,17 @@ fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>,
         return Err(DaclError(rc));
     }
     let _guard = Descriptor(psd);
-    let mut out = Vec::new();
-    if include_owner && !owner.is_null() {
-        out.extend(classify(owner));
-    }
+    let owner = if owner.is_null() {
+        None
+    } else {
+        sid_to_string(owner).ok()
+    };
     if dacl.is_null() {
-        // A null DACL grants everyone everything.
-        out.push(Grantee::Other(
-            "Everyone (no access-control list)".to_owned(),
-        ));
-        return Ok(out);
+        return Ok(DescriptorView {
+            owner,
+            allowed: None,
+            denied: Vec::new(),
+        });
     }
     let mut info = ACL_SIZE_INFORMATION {
         AceCount: 0,
@@ -208,6 +251,8 @@ fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>,
     if ok == 0 {
         return Err(DaclError(crate::sid::last_error()));
     }
+    let mut allowed = Vec::new();
+    let mut denied = Vec::new();
     for index in 0..info.AceCount {
         let mut ace: *mut c_void = std::ptr::null_mut();
         // SAFETY: `index` is below the ACE count the ACL reported. `GetAce`
@@ -223,22 +268,29 @@ fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>,
         }
         // SAFETY: every ACE begins with an `ACE_HEADER`.
         let header = unsafe { ace.cast::<ACE_HEADER>().read_unaligned() };
-        if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE
-            || u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0
-        {
+        let into = match u32::from(header.AceType) {
+            ACCESS_ALLOWED_ACE_TYPE => &mut allowed,
+            ACCESS_DENIED_ACE_TYPE => &mut denied,
+            _ => continue,
+        };
+        if u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0 {
             continue;
         }
-        // SAFETY: the type says this ACE is an `ACCESS_ALLOWED_ACE`, whose
-        // `SidStart` is the first dword of the SID that follows it in the ACL.
-        let allowed = ace.cast::<ACCESS_ALLOWED_ACE>();
+        // SAFETY: the type says this ACE is an `ACCESS_ALLOWED_ACE` or an
+        // `ACCESS_DENIED_ACE`, which share one layout: a header, a mask, and
+        // `SidStart`, the first dword of the SID that follows in the ACL.
+        let entry = ace.cast::<ACCESS_ALLOWED_ACE>();
         // Read through the raw pointer, as the header is: an ACE is
         // dword-aligned by contract, and the read does not depend on it.
-        let ace_mask = unsafe { std::ptr::addr_of!((*allowed).Mask).read_unaligned() };
-        if ace_mask & mask == 0 {
-            continue;
+        let ace_mask = unsafe { std::ptr::addr_of!((*entry).Mask).read_unaligned() };
+        let sid = unsafe { (&raw const (*entry).SidStart).cast_mut().cast::<c_void>() };
+        if let Ok(sid) = sid_to_string(sid) {
+            into.push((sid, ace_mask));
         }
-        let sid = unsafe { (&raw const (*allowed).SidStart).cast_mut().cast::<c_void>() };
-        out.extend(classify(sid));
     }
-    Ok(out)
+    Ok(DescriptorView {
+        owner,
+        allowed: Some(allowed),
+        denied,
+    })
 }
