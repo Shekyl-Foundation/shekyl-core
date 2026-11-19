@@ -561,22 +561,39 @@ fn noise_channels_emit_one_per_advance_not_synchronized() {
     );
     let firstc = covert[0];
 
-    // Advance again: the other channel, and only it.
-    let second = d.next_wake();
-    assert!(second > first, "the next wake is strictly later");
-    let covert2: Vec<usize> = d
-        .poll(second, &mut rng)
-        .into_iter()
-        .filter_map(|e| match e {
-            Step::NoiseSend { channel, .. } => Some(channel),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(covert2.len(), 1, "second advance also fires exactly one");
-    assert_ne!(
-        covert2[0], firstc,
-        "the second advance fires the OTHER channel — liveness, so a \
-         scheduler that only ever serves channel 0 cannot pass"
+    // Keep advancing: one channel per advance, and the other channel within
+    // a bound. The cadence is memoryless (`CVR-R4`), so the same channel may
+    // fire several times running; a run of `LIVENESS_ADVANCES` on two
+    // independent channels has probability 2^-LIVENESS_ADVANCES.
+    const LIVENESS_ADVANCES: u32 = 64;
+    let mut last = first;
+    let mut other_fired = false;
+    for advance in 0..LIVENESS_ADVANCES {
+        let wake = d.next_wake();
+        assert!(wake > last, "the next wake is strictly later");
+        last = wake;
+        let fired: Vec<usize> = d
+            .poll(wake, &mut rng)
+            .into_iter()
+            .filter_map(|e| match e {
+                Step::NoiseSend { channel, .. } => Some(channel),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fired.len(),
+            1,
+            "advance {advance} fires exactly one, got {fired:?}"
+        );
+        if fired[0] != firstc {
+            other_fired = true;
+            break;
+        }
+    }
+    assert!(
+        other_fired,
+        "the OTHER channel fires too — liveness, so a scheduler that only \
+         ever serves channel {firstc} cannot pass"
     );
 }
 

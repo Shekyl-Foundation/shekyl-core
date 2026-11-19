@@ -14,6 +14,7 @@ mod support;
 use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, DialFailure, Reached, Retry};
 use support::{
@@ -98,6 +99,9 @@ fn the_log_never_names_a_stems_transactions_or_its_successor() {
     drop(sender);
 }
 
+/// The clock step while a test waits for an embargo to fire.
+const EMBARGO_STEP_SECS: u32 = 30;
+
 /// The log as text, so far.
 fn text(log: &Mutex<Vec<u8>>) -> String {
     String::from_utf8(log.lock().expect("the log").clone()).expect("UTF-8")
@@ -143,7 +147,14 @@ fn the_carrier_discard_and_the_reshape_name_nothing_either() {
     thread::sleep(SETTLE);
     drop(rig.batches(&mut one));
     drop(rig.batches(&mut two));
-    rig.drive(STEP, 200, || text(&log).contains("a zone stem was"));
+    // The embargo is a memoryless draw: step the clock up to the wait a fire
+    // misses once in `FIRE_WAIT_MISS_ONE_IN`.
+    let steps = shekyl_relay::embargo_fire_wait_secs() / EMBARGO_STEP_SECS + 1;
+    rig.drive(
+        Duration::from_secs(u64::from(EMBARGO_STEP_SECS)),
+        steps,
+        || text(&log).contains("a zone stem was"),
+    );
     drop(sender);
 
     let text = text(&log);

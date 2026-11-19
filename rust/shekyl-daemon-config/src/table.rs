@@ -441,7 +441,7 @@ mod tests {
             .iter()
             .filter(|r| matches!(r.visibility, Visibility::Dev { .. }))
             .count();
-        assert_eq!(levers, 9);
+        assert_eq!(levers, 8);
     }
 
     #[test]

@@ -321,8 +321,14 @@ fn four_hidden_peers_share_the_hidden_slot() {
     );
 }
 
+/// A node's own transaction sent to the Tor peer in slot 0 leaves in that
+/// slot's window (`CVR-R3`, `CVR-R6`): a Tor session carries cover, slot 0
+/// included, and nothing leaves a covered session outside a window.
+///
+/// Red edit: exempt the own-edge, or slot 0, in `carrier_to`; the own-edge
+/// takes the ordinary connection.
 #[test]
-fn the_hidden_slot_origin_uses_the_ordinary_carrier_beside_a_clearnet_slot() {
+fn the_hidden_slot_origin_rides_its_cover_channel_beside_a_clearnet_slot() {
     let mut rng = SplitMix64::new(5);
     let mut z = Relay::new(
         DandelionParams::inherited(),
@@ -357,13 +363,23 @@ fn the_hidden_slot_origin_uses_the_ordinary_carrier_beside_a_clearnet_slot() {
     assert!(z.stem_slots()[1] == Some(id(1)) || z.stem_slots()[1] == Some(id(3)));
     assert_eq!(
         dispatch.carrier,
-        RelayCarrier::Ordinary,
-        "the own-edge leaves on the ordinary connection"
+        z.carrier_to(id(2)),
+        "one rule for every stem to a destination"
+    );
+    assert!(
+        matches!(dispatch.carrier, RelayCarrier::Noise { channel } if channel.get() == 0),
+        "the own-edge leaves in slot 0's window, got {:?}",
+        dispatch.carrier
     );
 }
 
+/// With both slots held by Tor peers, a node's own transaction leaves in
+/// the window of the slot its destination holds (`CVR-R3`, `CVR-R6`).
+///
+/// Red edit: send the own-edge on the ordinary connection when its
+/// destination is a Tor session.
 #[test]
-fn a_slotted_tor_own_edge_still_leaves_immediately() {
+fn a_slotted_tor_own_edge_rides_its_slots_cover_channel() {
     let mut rng = SplitMix64::new(6);
     let mut z = Relay::new(
         DandelionParams::inherited(),
@@ -385,10 +401,15 @@ fn a_slotted_tor_own_edge_still_leaves_immediately() {
         z.stem_slots().contains(&Some(dest)),
         "both Tor peers fill the two slots"
     );
-    assert_eq!(
-        dispatch.carrier,
-        RelayCarrier::Ordinary,
-        "the own-edge leaves on the ordinary connection, even from a stem slot"
+    let slot = z
+        .stem_slots()
+        .iter()
+        .position(|held| *held == Some(dest))
+        .expect("the destination holds a slot");
+    assert!(
+        matches!(dispatch.carrier, RelayCarrier::Noise { channel } if channel.get() == slot),
+        "the own-edge leaves in its slot's window ({slot}), got {:?}",
+        dispatch.carrier
     );
 }
 

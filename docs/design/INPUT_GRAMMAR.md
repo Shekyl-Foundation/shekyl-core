@@ -175,7 +175,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | connections | rpc, peer | concurrent connections; under `peer`, *view* — the live peer connections | peer:view |
 | dev | — | a development lever (IG-8) | |
 | encrypt | clearnet | the pre-flip clearnet encryption switch | |
-| relay | dev, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction | tx:verb |
+| relay | —, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction | tx:verb |
 | cover | relay | Dandelion++ cover traffic ([`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md)) | |
 | sync | dev, — | chain synchronization | |
 | difficulty | dev, chain | a fixed mining difficulty; under `chain`, *view* — the current difficulty | chain:view |
