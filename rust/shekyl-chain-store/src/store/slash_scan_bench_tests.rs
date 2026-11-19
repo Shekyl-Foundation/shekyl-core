@@ -900,7 +900,7 @@ fn a_replayed_chain_offers_only_coinbases_its_blocks_have_not_spent() {
     for height in replayed.matured() {
         let image = replayed
             .coinbase_key_image(BlockHeight::from_raw(height))
-            .expect("every coinbase pays the harness miner");
+            .expect("every coinbase pays the harness miner, and the replay has noted it");
         assert!(
             !snap.has_key_image(&image).expect("read"),
             "coinbase {height} is offered as unspent, and the chain spent it"

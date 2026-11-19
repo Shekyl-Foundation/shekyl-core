@@ -28,6 +28,11 @@
 //!   verify O == ho*G + B + y*T
 //!   verify C == z*G + amount*H
 //! ```
+//!
+//! A caller that needs only the key image uses
+//! [`crate::held_key_image`]: one ML-KEM decapsulation, the view tag, and
+//! `O = ho·G + B + y·T`. The amount, the commitment and the ML-DSA key
+//! belong to the scan, not to the image.
 
 use curve25519_dalek::{
     constants::{ED25519_BASEPOINT_POINT as G, X25519_BASEPOINT},
@@ -62,9 +67,16 @@ pub(crate) fn ml_kem_ss_wiped_on_last_prefilter_reject() -> bool {
     ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.load(Ordering::SeqCst)
 }
 
+/// How many wrong KEM keys a view-tag test draws before it requires a miss.
+///
+/// A wrong key misses the 1-byte tag about 255 times in 256, so the chance
+/// that every one of these samples collides is negligible.
+#[cfg(test)]
+pub(crate) const VIEW_TAG_MISS_SAMPLES: usize = 64;
+
 use crate::derivation::{
-    derive_kem_seed, derive_output_secrets, derive_view_tag_prefilter, keygen_from_seed,
-    OutputSecrets,
+    derive_kem_seed, derive_output_opening, derive_output_secrets, derive_view_tag_prefilter,
+    keygen_from_seed, OutputSecrets,
 };
 use crate::kem::MlKemDecapsKey;
 use crate::kem::{
@@ -579,20 +591,25 @@ pub fn recover_combined_ss(
     kem_ct_x25519: &[u8; 32],
     kem_ct_ml_kem: &[u8],
 ) -> Result<SharedSecret, CryptoError> {
-    // `view_scalar` is the wallet view secret in scalar form and `x25519_raw_ss`
-    // the raw ECDH shared secret; both are wrapped in `Zeroizing` so their limbs
-    // wipe on drop / early `Err` (`Scalar`/`MontgomeryPoint` are `Zeroize` but
-    // not `ZeroizeOnDrop`).
+    let x25519_raw_ss = x25519_shared_secret(view_x25519_sk, kem_ct_x25519)?;
+    decap_ml_kem_and_combine(&x25519_raw_ss.0, ml_kem_dk, kem_ct_ml_kem)
+}
+
+/// X25519 of the view secret against the on-chain ephemeral point.
+///
+/// A low-order ephemeral point is rejected before the multiplication. The
+/// scalar and the shared secret are `Zeroizing`, so an early return wipes
+/// them (`Scalar` and `MontgomeryPoint` are `Zeroize` but not `ZeroizeOnDrop`).
+pub(crate) fn x25519_shared_secret(
+    view_x25519_sk: &[u8; 32],
+    kem_ct_x25519: &[u8; 32],
+) -> Result<Zeroizing<MontgomeryPoint>, CryptoError> {
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*view_x25519_sk));
     let eph_mont = MontgomeryPoint(*kem_ct_x25519);
-
     if crate::montgomery::is_low_order_montgomery(&eph_mont) {
         return Err(CryptoError::LowOrderPoint);
     }
-
-    let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
-
-    decap_ml_kem_and_combine(&x25519_raw_ss.0, ml_kem_dk, kem_ct_ml_kem)
+    Ok(Zeroizing::new(*view_scalar * eph_mont))
 }
 
 /// ML-KEM-768 decapsulation followed by HKDF-SHA-512 combine with a
@@ -636,18 +653,26 @@ fn decap_ml_kem_and_combine(
     combine_shared_secrets(x25519_ss, &*ml_ss_bytes)
 }
 
+/// What one ML-KEM decapsulation said about the view tag.
+///
+/// A tag miss is not a decapsulation failure: the ciphertext opened, and it
+/// is not this key's. The shared secret is wiped before [`NotForThisKey`]
+/// (FA-6: the miss is the common path, so an early return must not leave it).
+pub(crate) enum Prefilter {
+    Matched(Zeroizing<[u8; 32]>),
+    NotForThisKey,
+}
+
 /// ML-KEM decap + FA-6 pre-filter tag compare (universal scan path).
 ///
 /// `ml_kem_ss` is held in `Zeroizing<[u8; 32]>` for the whole function. On tag
-/// mismatch (the dominant path during chain scan), the buffer is explicitly
-/// zeroized before `Err` — the early-return-leaves-secrets-unwiped failure mode
-/// that FA-6 promotes from rare to common.
-fn ml_kem_decap_prefilter_with_dk(
+/// mismatch the buffer is explicitly zeroized before [`Prefilter::NotForThisKey`].
+pub(crate) fn ml_kem_decap_prefilter_with_dk(
     ml_kem_dk: &ml_kem_768::DecapsKey,
     kem_ct_ml_kem: &[u8],
     view_tag_on_chain: u8,
     output_index: u64,
-) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+) -> Result<Prefilter, CryptoError> {
     if kem_ct_ml_kem.len() != ML_KEM_768_CT_LEN {
         return Err(CryptoError::DecapsulationFailed(
             "invalid ML-KEM ciphertext length".into(),
@@ -670,27 +695,93 @@ fn ml_kem_decap_prefilter_with_dk(
         ml_ss_bytes.zeroize();
         #[cfg(test)]
         ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.store(true, Ordering::SeqCst);
-        return Err(CryptoError::DecapsulationFailed(
-            "view tag pre-filter mismatch — output not for this key".into(),
-        ));
+        return Ok(Prefilter::NotForThisKey);
     }
 
-    Ok(ml_ss_bytes)
+    Ok(Prefilter::Matched(ml_ss_bytes))
 }
 
+/// The scan's name for a view-tag miss. [`scan_output`] and its tests match
+/// this text. [`crate::held_key_image`] reads [`Prefilter`] and does not.
+const VIEW_TAG_MISS: &str = "view tag pre-filter mismatch — output not for this key";
+
 /// ML-KEM decap + FA-6 pre-filter using a parsed decapsulation key (batch scan).
+///
+/// A tag miss is [`CryptoError::DecapsulationFailed`] with the scan's
+/// "view tag pre-filter mismatch" message. A malformed ciphertext stays
+/// `Err` of its own.
 pub fn ml_kem_decap_prefilter_with_parsed_dk(
     ml_kem_dk: &MlKemDecapsKey,
     kem_ct_ml_kem: &[u8],
     view_tag_on_chain: u8,
     output_index: u64,
 ) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
-    ml_kem_decap_prefilter_with_dk(
+    match ml_kem_decap_prefilter_with_dk(
         ml_kem_dk.as_decaps_key(),
         kem_ct_ml_kem,
         view_tag_on_chain,
         output_index,
-    )
+    )? {
+        Prefilter::Matched(shared_secret) => Ok(shared_secret),
+        Prefilter::NotForThisKey => Err(CryptoError::DecapsulationFailed(VIEW_TAG_MISS.into())),
+    }
+}
+
+/// `point` is a prime-order Edwards point. The identity and a point that
+/// is not torsion-free are [`CryptoError::InvalidKeyMaterial`]: neither is
+/// a base for `I = x·Hp(O)`.
+pub(crate) fn prime_order_point(point: EdwardsPoint) -> Result<EdwardsPoint, CryptoError> {
+    if point == EdwardsPoint::default() || !point.is_torsion_free() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+    Ok(point)
+}
+
+/// Decompress `hp_of_output` and require a prime-order point.
+pub(crate) fn decompress_hp(hp_of_output: &[u8; 32]) -> Result<EdwardsPoint, CryptoError> {
+    let point = CompressedEdwardsY(*hp_of_output)
+        .decompress()
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    prime_order_point(point)
+}
+
+/// `I = x · Hp(O)`.
+///
+/// `x` is the output spend scalar `ho + b`, held as a scalar. This returns
+/// only the image. The signing path encodes `x`'s bytes in
+/// [`KeyImageResult::spend_secret_x`]; this function does not.
+pub(crate) fn image_from_spend_scalar(
+    x: &Scalar,
+    hp_of_output: &EdwardsPoint,
+) -> crate::key_image::KeyImage {
+    crate::key_image::KeyImage::from_canonical_bytes((*x * hp_of_output).compress().to_bytes())
+}
+
+/// `O == ho·G + B + y·T`.
+///
+/// `ho` and `y` are the wide-reduced scalars from [`derive_output_opening`].
+/// `Zeroizing` wipes their limbs on drop. A spend public that is not an
+/// Edwards point is [`CryptoError::InvalidKeyMaterial`]. A point that fails
+/// the equation is `Ok(false)`: the output is not this spend key's.
+pub(crate) fn output_key_holds(
+    ho: &[u8; 32],
+    y: &[u8; 32],
+    spend_public: &[u8; 32],
+    output_key: &[u8; 32],
+) -> Result<bool, CryptoError> {
+    let spend_public = CompressedEdwardsY(*spend_public)
+        .decompress()
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    let ho: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(*ho))
+            .expect("ho from wide_reduce is always canonical"),
+    );
+    let y: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(*y))
+            .expect("y from wide_reduce is always canonical"),
+    );
+    let expected: EdwardsPoint = (G * *ho) + spend_public + (*T * *y);
+    Ok(expected.compress().to_bytes() == *output_key)
 }
 
 /// Scan an output to determine ownership and recover secrets.
@@ -767,15 +858,7 @@ pub fn scan_output_with_ml_kem_dk(
 
     // --- X25519 ECDH (tag match only) ---
 
-    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_sk));
-    let eph_mont = MontgomeryPoint(*kem_ct_x25519);
-
-    if crate::montgomery::is_low_order_montgomery(&eph_mont) {
-        return Err(CryptoError::LowOrderPoint);
-    }
-
-    let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
-
+    let x25519_raw_ss = x25519_shared_secret(x25519_sk, kem_ct_x25519)?;
     let combined_ss: SharedSecret = combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
 
     // --- Output secrets derivation ---
@@ -810,32 +893,18 @@ pub fn scan_output_with_ml_kem_dk(
 
     // --- Output key verification: O == ho*G + B + y*T ---
 
-    let b_point = CompressedEdwardsY(*spend_key)
-        .decompress()
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
-
-    // `ho`, `y`, `z` are per-output secret scalars derived from the combined
-    // shared secret; `Zeroizing` wipes their limbs on drop (`Scalar` is
-    // `Zeroize` but not `ZeroizeOnDrop`).
-    let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.ho))
-            .expect("ho from wide_reduce is always canonical"),
-    );
-    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.y))
-            .expect("y from wide_reduce is always canonical"),
-    );
-    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.z))
-            .expect("z from wide_reduce is always canonical"),
-    );
-
-    let expected_o = (G * *ho) + b_point + (*T * *y_scalar);
-    if expected_o.compress().to_bytes() != *output_key {
+    if !output_key_holds(&secrets.ho, &secrets.y, spend_key, output_key)? {
         return Err(CryptoError::DecapsulationFailed(
             "output key mismatch — not for this spend key".into(),
         ));
     }
+
+    // `z` is the commitment mask, a per-output secret scalar. `Zeroizing`
+    // wipes its limbs on drop (`Scalar` is `Zeroize` but not `ZeroizeOnDrop`).
+    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.z))
+            .expect("z from wide_reduce is always canonical"),
+    );
 
     // --- Commitment verification: C == z*G + amount*H ---
 
@@ -987,15 +1056,7 @@ pub fn scan_output_recover_with_ml_kem_dk(
         output_index,
     )?;
 
-    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_sk));
-    let eph_mont = MontgomeryPoint(*kem_ct_x25519);
-
-    if crate::montgomery::is_low_order_montgomery(&eph_mont) {
-        return Err(CryptoError::LowOrderPoint);
-    }
-
-    let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
-
+    let x25519_raw_ss = x25519_shared_secret(x25519_sk, kem_ct_x25519)?;
     let combined_ss: SharedSecret = combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
 
     // --- Output secrets derivation ---
@@ -1447,58 +1508,41 @@ impl std::fmt::Debug for KeyImageResult {
 
 /// Compute the key image and output spend secret for a V3 output.
 ///
-/// Derives `ho` internally from `combined_ss`; the caller never sees it.
-/// Returns both the key image `I = x * Hp(O)` and the output spend secret
-/// `x = ho + b` (needed for signing).
+/// Derives `ho` from `combined_ss`; the caller never sees it. Returns the
+/// key image `I = x·Hp(O)` and the output spend secret `x = ho + b`.
+/// Signing is the reason `x`'s bytes leave this function. A caller that
+/// needs only the image uses [`crate::held_key_image`].
 ///
 /// `hp_of_output` is `Hp(O)`, which the caller computes
 /// (`shekyl_curve_generators::biased_hash_to_point`, as the scanner does).
-/// Must decompress to a prime-order point.
+/// It must decompress to a prime-order point.
 pub fn compute_output_key_image(
     combined_ss: &[u8; 64],
     output_index: u64,
     spend_secret: &[u8; 32],
     hp_of_output: &[u8; 32],
 ) -> Result<KeyImageResult, CryptoError> {
-    let hp_point = CompressedEdwardsY(*hp_of_output)
-        .decompress()
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
-    if hp_point == EdwardsPoint::default() {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
-    if !hp_point.is_torsion_free() {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
+    let hp_point = decompress_hp(hp_of_output)?;
 
-    // `ho`, the spend secret `b`, and the output spend secret `x = ho + b` are
-    // all secret scalars; `Zeroizing` wipes their limbs on drop. `x.to_bytes()`
-    // is already wiped via `x_bytes` below; these wrappers cover the `Scalar`
-    // limbs themselves (`Scalar` is `Zeroize` but not `ZeroizeOnDrop`).
-    let secrets = derive_output_secrets(combined_ss, output_index);
+    // `ho`, the spend secret `b`, and `x = ho + b` are secret scalars.
+    // `Zeroizing` wipes their limbs on drop (`Scalar` is `Zeroize` but not
+    // `ZeroizeOnDrop`). `x`'s bytes are the signing secret this function
+    // returns; [`image_from_spend_scalar`] does not encode them.
+    let opening = derive_output_opening(combined_ss, output_index);
     let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+        Option::from(Scalar::from_canonical_bytes(opening.ho))
             .expect("ho from wide_reduce is always canonical"),
     );
-
-    let b_scalar: Zeroizing<Scalar> = Zeroizing::new(
+    let spend_secret: Zeroizing<Scalar> = Zeroizing::new(
         Option::from(Scalar::from_canonical_bytes(*spend_secret))
             .ok_or(CryptoError::InvalidKeyMaterial)?,
     );
-
-    let x = Zeroizing::new(*ho + *b_scalar);
-    let key_image =
-        crate::key_image::KeyImage::from_canonical_bytes((*x * hp_point).compress().to_bytes());
-
-    let mut x_bytes = zeroize::Zeroizing::new(x.to_bytes());
-
-    let result = KeyImageResult {
+    let x: Zeroizing<Scalar> = Zeroizing::new(*ho + *spend_secret);
+    let key_image = image_from_spend_scalar(&x, &hp_point);
+    Ok(KeyImageResult {
         key_image,
-        spend_secret_x: x_bytes.clone(),
-    };
-
-    x_bytes.zeroize();
-
-    Ok(result)
+        spend_secret_x: Zeroizing::new(x.to_bytes()),
+    })
 }
 
 /// Internal helper: derive ML-DSA-65 keypair from seed bytes, returning
@@ -1750,9 +1794,8 @@ mod tests {
         // its Display string) and bound the attempts, so a wording/RNG change fails
         // fast instead of hanging. `reset_*` before each scan so the probe reflects
         // only the final (pre-filter-reject) decap.
-        const MAX_ATTEMPTS: usize = 64; // P(all miss) = (1/256)^64 ≈ 0
         let mut result = None;
-        for _ in 0..MAX_ATTEMPTS {
+        for _ in 0..VIEW_TAG_MISS_SAMPLES {
             let (_, wrong_sk) = kem.keypair_generate().unwrap();
             reset_ml_kem_ss_wipe_probe();
             let r = scan_output(
@@ -1780,8 +1823,8 @@ mod tests {
             }
         }
         let result = result.expect(
-            "a wrong KEM key must hit the view-tag pre-filter reject within 64 samples \
-             (P(miss) = (1/256)^64); exhaustion means the error payload or scan path changed",
+            "a wrong KEM key must hit the view-tag pre-filter reject within the sample bound; \
+             exhaustion means the error payload or scan path changed",
         );
 
         assert!(result.is_err(), "scan with wrong KEM key must fail");

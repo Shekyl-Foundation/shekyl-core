@@ -17,7 +17,7 @@
 
 use hkdf::Hkdf;
 use sha2::Sha512;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use fips204::ml_dsa_65;
 
@@ -209,37 +209,72 @@ pub struct OutputSecrets {
     pub ed25519_pqc_seed: [u8; 32],
 }
 
+/// `ho` and `y` for one output: `O = ho·G + B + y·T`.
+///
+/// The key image is `(ho + b)·Hp(O)`. The amount key, the commitment mask
+/// and the signature seeds are the rest of [`OutputSecrets`], and a caller
+/// that only opens the output does not derive them. `ho` and `y` are the
+/// same two scalars [`derive_output_secrets`] stores.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub(crate) struct OutputOpening {
+    /// `O`'s coefficient of `G`, before the spend key `b`.
+    pub ho: [u8; 32],
+    /// `O`'s coefficient of `T`.
+    pub y: [u8; 32],
+}
+
+fn output_prk(combined_ss: &[u8]) -> Hkdf<Sha512> {
+    Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss)
+}
+
+/// `ho` and `y` over one PRK. Both are wide-reduced scalars. A zero scalar
+/// is an HKDF failure, not an output.
+fn opening_from(prk: &Hkdf<Sha512>, output_index: u64) -> OutputOpening {
+    let opening = OutputOpening {
+        ho: expand_to_scalar(prk, LABEL_OUTPUT_X, output_index),
+        y: expand_to_scalar(prk, LABEL_OUTPUT_Y, output_index),
+    };
+    assert!(
+        opening.ho != [0u8; 32],
+        "HKDF produced zero ho scalar -- implementation bug"
+    );
+    assert!(
+        opening.y != [0u8; 32],
+        "HKDF produced zero y scalar -- implementation bug"
+    );
+    opening
+}
+
+/// [`OutputOpening`] for `combined_ss` at `output_index`.
+///
+/// `combined_ss` is the 64-byte OKM from [`crate::kem::combine_shared_secrets`]
+/// on the production path. Any length is accepted (HKDF-Extract handles
+/// variable-length IKM).
+pub(crate) fn derive_output_opening(combined_ss: &[u8], output_index: u64) -> OutputOpening {
+    opening_from(&output_prk(combined_ss), output_index)
+}
+
 /// Derive all per-output secrets from the combined KEM shared secret.
 ///
 /// `combined_ss` is the 64-byte OKM from the private `kem::combine_shared_secrets`
 /// on the production scan path. Any length is accepted here (HKDF-Extract
 /// handles variable-length IKM); test vectors may supply synthetic IKM directly.
+/// `ho` and `y` are [`derive_output_opening`]'s.
 pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSecrets {
-    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
-
-    let ho = expand_to_scalar(&hk, LABEL_OUTPUT_X, output_index);
-    let y = expand_to_scalar(&hk, LABEL_OUTPUT_Y, output_index);
-    let z = expand_to_scalar(&hk, LABEL_OUTPUT_MASK, output_index);
-    let k_amount = expand_32(&hk, LABEL_OUTPUT_AMOUNT_KEY, output_index);
-    let view_tag_combined = expand_first_byte(&hk, LABEL_OUTPUT_VIEW_TAG_COMBINED, output_index);
-    let amount_tag = expand_first_byte(&hk, LABEL_OUTPUT_AMOUNT_TAG, output_index);
-    let k_label = expand_32(&hk, LABEL_OUTPUT_LABEL_KEY, output_index);
-    let label_tag = expand_first_byte(&hk, LABEL_OUTPUT_LABEL_TAG, output_index);
-    let ml_dsa_seed = expand_32(&hk, LABEL_OUTPUT_PQC, output_index);
-    let ed25519_pqc_seed = expand_32(&hk, LABEL_OUTPUT_PQC_ED25519, output_index);
-
-    assert!(
-        ho != [0u8; 32],
-        "HKDF produced zero ho scalar -- implementation bug"
-    );
-    assert!(
-        y != [0u8; 32],
-        "HKDF produced zero y scalar -- implementation bug"
-    );
+    let prk = output_prk(combined_ss);
+    let opening = opening_from(&prk, output_index);
+    let z = expand_to_scalar(&prk, LABEL_OUTPUT_MASK, output_index);
+    let k_amount = expand_32(&prk, LABEL_OUTPUT_AMOUNT_KEY, output_index);
+    let view_tag_combined = expand_first_byte(&prk, LABEL_OUTPUT_VIEW_TAG_COMBINED, output_index);
+    let amount_tag = expand_first_byte(&prk, LABEL_OUTPUT_AMOUNT_TAG, output_index);
+    let k_label = expand_32(&prk, LABEL_OUTPUT_LABEL_KEY, output_index);
+    let label_tag = expand_first_byte(&prk, LABEL_OUTPUT_LABEL_TAG, output_index);
+    let ml_dsa_seed = expand_32(&prk, LABEL_OUTPUT_PQC, output_index);
+    let ed25519_pqc_seed = expand_32(&prk, LABEL_OUTPUT_PQC_ED25519, output_index);
 
     OutputSecrets {
-        ho,
-        y,
+        ho: opening.ho,
+        y: opening.y,
         z,
         k_amount,
         view_tag_combined,
@@ -260,10 +295,10 @@ pub fn derive_multisig_key_hashes_key(
     combined_ss: &[u8],
     output_index: u64,
 ) -> zeroize::Zeroizing<[u8; 32]> {
-    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
+    let prk = output_prk(combined_ss);
     let mut out = zeroize::Zeroizing::new([0u8; 32]);
     expand_32_into(
-        &hk,
+        &prk,
         LABEL_OUTPUT_MULTISIG_KEY_HASHES,
         output_index,
         &mut out,
@@ -423,6 +458,20 @@ mod tests {
             *a,
             *derive_group_transport_secret(Network::Testnet, &[2; 32])
         );
+    }
+
+    /// The key-image path derives only the opening. Those two scalars are
+    /// the ones the full secret carries, at the same index.
+    #[test]
+    fn the_opening_is_the_secrets_ho_and_y() {
+        let shared_secret = [0xab; 64];
+        const OUTPUT_INDEX: u64 = 7;
+        let secrets = derive_output_secrets(&shared_secret, OUTPUT_INDEX);
+        let opening = derive_output_opening(&shared_secret, OUTPUT_INDEX);
+        assert_eq!(opening.ho, secrets.ho);
+        assert_eq!(opening.y, secrets.y);
+        let next = derive_output_opening(&shared_secret, OUTPUT_INDEX + 1);
+        assert_ne!(next.ho, opening.ho);
     }
 
     #[test]
