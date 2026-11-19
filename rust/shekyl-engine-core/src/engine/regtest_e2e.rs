@@ -123,13 +123,15 @@ fn log_tail(log_path: &std::path::Path) -> String {
 /// The persona answers a read only when its anchor is within
 /// `PASS_ANCHOR_LAG_BLOCKS` (`L`) of the persona's own view of the tip, and
 /// that view is the daemon's tip as of the last refresh: up to one
-/// `tip_refresh_interval` old (`stake_engine/serving/daemon_tip.rs`). A read
-/// in flight while the next block is mined lags one more, so the walk mines
-/// at most `L − 1` blocks per refresh interval (Rick, 2026-11-19): ten
-/// seconds a block at the 120 s target. At five seconds the persona's view
-/// fell six blocks behind and a valid anchor could miss its gate twice, a
+/// `tip_refresh_interval` old (`stake_engine/serving/daemon_tip.rs`). While
+/// a window is open, a read in flight while the next block is mined lags
+/// one more, so this wait is the refresh interval divided by `L − 1`: ten
+/// seconds a block at the 120 s target. At five seconds an open window put
+/// six blocks between refreshes and a valid anchor could miss its gate, a
 /// failed read the chain then counts. The pace is derived, so a change to
-/// the refresh interval or to `L` moves it.
+/// the refresh interval or to `L` moves it. Blocks mined before a window
+/// opens are not waited on: the walk first watches a whole epoch out, and
+/// this pace is the open window's.
 ///
 /// The producer's reads fit inside it: up to three a draw, at least
 /// `READ_SPACING` (30) blocks apart, each after a start delay drawn below
@@ -148,10 +150,11 @@ fn read_window_pace(daa_target_seconds: u64) -> Duration {
     refresh / blocks_per_refresh
 }
 
-/// [`read_window_pace`] keeps the persona inside its anchor gate: in one tip
-/// refresh interval the walk mines fewer blocks than the gate's lag `L`,
+/// [`read_window_pace`] is the wait while a read window is open. In one tip
+/// refresh interval that wait covers fewer blocks than the gate's lag `L`,
 /// leaving one for a read in flight. Pinned at the chain's block target,
-/// where it is ten seconds a block.
+/// where the wait is ten seconds a block. Blocks mined before a window
+/// opens are outside this pace.
 #[test]
 fn the_read_window_pace_keeps_the_persona_inside_its_anchor_gate() {
     let target = shekyl_economics::economic_params().daa_target_seconds;
