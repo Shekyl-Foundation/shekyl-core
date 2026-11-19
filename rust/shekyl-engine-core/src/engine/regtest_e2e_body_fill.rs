@@ -45,10 +45,12 @@ use super::shard::{close_shard, fill_closed_shard, price_closed_shard};
 type Shared = Arc<RwLock<super::super::Engine<super::super::SoloSigner>>>;
 
 const SLOT: u32 = 0;
-/// One epoch holds both fills and the stake: every close below lands in
-/// epoch 0, so every shard's freeze epoch is epoch 1 and its bodies are
-/// discarded at block `2 · SEB`.
-const SEB: u64 = 1_000;
+/// One epoch holds both closes and the stake: shard 0 closes near block 405
+/// and shard 1, after the supply its spends are mined from, near 1330. Both
+/// land in epoch 0, so each shard's freeze epoch, the pull window
+/// (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2), is epoch 1, and the node discards
+/// their bodies at block `2 · SEB`. The walk asserts the closes land there.
+const SEB: u64 = 1_500;
 /// The shards' finality wait, and the P-scan's own test horizon.
 const REORG_CAP: u64 = PSCAN_TEST_REORG_DEPTH;
 const SCHEDULE: RegtestSchedule = RegtestSchedule {
@@ -57,8 +59,9 @@ const SCHEDULE: RegtestSchedule = RegtestSchedule {
 };
 /// Persona funding above `floor + bond fee`.
 const FUNDING_CUSHION: u64 = 12_000_000_000;
-/// A P-scan over a few thousand blocks in a debug build.
-const LONG_SCAN: Duration = Duration::from_secs(1800);
+/// A P-scan over some fifteen hundred blocks in a debug build, with room:
+/// it bounds a hang, it does not time the scan.
+const LONG_SCAN: Duration = Duration::from_secs(3600);
 
 fn shard(n: u64) -> ShardId {
     ShardId::from_raw(n)
@@ -142,9 +145,11 @@ async fn holds(arc: &Shared, target: ShardId) -> bool {
 }
 
 /// Run the P-scan until its frontier reaches the finality horizon at the
-/// daemon's tip, so what is final is known.
+/// daemon's tip, so what is final is known. The horizon is the scan's own
+/// exclusive end, the block count less the cap (`pscan/task.rs`), which is
+/// also the bound the fill checks the scan against.
 async fn scan_to_the_horizon(daemon: &RegtestDaemon, arc: &Shared, pscan_seal: &std::path::Path) {
-    let needed = (daemon.height().await + 1).saturating_sub(REORG_CAP);
+    let needed = daemon.height().await.saturating_sub(REORG_CAP);
     refresh(arc).await;
     pscan_until_within(
         arc,
@@ -341,18 +346,31 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
     )
     .await;
     assert!(
+        zero.close_height < SEB && one.close_height < SEB,
+        "both shards close in epoch 0 (at {} and {}), so epoch 1 is both freeze epochs: \
+         SEB must exceed the closes",
+        zero.close_height,
+        one.close_height
+    );
+    assert!(
         !holds(&arc, shard(1)).await,
         "nothing has filled shard 1 yet"
     );
+    // Into shard 1's freeze epoch, the pull window, and pull there.
+    let count = daemon.height().await;
+    if count <= SEB {
+        daemon.generate_blocks(SEB + 1 - count).await;
+    }
     reconcile(&daemon, &arc, &mut state, &alarms).await;
     assert!(
         holds_verified(&arc, shard(1)).await,
         "the pass pulled the newly final shard"
     );
     assert_eq!(alarms.list(), [], "a routine pull is not an alarm");
+    let tip = daemon.height().await - 1;
     assert!(
-        daemon.height().await < 2 * SEB,
-        "the pull ran inside shard 1's freeze epoch"
+        (SEB..2 * SEB).contains(&tip),
+        "the pull ran inside shard 1's freeze epoch (tip {tip})"
     );
 
     // (4) A body that does not verify.
