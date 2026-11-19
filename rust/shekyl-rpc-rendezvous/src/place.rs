@@ -75,7 +75,7 @@ const MACOS_SERVICE_RENDEZVOUS: &str = "/Library/Application Support/Shekyl";
 
 /// The fixed rendezvous directory for `os` (`std::env::consts::OS`), or
 /// `None` when that operating system has none. Windows has none: there the
-/// service's record is a registry value ([`ServiceRecordAt::Registry`];
+/// service's record is a registry value (`ServiceRecordAt::Registry`;
 /// Rick, 2026-11-18).
 fn fixed_service_rendezvous(os: &str) -> Option<&'static str> {
     match os {

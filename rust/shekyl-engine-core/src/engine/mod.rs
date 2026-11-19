@@ -5,7 +5,7 @@
 
 //! Shekyl engine domain orchestrator.
 //!
-//! `shekyl-engine-core::engine` is the home of the [`Engine`](Engine) type
+//! `shekyl-engine-core::engine` is the home of the [`Engine`] type
 //! that composes the file envelope ([`shekyl_engine_file::WalletFile`]),
 //! identity material ([`shekyl_crypto_pq::account::AllKeysBlob`]), the
 //! ledger ([`crate::engine::local_ledger::LocalLedger`] aggregating
@@ -19,14 +19,14 @@
 //! surface into a single audited domain orchestrator. `Engine<S, D, L>`
 //! is generic over signer / daemon / ledger trait implementors, with
 //! defaults that preserve the existing concrete-typed shape for
-//! production callers — the CLI ([`shekyl-cli`]) and the JSON-RPC
-//! server ([`shekyl-wallet-rpc`]) sit on top of this surface, never
+//! production callers — the CLI (`shekyl-cli`) and the JSON-RPC
+//! server (`shekyl-wallet-rpc`) sit on top of this surface, never
 //! reaching around it.
 //!
 //! # What this module rejects on purpose
 //!
 //! The Phase 1 design log
-//! ([`docs/V3_WALLET_DECISION_LOG.md`]) names every monero-era pattern
+//! (`docs/V3_WALLET_DECISION_LOG.md`) names every monero-era pattern
 //! that is *not* being carried forward; the briefest summary, kept here
 //! so the rejection survives "while we're here" temptations:
 //!
@@ -58,13 +58,13 @@
 //! # Cross-cutting locks honored
 //!
 //! Every cross-cutting lock recorded in the in-tree decision log
-//! ([`docs/V3_WALLET_DECISION_LOG.md`]) is enforced at the type layer
+//! (`docs/V3_WALLET_DECISION_LOG.md`) is enforced at the type layer
 //! in this module:
 //!
 //! 1. **Async runtime** — caller-provided multi-threaded `tokio`. IO-bound
 //!    methods are `async`; pure compute stays sync.
 //! 2. **Error types** — per-domain enums in [`error`], unified at the
-//!    RPC boundary by [`shekyl-wallet-rpc`].
+//!    RPC boundary by `shekyl-wallet-rpc`.
 //! 3. **Locking discipline** — `&self` queries / `&mut self` mutations.
 //!    The RPC binary wraps in [`Arc<RwLock<Engine>>`].
 //! 4. **`PendingTx` lifetime** — process-local, chain-state-tagged,
@@ -83,9 +83,9 @@
 //!    a redacting subscriber field formatter (subscriber layer). Lands
 //!    with the `tracing` wiring commit.
 //! 10. **KAT regression** — plain `cargo test --workspace`,
-//!     [`docs/test_vectors/`] under `CODEOWNERS`.
+//!     `docs/test_vectors/` under `CODEOWNERS`.
 //! 11. **Decision Log** — every binding sub-decision in this module
-//!     ships an entry in [`docs/V3_WALLET_DECISION_LOG.md`].
+//!     ships an entry in `docs/V3_WALLET_DECISION_LOG.md`.
 //!
 //! # Status (as of this commit)
 //!
@@ -191,102 +191,102 @@ pub(crate) mod curve_tree_decode;
 // Native `ScannableBlock` fetch over the `shekyl-wire` parse — the engine-side
 // replacement for the legacy `shekyl_rpc_client::Rpc::get_scannable_block_by_*` path.
 // Backs `DaemonEngine::fetch_scannable_block`'s default impl.
-/// GF-4b (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.4, §5 item 1): the
-/// `BackingSet` constructor-mint gate — the sole enforcement layer for
-/// backing-lineage eligibility (consensus is lineage-blind and spend-blind
-/// for backing) — and the C-1 designated-backing selector
-/// (`designate_backing`, most-recent-eligible, arity-1), which consumes
-/// candidates exclusively through it and owns the Q11 fee-exclusion
-/// (`DesignatedBacking::fee_sweep`).
+// GF-4b (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.4, §5 item 1): the
+// `BackingSet` constructor-mint gate — the sole enforcement layer for
+// backing-lineage eligibility (consensus is lineage-blind and spend-blind
+// for backing) — and the C-1 designated-backing selector
+// (`designate_backing`, most-recent-eligible, arity-1), which consumes
+// candidates exclusively through it and owns the Q11 fee-exclusion
+// (`DesignatedBacking::fee_sweep`).
 pub(crate) mod backing_set;
 pub mod balance_view;
-/// F-D1 amount stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): the drain amount
-/// is chosen from `{user target, cadence, RNG}` and an aggregate-scalar
-/// affordability check only — a guarded module the M1 import-check arm keeps
-/// blind to the per-output reward vector.
+// F-D1 amount stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): the drain amount
+// is chosen from `{user target, cadence, RNG}` and an aggregate-scalar
+// affordability check only — a guarded module the M1 import-check arm keeps
+// blind to the per-output reward vector.
 pub(crate) mod block_fetch;
-/// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
-/// `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
-/// funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
-/// sweep semantics), and the assemble path's typed failure surface.
+// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
+// `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
+// funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
+// sweep semantics), and the assemble path's typed failure surface.
 pub(crate) mod bond_assembly;
-/// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
-/// persist-before-return via an independent `PendingPostStore`).
+// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
+// persist-before-return via an independent `PendingPostStore`).
 pub(crate) mod bond_orchestrator;
-/// SA-R-6 bond watch: shared `Input::BondPost` lift + merge sighting adoption.
+// SA-R-6 bond watch: shared `Input::BondPost` lift + merge sighting adoption.
 pub(crate) mod bond_watch;
-/// The engine cadence driver (`ENGINE_CADENCE_DRIVER.md`): the one
-/// engine-owned loop scheduling the non-interactive maintenance legs
-/// (submit lifecycle, serving liveness, per-epoch claim, terminal-reject
-/// prune/resubmit). Chain-progress tick base + wall-clock watchdog;
-/// `Weak` upgrade per tick so close is never blocked.
+// The engine cadence driver (`ENGINE_CADENCE_DRIVER.md`): the one
+// engine-owned loop scheduling the non-interactive maintenance legs
+// (submit lifecycle, serving liveness, per-epoch claim, terminal-reject
+// prune/resubmit). Chain-progress tick base + wall-clock watchdog;
+// `Weak` upgrade per tick so close is never blocked.
 pub(crate) mod cadence;
-/// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
-/// emission-claim **request path** — activate the claimant slot, assemble via
-/// `claim_orchestrator`, dispatch through the audited posture→submitter choke
-/// point. Scheduling policy is the cadence driver's epoch-claim leg
-/// (`ENGINE_CADENCE_DRIVER.md` §4).
+// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
+// emission-claim **request path** — activate the claimant slot, assemble via
+// `claim_orchestrator`, dispatch through the audited posture→submitter choke
+// point. Scheduling policy is the cadence driver's epoch-claim leg
+// (`ENGINE_CADENCE_DRIVER.md` §4).
 pub(crate) mod claim_dispatch;
-/// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
-/// §8): the fetch → designate → fee-sweep → path-assembly →
-/// `AssembleEmissionClaim` pipeline that prepares the operands the
-/// `StakeEngine` handler validates and signs against. Returns the reply
-/// unbroadcast (CB-3: dispatch is the `claim_dispatch` seam).
+// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
+// §8): the fetch → designate → fee-sweep → path-assembly →
+// `AssembleEmissionClaim` pipeline that prepares the operands the
+// `StakeEngine` handler validates and signs against. Returns the reply
+// unbroadcast (CB-3: dispatch is the `claim_dispatch` seam).
 pub(crate) mod claim_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;
 pub(crate) mod dispatch_durability;
 pub(crate) mod drain_amount;
-/// F-D2 drain assembly (`ARCHIVAL_P_DRAIN.md` §DS-PR-1): the `P`→principal
-/// value-out transaction builder. Produces a **transfer-shaped** tx (two
-/// confidential outputs — principal payment + `P`-space change) byte-identical
-/// to a modal 2-out transfer (T-DS-6 ∧ T-DS-7), by reusing the transfer path's
-/// output primitive (`sign_bridge::build_output`), the bond/claim fee-sweep
-/// spend leg (`stake_engine::prepare_funding_inputs`), and the plain-transfer
-/// prefix/prove/PQC-auth calls with empty `extra_inputs` and spend-only auths.
+// F-D2 drain assembly (`ARCHIVAL_P_DRAIN.md` §DS-PR-1): the `P`→principal
+// value-out transaction builder. Produces a **transfer-shaped** tx (two
+// confidential outputs — principal payment + `P`-space change) byte-identical
+// to a modal 2-out transfer (T-DS-6 ∧ T-DS-7), by reusing the transfer path's
+// output primitive (`sign_bridge::build_output`), the bond/claim fee-sweep
+// spend leg (`stake_engine::prepare_funding_inputs`), and the plain-transfer
+// prefix/prove/PQC-auth calls with empty `extra_inputs` and spend-only auths.
 pub(crate) mod drain_assembly;
-/// DS-PR-2's CB-3 dispatch seam (`ARCHIVAL_DRAIN_SEND_FD2.md` §6, the
-/// `claim_dispatch` sibling): the Engine-side drain **request path** — resolve
-/// the principal destination, assemble via `drain_orchestrator`, persist the
-/// `PendingDrain` before any send, dispatch through the persona-transport
-/// choke point (T-DS-2). Scheduling stays external.
+// DS-PR-2's CB-3 dispatch seam (`ARCHIVAL_DRAIN_SEND_FD2.md` §6, the
+// `claim_dispatch` sibling): the Engine-side drain **request path** — resolve
+// the principal destination, assemble via `drain_orchestrator`, persist the
+// `PendingDrain` before any send, dispatch through the persona-transport
+// choke point (T-DS-2). Scheduling stays external.
 pub(crate) mod drain_dispatch;
-/// WI-RPC-5: the **public** drain façade over the CB-3 dispatch seam — one
-/// embedder-callable `drain_to_principal(payment)` with no slot / fee /
-/// destination parameters (type-level active-persona restriction; the
-/// canonical P-lane floor fee and the SP-R0 witness are quoted/minted
-/// internally). The wallet-RPC `drain` handler is the production caller.
+// WI-RPC-5: the **public** drain façade over the CB-3 dispatch seam — one
+// embedder-callable `drain_to_principal(payment)` with no slot / fee /
+// destination parameters (type-level active-persona restriction; the
+// canonical P-lane floor fee and the SP-R0 witness are quoted/minted
+// internally). The wallet-RPC `drain` handler is the production caller.
 pub(crate) mod drain_facade;
-/// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
-/// §12.3): the sole drain-path site holding the funding records, projecting
-/// them into the aggregate scalar + stripped candidate operands the guarded
-/// stages consume, and composing the three stages ([`drain_orchestrator::plan_drain`]).
-/// Carries the F-D2 core-side aggregate-only balance surface
-/// ([`drain_orchestrator::DrainBalance`]). Public: the drain planner is the
-/// API the eventual drain command/actor calls.
+// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
+// §12.3): the sole drain-path site holding the funding records, projecting
+// them into the aggregate scalar + stripped candidate operands the guarded
+// stages consume, and composing the three stages ([`drain_orchestrator::plan_drain`]).
+// Carries the F-D2 core-side aggregate-only balance surface
+// ([`drain_orchestrator::DrainBalance`]). Public: the drain planner is the
+// API the eventual drain command/actor calls.
 pub mod drain_orchestrator;
-/// F-D2 aggregate drain-balance read (`ARCHIVAL_DRAIN_SEND_FD2.md`): the
-/// engine-side "how much is drainable?" accessor a UI polls. Lifts the sealed
-/// `P` funding set, anchors the canonical send-path reference
-/// ([`bond_orchestrator::anchored_reference_block`], the same helper the drain
-/// itself anchors through), and returns the aggregate spendable scalar. Its
-/// [`drain_read::DrainBalanceReadError`] is two-armed by design (transient
-/// "syncing" vs. non-transient state fault) so the read never renders a
-/// misleading zero.
+// F-D2 aggregate drain-balance read (`ARCHIVAL_DRAIN_SEND_FD2.md`): the
+// engine-side "how much is drainable?" accessor a UI polls. Lifts the sealed
+// `P` funding set, anchors the canonical send-path reference
+// ([`bond_orchestrator::anchored_reference_block`], the same helper the drain
+// itself anchors through), and returns the aggregate spendable scalar. Its
+// [`drain_read::DrainBalanceReadError`] is two-armed by design (transient
+// "syncing" vs. non-transient state fault) so the read never renders a
+// misleading zero.
 pub(crate) mod drain_read;
-/// F-D1 select stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): lineage-blind coin
-/// selection over the stripped `{output_id, amount, spendable_height}`
-/// vector — a guarded module the M1 import-check arm keeps blind to the
-/// lineage tag and the persisted funding record.
+// F-D1 select stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): lineage-blind coin
+// selection over the stripped `{output_id, amount, spendable_height}`
+// vector — a guarded module the M1 import-check arm keeps blind to the
+// lineage tag and the persisted funding record.
 pub(crate) mod drain_select;
 pub mod held_sends;
-/// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
-/// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
-/// never falls back to a remote/third-party node). §2b build invariant 3.
+// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
+// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
+// never falls back to a remote/third-party node). §2b build invariant 3.
 pub(crate) mod posture;
-/// SP-T2 (DQ-T2.2): the per-`P` RPC-over-Tor transport (`PRpc`) — an `Rpc` impl
-/// over `shekyl-p-transport`'s `PTorClient`. Confines the async/sync bridge; all
-/// `ureq`/agent construction stays in `shekyl-p-transport` (§2b invariant 1).
+// SP-T2 (DQ-T2.2): the per-`P` RPC-over-Tor transport (`PRpc`) — an `Rpc` impl
+// over `shekyl-p-transport`'s `PTorClient`. Confines the async/sync bridge; all
+// `ureq`/agent construction stays in `shekyl-p-transport` (§2b invariant 1).
 pub(crate) mod prpc;
 // C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays
 // the sim-recorded `RecordedChainFixture` through the real
@@ -300,13 +300,13 @@ mod daemon_observability;
 #[cfg(test)]
 mod economics_differential;
 pub(crate) mod economics_snapshot;
-/// Emission claim assembly (`EMISSION_CLAIM_BUILDER.md` §2, PR 2): the pure,
-/// KAT-able derivation/assembly core the PR-3 `StakeEngine` handler drives.
+// Emission claim assembly (`EMISSION_CLAIM_BUILDER.md` §2, PR 2): the pure,
+// KAT-able derivation/assembly core the PR-3 `StakeEngine` handler drives.
 pub(crate) mod emission_claim;
-/// Emission claim-source RPC decode (`EMISSION_CLAIM_BUILDER.md` §7, PR 1):
-/// the wallet-side twin of the daemon's claim-source serializer, producing
-/// the verify-side `EmissionEpochSource`/`ClaimantBondRecord` views the
-/// PR-2 assembly consumes.
+// Emission claim-source RPC decode (`EMISSION_CLAIM_BUILDER.md` §7, PR 1):
+// the wallet-side twin of the daemon's claim-source serializer, producing
+// the verify-side `EmissionEpochSource`/`ClaimantBondRecord` views the
+// PR-2 assembly consumes.
 pub(crate) mod emission_source;
 pub mod error;
 #[cfg(any(test, feature = "test-helpers"))]
@@ -318,7 +318,7 @@ pub(crate) mod fee_policy;
 // WI-RPC-1: read-only fee/weight query projection for the wallet-RPC surface.
 pub mod fee_query;
 pub(crate) mod fee_snapshot;
-/// The ladder fee a leftover pays, and the change that fee leaves.
+// The ladder fee a leftover pays, and the change that fee leaves.
 pub(crate) mod fee_variant;
 /// GF-7 leg-(b) sealing re-run harness (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`
 /// §19.8): drives the **production** P-scan task + dispatch driver
@@ -349,27 +349,27 @@ pub mod output_selector;
 pub(crate) mod ownership;
 pub mod payment_requests;
 pub mod pending;
-/// Pending-post family coordination: the seal write lock + the foreground
-/// gauge the epoch-claim leg yields to (`ENGINE_CADENCE_DRIVER.md` §3).
+// Pending-post family coordination: the seal write lock + the foreground
+// gauge the epoch-claim leg yields to (`ENGINE_CADENCE_DRIVER.md` §3).
 pub(crate) mod pending_post_gate;
 pub(crate) mod principal_stake;
-/// WI-RPC-3 proof-generation bridge: the crypto bodies behind the
-/// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
+// WI-RPC-3 proof-generation bridge: the crypto bodies behind the
+// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
 pub(crate) mod proof_bridge;
 pub mod proofs;
 pub(crate) mod proofs_chain_facts;
 pub(crate) mod pscan;
 pub mod refresh;
-/// Per-engine single-flight slot shared by `start_refresh` / `start_rescan`.
+// Per-engine single-flight slot shared by `start_refresh` / `start_rescan`.
 pub(crate) mod refresh_slot;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
 /// a real `shekyld --regtest` and drives the production [`Engine`] against it;
 /// every live-daemon test is `#[ignore]`d and requires `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
-/// Finality comparison shared by the producer fork walk and curve-tree ingest.
+// Finality comparison shared by the producer fork walk and curve-tree ingest.
 pub(crate) mod reorg_finality;
-/// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
+// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
 pub(crate) mod rescan;
 #[cfg(test)]
 mod retire_walk;
@@ -378,17 +378,17 @@ pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;
 pub mod signer;
 pub(crate) mod signing_assembly;
-/// PR 2b/2c-2a (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10.2): the
-/// archival staking actor that owns the pre-derived archival personas `P` (the
-/// Model D derive-forward set), not the seed. Landed inert — exercised by tests
-/// only; the `assemble()` spawn and the JoinMarket request path (2c-2b) wire it
-/// into the lifecycle.
+// PR 2b/2c-2a (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §10.2): the
+// archival staking actor that owns the pre-derived archival personas `P` (the
+// Model D derive-forward set), not the seed. Landed inert — exercised by tests
+// only; the `assemble()` spawn and the JoinMarket request path (2c-2b) wire it
+// into the lifecycle.
 pub(crate) mod stake_engine;
 pub mod stake_facade;
-/// PR 2c-2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, typed contract #1): the
-/// `PersistedBondTicket` persist-before-use typestate and its sole producer
-/// `Engine::persist_bond_record`. Inert until 2c-2b's `plan_bond_post` consumes the
-/// ticket; produced here so the cross-split contract is an unforgeable type.
+// PR 2c-2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, typed contract #1): the
+// `PersistedBondTicket` persist-before-use typestate and its sole producer
+// `Engine::persist_bond_record`. Inert until 2c-2b's `plan_bond_post` consumes the
+// ticket; produced here so the cross-split contract is an unforgeable type.
 pub(crate) mod stake_persist;
 /// Bond-PR 2c-2b (Round 2): typed timing-seam newtypes — `BlockSpan`, `SebSpan`,
 /// `NetworkGap`, `EconomicSpacing`, and their named default constants. Prevents
@@ -397,30 +397,30 @@ pub(crate) mod stake_persist;
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
 pub mod submit;
-/// Transfer / pending-tx workflow (extracted from the former monofile
-/// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
+// Transfer / pending-tx workflow (extracted from the former monofile
+// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
 pub mod transfer;
-/// PR-C: the composed `unstake` — two named actions on `StakeFacade`.
+// PR-C: the composed `unstake` — two named actions on `StakeFacade`.
 pub mod unstake_facade;
 // WI-RPC-1: read-only staked-balance/staked-output aggregation over the
 // authoritative sealed pscan/pending records, for the wallet-RPC surface.
-/// The `submit_release` dispatch seam (PR-P4): seal a `PendingRelease`, then
-/// the persona-transport choke point; driven by `StakeFacade::unstake` (PR-C).
+// The `submit_release` dispatch seam (PR-P4): seal a `PendingRelease`, then
+// the persona-transport choke point; driven by `StakeFacade::unstake` (PR-C).
 pub(crate) mod release_dispatch;
 pub mod staking_outcomes;
 pub mod staking_read;
-/// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
-/// driver — the wallet-side actor that lifts the [`submit_watchdog`]
-/// kernel (projection → escape ladder → resubmit-same-bytes probe →
-/// outcome) and executes the F40 targeted re-scan with its R2
-/// fruitless-rescan breaker. Thin per-tick step around audited kernel
-/// decisions; cadence is owned by the engine cadence driver
-/// ([`cadence`] leg 1, `ENGINE_CADENCE_DRIVER.md`).
+// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
+// driver — the wallet-side actor that lifts the [`submit_watchdog`]
+// kernel (projection → escape ladder → resubmit-same-bytes probe →
+// outcome) and executes the F40 targeted re-scan with its R2
+// fruitless-rescan breaker. Thin per-tick step around audited kernel
+// decisions; cadence is owned by the engine cadence driver
+// ([`cadence`] leg 1, `ENGINE_CADENCE_DRIVER.md`).
 pub(crate) mod submit_lifecycle;
-/// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
-/// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
-/// privacy-tiered escape ladder with presence branching, daemon-health
-/// gating, and the F35 horizon bound. Driven by [`submit_lifecycle`].
+// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
+// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
+// privacy-tiered escape ladder with presence branching, daemon-health
+// gating, and the F35 horizon bound. Driven by [`submit_lifecycle`].
 pub(crate) mod submit_watchdog;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer
 /// folds the real paths the curve-tree client assembled (`assemble_paths`).
@@ -626,7 +626,7 @@ pub struct Engine<
     /// [`WalletFile::zeroize_transient_file_kek`].
     prefs_hmac_key: shekyl_engine_prefs::PrefsHmacKey,
 
-    /// Handle to the wallet's [`KeyActor`](super::key_actor::KeyActor), which
+    /// Handle to the wallet's [`KeyActor`](crate::engine::key_actor::KeyActor), which
     /// owns the full [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) inside its own task (Stage 2,
     /// `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`). No `&AllKeysBlob` is
     /// reachable from the orchestrator after `assemble`: secret-touching key
@@ -646,7 +646,7 @@ pub struct Engine<
     // the actor and zeroizes the blob (`LocalSigner` carries a clone).
     key: KeyEngineHandle,
 
-    /// Handle to the wallet's [`CurveTreeActor`](super::curve_tree_actor::CurveTreeActor),
+    /// Handle to the wallet's [`CurveTreeActor`](crate::engine::curve_tree_actor::CurveTreeActor),
     /// which owns the FCMP++ [`CurveTreeClient`](shekyl_curve_tree::CurveTreeClient)
     /// — the `redb`-backed leaf store living beside the wallet files (CT-5,
     /// `docs/design/CT5_ENGINE_WIRING.md` §3.1). Opened and spawned in
@@ -673,8 +673,8 @@ pub struct Engine<
     /// until the Ledger actor lands, §8.1); it derives the per-output
     /// `OutputHandle` from the view secret carried here instead. This is the
     /// *second* construction-time view-secret holder — the first is
-    /// [`ViewMaterial`](super::view_material::ViewMaterial), moved into
-    /// [`LocalRefresh`](super::local_refresh::LocalRefresh) for scanning. The
+    /// [`ViewMaterial`], moved into
+    /// [`LocalRefresh`] for scanning. The
     /// two are deliberately distinct types so neither is mistaken for a clone
     /// of the other; both are Stage-2-minimal pending the 6-ii re-route.
     merge_view_secret: HandleDerivationViewSecret,
@@ -688,13 +688,13 @@ pub struct Engine<
     ///   transfers, bookkeeping (primary label and address book), tx
     ///   metadata (`tx_keys`, scanned pool
     ///   txs), and the sync-state block. **Reservations do not live
-    ///   here** — see [`local_pending_tx`](crate::engine::local_pending_tx)
+    ///   here** — see [`local_pending_tx`]
     ///   below (reservations live in `LocalPendingTx`, not in the ledger).
     /// - The [`shekyl_engine_state::LedgerIndexes`] — runtime-only
     ///   indexes derived from chain replay (key-image / pubkey lookup
     ///   maps, staker-pool accrual aggregate). Per the
     ///   `RuntimeWalletState audit` Decision Log entry (2026-04-25),
-    ///   these fields are reconstructible from the [`WalletLedger`]
+    ///   these fields are reconstructible from the [`WalletLedger`](shekyl_engine_state::wallet_ledger::WalletLedger)
     ///   plus daemon block replay and are never persisted; they are
     ///   rebuilt at every `Engine::open*` and mutated together with
     ///   the `WalletLedger` by `apply_scan_result`.
@@ -710,8 +710,8 @@ pub struct Engine<
     ledger: Arc<L>,
 
     /// **Transfer workflow handle** — the production default is
-    /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) in
-    /// [`transfer`](transfer). Multi-step send (build / submit / discard /
+    /// [`LocalPendingTx`] in
+    /// [`transfer`]. Multi-step send (build / submit / discard /
     /// re-anchor) is owned by that implementor, not by inherent methods on
     /// `Engine`. Prefer `self.pending.…` / `PendingTxEngine` over growing
     /// send bodies here (`ENGINE_COMPOSITION_DECOMPOSITION.md` §Transfer
@@ -720,7 +720,7 @@ pub struct Engine<
     /// Shares the same [`Arc`] ledger handle as [`Engine::ledger`] at
     /// assembly time (C6). `Engine::close` consults
     /// `outstanding_pending_txs()` and refuses with
-    /// [`OpenError::OutstandingPendingTx`](error::OpenError::OutstandingPendingTx)
+    /// [`OpenError::OutstandingPendingTx`]
     /// when any reservation is in flight.
     pub(crate) pending: P,
 
@@ -729,7 +729,7 @@ pub struct Engine<
     /// epochs, alarm latches, and F40 targeted-re-scan / R2-breaker
     /// counters that must survive across driver ticks. Not generic in
     /// `P`/`D` — the wallet surface and the daemon are lent to the driver
-    /// per tick ([`SubmitLifecycleDriver::tick`]), not owned by it.
+    /// per tick ([`SubmitLifecycleDriver::tick`](crate::engine::submit_lifecycle::SubmitLifecycleDriver::tick)), not owned by it.
     ///
     /// Wrapped in a [`tokio::sync::Mutex`] so the tick entry point
     /// ([`Engine::run_submit_lifecycle_tick`]) can hold the driver's
@@ -741,7 +741,7 @@ pub struct Engine<
         tokio::sync::Mutex<submit_lifecycle::SubmitLifecycleDriver>,
 
     /// User preferences per the layer-2 plaintext+HMAC contract in
-    /// [`docs/WALLET_PREFS.md`]. Loaded at open, saved on
+    /// `docs/WALLET_PREFS.md`. Loaded at open, saved on
     /// [`Engine::change_password`] / [`Engine::close`].
     prefs: WalletPrefs,
 
@@ -775,7 +775,7 @@ pub struct Engine<
     /// guarded) by the producer task `run_refresh_task` for the
     /// duration of one refresh. A racing `start_refresh` finds the
     /// flag set and returns
-    /// [`RefreshError::AlreadyRunning`](error::RefreshError::AlreadyRunning).
+    /// [`RefreshError::AlreadyRunning`].
     ///
     /// Independent of the cross-cutting RwLock around `Engine<S>`:
     /// the slot is its own `Arc<AtomicBool>` so the slot-claim path
@@ -787,7 +787,7 @@ pub struct Engine<
 
     /// Single-flight slots for the embedder-held open-span tasks (P-scan +
     /// serving). One field so a third task does not spend a `FIELDS_CEILING`
-    /// slot; the two flags are independent. Serving reuses [`RefreshSlot`]
+    /// slot; the two flags are independent. Serving reuses [`RefreshSlot`](crate::engine::refresh_slot::RefreshSlot)
     /// rather than a third copy of the same primitive.
     open_slots: refresh_slot::OpenTaskSlots,
 
@@ -813,7 +813,7 @@ pub struct Engine<
     /// through the trait surface. Production callers default
     /// `R = LocalRefresh`, constructed at every `Engine::create` /
     /// `Engine::open_*` site by moving a freshly-derived
-    /// [`ViewMaterial`](view_material::ViewMaterial) into
+    /// [`ViewMaterial`] into
     /// `LocalRefresh::new`.
     ///
     /// # Why `Arc<R>` rather than `R`
@@ -856,7 +856,7 @@ pub struct Engine<
     /// ([`EconomicsEngine`]).
     ///
     /// Production callers default `E = LocalEconomics`
-    /// ([`LocalEconomics`](local_economics::LocalEconomics)), constructed
+    /// ([`LocalEconomics`]), constructed
     /// at every `Engine::create` / `Engine::open_*` site (a pure
     /// constants rulebook — the claim-era chain-read seam was retired
     /// with the confidential-staking sweep).
@@ -885,7 +885,7 @@ pub struct Engine<
     #[allow(dead_code)]
     pub(crate) economics: E,
 
-    /// Handle to the wallet's [`StakeEngine`](super::stake_engine::StakeEngine),
+    /// Handle to the wallet's [`StakeEngine`](stake_engine::StakeEngine),
     /// the archival-staking actor that holds the Model-D pre-derived persona
     /// bundles (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2). `Some` only for a wallet
     /// that has staked (`StakingBlock::staking_enabled`); `None` for the
@@ -906,7 +906,7 @@ pub struct Engine<
     pub(crate) stake: Option<StakeEngineHandle>,
 
     /// Compile-time signer-kind dispatch. The actual key material lives
-    /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
+    /// behind [`Engine::key`] (for `SoloSigner`); this marker exists so
     /// the V3.1 multisig type can name distinct method signatures via
     /// associated items on [`EngineSignerKind`] without the V3.0 build
     /// paying a runtime branch on every send.
@@ -1302,7 +1302,7 @@ impl<
     /// block the merge it depends on.
     ///
     /// Available only when the pending-tx engine is the production
-    /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) (the
+    /// [`LocalPendingTx`] (the
     /// `WatchdogHost` implementor); fault-injection test wrappers that do
     /// not implement the host contract do not expose this entry point.
     pub async fn run_submit_lifecycle_tick(&self) {

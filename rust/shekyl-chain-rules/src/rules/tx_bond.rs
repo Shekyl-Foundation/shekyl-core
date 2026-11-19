@@ -140,7 +140,7 @@ impl Rule for J14 {
 ///    `parent_state_shards_from_gather` builds the same rows from the
 ///    process-latched schedule for the C++) — through the retention
 ///    crate's [`check_admission`]: the credited work at `r_market + 1`
-///    clears [`ADMISSION_MIN_WORK_MILLI`].
+///    clears [`ADMISSION_MIN_WORK_MILLI`](shekyl_archival_retention::admission::ADMISSION_MIN_WORK_MILLI).
 ///
 /// A complete tree names no shard and is admitted without a gather
 /// (`check_admission`'s dominance argument); the C++ skips the gather for
@@ -151,7 +151,7 @@ impl Rule for J14 {
 /// The first 4.J row to read a per-height record (the archival fold, through
 /// the predicate), so [`judge_bond_post`]'s fault is a [`ViewRead`] from this
 /// row on: a shard the frontier counts closed with no height that closed it
-/// is [`Corrupt::ShardCloseUnplaced`], the writer halt, never a refusal.
+/// is [`Corrupt::ShardCloseUnplaced`](crate::Corrupt::ShardCloseUnplaced), the writer halt, never a refusal.
 ///
 /// # Witness
 ///

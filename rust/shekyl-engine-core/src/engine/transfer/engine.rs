@@ -805,7 +805,7 @@ where
         Ok(pending)
     }
 
-    /// CT-5d re-anchor — **reprove** path ([`docs/design/CT5D_REANCHOR.md`] §3/§3a):
+    /// CT-5d re-anchor — **reprove** path (`docs/design/CT5D_REANCHOR.md` §3/§3a):
     /// refresh a `consumer_held` proof against a fresh reference without changing
     /// its inputs.
     ///

@@ -88,6 +88,7 @@ scripts/ci/check_relay_connector_agnostic.py	docs-gates:check-doc-links
 scripts/ci/check_release_archive_docs.py	docs-gates:check-doc-links
 scripts/ci/check_rpc_route_liveness.sh	rpc-route-liveness:rpc-route-liveness
 scripts/ci/check_rt_p4_standing.py	grep-gates:grep-gates
+scripts/ci/check_rustdoc.py	build:build-windows-msvc,rust-audit-test:rust-audit-and-test
 scripts/ci/check_seedable_rng.py	grep-gates:grep-gates
 scripts/ci/check_secret_byte_locality.py	docs-gates:check-doc-links
 scripts/ci/check_shard_fill_frozen.py	grep-gates:grep-gates

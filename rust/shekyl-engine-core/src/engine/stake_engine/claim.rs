@@ -44,7 +44,7 @@ use super::types::*;
 
 /// Assemble the **full, broadcast-ready** emission-claim transaction inside
 /// the actor (`REWARD_EMISSION_VIN_PLAN.md` §8.0.2/§8.0.3, PR-3 commit 4) —
-/// the emission sibling of [`AssembleBond`].
+/// the emission sibling of [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond).
 ///
 /// No [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) and
 /// no entry-seam plan: the claim consumes no funding-entry seam (the bond is
@@ -64,8 +64,8 @@ pub(crate) struct AssembleEmissionClaim {
     pub handle: PersonaHandle,
     /// The sealed operand set — claim source, designated backing, swept fee
     /// inputs, membership paths — mintable only through
-    /// [`DesignatedBacking::fee_sweep`](super::backing_set::DesignatedBacking::fee_sweep)
-    /// → [`SweptFeeInputs::with_paths`](super::backing_set::SweptFeeInputs::with_paths),
+    /// [`DesignatedBacking::fee_sweep`](crate::engine::backing_set::DesignatedBacking::fee_sweep)
+    /// → [`SweptFeeInputs::with_paths`](crate::engine::backing_set::SweptFeeInputs::with_paths),
     /// so possession is proof of same-tip (item 6) and Q11 backing/fee
     /// disjointness. The handler re-checks nothing (`backing_set.rs` module
     /// docs: the old step-2 runtime refusals are deleted, not relocated).

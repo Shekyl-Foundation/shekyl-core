@@ -42,11 +42,10 @@
 //! - JSON line emitted to **stderr** (one JSON per failure for
 //!   grep-friendliness) via [`FailureOutput::emit_stderr`].
 //! - Human-readable formatted block emitted to **stdout** via the
-//!   [`fmt::Display`] impl (which the C7+ mode error variants'
-//!   `Display` impls drive directly; this module retains the
-//!   structured schema for the JSON path and for forward
-//!   reviewer-facing diagnostics if mode-error reporting later
-//!   extends to JSON-line emission per R1-D11's reopening clause).
+//!   mode error variants' [`Display`](std::fmt::Display) impls. This
+//!   module retains the structured schema for the JSON path and for
+//!   forward reviewer-facing diagnostics if mode-error reporting later
+//!   extends to JSON-line emission per R1-D11's reopening clause.
 //! - First failure aborts the corpus pass per R1-D11 "no
 //!   continue-on-failure" pin.
 
@@ -103,7 +102,7 @@ pub const HARNESS_VERSION: &str = env!("CARGO_PKG_VERSION");
 ///   at test time. Empty string when the failure occurs before
 ///   cache derivation completes.
 /// - `mode` — one of `correctness` / `worst-case` / `latency` /
-///   `concurrent` per [`crate::Mode`]'s `as_str()`. Worst-case
+///   `concurrent` per the binary's `Mode::as_str()`. Worst-case
 ///   is wired in the schema for forward-compatibility even though
 ///   `--mode=worst-case` is deferred per §3.19 R7-D4.
 /// - `class_tag` — adversarial-corpus class tag per R1-D5/R1-D6
@@ -137,7 +136,7 @@ pub struct FailureOutput {
     /// C cache; empty string for pre-cache failures.
     pub c_cache_sha256: String,
     /// Mode tag: `correctness` / `worst-case` / `latency` /
-    /// `concurrent` per [`crate::Mode::as_str`].
+    /// `concurrent` per the binary's `Mode::as_str`.
     pub mode: String,
     /// Adversarial-corpus class tag; empty string for non-worst-
     /// case modes.

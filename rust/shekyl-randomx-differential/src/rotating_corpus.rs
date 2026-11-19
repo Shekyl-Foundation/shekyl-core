@@ -42,7 +42,7 @@
 //! `CANONICAL_RANDOM_HASHES` entries plus 32 `CANONICAL_CACHE_SHAS`
 //! entries are *positionally bound* to it. Any unification invalidates
 //! the entire canonical table and every pin gate consuming it, across
-//! five lanes. [`tests::rotating_seed_never_collides_with_v1`] is the
+//! five lanes. `tests::rotating_seed_never_collides_with_v1` is the
 //! mechanical guard; this paragraph is the reason.
 
 use shekyl_crypto_hash::cshake256_32;

@@ -13,7 +13,7 @@
 //! had missed its own.
 //!
 //! The core does not decide that the machine slept. The driver says so,
-//! with [`Input::Resumed`], only when the one wait its loop makes returned
+//! with [`Input::Resumed`](crate::supervisor::Input::Resumed), only when the one wait its loop makes returned
 //! more than [`crate::control::RESUMED_AFTER`] past the deadline it was
 //! armed with ([`crate::control::resume_lateness`]), whatever woke it (at a
 //! wake a dial result can be ready with the late timer). Nothing else on

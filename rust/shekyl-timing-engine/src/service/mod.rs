@@ -5,7 +5,7 @@
 
 //! The engine service from `P2P_TIMING_ENGINE.md`'s addendum.
 //!
-//! One std thread owns the [`Engine`](crate::Engine). Homes send on a
+//! One std thread owns the [`Engine`]. Homes send on a
 //! mailbox and do not wait for the engine to apply the command. The
 //! handle drops an arm that is not strictly earlier than the one it
 //! remembers. That memory clears when the home takes the wake for that

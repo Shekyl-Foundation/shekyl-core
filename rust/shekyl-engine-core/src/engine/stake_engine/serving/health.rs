@@ -7,7 +7,7 @@
 //!
 //! Mapping onto the board is [`shekyl_operator_alarm::serve_health`] — this
 //! module owns how often the host's counters are sampled and publishes the
-//! windowed [`ServeHealthObservation`]s. A dedicated task rather than a
+//! windowed [`ServeHealthObservation`](shekyl_operator_alarm::serve_health::ServeHealthObservation)s. A dedicated task rather than a
 //! line in the refresh loop, for the reason the disk probe is one: the
 //! counters are not a serve-set reading, and the refresh they would
 //! otherwise ride on awaits the store actor with no timeout. A key that

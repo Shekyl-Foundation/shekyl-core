@@ -5,7 +5,7 @@
 
 //! Open a proved spend and seal its extra auth slots.
 //!
-//! [`sign_transaction_with_terms`] returns proofs and an empty `pqc_auths`.
+//! [`sign_transaction_with_terms`](crate::sign_transaction_with_terms) returns proofs and an empty `pqc_auths`.
 //! The payload hash of each prefix input covers that slot's public key, so
 //! the keys have to be in place before any slot is signed, and a signature
 //! cannot be filled in before its own hash exists. [`open_spend`] is that

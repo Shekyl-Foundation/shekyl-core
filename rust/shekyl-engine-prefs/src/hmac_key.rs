@@ -55,7 +55,7 @@ use zeroize::Zeroizing;
 pub const PREFS_HMAC_KEY_BYTES: usize = 32;
 
 /// Length of the envelope's `file_kek` in bytes. Matches
-/// `FILE_KEK_BYTES` in [`shekyl_crypto_pq::wallet_envelope`]; pinned
+/// `FILE_KEK_BYTES` in `shekyl_crypto_pq::wallet_envelope`; pinned
 /// here so a future divergence trips a compile error instead of
 /// silently producing an incompatible HMAC key.
 pub const FILE_KEK_BYTES: usize = 32;

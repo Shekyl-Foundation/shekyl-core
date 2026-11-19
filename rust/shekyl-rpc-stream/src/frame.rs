@@ -14,7 +14,7 @@
 //! A submission is one of two runs:
 //!
 //! - a padded frame, at the record that finishes it;
-//! - exactly [`SUBMISSION_RECORDS`](crate::SUBMISSION_RECORDS) largest-class
+//! - exactly [`SUBMISSION_RECORDS`] largest-class
 //!   payload records in a row, counted from a message boundary.
 //!
 //! A boundary is the start of the stream, a record of a smaller class, a
@@ -144,7 +144,7 @@ pub(crate) enum Admit {
 enum Place {
     /// No frame is open. `count` is the consecutive largest-class payload
     /// records since a boundary, capped at one past
-    /// [`SUBMISSION_RECORDS`](crate::SUBMISSION_RECORDS). That extra one is
+    /// [`SUBMISSION_RECORDS`]. That extra one is
     /// a longer ordinary message, and further records stay there so the
     /// count cannot wrap back onto a submission.
     Run { count: usize },

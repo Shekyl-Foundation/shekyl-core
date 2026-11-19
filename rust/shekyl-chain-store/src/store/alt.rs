@@ -62,7 +62,7 @@
 //! [`ReadSnapshot::alternate_chains`](super::ReadSnapshot::alternate_chains):
 //! each tip is [`AltChain::build`](super::AltChain::build), and a stored
 //! chain that does not reach a recorded block comes back
-//! [`AltCannot::Unlinked`](super::AltCannot::Unlinked) rather than a parent
+//! [`AltCannot::Unlinked`] rather than a parent
 //! the main chain does not hold. The lowest block of every chain that
 //! listing returns names a main-chain block as its parent.
 //!
