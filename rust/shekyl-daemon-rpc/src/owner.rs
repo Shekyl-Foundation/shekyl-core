@@ -159,7 +159,9 @@ mod windows {
         /// - `config.socket-dir.unusable`: a directory fails its check or a
         ///   create failed;
         /// - `config.replace.held-open`: another program held the record, or
-        ///   a leftover staged one, open past the wait.
+        ///   a leftover staged one, open past the wait;
+        /// - `config.replace.read-only`: the record's read-only attribute
+        ///   refused the replace.
         pub fn bind(plan: &OwnerSocketPlan, network: &str) -> Result<Self, Diagnostic> {
             let unusable = |found: String| {
                 Diagnostic::new(Code::SocketDirUnusable, Source::Machine)
@@ -191,7 +193,10 @@ mod windows {
                 CommitError::HeldOpen(held) => {
                     shekyl_daemon_config::replace::held_open_refusal(&held, &plan.dir)
                 }
-                CommitError::Io(_, e) | CommitError::Unsynced(_, e) => {
+                CommitError::ReadOnly(path) => {
+                    shekyl_daemon_config::replace::read_only_refusal(&path)
+                }
+                CommitError::Io { error: e, .. } | CommitError::Unsynced(_, e) => {
                     unusable(format!("the rendezvous cannot be published: {e}"))
                 }
             })?;
@@ -222,9 +227,10 @@ mod windows {
     /// and rename it over the path: a reader sees the old record or the new
     /// one.
     fn publish(plan: &OwnerSocketPlan, record: &[u8]) -> Result<(), CommitError> {
-        StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)?
-            .commit()
-            .map(drop)
+        let durability =
+            StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)?.commit()?;
+        crate::channel::files::note_durability(&plan.path, &durability);
+        Ok(())
     }
 
     /// The start-up dial (`RPC_CHANNEL.md` §7.1).

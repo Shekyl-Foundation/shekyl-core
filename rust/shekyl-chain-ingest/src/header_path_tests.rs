@@ -31,7 +31,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::transaction::Input;
 use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{open_store_under, tmp};
 use crate::vectors_tests::replay::rules_for;
@@ -48,7 +48,7 @@ enum Said {
 
 fn load(dir: &std::path::Path, shape: &str) -> Vec<Candidate> {
     let bytes = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
-    let mut reader = CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus");
+    let mut reader = CorpusSource::open(Cursor::new(bytes.as_slice())).expect("open corpus");
     let mut blocks = Vec::new();
     while let Some(sequenced) = reader.next().expect("corpus reads") {
         if let IngestEvent::Extend(candidate) = sequenced.event {

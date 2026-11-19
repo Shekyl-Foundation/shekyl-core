@@ -23,7 +23,7 @@ use shekyl_wire::Input;
 
 use super::replay::replay_open;
 use super::{captured_chains, mock_with_the_real_clock};
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::mutation::{Environment, Mutated, Mutation};
 use crate::source::{IngestEvent, Source};
 use crate::trace::Trace;
@@ -32,7 +32,7 @@ use crate::trace::Trace;
 fn first_spend_height(dir: &Path) -> BlockHeight {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+        CorpusSource::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut height = reader.first_height();
     while let Some(event) = reader.next().expect("corpus reads") {
         if let IngestEvent::Extend(candidate) = event.event {
@@ -64,7 +64,7 @@ async fn the_ninth_input_is_refused_on_a_captured_regtest_chain() {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
     let source = Mutated::new(
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
+        CorpusSource::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
         at,
         Mutation::TooManyInputs,
         Environment {

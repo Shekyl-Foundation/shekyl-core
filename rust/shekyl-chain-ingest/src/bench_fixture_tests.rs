@@ -70,9 +70,9 @@ use shekyl_wire::Transaction;
 
 use crate::archival_driver::{ENDPOINT, FEE};
 use crate::bench_support::BlockPath;
-use crate::corpus::CorpusWriter;
 use crate::scenario::{Mined, Scenario};
 use crate::test_support::{h, Family, FIRST_SPEND_HEIGHT};
+use shekyl_corpus::CorpusWriter;
 
 /// How many transactions a fixture's subject block lists.
 #[derive(Clone, Copy)]

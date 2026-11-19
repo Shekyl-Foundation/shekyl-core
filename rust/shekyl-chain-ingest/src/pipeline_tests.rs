@@ -26,7 +26,7 @@ use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, RunEnd, RunFault};
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
 use crate::pipeline::{run, Checkpoint, PipelineConfig, PipelineFault};
 use crate::schedule::ChainRules;
@@ -271,7 +271,7 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     let chain = chain(5);
     let trace = Arc::new(trace_of(&chain, true));
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let metrics = Arc::new(Metrics::new());
     let report = run(
         &mut source,
@@ -316,7 +316,7 @@ async fn a_one_block_window_records_the_store_digest_at_every_height() {
     let path = tmp("pipeline-height-digests");
     let chain = chain(5);
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let mut config = cfg(1);
     config.digest_each_commit = true;
     let report = run(
@@ -344,7 +344,7 @@ async fn a_wider_commit_refuses_to_invent_a_digest_per_height() {
     let path = tmp("pipeline-digest-window");
     let chain = chain(5);
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let mut config = cfg(2);
     config.digest_each_commit = true;
     let fault = run(
@@ -574,7 +574,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     let chain = bare_chain(n + 2);
     let trace = Arc::new(trace_of(&chain, false));
     let first = corpus_of(&chain[..=n_us]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&first)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -594,7 +594,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     // The next block, through the pipeline, from a store that already holds
     // the chain (the seed claim asks the store for block 0).
     let rest = corpus_from(h(n + 1), &chain[n_us + 1..=n_us + 1]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&rest)).expect("open");
     let err = run(
         &mut source,
         substrate(),
@@ -658,7 +658,7 @@ async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
     let chain = bare_chain(4);
     let trace = Arc::new(trace_of(&chain, false));
     let first = corpus_of(&chain[..3]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&first)).expect("open");
     run(
         &mut source,
         substrate(),
@@ -673,7 +673,7 @@ async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
     plant_work(&path, h(2), u128::MAX);
 
     let rest = corpus_from(h(3), &chain[3..]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&rest)).expect("open");
     let err = run(
         &mut source,
         substrate(),
@@ -725,7 +725,7 @@ async fn a_slow_window_claims_one_and_the_chain_goes_on() {
     let chain = growing.finish();
     let trace = Arc::new(trace_of(&chain, false));
     let first = corpus_of(&chain[..=n_us]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&first)).expect("open");
     run(
         &mut source,
         substrate(),
@@ -743,7 +743,7 @@ async fn a_slow_window_claims_one_and_the_chain_goes_on() {
     }
 
     let rest = corpus_from(h(n + 1), &chain[n_us + 1..]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&rest)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -774,7 +774,7 @@ async fn the_writer_observes_a_target_only_at_its_own_next_height() {
     let chain = bare_chain(3);
     let trace = Arc::new(trace_of(&chain, false));
     let corpus = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&corpus)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&corpus)).expect("open");
     run(
         &mut source,
         substrate(),
@@ -822,7 +822,7 @@ async fn a_misaligned_source_is_refused_before_anything_is_formed() {
     let chain = chain(7);
     let trace = Arc::new(trace_of(&chain, false));
     let bytes = corpus_from(h(5), &chain[5..]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let err = run(
         &mut source,
         substrate(),
@@ -975,7 +975,7 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
     let r = reorg_of(bare_chain(boundary + 1), boundary - 2, 3);
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1049,7 +1049,7 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
     );
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1099,7 +1099,7 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     let chain = chain(4);
     let trace = Arc::new(trace_of(&chain, false));
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let rules = ChainRules::harness_regtest(
         std::num::NonZeroU128::new(7),
         shekyl_chain_rules::CappedEpoch::PRODUCTION,
@@ -1145,7 +1145,7 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     let r = reorg(f + 4, f, 4);
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1230,7 +1230,7 @@ async fn a_wrong_checkpoint_goes_red_and_the_run_names_it() {
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1292,7 +1292,7 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1369,7 +1369,7 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1462,7 +1462,7 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1537,7 +1537,7 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1591,7 +1591,7 @@ async fn digest_after_replay_and_mutation(
     let chain = chain(CONTROL_LEN);
     let trace = Arc::new(trace_of(&chain, true));
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),

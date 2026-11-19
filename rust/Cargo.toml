@@ -243,6 +243,13 @@ members = [
     # scenario driver. NOT_SHIPPED: no shipped build links it.
     "shekyl-chain-forge",
 
+    # The corpus artifact's codec (docs/design/CORPUS_CODEC.md): its magic,
+    # its layout version, and the one writer and one reader of its records.
+    # Below shekyl-chain-ingest (whose replay Source wraps it) and below the
+    # store's tests, which read a forged chain's corpus and cannot depend on
+    # the ingest crate (it depends on the store). No pipeline, no store.
+    "shekyl-corpus",
+
     # The daemon's block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1):
     # Source → form → sequence → validate+connect → sinks. Production code
     # shared by E2 (replay) and DRS-X (live, the store flip); the one crate

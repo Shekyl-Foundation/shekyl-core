@@ -537,17 +537,32 @@ info:
   # checks this computer's random-number source before it stakes, and
   # refuses to open when the source fails; the refusal had no code of its
   # own. The default build never runs the check, so never answers it.
-  # Every cause of an unsaved send has its own code (Rick, 2026-11-18):
-  # SEND_NOT_SAVED (-29120) narrows to a wallet folder this account cannot
-  # write, and submit_pending_tx gains -29128 SAVE_DURABILITY_UNCONFIRMED
-  # (a Windows volume other than NTFS, which cannot confirm a save survives
-  # a power cut; data.file_system names it; move the wallet to an NTFS
-  # volume), -29129 SAVE_DISK_FULL, -29130 SAVE_FILE_HELD (another program,
-  # most likely a scanner, held the wallet's file; data.or_unwritable),
-  # -29131 SAVE_IO_FAILED (the disk's error, data.error), -29132
-  # SAVE_RENAME_UNCONFIRMED (an NTFS drive that refused the rename Windows
-  # confirms) and -29133 SAVE_INTERNAL_FAULT (a fault in the wallet before
-  # the disk was touched). Each sent nothing and keeps the reservation.
+  # Every cause of an unsaved send has its own code (Rick, 2026-11-18 and
+  # 2026-11-19). SEND_NOT_SAVED (-29120) is renamed SAVE_NOT_WRITABLE: the
+  # wallet's folder, file or drive is not writable (data.target:
+  # folder, file or volume, each with its own advice). submit_pending_tx
+  # gains -29128 SAVE_DURABILITY_UNCONFIRMED (a local Windows volume other
+  # than NTFS, which cannot confirm a save survives a power cut;
+  # data.file_system names it; move the wallet to an NTFS volume), -29129
+  # SAVE_DISK_FULL, -29130 SAVE_FILE_HELD (another program, most likely a
+  # scanner, held the wallet's file), -29131 SAVE_IO_FAILED (the disk's
+  # error at a step: data.step, one of write, rename, folder-sync, flush,
+  # volume-query, and data.error), -29132 SAVE_RENAME_UNCONFIRMED (a local
+  # NTFS drive that refused the rename Windows confirms), -29133
+  # SAVE_INTERNAL_FAULT (a fault in the wallet before the disk was touched)
+  # and -29134 SAVE_ON_NETWORK_DRIVE (a network drive, never confirmed,
+  # whatever file system it reports; move the wallet to a local drive).
+  # Each sent nothing and keeps the reservation. stake, unstake, drain and
+  # collect_unstaked answer the same codes by cause when their seal was not
+  # saved, or saved but not confirmed: nothing was sent and the seal was
+  # removed, so the call is retried; unstake never answers -29522 for it,
+  # nor drain and collect_unstaked -29107. A staking record read back from
+  # disk is sent only after a save of the pending records confirmed in
+  # this process; the wallet saves them once at open for that.
+  # Supported storage (Rick, 2026-11-19): a local NTFS volume on Windows,
+  # a local disk on Unix. On anything else the wallet still saves, but
+  # refuses to send or stake, answering the code for the cause, whose
+  # message says why. Network shares are not a supported configuration.
   # api_version stays 1.
   version: 0.21.0
   description: >
@@ -864,7 +879,7 @@ components:
         - -29117   # RESELECTION_REQUIRED
         - -29118   # DAEMON_FEE_RESPONSE_INVALID
         - -29119   # SIGNER_FAILED
-        - -29120   # SEND_NOT_SAVED
+        - -29120   # SAVE_NOT_WRITABLE
         - -29121   # TX_NOT_HELD
         - -29122   # TX_BYTES_MISSING
         - -29123   # TOO_MANY_INPUTS
@@ -881,6 +896,7 @@ components:
         - -29131   # SAVE_IO_FAILED
         - -29132   # SAVE_RENAME_UNCONFIRMED
         - -29133   # SAVE_INTERNAL_FAULT
+        - -29134   # SAVE_ON_NETWORK_DRIVE
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -1157,23 +1173,35 @@ components:
                                           randomness).
                                           Report it; the wallet log has the
                                           detail (A16)
-          -29120 SEND_NOT_SAVED           submit: the send's record (its
+          -29120 SAVE_NOT_WRITABLE        submit: the send's record (its
                                           signed bytes, tx secret and input
                                           locks) could not be saved because
-                                          this account may not write the
-                                          wallet's folder (or its volume is
-                                          read-only), so the wallet sent
-                                          NOTHING. The reservation is kept:
-                                          make the folder writable and
-                                          submit again, or discard (A19).
-                                          A failed save undoes the record; a
-                                          save whose durability was not
-                                          confirmed leaves the applied
-                                          record. Every other cause of an
-                                          unsaved send is its own code,
-                                          -29128..-29133, each of which
-                                          also sent nothing and keeps the
-                                          reservation (Rick, 2026-11-18)
+                                          the wallet's folder, file or
+                                          drive is not writable for this
+                                          account, so the wallet sent
+                                          NOTHING (data: {"target"}:
+                                          "folder", make it writable for
+                                          this account; "file", its
+                                          read-only attribute is set, clear
+                                          it; "volume", the drive is
+                                          read-only or write-protected, make
+                                          it writable or move the wallet).
+                                          The reservation is kept: fix it
+                                          and submit again, or discard
+                                          (A19). A failed save undoes the
+                                          record; a save whose durability
+                                          was not confirmed leaves the
+                                          applied record. Every other cause
+                                          of an unsaved send is its own
+                                          code, -29128..-29134, each of
+                                          which also sent nothing and keeps
+                                          the reservation. stake, unstake,
+                                          drain and collect_unstaked answer
+                                          these codes by cause when their
+                                          seal was saved but not confirmed:
+                                          nothing was sent and the seal was
+                                          removed, so the call is retried
+                                          (Rick, 2026-11-18 and 2026-11-19)
           -29121 TX_NOT_HELD              tx_resend: no held send has this
                                           id — it confirmed, was released,
                                           or was never this wallet's
@@ -1213,7 +1241,8 @@ components:
                                           number is retired, not freed
           -29128 SAVE_DURABILITY_UNCONFIRMED
                                           submit: the send was saved on a
-                                          Windows volume whose file system
+                                          local Windows volume whose file
+                                          system
                                           Windows cannot confirm keeps a
                                           save through a power cut (any but
                                           NTFS: FAT32, exFAT, ReFS), so the
@@ -1233,27 +1262,31 @@ components:
                                           wait, most likely an antivirus
                                           scanner or a search indexer, so
                                           the send was not saved and not
-                                          sent (data: {"or_unwritable"}:
-                                          true on FAT32 or exFAT, where
-                                          Windows answers a read-only file
-                                          the same way) — exclude the
-                                          wallet's folder from scanning (or
-                                          make the file writable) and submit
-                                          again, or discard
+                                          sent — exclude the wallet's
+                                          folder from scanning and submit
+                                          again, or discard. A read-only
+                                          file is -29120 with target
+                                          "file": the save reads the
+                                          attribute to tell the two apart
           -29131 SAVE_IO_FAILED           submit: the disk reported an error
-                                          saving the send or confirming the
-                                          save (a write, the rename, the
-                                          folder's sync, the flush), so the
+                                          at a step of saving the send or
+                                          confirming the save, so the
                                           wallet sent nothing (data:
-                                          {"error"}, the system's words for
-                                          it, never a path) — check the disk
-                                          and submit again, or discard
-          -29132 SAVE_RENAME_UNCONFIRMED  submit: the wallet's NTFS drive
-                                          refused the rename Windows
+                                          {"step", "error"}: step is one of
+                                          "write", "rename", "folder-sync",
+                                          "flush", "volume-query", and the
+                                          message names it; error is the
+                                          system's words, never a path) —
+                                          check the disk and submit again,
+                                          or discard
+          -29132 SAVE_RENAME_UNCONFIRMED  submit: the wallet's local NTFS
+                                          drive refused the rename Windows
                                           confirms survives a power cut, so
                                           the wallet sent nothing — move the
-                                          wallet to a local NTFS drive and
-                                          submit again, or discard
+                                          wallet to another local NTFS drive
+                                          and submit again, or discard.
+                                          Windows builds observed to give
+                                          it: none observed
           -29133 SAVE_INTERNAL_FAULT      submit: the wallet could not
                                           prepare the send's record to save
                                           (its state failed a check, or
@@ -1261,6 +1294,14 @@ components:
                                           fault in the wallet, not the disk,
                                           so nothing was sent — report it;
                                           the wallet's log has the detail
+          -29134 SAVE_ON_NETWORK_DRIVE    submit: the wallet is on a network
+                                          drive, where no save is confirmed
+                                          to survive a power cut whatever
+                                          file system the drive reports (a
+                                          Samba share reports NTFS), so the
+                                          wallet sent nothing — move the
+                                          wallet to a local drive and
+                                          submit again, or discard
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: the
                                           daemon did not answer — check it
@@ -2295,7 +2336,7 @@ components:
         (A19): its record — the signed bytes, the retained tx secret, the
         inputs its lock holds — is on disk before the daemon sees it, and a
         save that fails, or whose durability is not confirmed, sends nothing
-        (-29120, -29128..-29133, one code per cause). What the daemon's verdict
+        (-29120, -29128..-29134, one code per cause). What the daemon's verdict
         changed is saved before this reply; verdict_saved says whether that
         second save succeeded.
       properties:
@@ -3690,7 +3731,9 @@ components:
         irreversible: -29521 means the seal was RELEASED (retry at will);
         -29522 means it is HELD funds-safe until it lands or its end date
         passes (do not re-fire; staking_info names the height) — see the
-        code table.
+        code table. A seal saved but not confirmed on disk sent nothing:
+        it was removed, and the save's own code answers by cause (-29120,
+        -29128..-29134), after which a retry exits the same bond.
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"

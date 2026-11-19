@@ -106,6 +106,7 @@ GRANDFATHER = os.path.join(
 SCOPE = (
     "shekyl-archival-retention",
     "shekyl-chain-ingest",
+    "shekyl-corpus",
     "shekyl-chain-rules",
     "shekyl-chain-store",
     "shekyl-types",
@@ -156,8 +157,11 @@ SCOPE = (
 # serve-credit input and `path.rs`, the ingest's `anchor` helper and the
 # prune tests' `key_of` went with the padded-credit fixtures, one
 # `archival_write.rs` site left with the serve-credit write, and the
-# prune tests' close height is typed.
-GRANDFATHER_CEILING = 123
+# prune tests' close height is typed. 122 when the corpus format moved to
+# `shekyl-corpus` (CF-4a, 2026-11-18): the record encoder's height was
+# typed as `BlockHeight` there rather than re-recorded, and the codec
+# joined `SCOPE` so the move took none of its sites out of the scan.
+GRANDFATHER_CEILING = 122
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

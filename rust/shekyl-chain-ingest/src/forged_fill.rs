@@ -34,7 +34,7 @@ use shekyl_chain_rules::CappedEpoch;
 use shekyl_network::Network;
 use shekyl_types::{BlockHeight, ShardId};
 
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_shard::{closed_shards, ClosedShard, Filled, FILL_FROM_COINBASE};
 use crate::schedule::ChainRules;
@@ -139,7 +139,7 @@ async fn extend(
     closed: &[ClosedShard],
 ) {
     let last = closed.last().expect("shards > 0").close_height;
-    let mut corpus = CorpusReader::open(BufReader::new(
+    let mut corpus = CorpusSource::open(BufReader::new(
         File::open(fetched.corpus()).expect("the fetched corpus opens"),
     ))
     .unwrap_or_else(|fault| panic!("the forged corpus: {fault}"));
@@ -248,7 +248,7 @@ mod tests {
     /// corpus.
     fn archival_lengths() -> Vec<u64> {
         let fetched = hosted::open(CHAIN).unwrap_or_else(|fault| panic!("{fault}"));
-        let mut corpus = CorpusReader::open(BufReader::new(
+        let mut corpus = CorpusSource::open(BufReader::new(
             File::open(fetched.corpus()).expect("the fetched corpus opens"),
         ))
         .unwrap_or_else(|fault| panic!("the forged corpus: {fault}"));

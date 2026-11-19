@@ -2055,10 +2055,17 @@ removal of a leftover staged file and the rename share one deadline,
 `REPLACE_WAIT`, 2 s in all (Rick, 2026-11-18; the 2 s is an Assumption,
 basis at the constant). Past it the start refuses with
 `config.replace.held-open`, naming the file held and the directory to
-exclude from scanning. The rename is durable on NTFS, where the
-write-through handle's rename is flushed with it (`CreateFileW`'s
-"Caching Behavior"); on any other file system a publish lands, unconfirmed,
-and the start goes on. A stale record, which a crashed daemon
+exclude from scanning. A record whose read-only attribute is set refuses
+the rename at once, `config.replace.read-only`, which no wait changes
+(Rick, 2026-11-19). The rename is durable on a local NTFS volume, where
+the write-through handle's rename is flushed with it (`CreateFileW`'s
+"Caching Behavior"); on a network drive, whatever file system it reports,
+and on any other file system a publish lands, unconfirmed, and the start
+goes on, logging a warning that names the file, why its save is not
+confirmed, and the supported storage (Rick, 2026-11-19). The daemon's supported storage is a local
+NTFS volume on Windows and a local disk on Unix; network shares are not a
+supported configuration (Rick, 2026-11-19; `INSTALLATION_GUIDE.md`,
+"Supported storage"). A stale record, which a crashed daemon
 left, is replaced by the publish the same way, never removed beside it.
 Every rendezvous path is keyed by the genesis-derived network id, not a
 nettype name (rule 71), so daemons of different networks coexist and a

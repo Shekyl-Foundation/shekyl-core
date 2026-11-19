@@ -15,7 +15,7 @@ use std::io::Cursor;
 use shekyl_wire::transaction::Ct;
 use shekyl_wire::{PowBlob, SkeletonTx};
 
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::source::{IngestEvent, Source};
 use crate::vectors_tests::captured_chains;
 
@@ -23,7 +23,7 @@ fn each_captured_block(mut body: impl FnMut(&str, &shekyl_chain_rules::Candidate
     let mut blocks = 0u64;
     for (dir, manifest) in captured_chains() {
         let bytes = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
-        let mut reader = CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus");
+        let mut reader = CorpusSource::open(Cursor::new(bytes.as_slice())).expect("open corpus");
         while let Some(sequenced) = reader.next().expect("corpus reads") {
             let IngestEvent::Extend(candidate) = sequenced.event else {
                 continue;

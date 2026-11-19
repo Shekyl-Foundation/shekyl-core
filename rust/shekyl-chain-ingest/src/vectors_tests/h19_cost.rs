@@ -23,7 +23,7 @@ use std::time::Instant;
 use shekyl_chain_rules::{BatchOutcome, ListedProofs};
 
 use super::captured_chains;
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::source::{IngestEvent, Source};
 
 /// Odd, so the middle sample of a sorted run is the median.
@@ -44,7 +44,7 @@ fn h19_batch_cost_at_the_captured_densities() {
     for (dir, manifest) in captured_chains() {
         let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
         let mut reader =
-            CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+            CorpusSource::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
         let (mut blocks, mut proofs_per_block, mut commitments, mut times) =
             (0usize, Vec::new(), Vec::new(), Vec::new());
         loop {
