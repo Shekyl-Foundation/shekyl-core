@@ -15,12 +15,12 @@
 //!
 //! `LocalKeys` carries five pieces of state:
 //!
-//! - [`Self::keys`] (`AllKeysBlob`): the wallet's complete key material.
+//! - [`LocalKeys::keys`] (`AllKeysBlob`): the wallet's complete key material.
 //!   `AllKeysBlob` is `ZeroizeOnDrop`; secrets are wiped when `LocalKeys`
 //!   is dropped.
-//! - [`Self::account_public_address`]: cached at construction;
+//! - [`LocalKeys::account_public_address`]: cached at construction;
 //!   trait-method [`KeyEngine::account_public_address`] returns a borrow.
-//! - [`Self::derived`]: pre-decompressed cryptographic forms of the
+//! - [`LocalKeys::derived`]: pre-decompressed cryptographic forms of the
 //!   spend public key and view scalar, computed once at construction
 //!   to avoid per-call decompression / mod-order-reduction costs.
 //!
@@ -43,21 +43,16 @@
 //! aggregate becomes the actor's owned state. Trait method signatures
 //! do not change.
 //!
-//! # M3a commit 4b: stub-bearing methods
+//! # Signing
 //!
-//! [`KeyEngine::sign_transaction`] returns
-//! [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`] pending
-//! PR 5's finalization of `TxToSign`'s shape (the per-input
-//! public-on-chain data and FCMP++ tree-branch context that
-//! `shekyl_tx_builder::sign_transaction` requires).
-//!
-//! The stub return-path is tested; the remaining trait surface
+//! [`KeyEngine::sign_transaction`] delegates to
+//! [`sign_tx`](super::sign_bridge::sign_tx), which signs through
+//! `shekyl_tx_builder::sign_transaction`. The rest of the trait surface
 //! (`account_public_address`, `try_claim_output`) is exercised
 //! end-to-end against `construct_output`-produced ciphertexts.
 //!
 //! [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`]: ../../../../../docs/design/STAGE_1_PR_3_KEY_ENGINE.md
 //! [`KeyEngine`]: super::traits::key::KeyEngine
-//! [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]: super::error::KeyEngineError::SignTransactionTraitSurfaceIncomplete
 
 // Only the signing/index-sensitivity tests derive `D + m_i·G`; the production
 // claim path uses the base spend key (`x = ho + b`, no offset).
@@ -126,13 +121,13 @@ struct DerivedScalars {
 /// **Constructor scope.** In production builds (without the
 /// `bench-internals` feature enabled), the type has no public
 /// constructor — `from_keys_blob` is `pub(crate)` and the
-/// test/bench helper [`LocalKeys::from_test_seed`] is gated by
+/// test/bench helper `LocalKeys::from_test_seed` is gated by
 /// `#[cfg(any(test, feature = "bench-internals"))]`. When the
 /// `bench-internals` feature IS enabled (an internal-use-only
 /// feature flag, gated for benches), the `from_test_seed`
 /// constructor becomes `pub` to let the bench compilation unit
 /// build a deterministic fixture. This pattern matches
-/// [`super::local_ledger::LocalLedger::populate_for_bench`]
+/// `LocalLedger::populate_for_bench`
 /// exactly: bench-only `pub` widening under a feature flag the
 /// public API contract explicitly disclaims.
 #[allow(dead_code)] // M3a wires the implementor; orchestrator integration lands in M3c+.

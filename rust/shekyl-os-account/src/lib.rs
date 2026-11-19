@@ -6,9 +6,10 @@
 //! The operating-system account this process runs as, read from the
 //! platform's own interface and never from the environment (IG-Q14).
 //!
-//! **The contract: who this account is, where its session keeps things,
-//! which files it alone may read, and which account is at the other end of
-//! a local socket; nothing that dials, listens or speaks a protocol.** It is a leaf with no network stack (libc
+//! **The contract: who this account is, where its home and its session keep
+//! things, which files it alone may read, and which account is at the other
+//! end of a local socket; nothing that dials, listens or speaks a
+//! protocol.** It is a leaf with no network stack (libc
 //! on Unix, `shekyl-win-sec` on Windows), so the daemon's process-hardening
 //! crate and the client transport both read the account here without either
 //! pulling in the other (`docs/design/RPC_CHANNEL.md` RT-15, §7.1).
@@ -18,6 +19,14 @@
 //!   run-as-me daemon's owner's socket lives on Unix.
 //! - [`account_root`]: the account's root for a rendezvous: the session
 //!   directory on Unix, the local application data folder on Windows.
+//! - [`account_home`], [`per_account_root_in`], [`per_account_root`]: the
+//!   account's home and the per-account root under it
+//!   ([`PER_ACCOUNT_ROOT_NAME`]), where every per-account default path sits
+//!   (rule 83 IG-13). The one owner of that name: the daemon's
+//!   configuration, the rendezvous and the wallets read it here.
+//!   [`ensure_per_account_root`] makes it as the daemon does, which a
+//!   wallet binary does at its start, before it makes anything in it, and
+//!   [`wallet_dir_in`] names the wallet directory in it.
 //! - [`peer_uid`] (Unix): the account of the process at the other end of a
 //!   connected Unix socket (`SO_PEERCRED` on Linux, `getpeereid`
 //!   elsewhere). On Windows the pipe's peer check is
@@ -29,7 +38,7 @@
 
 #![deny(unsafe_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod private_file;
 
@@ -79,6 +88,122 @@ pub fn account_root() -> Option<PathBuf> {
     {
         shekyl_win_sec::known_folder::local_app_data()
     }
+}
+
+/// The per-account root's name inside the account's home (rule 83 IG-13):
+/// `.shekyl` on Linux, FreeBSD and macOS, `Shekyl` on Windows, where the
+/// home is the local application data folder.
+pub const PER_ACCOUNT_ROOT_NAME: &str = if cfg!(windows) { "Shekyl" } else { ".shekyl" };
+
+/// The per-account root inside `home`, the account's home as
+/// [`account_home`] reads it. Every per-account default path sits under it:
+/// a run-as-user daemon's data and logs, the wallet directory and the wallet
+/// binaries' configuration (rule 83 IG-13). Taking the home as a value lets
+/// a caller resolve against a home it was handed.
+#[must_use]
+pub fn per_account_root_in(home: &Path) -> PathBuf {
+    home.join(PER_ACCOUNT_ROOT_NAME)
+}
+
+/// This account's per-account root ([`per_account_root_in`] its
+/// [`account_home`]), or `None` when the account has no home.
+#[must_use]
+pub fn per_account_root() -> Option<PathBuf> {
+    account_home().map(|home| per_account_root_in(&home))
+}
+
+/// The wallet directory's name inside the per-account root (rule 83 IG-13).
+pub const WALLET_DIR_NAME: &str = "wallets";
+
+/// The wallet directory inside the per-account root `root`: where a wallet
+/// binary keeps its wallet files when the person names no other place.
+#[must_use]
+pub fn wallet_dir_in(root: &Path) -> PathBuf {
+    root.join(WALLET_DIR_NAME)
+}
+
+/// Creates the per-account root `root` where it does not exist, as the
+/// daemon creates it, so whichever of the daemon and a wallet binary runs
+/// first makes the same directory. A wallet binary calls it at its start,
+/// before it makes anything in the root: a directory made later, under any
+/// spelling of the root's path (Windows matches names without regard to
+/// case), then finds the root already made with its protections. On Windows it is owner-only with the
+/// no-read-up label, made in the creating call
+/// (`shekyl_win_sec::rendezvous::ensure_data_home`); on Unix it has this
+/// process's mode, as the daemon's data directory does. An existing root is
+/// the operator's and is left as it is.
+///
+/// # Errors
+/// The create failed, or on Windows the owner or the descriptor could not
+/// be had.
+pub fn ensure_per_account_root(root: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        shekyl_win_sec::rendezvous::ensure_data_home(root)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::create_dir_all(root)
+    }
+}
+
+/// The calling account's home from the operating system's account interface
+/// (rule 83 IG-13), never `HOME`, `XDG_*` or `%APPDATA%`: the passwd entry's
+/// home on Unix, or `None` when the account has none (unset or
+/// `/nonexistent`) or it cannot be read.
+#[cfg(unix)]
+#[must_use]
+#[allow(unsafe_code, reason = "getpwuid_r has no safe wrapper in std")]
+pub fn account_home() -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    let uid = effective_uid();
+    // SAFETY: `passwd` is plain data; a zeroed value is a valid out-struct
+    // for `getpwuid_r` to fill.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut buffer = vec![0u8; 16 * 1024];
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: `entry`, `buffer` and `found` are live locals of the sizes
+    // passed; the call writes the entry's strings into `buffer`, which
+    // outlives every read of `entry` below.
+    let rc = unsafe {
+        libc::getpwuid_r(
+            uid,
+            &raw mut entry,
+            buffer.as_mut_ptr().cast::<libc::c_char>(),
+            buffer.len(),
+            &raw mut found,
+        )
+    };
+    if rc != 0 || found.is_null() || entry.pw_dir.is_null() {
+        return None;
+    }
+    // SAFETY: `pw_dir` points at a NUL-terminated string inside `buffer`.
+    let dir = unsafe { CStr::from_ptr(entry.pw_dir) };
+    home_of_passwd_dir(dir.to_bytes()).map(|home| PathBuf::from(OsStr::from_bytes(home)))
+}
+
+/// The passwd home that names no home: a service account's (rule 83 IG-13).
+#[cfg(unix)]
+const NO_HOME_SENTINEL: &[u8] = b"/nonexistent";
+
+/// The home a passwd entry's `pw_dir` names: `None` when it is unset (empty)
+/// or the no-home sentinel `/nonexistent`, so such an account has no
+/// default paths (rule 83 IG-13).
+#[cfg(unix)]
+fn home_of_passwd_dir(dir: &[u8]) -> Option<&[u8]> {
+    (!dir.is_empty() && dir != NO_HOME_SENTINEL).then_some(dir)
+}
+
+/// The calling account's home on Windows: the local application data folder
+/// (`FOLDERID_LocalAppData`), never Roaming AppData, which copies what is in
+/// it to domain servers (rule 83 IG-13).
+#[cfg(windows)]
+#[must_use]
+pub fn account_home() -> Option<PathBuf> {
+    shekyl_win_sec::known_folder::local_app_data()
 }
 
 /// `confstr(_CS_DARWIN_USER_TEMP_DIR)`: the per-user, per-boot temporary
@@ -168,6 +293,33 @@ pub fn peer_uid(socket: &impl std::os::fd::AsFd) -> std::io::Result<u32> {
 mod tests {
     use super::*;
 
+    /// A passwd entry whose home is unset or `/nonexistent` names no home,
+    /// so the account has no default paths (rule 83 IG-13); any other path
+    /// is the home. Red edit: drop the sentinel, and a service account's
+    /// root is `/nonexistent/.shekyl`.
+    #[test]
+    fn an_unset_or_nonexistent_passwd_home_is_no_home() {
+        assert_eq!(home_of_passwd_dir(b""), None);
+        assert_eq!(home_of_passwd_dir(b"/nonexistent"), None);
+        assert_eq!(
+            home_of_passwd_dir(b"/var/lib/shekyl"),
+            Some(&b"/var/lib/shekyl"[..])
+        );
+        assert_eq!(
+            home_of_passwd_dir(b"/nonexistent/a"),
+            Some(&b"/nonexistent/a"[..])
+        );
+    }
+
+    /// The passwd home is absolute and exists for the account the tests
+    /// run under; it is read without consulting `HOME`.
+    #[test]
+    fn the_passwd_home_is_an_absolute_existing_directory() {
+        let home = account_home().expect("the test account has a passwd entry");
+        assert!(home.is_absolute(), "{}", home.display());
+        assert!(home.is_dir(), "{}", home.display());
+    }
+
     /// The process at the other end of a pair this process made is this
     /// account.
     #[test]
@@ -211,5 +363,62 @@ mod tests {
     #[test]
     fn the_unix_account_root_is_the_session_directory() {
         assert_eq!(account_root(), session_dir());
+    }
+}
+
+/// The per-account root on every platform, pinned as rule 83 IG-13 states
+/// it rather than recomputed from the constant.
+#[cfg(test)]
+mod per_account_root_tests {
+    use super::*;
+
+    #[test]
+    fn the_per_account_root_is_the_rules() {
+        let home = Path::new("home");
+        let expected = if cfg!(windows) { "Shekyl" } else { ".shekyl" };
+        assert_eq!(per_account_root_in(home), home.join(expected));
+        assert_eq!(
+            wallet_dir_in(&per_account_root_in(home)),
+            home.join(expected).join("wallets")
+        );
+    }
+
+    /// The root is made where it is missing, and an existing one is left as
+    /// it is, so the daemon and a wallet binary may each run first.
+    #[test]
+    fn the_root_is_made_once_and_then_left_as_it_is() {
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let root = per_account_root_in(base.path());
+        ensure_per_account_root(&root).expect("the root is made");
+        assert!(root.is_dir(), "{}", root.display());
+        ensure_per_account_root(&root).expect("an existing root is left as it is");
+    }
+
+    /// On Windows the root is made owner-only with the no-read-up label,
+    /// as the daemon makes it, and a directory made in it afterwards under
+    /// another spelling of its name lands in that same root. Windows only:
+    /// the estate's Windows hosts run it.
+    #[cfg(windows)]
+    #[test]
+    fn the_root_is_owner_only_and_a_respelled_path_finds_it() {
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let root = per_account_root_in(base.path());
+        ensure_per_account_root(&root).expect("the root is made");
+        shekyl_win_sec::rendezvous::check_owner_only_labelled(&root)
+            .expect("the root is owner-only and refuses read-up");
+        let respelled = base.path().join("SHEKYL").join("wallets");
+        std::fs::create_dir_all(&respelled).expect("made");
+        assert!(root.join("wallets").is_dir(), "the same root");
+        shekyl_win_sec::rendezvous::check_owner_only_labelled(&root)
+            .expect("the root keeps its protections");
+    }
+
+    /// The root this account resolves is its home's, on every platform the
+    /// tests run on; every test account has a home.
+    #[test]
+    fn this_account_s_root_is_under_its_home() {
+        let home = account_home().expect("the test account has a home");
+        assert_eq!(per_account_root(), Some(per_account_root_in(&home)));
+        assert!(home.is_absolute(), "{}", home.display());
     }
 }

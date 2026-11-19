@@ -16,11 +16,11 @@
 //! table; none of it crosses the trait boundary. The orchestrator
 //! interacts with claimed outputs through opaque [`OutputHandle`]
 //! references whose unforgeability is rooted in a deterministic cSHAKE256
-//! derivation per [`derive_output_handle`].
+//! derivation per [`derive_output_handle`](shekyl_crypto_pq::handle::derive_output_handle).
 //!
 //! # Round 4a visibility
 //!
-//! Per [`super::mod`]'s visibility note, the trait ships `pub(crate)`.
+//! Per the visibility note in [`traits`](super), the trait ships `pub(crate)`.
 //! Stage 1's consumer is [`Engine<S>`](super::super::Engine), which lives
 //! inside this crate.
 //!
@@ -41,7 +41,7 @@
 //! [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`] §3.2 / preflight D2),
 //! [`TxInputSigningContext`] carries
 //! [`source_ciphertext: HybridCiphertext`](TxInputSigningContext::source_ciphertext)
-//! and [`output_index: u64`](TxInputSigningContext::output_index)
+//! and [`internal_output_index: u64`](TxInputSigningContext::internal_output_index)
 //! instead of a populated `SourceSecretsBundle`. The orchestrator
 //! supplies the on-chain hybrid ciphertext for each input; the
 //! implementor reconstructs the per-input secret material internally
@@ -788,25 +788,18 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// per-output spending material needed to produce the per-input
     /// signature.
     ///
-    /// # M3a stub status
+    /// # Stage 1 implementor
     ///
-    /// The Stage 1 implementor `LocalKeys::sign_transaction` is an
-    /// **M3a stub**: it returns
-    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]
-    /// without producing signatures. The bridge into
-    /// [`shekyl_tx_builder::sign_transaction`] is PR-5-pinned — it
-    /// waits on [`TxToSign`]'s shape finalizing the per-input public
-    /// on-chain carriers and FCMP++ tree-branch context the builder's
-    /// `SpendInput` construction requires. The per-input secret
-    /// material is never supplied as a populated bundle crossing the
-    /// trait boundary; per the module-level "secrets stay
-    /// engine-internal" section, the committed direction reconstructs
-    /// it inside the engine from each
+    /// The Stage 1 implementor `LocalKeys::sign_transaction` delegates to
+    /// [`sign_tx`](crate::engine::sign_bridge::sign_tx), which signs
+    /// through [`shekyl_tx_builder::sign_transaction`]. The per-input
+    /// secret material is never supplied as a populated bundle crossing
+    /// the trait boundary; per the module-level "secrets stay
+    /// engine-internal" section, the engine reconstructs it from each
     /// [`TxInputSigningContext::source_ciphertext`] +
-    /// [`output_index`](TxInputSigningContext::output_index) via the
-    /// engine-internal `LocalKeys::derive_primary_source_secrets_bundle`
-    /// helper. The trait's contract for what `sign_transaction`
-    /// consumes stays stable across the stub-to-PR-5 transition.
+    /// [`internal_output_index`](TxInputSigningContext::internal_output_index)
+    /// via the engine-internal `LocalKeys::derive_primary_source_secrets_bundle`
+    /// helper.
     ///
     /// # Validation contract
     ///
@@ -846,14 +839,6 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// may reject double-spend attempts at the handle layer; the
     /// counter-based pathway treats each call independently. The
     /// committed direction is replay-rejection at handle resolution.
-    ///
-    /// # Panics
-    ///
-    /// **Does not panic.** The M3a stub returns
-    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]; it
-    /// acquires no lock and asserts no invariant. PR 5's signing body
-    /// will document its own panic surface (handle-table access,
-    /// builder invariants) when it lands.
     fn sign_transaction(
         &self,
         tx: TxToSign,

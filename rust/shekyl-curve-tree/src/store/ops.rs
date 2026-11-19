@@ -102,8 +102,8 @@ fn root_from_layers(layers: &[Vec<[u8; 32]>]) -> Result<[u8; 32], MixedRootError
 /// Layer-`j` nodes contributed by a partial tail segment.
 ///
 /// When the tail is too shallow for `build_layers` to reach absolute layer `j`
-/// directly, promote from the tail's deepest built layer via [`promote_to_layer`]
-/// (not [`build_upper_layers`], which stops at a single-node root) so mixed
+/// directly, promote from the tail's deepest built layer via [`promote_to_layer`](shekyl_fcmp::tree::promote_to_layer)
+/// (not [`build_upper_layers`](shekyl_fcmp::tree::build_upper_layers), which stops at a single-node root) so mixed
 /// composition can combine frozen `R_k` with the tail's nodes at the correct
 /// absolute depth.
 fn tail_layer_j_nodes(

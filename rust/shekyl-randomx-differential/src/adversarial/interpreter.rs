@@ -26,12 +26,12 @@
 //! The R1-D3 close enumerates three mitigations against this
 //! failure mode, all of which apply here:
 //!
-//! 1. **Dedicated [`tests`] coverage** in this module. The
-//!    [`tests::evaluate_no_op_returns_base_cache_bytes`] (no-op
-//!    identity), [`tests::evaluate_idempotent`] (idempotence),
-//!    [`tests::evaluate_applies_modifications_in_order`] (sequential
+//! 1. **Dedicated `tests` coverage** in this module. The
+//!    `tests::evaluate_no_op_returns_base_cache_bytes` (no-op
+//!    identity), `tests::evaluate_idempotent` (idempotence),
+//!    `tests::evaluate_applies_modifications_in_order` (sequential
 //!    overrides), and
-//!    [`tests::evaluate_panics_on_out_of_range_offset`]
+//!    `tests::evaluate_panics_on_out_of_range_offset`
 //!    (bounds-check) tests pin the invariants.
 //! 2. **Canonical-output cross-check** via the M1 substrate at
 //!    `adversarial_canonical_outputs::FAMILY_1_RECIPE_OUTPUTS`
@@ -47,7 +47,7 @@
 //! Per the Phase 2h Round 2 R2-D1 close, T-A13 (recipe evaluator
 //! divergence — silent mis-construction of the corpus via an
 //! evaluator bug) is mitigated primarily by *the evaluator's own
-//! test surface* (this module's [`tests`] block) with the M1
+//! test surface* (this module's `tests` block) with the M1
 //! canonical-output discipline as the backstop. T-A13's mitigation
 //! chain is structurally distinct from T-A12 (recipe substrate
 //! tamper, mitigated by M1 + M3 PR-template review of recipe data
@@ -66,7 +66,7 @@ use shekyl_pow_randomx::Seedhash;
 /// `RANDOMX_CACHE_SIZE_BYTES` (which is itself derived from the
 /// C reference's `RANDOMX_ARGON_MEMORY * ArgonBlockSize` at pin
 /// `aaafe71`). The
-/// [`tests::cache_size_matches_verifier_constant`] test pins the
+/// `tests::cache_size_matches_verifier_constant` test pins the
 /// equality at runtime via the existing
 /// [`shekyl_pow_randomx::PreparedCache::cache_block_bytes_for_testing`]
 /// accessor's byte count.

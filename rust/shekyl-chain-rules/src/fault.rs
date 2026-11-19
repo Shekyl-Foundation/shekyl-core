@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The faults [`validate`](crate::validate) can return that are **not the
+//! The faults [`validate`](fn@crate::validate) can return that are **not the
 //! view's**: a stateless-stage premise that no longer holds against the
 //! committing view ([`Stale`]), and view data no conforming store can hold
 //! ([`Corrupt`]). Neither is a verdict (`CHAIN_RULES_SLICE_2.md` §8.1 Q8).

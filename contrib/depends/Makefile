@@ -2,7 +2,11 @@
 
 SOURCES_PATH ?= $(BASEDIR)/sources
 BASE_CACHE ?= $(BASEDIR)/built
-FALLBACK_DOWNLOAD_PATH ?= https://downloads.getmonero.org/depends-sources
+# The Foundation's mirror of the sources, fetched before each package's own
+# download path (funcs.mk `fetch_file`). Every file is checked against the
+# package's pinned SHA-256 whichever host served it. The macOS SDK is not
+# mirrored; it is fetched from its own path.
+MIRROR_DOWNLOAD_PATH ?= https://github.com/Shekyl-Foundation/depends-sources/releases/download/v1
 
 BUILD = $(shell ./config.guess)
 HOST ?= $(BUILD)

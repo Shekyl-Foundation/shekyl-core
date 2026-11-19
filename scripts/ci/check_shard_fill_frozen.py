@@ -89,52 +89,18 @@ ACCESS_RE = re.compile("|".join(ACCESS))
 FN_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+(\w+)")
 MODULE = "<module>"
 
-# The chain's owner, its two readers, and their consumers at the freeze
-# (`bfdc84a30` plus #1370): file -> function -> access lines. Lowering a
-# count, or removing an entry, is how a consumer leaves; raising one or
-# adding one needs a ruling that reopens `CF-R17`.
+# The chain's owner, its reader, and their consumers: file -> function ->
+# access lines. Lowering a count, or removing an entry, is how a consumer
+# leaves; raising one or adding one needs a ruling that reopens `CF-R17`.
+# The ingest's scenarios read the forged shard-fill chain (`forged_fill`)
+# instead; the store's readers leave in CF-4a's third pull request, with
+# the file and this gate.
 READERS: dict[str, dict[str, int]] = {
     # The owner: the format, the loader and the path.
     "rust/shekyl-harness-spender/src/captured.rs": {
         MODULE: 1,
         "shard_fill_path": 2,
         "shard_fill": 1,
-    },
-    # The ingest's reader (`load_shard_fill`, `close_shards`) and its users.
-    "rust/shekyl-chain-ingest/src/scenario_shard.rs": {
-        "settled_schedule": 1,
-        "load_shard_fill": 2,
-        "close_shards": 1,
-    },
-    "rust/shekyl-chain-ingest/src/archival_pop_roundtrip_tests.rs": {
-        MODULE: 1,
-        "a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on": 1,
-        "a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused": 1,
-    },
-    "rust/shekyl-chain-ingest/src/archival_slash_tests.rs": {
-        MODULE: 1,
-        "open": 1,
-    },
-    "rust/shekyl-chain-ingest/src/bundle_producer_gate_tests.rs": {
-        MODULE: 1,
-        "a_produced_bundle_is_admitted_and_connects": 1,
-        "a_produced_support_bundle_is_admitted_and_connects": 1,
-    },
-    "rust/shekyl-chain-ingest/src/pool_submit_tests.rs": {
-        "closed_shards_lane": 2,
-    },
-    "rust/shekyl-chain-ingest/src/rpc_store_facts_tests/below_horizon.rs": {
-        MODULE: 1,
-        "the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded": 1,
-    },
-    "rust/shekyl-chain-ingest/src/scenario_emission_tests.rs": {
-        MODULE: 1,
-        "the_drivers_emission_claim_connects_and_pays_the_persona": 1,
-        "a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed": 1,
-    },
-    "rust/shekyl-chain-ingest/src/scenario_join_tests.rs": {
-        MODULE: 1,
-        "a_join_is_written_and_the_blocks_after_it_read_the_record": 1,
     },
     # The store's reader (`store_with_prefix`, the capture writer) and its
     # users.

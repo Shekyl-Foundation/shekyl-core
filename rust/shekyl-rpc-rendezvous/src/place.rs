@@ -75,7 +75,7 @@ const MACOS_SERVICE_RENDEZVOUS: &str = "/Library/Application Support/Shekyl";
 
 /// The fixed rendezvous directory for `os` (`std::env::consts::OS`), or
 /// `None` when that operating system has none. Windows has none: there the
-/// service's record is a registry value ([`ServiceRecordAt::Registry`];
+/// service's record is a registry value (`ServiceRecordAt::Registry`;
 /// Rick, 2026-11-18).
 fn fixed_service_rendezvous(os: &str) -> Option<&'static str> {
     match os {
@@ -259,20 +259,13 @@ pub fn service_record_path(
     )))
 }
 
-/// Windows: the account's data home, `Shekyl` under the local application
-/// data folder `root`. The default rendezvous directory sits in it.
-#[must_use]
-pub fn data_home(root: &Path) -> PathBuf {
-    root.join("Shekyl")
-}
-
 /// The default rendezvous directory for an account whose root is `root`:
 /// on Unix the session directory itself, on Windows `Shekyl\rendezvous`
 /// under the local application data folder.
 #[must_use]
 pub fn account_dir(root: &Path) -> PathBuf {
     if cfg!(windows) {
-        data_home(root).join(RENDEZVOUS_DIR)
+        shekyl_os_account::per_account_root_in(root).join(RENDEZVOUS_DIR)
     } else {
         root.to_path_buf()
     }

@@ -6,7 +6,7 @@
 //! consumer of which is the reward-emission vin
 //! (`docs/design/REWARD_EMISSION_LEG.md` §7.2).
 //!
-//! This is a sibling type to [`SpendAuthAndLinkability`], not a mode flag: cross-type
+//! This is a sibling type to [`SpendAuthAndLinkability`](crate::sal::SpendAuthAndLinkability), not a mode flag: cross-type
 //! rejection is a compile-time property at the typed API, and the transcript
 //! domain-separation tag ([`SAL_MEMBERSHIP_ONLY_DST`]) is the guard at the byte seam,
 //! where the type guarantee evaporates. See `docs/design/FCMP_MEMBERSHIP_ONLY.md` §2.2,

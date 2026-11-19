@@ -433,7 +433,7 @@ impl Cache {
     ///
     /// The sole production caller is `vm::VmState::dataset_read`
     /// (`vm.rs::dataset_read` at line 1427 calls `cache.derive_item`
-    /// per spec §7.3 step 5; reachable from the public [`compute_hash`]
+    /// per spec §7.3 step 5; reachable from the public [`compute_hash`](crate::compute_hash)
     /// transform via `VmState::execute_program`). The entire transitive
     /// chain reached from this function — [`item_bytes`](Cache::item_bytes),
     /// `execute_superscalar` and its internal helpers
@@ -508,7 +508,7 @@ impl Cache {
     ///
     /// `pub(crate)` per the §5.3.1 "no new production surfaces"
     /// discipline. Gated on the same `test-internals` feature as
-    /// the public [`PreparedCache::cache_block_bytes_for_testing`]
+    /// the public [`PreparedCache::cache_block_bytes_for_testing`](crate::PreparedCache::cache_block_bytes_for_testing)
     /// accessor so the default-features build (no production
     /// consumer) does not flag the helper as dead code under the
     /// crate's `#[warn(dead_code)]` default lint.
