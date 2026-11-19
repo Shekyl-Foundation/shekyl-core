@@ -38,7 +38,7 @@
 //!
 //! [`crate::CurveTreeClient`] does not store block-header roots — the
 //! caller supplies the consensus [`crate::ReferenceBlock`] (height +
-//! header root) that [`crate::CurveTreeClient::assemble_path`] verifies
+//! header root) that [`crate::CurveTreeClient::assemble_paths`] verifies
 //! the reconstructed root against. So reference-block *selection* is
 //! height arithmetic the caller drives against its own chain view; this
 //! module exposes that arithmetic as total, side-effect-free functions

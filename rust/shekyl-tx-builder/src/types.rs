@@ -8,6 +8,7 @@
 //! FFI's contract, deleted with it (the wallet is Rust).
 
 use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_types::{BlockHash, CurveTreeRoot, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -88,27 +89,25 @@ pub struct OutputInfo {
     pub dest_key: [u8; 32],
     /// Amount in atomic units. Must be non-zero.
     pub amount: AtomicUnits,
-    /// HKDF-derived commitment mask z where C = z*G + amount*H.
-    /// Pre-derived by `shekyl_construct_output` via HKDF from the shared secret.
-    #[zeroize]
-    pub commitment_mask: [u8; 32],
-    /// Encrypted amount (9 bytes): [0..8] = amount XOR k_amount, [8] =
-    /// amount_tag. In process, obtainable only from
-    /// `OutputData::enc_amount_wire()`; the type's `Deserialize` impl is the
-    /// one other route, and it exists for the FFI JSON boundary where the far
-    /// side computed the encryption — see [`EncryptedOutputField`].
+    /// Commitment mask `z` where `C = z·G + amount·H`, the scalar the
+    /// output derivation produced ([`OutputMask`]). The signer opens it;
+    /// it does not read the mask's bytes.
+    pub commitment_mask: OutputMask,
+    /// Encrypted amount (9 bytes): `[0..8]` = amount XOR k_amount, `[8]` =
+    /// amount_tag. Obtainable only from an output derivation's
+    /// `enc_amount_wire()` (solo or group), so it is always a ciphertext —
+    /// see [`EncryptedOutputField`], which lists every route.
     ///
     /// Not zeroized, deliberately: this is ciphertext bound for the chain, so
     /// wiping the local copy protects nothing. The secret it was derived under
     /// (`k_amount`) is wiped by `OutputData`'s own `ZeroizeOnDrop`.
     #[zeroize(skip)]
     pub enc_amount: EncryptedOutputField,
-    /// Encrypted label (9 bytes): [0..8] = plaintext XOR k_label, [8] =
-    /// label_tag; sentinel plaintext at V3.0 launch. In process, obtainable
-    /// only from `OutputData::enc_label_wire()`, so an unencrypted label
-    /// cannot be constructed on this path. The type's `Deserialize` impl is
-    /// the one other route, and it exists for the FFI JSON boundary where the
-    /// far side computed the encryption — see [`EncryptedOutputField`].
+    /// Encrypted label (9 bytes): `[0..8]` = plaintext XOR k_label, `[8]` =
+    /// label_tag; sentinel plaintext at V3.0 launch. Obtainable only from an
+    /// output derivation's `enc_label_wire()` (solo or group), so an
+    /// unencrypted label cannot be constructed — see
+    /// [`EncryptedOutputField`], which lists every route.
     #[zeroize(skip)]
     pub enc_label: EncryptedOutputField,
 }
@@ -138,14 +137,39 @@ pub struct TreeContext {
 /// carries the same version as the signature that later replaces it.
 pub const PQC_AUTH_VERSION: u8 = shekyl_wire::PqcAuth::VERSION;
 
+/// The authorization scheme of an input's `pqc_auth`: the closed set the
+/// builder writes, each its crypto crate's id. A scheme the chain does not
+/// define cannot be written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PqcScheme {
+    /// One hybrid signer (Ed25519 + ML-DSA-65).
+    Single,
+    /// An M-of-N multisig container (Option E′).
+    Multisig,
+}
+
+impl PqcScheme {
+    /// The scheme's `scheme_id` on the wire.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            Self::Single => shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            Self::Multisig => shekyl_crypto_pq::multisig::HYBRID_SCHEME_ID_MULTISIG,
+        }
+    }
+}
+
 /// Per-input PQC authentication data (hybrid signature).
 ///
-/// Contains the serialized hybrid signature (Ed25519 + ML-DSA-65) and the
-/// serialized public key needed for verification.
+/// Contains the serialized hybrid signature and the serialized public key
+/// needed for verification, under its scheme: one signer's key and
+/// signature, or a multisig key blob and signature container.
 #[derive(Clone, Debug)]
 pub struct PqcAuth {
     /// Authentication version. Production slots use [`PQC_AUTH_VERSION`].
     pub auth_version: u8,
+    /// The authorization scheme.
+    pub scheme: PqcScheme,
     /// Serialized hybrid signature (Ed25519 + ML-DSA-65) in canonical encoding.
     pub signature: Vec<u8>,
     /// Serialized hybrid public key in canonical encoding.
@@ -170,7 +194,7 @@ pub struct SignedProofs {
     /// not be `8*C`. The Bulletproof+ `V` vector carries the cofactored `C/8`
     /// form internally; the two are reconciled inside the BP+ verifier.
     pub commitments: Vec<[u8; 32]>,
-    /// Per-output encrypted amounts (9 bytes each: [0..8] = XOR-encrypted, [8] = HKDF tag).
+    /// Per-output encrypted amounts (9 bytes each: `[0..8]` = XOR-encrypted, `[8]` = HKDF tag).
     pub enc_amounts: Vec<EncryptedOutputField>,
     /// Per-output encrypted labels (9 bytes each).
     pub enc_labels: Vec<EncryptedOutputField>,

@@ -5,11 +5,12 @@
 //! A failure here means two members' wallets would disagree on what they
 //! sign: refuse the change, or bump the format with a recorded reason.
 
-use crate::intent::{ChainStateFingerprint, IntentRecipient, SpendIntent};
+use crate::intent::{ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent};
 use serde_json::Value;
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_units::AtomicUnits;
 
-const INTENT_VECTORS: &str = include_str!("../../../../docs/test_vectors/MULTISIG_INTENT_V2.json");
+const INTENT_VECTORS: &str = include_str!("../../../../docs/test_vectors/MULTISIG_INTENT_V3.json");
 
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len())
@@ -30,6 +31,22 @@ fn u8_of(v: &Value) -> u8 {
     u8::try_from(u64_of(v)).unwrap()
 }
 
+/// A recipient's payee as the vector names it: a single-signer address as
+/// its string with its label block, a group's payload as hex.
+fn payee_of(r: &Value) -> IntentPayee {
+    let address = r["address"].as_str().unwrap();
+    match u8_of(&r["kind"]) {
+        IntentPayee::KIND_SINGLE => IntentPayee::Single {
+            address: address.to_owned(),
+            label_plaintext: hex(r["label"].as_str().unwrap()).try_into().unwrap(),
+        },
+        IntentPayee::KIND_GROUP => IntentPayee::Group {
+            address: hex(address),
+        },
+        kind => panic!("the vector names recipient kind {kind}"),
+    }
+}
+
 fn intent_of(v: &Value) -> SpendIntent {
     SpendIntent {
         version: u8_of(&v["version"]),
@@ -46,7 +63,7 @@ fn intent_of(v: &Value) -> SpendIntent {
             .unwrap()
             .iter()
             .map(|r| IntentRecipient {
-                address: hex(r["address"].as_str().unwrap()),
+                payee: payee_of(r),
                 amount: AtomicUnits::from_raw(u64_of(&r["amount"])),
             })
             .collect(),
@@ -57,7 +74,7 @@ fn intent_of(v: &Value) -> SpendIntent {
             .iter()
             .map(u64_of)
             .collect(),
-        kem_randomness_seed: hex32(&v["kem_randomness_seed"]),
+        kem_randomness_seed: IntentSeed::new(&hex32(&v["kem_randomness_seed"])),
         chain_state_fingerprint: hex32(&v["chain_state_fingerprint"]),
     }
 }
@@ -66,18 +83,21 @@ fn intent_of(v: &Value) -> SpendIntent {
 /// (`scripts/kat/multisig_intent_oracle.py`, written from the spec). The
 /// vectors define the bytes; do not regenerate them to make this pass.
 #[test]
-fn intent_v2_vectors() {
+fn intent_v3_vectors() {
     let file: Value = serde_json::from_str(INTENT_VECTORS).unwrap();
     let vectors = file["vectors"].as_array().unwrap();
     assert!(!vectors.is_empty(), "the vector file pins no intent");
     for v in vectors {
         let intent = intent_of(v);
         let name = v["name"].as_str().unwrap();
+        let canonical = hex(v["canonical"].as_str().unwrap());
         assert_eq!(
             intent.to_canonical_bytes().unwrap(),
-            hex(v["canonical"].as_str().unwrap()),
+            canonical,
             "{name}: canonical bytes"
         );
+        let parsed = SpendIntent::from_canonical_bytes(&canonical).unwrap();
+        assert_eq!(parsed.recipients, intent.recipients, "{name}: parsed back");
         assert_eq!(
             intent.intent_hash().unwrap(),
             hex32(&v["intent_hash"]),

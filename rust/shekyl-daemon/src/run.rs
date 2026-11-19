@@ -129,15 +129,13 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     }
 
     let Loaded {
-        config_path,
-        file_read,
+        config_file,
         resolved,
         config,
     } = match load(cli, platform) {
         Ok(loaded) => loaded,
         Err(ds) => return refuse(&ds),
     };
-    let read_path = file_read.as_deref();
     let network = config.network;
 
     // The walk (IG-Q59): every refusal a start makes before it creates
@@ -148,13 +146,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         Err(ds) => return refuse(&ds),
     };
     if config.session.verify {
-        return verify::accept(
-            &resolved,
-            read_path,
-            &config_path,
-            &config,
-            &walked.warnings,
-        );
+        return verify::accept(&resolved, &config_file, &config, &walked.warnings);
     }
     let network_id = walked.network_id;
 
@@ -213,14 +205,8 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
             return EXIT_FAILED;
         }
     };
-    let mut announced = announce::announcements(
-        &TABLE,
-        &resolved,
-        read_path,
-        &config_path,
-        &config,
-        &walked.warnings,
-    );
+    let mut announced =
+        announce::announcements(&TABLE, &resolved, &config_file, &config, &walked.warnings);
     announced.rest.extend(mining_notice(&config));
     announced
         .rest

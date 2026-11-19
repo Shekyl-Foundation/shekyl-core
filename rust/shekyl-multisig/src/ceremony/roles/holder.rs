@@ -14,7 +14,7 @@ use shekyl_fcmp::frost_sal::share_bytes;
 
 use super::super::context::SigningContext;
 use super::super::files::{Authenticated, Commitment, Proposal, SignatureShare, SigningSet};
-use super::super::nonce::{consume, HeldNonceStore, LiveCeremonies, NonceCounterSink};
+use super::super::nonce::{consume, HeldNonceStore, LiveCeremonies};
 use super::super::{CeremonyError, Role};
 use super::{
     check_rounds, expect_role, from_role, hold_all, seal_as, sign_held, OpenedSet, PreprocessSet,
@@ -41,7 +41,7 @@ impl<'a> Holder<'a, Committed> {
     pub fn commit(
         ctx: SigningContext<'a>,
         proposal: &Authenticated<Proposal>,
-        store: &mut impl HeldNonceStore,
+        store: &mut HeldNonceStore,
         live: &mut impl LiveCeremonies,
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<(Self, Vec<u8>), CeremonyError> {
@@ -66,20 +66,6 @@ impl<'a> Holder<'a, Committed> {
         ))
     }
 
-    /// Rebuild a committed holder after a restart. Its held nonce in the
-    /// store is the durable fact: signing without one is refused.
-    ///
-    /// # Errors
-    ///
-    /// [`CeremonyError::WrongRole`] if this member is not a holder.
-    pub fn committed(ctx: SigningContext<'a>) -> Result<Self, CeremonyError> {
-        expect_role(&ctx, &[Role::Holder])?;
-        Ok(Self {
-            ctx,
-            state: PhantomData,
-        })
-    }
-
     /// Step 5 received, step 6 sent: open every forwarded file under its
     /// own sender's signature, check the set is exactly the other signers',
     /// consume the held nonce, sign every input, and write the
@@ -89,13 +75,12 @@ impl<'a> Holder<'a, Committed> {
     ///
     /// [`CeremonyError`]: the set is not from the proposer, a forwarded
     /// file does not open or is not this intent's, the set is not exactly
-    /// the other signers', the nonce is not held or its use cannot be
-    /// persisted, or a FROST or seal refusal.
+    /// the other signers', the nonce is not held (it was used, or the
+    /// wallet closed since the commit: R-20), or a FROST or seal refusal.
     pub fn sign(
         self,
         set: &Authenticated<SigningSet>,
-        store: &mut impl HeldNonceStore,
-        sink: &mut impl NonceCounterSink,
+        store: &mut HeldNonceStore,
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<Vec<u8>, CeremonyError> {
         let ctx = &self.ctx;
@@ -119,7 +104,7 @@ impl<'a> Holder<'a, Committed> {
                 (responder, responder_rounds),
             ]),
         )?;
-        let consumed = consume(ctx.intent.hash(), store, sink)?;
+        let consumed = consume(ctx.intent.hash(), store)?;
         let shares = sign_held(consumed, &own, &set)?
             .iter()
             .map(|(_, share)| share_bytes(share))

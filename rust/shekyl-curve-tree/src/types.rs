@@ -359,35 +359,12 @@ pub struct TreeContext {
     pub tree_depth: u8,
 }
 
-/// A locally-assembled FCMP++ membership path for one owned output, public
-/// material only (no secrets, no `ZeroizeOnDrop`). The secret-bearing
-/// `shekyl_tx_builder::types::SpendInput` is a *different* type; the
-/// engine/2A signer maps this path into a `SpendInput` by adding secrets.
-///
-/// `c1_layers`/`c2_layers` are node x-coordinate scalars, each layer the
-/// **full chunk including the path node** (siblings are not excluded),
-/// ordered bottom-to-top, matching the FCMP++ prover's `Path`. The C3
-/// invariant `c1_layers.len() + c2_layers.len() + 1 == tree.tree_depth`
-/// holds on a successful assembly (the leaf layer is the `+1`; the root
-/// layer is excluded — it is the prover's `TreeRoot`).
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct AssembledPath {
-    /// The path leaf node's outputs (including the target), in chunk order.
-    pub leaf_chunk: Vec<ChunkLeaf>,
-    /// Selene-node chunks as x-coordinate scalars, bottom-to-top.
-    pub c1_layers: Vec<Vec<[u8; 32]>>,
-    /// Helios-node chunks as x-coordinate scalars, bottom-to-top.
-    pub c2_layers: Vec<Vec<[u8; 32]>>,
-    /// The single tree context shared by the whole transaction.
-    pub tree: TreeContext,
-}
-
 /// A reference block the wallet anchors a membership proof to: the height,
 /// the consensus curve-tree root committed in that block's header, and the
 /// block's own hash.
 ///
 /// All three are public consensus values the caller holds from its synced
-/// chain view; the struct is the single anchor [`crate::CurveTreeClient::assemble_path`]
+/// chain view; the struct is the single anchor [`crate::CurveTreeClient::assemble_paths`]
 /// consumes, so the caller cannot positionally swap one 32-byte value for
 /// another (output keys, commitments, roots, and block hashes are all
 /// `[u8; 32]`). Binding a height to its consensus root and hash is the

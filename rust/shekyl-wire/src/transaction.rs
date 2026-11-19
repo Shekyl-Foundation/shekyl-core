@@ -781,11 +781,12 @@ pub const CT_COMMITMENT_LEN: usize = 32;
 ///
 /// `view_tag` is mandatory — `tagged_key` is the sole genesis output type
 /// (GENESIS_TX_WIRE_FORMAT.md §2.2), so a view-tag-less output is unrepresentable
-/// (no `Option`). `amount` is cleartext for the coinbase output and `0` for a
-/// confidential spend output.
+/// (no `Option`). `amount` is cleartext for the coinbase output and
+/// [`Output::CONFIDENTIAL_AMOUNT`] for a confidential spend output.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Output {
-    /// Cleartext amount for the coinbase output; `0` for confidential outputs.
+    /// Cleartext amount for the coinbase output;
+    /// [`Output::CONFIDENTIAL_AMOUNT`] for confidential outputs.
     pub amount: u64,
     /// The one-time output key.
     pub key: [u8; OUTPUT_KEY_LEN],
@@ -794,6 +795,21 @@ pub struct Output {
 }
 
 impl Output {
+    /// The prefix amount of a confidential output: its value is in its
+    /// commitment, never in the clear.
+    pub const CONFIDENTIAL_AMOUNT: u64 = 0;
+
+    /// A confidential output with one-time key `key` and view tag
+    /// `view_tag`.
+    #[must_use]
+    pub const fn confidential(key: [u8; OUTPUT_KEY_LEN], view_tag: u8) -> Self {
+        Self {
+            amount: Self::CONFIDENTIAL_AMOUNT,
+            key,
+            view_tag,
+        }
+    }
+
     /// Write the output.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(self.amount, w)?;
