@@ -72,6 +72,7 @@ use shekyl_fcmp_proofs::Output;
 use shekyl_types::TxSignableHash;
 
 use shekyl_crypto_pq::multisig::{MAX_MULTISIG_PARTICIPANTS, MIN_MULTISIG_THRESHOLD};
+use shekyl_crypto_pq::multisig_intent::RerandomizationSeed;
 
 /// The SAL algorithm every signer of one input runs.
 pub type FrostSal = SalAlgorithm<ChaCha20Rng, RecommendedTranscript>;
@@ -418,9 +419,6 @@ pub struct SpentOutput<'a> {
     pub commitment_mask: &'a [u8; 32],
 }
 
-/// Bytes of one input's rerandomization seed.
-pub const RERANDOMIZATION_SEED_LEN: usize = 32;
-
 /// One input's signing parameters. Every signer builds its own from the
 /// same intent (R-7): the same spent output, pseudo-out blind, message and
 /// rerandomization seed give the same value, so every signer's
@@ -459,8 +457,9 @@ impl SalSigningParams {
     /// input's pseudo-out is `C~ = a·G + amount·H`. The other three blinds
     /// (`r_o`, `r_i`, `r_r_i`) are drawn from the ChaCha20 stream over
     /// `rerandomization_seed`
-    /// ([`shekyl_crypto_pq::seeded_rng::SeededRng`], which wipes itself), so
-    /// two members with the same seed build the same rerandomized input. The
+    /// ([`RerandomizationSeed::rng`], which wipes itself). The seed is
+    /// derived from the intent per input, so two members build the same
+    /// rerandomized input and two inputs never share blinds. The
     /// expansion is pinned by `the_rerandomization_is_pinned`. The
     /// key-image generator is `Hp(O)`.
     ///
@@ -468,12 +467,12 @@ impl SalSigningParams {
     ///
     /// [`FrostSalError`] for a point or scalar that does not decode.
     pub fn new(
-        rerandomization_seed: &[u8; RERANDOMIZATION_SEED_LEN],
+        rerandomization_seed: &RerandomizationSeed,
         spent: &SpentOutput<'_>,
         pseudo_out_blind: &[u8; 32],
         signable: TxSignableHash,
     ) -> Result<Self, FrostSalError> {
-        let rng = &mut shekyl_crypto_pq::seeded_rng::SeededRng::from_seed(rerandomization_seed);
+        let rng = &mut rerandomization_seed.rng();
         let o = decode_point(spent.output_key).ok_or(FrostSalError::OutputKey)?;
         let c = decode_point(spent.commitment).ok_or(FrostSalError::Commitment)?;
         let i = EdwardsPoint(shekyl_curve_generators::biased_hash_to_point(

@@ -20,7 +20,7 @@
 //! for reading a file that holds a secret also the daemon's group (Rick,
 //! 2026-10-19), when the daemon's account is that group's only member
 //! (Rick, 2026-10-22): a service install keeps the file `root:<daemon
-//! group>` `0640` under `/etc/shekyl` `root:root` `0755`, written by root
+//! group>` `0640` under `/etc/shekyl` `root:shekyl` `0750`, written by root
 //! only and read by root and the daemon; a per-account install keeps it
 //! owner-only `0600`. One file, no separate secrets file. The mode bits are
 //! that whole policy only when the access-control list names nobody else

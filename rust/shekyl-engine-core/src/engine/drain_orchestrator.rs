@@ -490,17 +490,6 @@ pub(crate) enum DrainOrchestrationError {
     /// the session; a lagging-ingest refusal clears on a resync.
     #[error("curve tree unavailable or refused: {0:?}")]
     Tree(CurveTreeHandleError),
-    /// The path assembly returned a set that does not match the selection
-    /// (a count mismatch, or no paths for a non-empty selection) —
-    /// structurally unreachable (`assemble_tx` returns exactly one path per
-    /// input, and a covered plan selects ≥1 input), so it signals a defect or
-    /// corrupt tree state rather than a caller-recoverable refusal. `detail`
-    /// carries only public counts, never a gindex or amount.
-    #[error("drain path assembly invariant broken: {detail}")]
-    PathAssembly {
-        /// The (scalar-free) invariant that failed.
-        detail: String,
-    },
     /// The stake actor refused or failed the drain assembly itself (the
     /// [`DrainAssemblyError`](super::drain_assembly::DrainAssemblyError) it
     /// wraps names the drain-specific reason).
@@ -549,7 +538,7 @@ pub(crate) struct DrainCtx<'a> {
     /// bond posts, claims, or other drains). Excluded from selection so a
     /// drain can never double-spend an in-flight funding input.
     pub reserved: &'a BTreeSet<GlobalOutputIndex>,
-    /// The wallet's own principal destination (vout 0), resolved engine-side
+    /// The wallet's own principal destination, resolved engine-side
     /// from the primary address (T-DS-3: never caller-supplied).
     pub dest: DrainDestination,
     /// What the drain moves. `Payment`: the selection covers `payment + fee`;
@@ -875,28 +864,17 @@ pub(crate) async fn orchestrate_drain(
         .assemble_tx(reference, assemble_inputs)
         .await
         .map_err(DrainOrchestrationError::Tree)?;
-    if paths.len() != selected.len() {
-        return Err(DrainOrchestrationError::PathAssembly {
-            detail: format!(
-                "expected {} membership paths, got {}",
-                selected.len(),
-                paths.len()
-            ),
-        });
-    }
-    let first = paths
-        .first()
-        .ok_or_else(|| DrainOrchestrationError::PathAssembly {
-            detail: "assemble_tx returned no paths for a non-empty selection".to_owned(),
-        })?;
+    // One path per input asked for, in that order, all to one tree: the
+    // batch's own properties (R-26), so the records zip with its paths.
+    let tree = paths.tree();
     let tree_ctx = TreeContext {
-        reference_block: first.tree.reference_block,
-        tree_root: first.tree.tree_root,
-        tree_depth: first.tree.tree_depth,
+        reference_block: tree.reference_block,
+        tree_root: tree.tree_root,
+        tree_depth: tree.tree_depth,
     };
     let funding: Vec<FundingInputContext> = selected
         .into_iter()
-        .zip(paths)
+        .zip(paths.into_paths().map(|(_, path)| path.into_parts()))
         .map(|(record, path)| FundingInputContext {
             record,
             leaf_chunk: path

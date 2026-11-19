@@ -226,7 +226,7 @@ fn pack_output_info(out: &OutputData, amount: u64) -> OutputInfo {
     OutputInfo {
         dest_key: out.output_key,
         amount: AtomicUnits::from_raw(amount),
-        commitment_mask: out.z,
+        commitment_mask: out.commitment_mask(),
         enc_amount: out.enc_amount_wire(),
         enc_label: out.enc_label_wire(),
     }
@@ -382,12 +382,15 @@ fn build_funding_setup() -> FundingSetup {
     client
         .sync_owned(&[(target.gindex, target.output_key)])
         .expect("register the spent output");
-    let path = client
-        .assemble_path(&target, &reference)
+    let paths = client
+        .assemble_paths(std::slice::from_ref(&target), &reference)
         .expect("assemble membership path");
+    let tree = paths.tree();
+    let (_, path) = paths.into_paths().next().expect("one input, one path");
+    let path = path.into_parts();
     assert_eq!(
         path.c1_layers.len() + path.c2_layers.len() + 1,
-        usize::from(path.tree.tree_depth),
+        usize::from(tree.tree_depth),
         "C3 invariant: c1 + c2 + 1 (leaf) == tree_depth"
     );
 
@@ -411,16 +414,16 @@ fn build_funding_setup() -> FundingSetup {
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers,
+        c2_layers: path.c2_layers,
     };
 
     let pqc_pk =
         derive_pqc_public_key(&combined_ss.0, spent_index).expect("derive hybrid public key");
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
-        tree_depth: path.tree.tree_depth,
+        reference_block: tree.reference_block,
+        tree_root: tree.tree_root,
+        tree_depth: tree.tree_depth,
     };
 
     FundingSetup {
@@ -525,6 +528,7 @@ fn build_fixture() -> SpendFixture {
         fcmp_proof: signed.fcmp_proof.clone(),
         pqc_auths: vec![BuilderPqcAuth {
             auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+            scheme: shekyl_tx_builder::PqcScheme::Single,
             signature: Vec::new(),
             public_key: su.pqc_pk.clone(),
         }],
@@ -743,11 +747,13 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         pqc_auths: vec![
             BuilderPqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: su.pqc_pk.clone(),
             },
             BuilderPqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: p_pubkey.clone(),
             },
@@ -768,6 +774,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
         auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+        scheme: shekyl_tx_builder::PqcScheme::Single,
         signature: bond_sig
             .to_canonical_bytes()
             .expect("encode bond auth signature"),
@@ -1637,11 +1644,13 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         pqc_auths: vec![
             BuilderPqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: su.pqc_pk.clone(),
             },
             BuilderPqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: slot_pk.clone(),
             },
@@ -1673,6 +1682,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
         auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+        scheme: shekyl_tx_builder::PqcScheme::Single,
         signature: bond_sig
             .to_canonical_bytes()
             .expect("encode bond auth signature"),

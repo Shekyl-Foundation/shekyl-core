@@ -149,7 +149,7 @@ fn make_recipient_output_info(
     OutputInfo {
         dest_key: constructed.output_key,
         amount: AtomicUnits::from_raw(amount),
-        commitment_mask: constructed.z,
+        commitment_mask: constructed.commitment_mask(),
         enc_amount: constructed.enc_amount_wire(),
         enc_label: constructed.enc_label_wire(),
     }
@@ -739,7 +739,6 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
     use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_curve_io::CompressedPoint;
-    use shekyl_curve_primitives::Commitment;
     use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
     use shekyl_fcmp::PqcKeyScalar;
     use shekyl_tx_builder::{sign_transaction, LeafEntry, SpendInput, TreeContext};
@@ -1085,9 +1084,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
         let bp_commitments: Vec<CompressedPoint> = outputs
             .iter()
             .map(|out| {
-                let mask = Scalar::from_canonical_bytes(out.commitment_mask)
-                    .expect("commitment_mask from OutputInfo is canonical");
-                let c = Commitment::new(mask, out.amount.to_raw());
+                let c = out.commitment_mask.opening(out.amount.to_raw());
                 CompressedPoint::from(c.calculate().compress().to_bytes())
             })
             .collect();
@@ -1153,10 +1150,10 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
 /// depth-1 tree (`engine::synthetic_tree`), not a real on-chain tree. The
 /// synthetic fixtures survive `#[cfg(test)]` precisely for the `local_keys`
 /// signing KATs — the A4 reversion clause of `CT5C_ASSEMBLER_CUTOVER.md`, the
-/// same slice that cut production over to the real `assemble_path`. A
+/// same slice that cut production over to the real path assembler. A
 /// real-tree bond round-trip (mirroring `local_pending_tx`'s
 /// `build_then_submit_places_awaiting_confirmation_lock` over `funded_ledger_and_tree`) is
-/// **not** blocked on CT-5 — `assemble_path` is real — but on threading the
+/// **not** blocked on CT-5 — the assembler is real — but on threading the
 /// bond's cleartext `credit_term` through the engine signer, which today
 /// calls the zero-terms `sign_transaction` (`sign_bridge.rs`). That
 /// threading is PR 2c, so the real-tree bond KAT lands as 2c's closing
@@ -1198,7 +1195,6 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // (the bond vin carries no on-chain signature; surface-A signing over the
     // tx payload is exercised in the pqc_auths tests, not here — SA-2b)
     use shekyl_curve_io::CompressedPoint;
-    use shekyl_curve_primitives::Commitment;
     use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
     use shekyl_fcmp::PqcKeyScalar;
     use shekyl_tx_builder::{
@@ -1367,9 +1363,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     let bp_commitments: Vec<CompressedPoint> = outputs
         .iter()
         .map(|out| {
-            let mask = Scalar::from_canonical_bytes(out.commitment_mask)
-                .expect("commitment_mask from OutputInfo is canonical");
-            let c = Commitment::new(mask, out.amount.to_raw());
+            let c = out.commitment_mask.opening(out.amount.to_raw());
             CompressedPoint::from(c.calculate().compress().to_bytes())
         })
         .collect();

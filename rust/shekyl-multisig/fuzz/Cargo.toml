@@ -36,8 +36,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+shekyl-address = { path = "../../shekyl-address" }
 shekyl-multisig = { path = ".." }
-shekyl-units = { path = "../../shekyl-units" }
 
 [[bin]]
 name = "fuzz_envelope_v2_decode"

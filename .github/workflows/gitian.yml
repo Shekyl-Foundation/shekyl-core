@@ -133,7 +133,12 @@ jobs:
   package-and-publish:
     name: Package & Publish Release
     needs: [build-gitian]
-    runs-on: ubuntu-22.04
+    # 24.04, not the build jobs' 22.04: the installer check unpacks the NSIS
+    # installer with 7-Zip, and 22.04's p7zip 16.02 cannot decode it. On an
+    # installer built here it reports "Data Error" for shekyld.exe and, asked
+    # for tor/ alone, exits 0 with a tor.exe that is not the one packed.
+    # 24.04's p7zip-full is 7-Zip 23.01, which reads it byte-exact.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10  # p90 3.3 min over 12 runs; the floor
     # On a tag this packages and publishes. Dispatched with package_dry_run
     # it packages and stops: the .deb/.rpm staging, the post-pack checks and
@@ -155,9 +160,12 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ruby ruby-dev rubygems rpm rpm2cpio cpio nsis
+          sudo apt-get install -y ruby ruby-dev rubygems rpm rpm2cpio cpio nsis p7zip-full pipx
           sudo gem install --no-document fpm
-          python3 -m pip install git-archive-all
+          # 24.04 refuses a pip install into the system Python (PEP 668);
+          # pipx gives the tool its own environment and puts it on PATH.
+          pipx install git-archive-all
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Package release assets
         run: |
@@ -205,20 +213,68 @@ jobs:
             # the pinned files, each with its digest.
             python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$root$install_dir"
           }
-          # The daemon's slice unit, beside the service unit fpm installs
-          # from --deb-systemd: the package's after-install hook reloads
-          # systemd so the service can join it (ruled 2026-10-12).
+          # The daemon's service, the same in both packages
+          # (INPUT_GRAMMAR.md IG-Q64): its template unit shekyld@.service
+          # and slice (ruled 2026-10-12); the account and /etc/shekyl it runs
+          # with, declared for systemd-sysusers and systemd-tmpfiles; and a
+          # settings file per public network, every option commented out,
+          # which post-install.sh copies into /etc/shekyl when none is there.
+          # The scripts, not fpm's systemd hook, carry the unit: that hook
+          # takes one plain unit and cannot stop a template's instances.
           #
-          # stage_slice <stage-root>
-          stage_slice() {
+          # stage_service <stage-root>
+          stage_service() {
             local root="$1"
-            mkdir -p "$root/lib/systemd/system"
-            cp contrib/packaging/linux/shekyl.slice "$root/lib/systemd/system/"
+            mkdir -p "$root/lib/systemd/system" "$root/usr/lib/sysusers.d" \
+              "$root/usr/lib/tmpfiles.d" "$root/usr/share/shekyl"
+            cp contrib/packaging/linux/shekyld@.service contrib/packaging/linux/shekyl.slice \
+              "$root/lib/systemd/system/"
+            cp contrib/packaging/linux/shekyl.sysusers "$root/usr/lib/sysusers.d/shekyl.conf"
+            cp contrib/packaging/linux/shekyl.tmpfiles "$root/usr/lib/tmpfiles.d/shekyl.conf"
+            cp contrib/packaging/linux/shekyld-*.toml "$root/usr/share/shekyl/"
+          }
+          # The .deb, built by dpkg-deb from the staged tree. Its maintainer
+          # scripts dispatch on dpkg's own action and run the bodies the
+          # .rpm runs (contrib/packaging/linux/*.sh): fpm's deb templates
+          # never run a purge script (fpm 1.18 defines --deb-after-purge and
+          # does not wire it), and IG-Q64's purge is one. xz, which every
+          # supported dpkg reads (Ubuntu's dpkg defaults to zstd).
+          #
+          # deb_script <stage-root> <dpkg script> <actions, a case pattern> <body>
+          deb_script() {
+            local root="$1" name="$2" actions="$3" body="$4"
+            {
+              printf '#!/bin/sh\n# dpkg %s: runs %s on %s.\nset -e\n' "$name" "${body##*/}" "$actions"
+              printf 'case "$1" in\n%s) ;;\n*) exit 0 ;;\nesac\n' "$actions"
+              sed '1{/^#!/d}' "$body"
+            } > "$root/DEBIAN/$name"
+            chmod 0755 "$root/DEBIAN/$name"
+          }
+          # build_deb <stage-root> <deb architecture> <output>
+          build_deb() {
+            local root="$1" arch="$2" out="$3"
+            mkdir -p "$root/DEBIAN"
+            {
+              echo "Package: shekyl"
+              echo "Version: $VERSION"
+              echo "Architecture: $arch"
+              echo "Maintainer: Shekyl Foundation <info@shekyl.org>"
+              echo "Depends: zlib1g, systemd"
+              echo "Section: net"
+              echo "Priority: optional"
+              echo "Homepage: https://github.com/Shekyl-Foundation/shekyl-core"
+              echo "Description: Shekyl cryptocurrency daemon and wallet tools"
+            } > "$root/DEBIAN/control"
+            deb_script "$root" preinst "install|upgrade" contrib/packaging/linux/pre-install.sh
+            deb_script "$root" postinst "configure" contrib/packaging/linux/post-install.sh
+            deb_script "$root" prerm "remove|deconfigure" contrib/packaging/linux/pre-remove.sh
+            deb_script "$root" postrm "purge" contrib/packaging/linux/deb-after-purge.sh
+            dpkg-deb --root-owner-group -Zxz --build "$root" "$out"
           }
           # The RPC tunnel (RPC_CHANNEL.md §8; Rick, 2026-11-16): its binary
-          # beside shekyl-cli, and its unit installed but not enabled. fpm's
-          # systemd hook enables and starts what --deb-systemd names; the
-          # tunnel needs a configuration and a key before its first start,
+          # beside shekyl-cli, and its unit installed but not enabled. Neither
+          # package enables, starts or restarts a unit. The tunnel needs a
+          # configuration, a key and its own account before its first start,
           # so its unit is a plain file the operator enables.
           #
           # stage_tunnel <bin-dir> <stage-root>
@@ -245,9 +301,18 @@ jobs:
                      # fails as the runner or inspects a directory it did not unpack.
                      (cd "$unpacked" && cpio -idm --quiet --no-absolute-filenames < "$unpacked.cpio")
                      rm -f "$unpacked.cpio" ;;
+              # The Windows installer lays the bundle in `tor\` beside
+              # shekyld.exe, where the daemon looks on Windows
+              # (shekyl-tor-control-client BESIDE_TOR_DIR), not under a system
+              # directory. 7-Zip reads an NSIS installer. Windows has no
+              # executable bit, so the extract is given one for the check.
+              *.exe) 7z x -y -o"$unpacked" "$pkg" >/dev/null || return 1
+                     install_dir=/tor
+                     chmod +x "$unpacked$install_dir"/*.exe || return 1 ;;
               *) echo "check_packed_tor: unknown package type: $pkg" >&2; return 1 ;;
             esac
-            python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$unpacked$install_dir"
+            python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$unpacked$install_dir" \
+              || { rm -rf "$unpacked"; return 1; }
             rm -rf "$unpacked"
           }
 
@@ -291,20 +356,8 @@ jobs:
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             stage_tunnel "$BIN_X86" "$STAGE"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE"
-            stage_slice "$STAGE"
-            fpm -s dir -t deb \
-              -p "$RELEASE/shekyl_${VERSION}_amd64.deb" \
-              --name shekyl --version "$VERSION" \
-              --description "Shekyl cryptocurrency daemon and wallet tools" \
-              --url "https://github.com/Shekyl-Foundation/shekyl-core" \
-              --license "$PKG_LICENSE" --architecture amd64 \
-              --maintainer "Shekyl Foundation <info@shekyl.org>" \
-              --depends zlib1g \
-              --deb-systemd contrib/packaging/linux/shekyld.service \
-              --after-install contrib/packaging/linux/deb-after-install.sh \
-              --after-upgrade contrib/packaging/linux/deb-after-install.sh \
-              --deb-no-default-config-files \
-              -C "$STAGE" .
+            stage_service "$STAGE"
+            build_deb "$STAGE" amd64 "$RELEASE/shekyl_${VERSION}_amd64.deb"
             check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_amd64.deb"
 
             STAGE_RPM="$(pwd)/stage-rpm-x86_64"
@@ -314,6 +367,7 @@ jobs:
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
             stage_tunnel "$BIN_X86" "$STAGE_RPM"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE_RPM"
+            stage_service "$STAGE_RPM"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
               --name shekyl --version "$VERSION" \
@@ -322,6 +376,12 @@ jobs:
               --license "$PKG_LICENSE" --architecture x86_64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib \
+              --depends systemd \
+              --before-install contrib/packaging/linux/pre-install.sh \
+              --before-upgrade contrib/packaging/linux/pre-install.sh \
+              --after-install contrib/packaging/linux/post-install.sh \
+              --after-upgrade contrib/packaging/linux/post-install.sh \
+              --before-remove contrib/packaging/linux/pre-remove.sh \
               -C "$STAGE_RPM" .
             check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.x86_64.rpm"
 
@@ -343,20 +403,8 @@ jobs:
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             stage_tunnel "$BIN_ARM" "$STAGE"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE"
-            stage_slice "$STAGE"
-            fpm -s dir -t deb \
-              -p "$RELEASE/shekyl_${VERSION}_arm64.deb" \
-              --name shekyl --version "$VERSION" \
-              --description "Shekyl cryptocurrency daemon and wallet tools" \
-              --url "https://github.com/Shekyl-Foundation/shekyl-core" \
-              --license "$PKG_LICENSE" --architecture arm64 \
-              --maintainer "Shekyl Foundation <info@shekyl.org>" \
-              --depends zlib1g \
-              --deb-systemd contrib/packaging/linux/shekyld.service \
-              --after-install contrib/packaging/linux/deb-after-install.sh \
-              --after-upgrade contrib/packaging/linux/deb-after-install.sh \
-              --deb-no-default-config-files \
-              -C "$STAGE" .
+            stage_service "$STAGE"
+            build_deb "$STAGE" arm64 "$RELEASE/shekyl_${VERSION}_arm64.deb"
             check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_arm64.deb"
 
             STAGE_RPM="$(pwd)/stage-rpm-aarch64"
@@ -366,6 +414,7 @@ jobs:
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
             stage_tunnel "$BIN_ARM" "$STAGE_RPM"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE_RPM"
+            stage_service "$STAGE_RPM"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \
               --name shekyl --version "$VERSION" \
@@ -374,6 +423,12 @@ jobs:
               --license "$PKG_LICENSE" --architecture aarch64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib \
+              --depends systemd \
+              --before-install contrib/packaging/linux/pre-install.sh \
+              --before-upgrade contrib/packaging/linux/pre-install.sh \
+              --after-install contrib/packaging/linux/post-install.sh \
+              --after-upgrade contrib/packaging/linux/post-install.sh \
+              --before-remove contrib/packaging/linux/pre-remove.sh \
               -C "$STAGE_RPM" .
             check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.aarch64.rpm"
 
@@ -391,8 +446,10 @@ jobs:
               -DVERSION="$VERSION" \
               -DBIN_DIR="$BIN_WIN" \
               -DLICENSE_FILE="$(pwd)/LICENSE" \
+              -DEXAMPLE_TOML="$(pwd)/docs/generated/shekyld.example.toml" \
               -DOUTPUT_FILE="$(pwd)/$RELEASE/shekyl-${TAG}-win-x64-setup.exe" \
               contrib/packaging/windows/shekyl.nsi
+            check_packed_tor x86_64-w64-mingw32 "$(pwd)/$RELEASE/shekyl-${TAG}-win-x64-setup.exe"
             rm -rf "$TMPDIR_WIN"
           fi
 

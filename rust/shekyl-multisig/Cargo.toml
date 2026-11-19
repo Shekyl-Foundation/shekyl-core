@@ -35,19 +35,26 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # enforces the "no transport" ban.
 shekyl-address = { path = "../shekyl-address" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Every input's pseudo-out blind, the last balancing the outputs' masks
+# (`PseudoOutBlinds::from_intent`).
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-network = { path = "../shekyl-network" }
 shekyl-types = { path = "../shekyl-types" }
 # The signing ceremony (`ceremony/`): the FROST SAL machines and the FCMP++
 # prove and verify (`shekyl-fcmp`, feature `multisig`), the transaction it
 # assembles and signs over (`shekyl-wire`), and the range proof the proposer
-# makes and every signer verifies (`shekyl-bulletproofs`). The proposer is
-# handed the outputs' openings as `shekyl-curve-primitives` commitments,
-# which wipe on drop; this crate never reads a mask (rule 36), and does no
-# curve arithmetic of its own. Crypto and wire crates only: none reaches a
-# transport crate. `shekyl-fcmp` takes no edge back to this crate.
+# makes and every signer verifies (`shekyl-bulletproofs`). Each member
+# builds the spend's outputs with the builder every spend uses
+# (`shekyl-tx-builder::outputs`, R-7), so a group's transaction is built
+# exactly as a solo one is; the outputs' openings are
+# `shekyl-curve-primitives` commitments, which wipe on drop. This crate
+# combines no mask (rule 36) and does no curve arithmetic of its own.
+# Crypto, builder and wire crates only: none reaches a transport crate, and
+# none takes an edge back to this crate.
 shekyl-fcmp = { path = "../shekyl-fcmp", features = ["multisig"] }
 shekyl-wire = { path = "../shekyl-wire" }
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
@@ -69,6 +76,14 @@ serde_json = "1"
 ciphersuite = "0.4"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# The ceremony gate checks the scheme-2 weight prediction against the real
+# spend it signs (slice 4a §2.4).
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
+# `test-paths` compiles `AssembledPath::from_parts_unchecked`: the tests'
+# ledgers hold paths to a hand-built tree, and the adversary tests tamper a
+# recorded path's tree (R-25). Test builds only (resolver v2); production
+# keeps the plain dependency above.
+shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-paths"] }
 rand_core = { version = "0.6", features = ["std"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 

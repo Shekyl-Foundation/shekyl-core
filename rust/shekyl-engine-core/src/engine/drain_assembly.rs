@@ -28,8 +28,9 @@
 //! - **Wire record** is assembled by `assemble_transfer_wire` from the shared
 //!   [`SignedProofs`](shekyl_tx_builder::SignedProofs), so the `WireEncodeInput`
 //!   shape cannot drift from the transfer path.
-//! - **Outputs** are built by [`build_output`] (the exact `sign_tx` output
-//!   primitive), so a drain vout is bit-for-bit an ordinary transfer vout.
+//! - **Outputs** are built by [`BuiltSpend::build`] (the exact `sign_tx`
+//!   output builder), so a drain vout is bit-for-bit an ordinary transfer vout
+//!   and its two outputs sit where the key's order puts them (R-24).
 //! - **Spend inputs** come from [`prepare_funding_inputs`] (the exact bond/claim
 //!   fee-sweep leg): persona-keyed derivation, key images, strict-descending
 //!   order.
@@ -80,7 +81,6 @@
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::label::sentinel_plaintext;
-use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, OutputInfo,
     TreeContext,
@@ -89,8 +89,9 @@ use shekyl_types::GlobalOutputIndex;
 use shekyl_units::AtomicUnits;
 
 use super::bond_assembly::{finalize_bond_tx, FundingInputContext, PBoundBytes};
-use super::sign_bridge::{assemble_transfer_wire, build_output};
+use super::sign_bridge::assemble_transfer_wire;
 use super::stake_engine::{prepare_funding_inputs, PersonaHandle, StakeEngineError};
+use shekyl_tx_builder::outputs::{BuiltSpend, Payee, Recipient};
 
 /// Why an [`assemble_drain_tx`] pipeline step refused or failed.
 ///
@@ -106,7 +107,7 @@ pub(crate) enum DrainAssemblyError {
     /// The caller asked to pay **zero** to the principal. A drain's whole
     /// purpose is to move value out of `P`-space to the principal address; a
     /// zero payment moves nothing and cannot form the mandatory nonzero
-    /// principal output (vout 0). Refused as an invalid parameter **before**
+    /// principal output. Refused as an invalid parameter **before**
     /// any output construction or proving, rather than surfacing later as the
     /// shared prover's opaque `ZeroOutputAmount` on a zero-value vout — a
     /// caller-input error, diagnosed at its source. Non-terminal: re-request
@@ -176,7 +177,7 @@ impl DrainAssemblyError {
     }
 }
 
-/// The principal destination a drain pays to (vout 0).
+/// The principal destination a drain pays to.
 ///
 /// **Not caller-supplied** (T-DS-3): the drain always pays the wallet's *own*
 /// principal address, which the orchestrator resolves engine-side from the
@@ -216,9 +217,9 @@ pub(crate) struct AssembleDrain {
     pub funding: Vec<FundingInputContext>,
     /// The curve-tree reference context the paths were assembled against.
     pub tree_ctx: TreeContext,
-    /// The wallet's own principal destination (vout 0), resolved engine-side.
+    /// The wallet's own principal destination, resolved engine-side.
     pub dest: DrainDestination,
-    /// Value to pay to the principal (vout 0). The `P`-space change (vout 1) is
+    /// Value to pay to the principal. The `P`-space change is
     /// `available - payment_amount - fee`, possibly zero.
     pub payment_amount: u64,
     /// The fee the Engine-side selection was run against.
@@ -261,7 +262,7 @@ pub(super) async fn assemble_drain_tx(
     // principal, so it must pay a nonzero amount there; a zero payment forms no
     // valid principal output. Refuse here as a caller-input error rather than
     // deferring to the shared prover's opaque `ZeroOutputAmount` on a
-    // zero-value vout 0. ──
+    // zero-value principal output. ──
     if payment_amount == 0 {
         return Err(DrainAssemblyError::PaymentZero.into());
     }
@@ -287,7 +288,8 @@ pub(super) async fn assemble_drain_tx(
     }
     let change = available - required;
 
-    // ── Step 2: resolve the two output specs `[vout 0, vout 1]`. Every valid tx
+    // ── Step 2: resolve the two output specs, which the builder places in the
+    // key's order (R-24). Every valid tx
     // carries exactly two NONZERO confidential outputs (consensus `vout >= 2` +
     // the shared prover's zero-output rejection), and a drain matches that modal
     // shape in both regimes (T-DS-6):
@@ -352,45 +354,31 @@ pub(super) async fn assemble_drain_tx(
         ]
     };
 
-    // Both outputs built by the transfer path's `build_output` primitive, so a
-    // drain vout is bit-for-bit an ordinary transfer vout.
+    // Both outputs built by the transfer path's builder, so a drain vout is
+    // bit-for-bit an ordinary transfer vout.
     let tx_key = shekyl_crypto_pq::TxKey::random()
         .map_err(|e| DrainAssemblyError::build("drain transaction key", e))?;
 
-    let vout0 = build_output(
-        &tx_key,
-        spec0.spend_pk,
-        spec0.x25519_pk,
-        spec0.ml_kem_ek,
-        spec0.amount,
-        0,
-        &sentinel_plaintext(),
-    )
-    .map_err(|e| DrainAssemblyError::build("drain vout0 construction", e))?;
-    let vout1 = build_output(
-        &tx_key,
-        spec1.spend_pk,
-        spec1.x25519_pk,
-        spec1.ml_kem_ek,
-        spec1.amount,
-        1,
-        &sentinel_plaintext(),
-    )
-    .map_err(|e| DrainAssemblyError::build("drain vout1 construction", e))?;
-
-    let built_outputs = [vout0, vout1];
+    let sentinel = sentinel_plaintext();
+    let recipients = [spec0, spec1].map(|spec| Recipient {
+        payee: Payee::Single {
+            spend_key: spec.spend_pk,
+            view_x25519: spec.x25519_pk,
+            ml_kem_ek: spec.ml_kem_ek,
+            label_plaintext: &sentinel,
+        },
+        amount: spec.amount,
+    });
+    // The builder places the two at the positions the key derives (R-24).
+    let built = BuiltSpend::build(&tx_key, &recipients)
+        .map_err(|e| DrainAssemblyError::build("drain output construction", e))?;
+    let built_outputs = built.outputs();
     let output_infos: Vec<OutputInfo> = built_outputs.iter().map(|b| b.info.clone()).collect();
     let output_keys: Vec<[u8; 32]> = built_outputs.iter().map(|b| b.output_key).collect();
-    let view_tags: Vec<Option<u8>> = built_outputs.iter().map(|b| b.view_tag).collect();
-    let kem_blobs: Vec<Vec<u8>> = built_outputs.iter().map(|b| b.kem_blob.clone()).collect();
-    let leaf_entry_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
+    let view_tags: Vec<Option<u8>> = built_outputs.iter().map(|b| Some(b.view_tag)).collect();
 
-    // ── Step 3: tx_extra — tx pubkey + per-output KEM blobs + the `0x07` PQC
-    // leaf entries (identical layout + order to the transfer path; consensus
-    // refuses a transaction with outputs that lacks the field). ──
-    let mut extra = Extra::for_hybrid_transfer(tx_key.public(), kem_blobs);
-    extra.push_pqc_leaf_entries(leaf_entry_blob);
-    let tx_extra = extra.serialize();
+    // ── Step 3: tx_extra, the builder's. ──
+    let tx_extra = built.extra().to_vec();
 
     // ── Step 4: persona-keyed spend inputs — the shared bond/claim fee-sweep
     // leg (rule 36: secrets re-derived inside; strict-descending key-image
