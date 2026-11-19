@@ -617,16 +617,6 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         pinned.staleness(&self.pinner, bound).await
     }
 
-    /// The served store's ingest tip, read through this host's pinner.
-    ///
-    /// # Errors
-    ///
-    /// [`PinError`] as [`PinnedServeSet::ingested_tip`].
-    pub async fn ingested_tip(&self) -> Result<shekyl_curve_tree::BlockHeight, PinError> {
-        let pinned = self.pinned_serve_set();
-        pinned.ingested_tip(&self.pinner).await
-    }
-
     /// The bound loopback address the onion targets.
     ///
     /// Stable for the host's whole life — that is the invariant, not an
