@@ -21,6 +21,7 @@ mod fee_ladder;
 mod fee_model;
 mod fee_signal;
 mod growth_gate;
+mod growth_trace;
 mod honest_step;
 mod jg_grid;
 mod median_window;
@@ -152,6 +153,24 @@ fn main() {
             "overrides are read by --stage2, --esr10 and each instrument's own mode only: each \
              prints a cell beside its baseline",
         );
+    }
+    // §5.36: the growth under standard traffic, traced. It names its own
+    // four runs (both zones, on standard traffic and on steady), so it
+    // takes no other mode, no control flag and no spread.
+    if std::env::args().any(|a| a == "--growth-trace") {
+        let seed_spread = std::env::args().any(|a| a == "--seed-spread");
+        if control || steady || stage2 || esr10 || eup4 || instrument.is_some() || jg || seed_spread
+        {
+            refuse(
+                "--growth-trace runs its own four folds (both zones, on standard traffic and on \
+                 steady): it takes no other mode, no control flag and no --seed-spread",
+            );
+        }
+        let mut narration = String::new();
+        growth_trace::run(&mut narration, &SimParams::default())
+            .expect("String sink is infallible");
+        eprint!("{narration}");
+        return;
     }
     if esr10 && control {
         refuse("--esr10 runs the production ladder: the flat control fee has no rungs to mix");

@@ -110,7 +110,7 @@ impl CapacityTally {
 }
 
 /// The lower-middle median of `blocks` values held as value to count.
-fn lower_median(counts: &BTreeMap<u64, u64>, blocks: u64) -> u64 {
+pub(crate) fn lower_median(counts: &BTreeMap<u64, u64>, blocks: u64) -> u64 {
     let rank = blocks.saturating_sub(1) / 2;
     let mut seen = 0;
     for (&value, &n) in counts {

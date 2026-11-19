@@ -848,3 +848,92 @@ fn own_bodies_fill_the_penalty_free_room_and_no_more() {
         "nothing offered, nothing listed"
     );
 }
+
+/// The penalty-free body room a block judged under `space`'s medians has:
+/// the fill's own figure, from an empty `Fill` at the same point.
+fn free_bodies(space: &BlockSpace, run: &SimParams, point: &FeePoint<'_>) -> u64 {
+    let coinbase = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
+    Fill::empty(
+        space.medians(run.economic()).effective_median.to_raw(),
+        coinbase,
+        point.already_generated,
+        point.volume,
+        point.params,
+    )
+    .expect("the point is in the reward's domain")
+    .penalty_free_bodies()
+}
+
+/// §5.36's record of a fill. A pool the block empties stops `Drained` and
+/// lists nothing past the penalty-free weight. A pool deeper than the room
+/// stops at the template's refusal: at the penalty while the next body's
+/// fee is under what it adds, and at the limit once a fee covers the
+/// penalty all the way there. The bodies past the free weight are the ones
+/// whose place ends beyond it; the penalty is the empty block's reward less
+/// the paid one; and the fees cover it.
+#[test]
+fn the_fill_records_why_it_stopped_and_what_it_listed_past_the_free_weight() {
+    let run = SimParams::default();
+    let params = run.economic();
+    let point = at(&run);
+    let tx = baseline_tx();
+
+    let mut space = BlockSpace::default();
+    let small = space.fill(1_000, space.medians(params), &standard(5, tx), &point);
+    assert_eq!(small.stop, FillStop::Drained);
+    assert_eq!(small.past_free, PastFree::default());
+
+    let mut space = BlockSpace::default();
+    let free = free_bodies(&space, &run, &point);
+    let deep = space.fill(1_000, space.medians(params), &standard(3_000, tx), &point);
+    assert_eq!(
+        deep.stop,
+        FillStop::Penalty,
+        "the next body's fee is under its penalty"
+    );
+    let under_free = free / tx.weight;
+    assert_eq!(
+        deep.past_free.bodies,
+        deep.carried_txs() - under_free.min(deep.carried_txs()),
+        "past the free weight: the bodies whose place ends beyond it"
+    );
+    assert_eq!(
+        deep.past_free.fees_atomic,
+        deep.past_free.bodies * tx.fee_atomic
+    );
+    assert_eq!(
+        deep.past_free.surplus_atomic(),
+        deep.past_free.fees_atomic - deep.past_free.penalty_atomic,
+    );
+    if deep.past_free.bodies == 0 {
+        assert_eq!(
+            deep.past_free.penalty_atomic, 0,
+            "no body past the free weight, no penalty"
+        );
+    }
+
+    // A fee that covers the penalty to the limit: the block stops there,
+    // every body past the free weight paying a penalty its fee covers.
+    let rich = OrdinaryTx {
+        fee_atomic: 1_000_000_000_000_000,
+        weight: tx.weight,
+    };
+    let mut space = BlockSpace::default();
+    let free = free_bodies(&space, &run, &point);
+    let full = space.fill(1_000, space.medians(params), &standard(3_000, rich), &point);
+    assert_eq!(
+        full.stop,
+        FillStop::Limit,
+        "the fee covers the penalty to the limit"
+    );
+    assert_eq!(
+        full.past_free.bodies,
+        full.carried_txs() - (free / rich.weight).min(full.carried_txs())
+    );
+    assert!(full.past_free.bodies > 0);
+    assert!(
+        full.past_free.penalty_atomic > 0,
+        "a block past the free weight pays"
+    );
+    assert!(full.past_free.surplus_atomic() > 0);
+}

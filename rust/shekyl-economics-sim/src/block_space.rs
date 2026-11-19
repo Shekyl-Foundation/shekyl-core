@@ -146,6 +146,58 @@ pub(crate) struct Filled {
     /// The producer's own bodies, listed after the pool's
     /// ([`OwnBodies`]). Zero unless the fold offers some.
     pub(crate) own: OwnListing,
+    /// Why the fill ended (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.36).
+    pub(crate) stop: FillStop,
+    /// The bodies listed past the penalty-free weight, and the penalty
+    /// the block pays for them (§5.36).
+    pub(crate) past_free: PastFree,
+}
+
+/// Why a block's fill ended (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.36):
+/// the template's first refusal, or none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FillStop {
+    /// Every body the pool offered was listed.
+    Drained,
+    /// A body's fee was under the penalty it would add
+    /// (`shekyl_block_template::Fill::admit`'s coinbase test).
+    Penalty,
+    /// A body would have passed the block's limit, twice the effective
+    /// median.
+    Limit,
+}
+
+/// The bodies a block lists past the penalty-free weight
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.36). Only they pay a penalty.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PastFree {
+    /// Bodies whose place in the block ends past the penalty-free weight.
+    pub(crate) bodies: u64,
+    /// Their fees.
+    pub(crate) fees_atomic: u64,
+    /// The block's penalty: the reward it would have paid within the
+    /// penalty-free weight less the reward it paid.
+    pub(crate) penalty_atomic: u64,
+}
+
+impl PastFree {
+    /// Those bodies' fees less the penalty they added: what listing them
+    /// left the producer. The fill lists a body only when the coinbase
+    /// does not fall, so the fees cover the penalty.
+    pub(crate) fn surplus_atomic(&self) -> u64 {
+        self.fees_atomic
+            .checked_sub(self.penalty_atomic)
+            .expect("the fill lists no body that lowers the coinbase")
+    }
+}
+
+/// What the offer saw: its first refusal, and the bodies it listed past
+/// the penalty-free weight.
+#[derive(Debug, Clone, Copy, Default)]
+struct Offered {
+    refusal: Option<FillStop>,
+    past_bodies: u64,
+    past_fees_atomic: u64,
 }
 
 impl Filled {
@@ -477,7 +529,14 @@ impl BlockSpace {
     /// by fee per weight, so both conditions refuse it as well. A group of
     /// another weight faces a different penalty and limit test and is still
     /// offered, as the template walks every candidate.
-    fn offer(&mut self, fill: &mut Fill<'_>, height: u64, rungs: &mut PerRung<RungTraffic<u64>>) {
+    fn offer(
+        &mut self,
+        fill: &mut Fill<'_>,
+        height: u64,
+        rungs: &mut PerRung<RungTraffic<u64>>,
+    ) -> Offered {
+        let mut offered_read = Offered::default();
+        let free = fill.penalty_free_bodies();
         self.listed.clear();
         self.taken.clear();
         self.taken.resize(self.waiting.len(), 0);
@@ -495,10 +554,27 @@ impl BlockSpace {
             if offered == 0 {
                 continue;
             }
+            let before = fill.bodies_weight();
             let taken = fill.admit_up_to(head.weight, head.fee, offered);
             if taken < offered {
                 closed.push(head.weight);
+                let passes_limit = fill
+                    .bodies_weight()
+                    .checked_add(head.weight)
+                    .is_none_or(|weight| weight > fill.bodies_weight_bound());
+                offered_read.refusal.get_or_insert(if passes_limit {
+                    FillStop::Limit
+                } else {
+                    FillStop::Penalty
+                });
             }
+            let under_free = free
+                .saturating_sub(before)
+                .checked_div(head.weight)
+                .unwrap_or(taken);
+            let past = taken.saturating_sub(under_free);
+            offered_read.past_bodies += past;
+            offered_read.past_fees_atomic += past * head.fee;
             if taken == 0 {
                 continue;
             }
@@ -535,6 +611,7 @@ impl BlockSpace {
                 count: taken,
             });
         }
+        offered_read
     }
 
     /// Step 4: bring the pool within `limit`, the bodies this block listed
@@ -626,7 +703,7 @@ impl BlockSpace {
             at.params,
         )
         .expect("sim trajectory stays within the reward's arithmetic domain");
-        self.offer(&mut fill, height, &mut rungs);
+        let offered = self.offer(&mut fill, height, &mut rungs);
         self.trim(limit, &mut evicted);
         self.drop_empty();
         let own = own.map_or_else(OwnListing::default, |own| {
@@ -644,6 +721,16 @@ impl BlockSpace {
 
         let weight = fill.block_weight();
         self.medians.push(medians, weight, at.params);
+        // The producer's own bodies sit inside the penalty-free room, so the
+        // penalty is the pool's bodies' alone.
+        let penalty_atomic = if fill.bodies_weight() > fill.penalty_free_bodies() {
+            fill.reward_at(0)
+                .expect("the reward prices an empty block")
+                .checked_sub(fill.reward())
+                .expect("a heavier block is not paid more")
+        } else {
+            0
+        };
         let filled = Filled {
             rungs,
             waiting: self.waiting_total,
@@ -651,6 +738,12 @@ impl BlockSpace {
             block_weight: weight,
             bodies_weight: fill.bodies_weight(),
             own,
+            stop: offered.refusal.unwrap_or(FillStop::Drained),
+            past_free: PastFree {
+                bodies: offered.past_bodies,
+                fees_atomic: offered.past_fees_atomic,
+                penalty_atomic,
+            },
         };
         assert_eq!(
             filled.fees_atomic(),
