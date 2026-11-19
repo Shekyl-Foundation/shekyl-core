@@ -26,8 +26,8 @@ use super::*;
 use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_engine_state::pscan_state::PScanState;
 use shekyl_p_loopback::{
-    client_through, fetch_target, request_header, DiscardTxs, ExpectedShard, FetchError,
-    PServeEndpoint, Timeouts,
+    client_through, fetch_target, DiscardTxs, ExpectedShard, FetchError, PServeEndpoint,
+    RequestHeader, Timeouts,
 };
 use shekyl_types::{shard_of, ArchivalLength};
 use shekyl_wire::shard_frame::frame_rows_digest;
@@ -184,6 +184,14 @@ fn proving_timeouts() -> Timeouts {
 /// body against the chain's rows and the receipt against the persona's
 /// receipt key. Then a draw on a shard the store does not hold, which is
 /// the 404 and moves the not-held count.
+///
+/// Each request anchors where a requester does: [`PASS_ANCHOR_DEPTH_BLOCKS`]
+/// below the tip, on that block's hash, with a fresh nonce. The depth is
+/// the genesis reorg cap, not the regtest lever, and P's pre-sign gate
+/// refuses every anchor (400) while its own height is below it, so the
+/// chain is first mined past the depth.
+///
+/// [`PASS_ANCHOR_DEPTH_BLOCKS`]: shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS
 async fn draw_and_check(
     daemon: &RegtestDaemon,
     arc: &Shared,
@@ -199,6 +207,11 @@ async fn draw_and_check(
     let stake = arc.read().await.stake_handle().expect("a staker");
     let key: Arc<dyn shekyl_p_host::PassKey> =
         ResidentReceiptKey::new(&stake, PSlot::from_raw(SLOT));
+    let depth = shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
+    let count = daemon.height().await;
+    if count <= depth.to_raw() {
+        daemon.generate_blocks(depth.to_raw() + 1 - count).await;
+    }
     let top = shekyl_types::BlockHeight::from_raw(daemon.height().await - 1);
     let signer = shekyl_p_host::signer_at_synced_tip(key, top, Duration::from_secs(600));
     let provider = Arc::new(shekyl_p_serve::StoreShardProvider::new(Arc::new(
@@ -212,12 +225,23 @@ async fn draw_and_check(
         .expect("derive persona keys")
         .receipt_sign_pk;
     let anchor = top
-        .checked_sub_count(shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS)
-        .unwrap_or(shekyl_types::BlockHeight::ZERO);
+        .checked_sub_count(depth)
+        .expect("the chain was mined past the anchor depth");
+    let anchor_hash = arc
+        .read()
+        .await
+        .daemon()
+        .clone()
+        .fetch_scannable_block(usize::try_from(anchor.to_raw()).expect("fits"))
+        .await
+        .expect("the anchor block")
+        .block
+        .hash();
+    let header = || RequestHeader::fresh(anchor, anchor_hash).expect("entropy for the nonce");
     let served = client
         .fetch(
             &fetch_target(receipt_key.clone()),
-            &request_header(anchor),
+            &header(),
             &expected,
             Arc::new(DiscardTxs),
         )
@@ -230,7 +254,7 @@ async fn draw_and_check(
     let refused = client
         .fetch(
             &fetch_target(receipt_key),
-            &request_header(anchor),
+            &header(),
             &shekyl_p_loopback::fixture_expectation(unheld.to_raw()),
             Arc::new(DiscardTxs),
         )
