@@ -56,6 +56,8 @@ DEPENDS = REPO / "contrib" / "depends"
 PAYLOAD = b"shekyl depends fetch selftest payload\n" * 64
 NAME = "zzfetch-1.tar.gz"
 RETIRED = "getmonero"
+# The hosts in the order `fetch_file` must try them.
+ORDER = ("primary", "first", "second")
 SERVED: list[str] = []
 
 
@@ -115,7 +117,7 @@ def selftest() -> int:
     changed = bytes([PAYLOAD[0] ^ 1]) + PAYLOAD[1:]
     with tempfile.TemporaryDirectory() as tmp_name:
         tmp = Path(tmp_name)
-        roots = {k: tmp / k for k in ("primary", "first", "second")}
+        roots = {k: tmp / k for k in ORDER}
         servers, ports = {}, {}
         for key, root in roots.items():
             root.mkdir()
@@ -125,7 +127,10 @@ def selftest() -> int:
         try:
             cases = [
                 # label, files on (primary, first, second), primary url, want ok, served by
-                ("the primary blocked, an alternate holds the file", (None, PAYLOAD, None), blocked, True, "first"),
+                # Both alternates hold it, so the first served and the second
+                # never asked is the order, not the only host that answered.
+                ("the primary blocked, both alternates hold the file: the first serves it",
+                 (None, PAYLOAD, PAYLOAD), blocked, True, "first"),
                 ("the primary blocked, the alternate's file has one byte changed",
                  (None, changed, None), blocked, False, None),
                 ("the primary blocked, the first alternate lacks it, the second holds it",
@@ -134,7 +139,7 @@ def selftest() -> int:
                 ("no host holds it", (None, None, None), url["primary"], False, None),
             ]
             for label, bodies, primary, want_ok, served_by in cases:
-                for key, body in zip(("primary", "first", "second"), bodies):
+                for key, body in zip(ORDER, bodies):
                     path = roots[key] / NAME
                     if path.exists():
                         path.unlink()
@@ -146,8 +151,9 @@ def selftest() -> int:
                     ok = rc == 0 and kept.is_file() and hashlib.sha256(kept.read_bytes()).hexdigest() == digest
                     hit = [s for s in SERVED if s.endswith(NAME)]
                     ok = ok and bool(hit) and hit[-1].startswith(f"{ports[served_by]}/")
-                    if served_by == "primary":
-                        ok = ok and all(s.startswith(f"{ports['primary']}/") for s in hit)
+                    # The order: no host after the one that served was asked.
+                    later = ORDER[ORDER.index(served_by) + 1:]
+                    ok = ok and not any(s.startswith(f"{ports[k]}/") for k in later for s in hit)
                 else:
                     ok = rc != 0 and not kept.exists()
                 if not ok:
