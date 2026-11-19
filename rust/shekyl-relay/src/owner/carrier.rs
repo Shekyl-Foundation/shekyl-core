@@ -27,6 +27,7 @@
 use std::collections::HashMap;
 
 use shekyl_draw_rng::RelayRng;
+use shekyl_levin::{fragmented_notify, NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_p2p_session::Established;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 use shekyl_timing_engine::{Clock, OwnerHandle};
@@ -34,7 +35,9 @@ use tokio::sync::mpsc;
 
 use super::actor::{millis, tick_of, Cmd};
 use crate::carrier::{Carrier, CarrierView, NoiseDue};
+use crate::graph::{Relay, TxBlob};
 use crate::noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues};
+use crate::stem_watch::TxId;
 
 /// What the relay owner tells the carrier task.
 pub(super) enum CarrierCmd {
@@ -190,5 +193,114 @@ impl<C: Clock + Clone + Send + Sync + 'static> CarrierTask<C> {
         if let Some(deadline) = self.carrier.deadline() {
             if let Err(_engine_closing) = self.owner.arm(tick_of(deadline)) {}
         }
+    }
+}
+
+/// A stem the carrier task holds, until it reports what became of it.
+pub(super) struct PendingStem {
+    pub(super) tx: TxId,
+    pub(super) blob: TxBlob,
+    pub(super) source: Option<ConnectionId>,
+    /// Originated here. Before any byte leaves, a failure waits.
+    pub(super) local: bool,
+}
+
+/// The relay owner's side of the carrier task.
+///
+/// The task owns the schedule, the queue and the writers. This owns the
+/// tokens, the window the messages are framed to, and the last view the
+/// task was told. Cover off is the absence of a link, not a second flag.
+pub(super) struct CarrierLink {
+    tx: mpsc::UnboundedSender<CarrierCmd>,
+    /// The dummy's length: what a carried message is framed to.
+    window: usize,
+    last_view: CarrierView,
+    last_epochs: u64,
+    pending: HashMap<u64, PendingStem>,
+    next_token: u64,
+}
+
+impl CarrierLink {
+    pub(super) fn new(tx: mpsc::UnboundedSender<CarrierCmd>, window: usize) -> Self {
+        Self {
+            tx,
+            window,
+            last_view: CarrierView::default(),
+            last_epochs: 0,
+            pending: HashMap::new(),
+            next_token: 0,
+        }
+    }
+
+    pub(super) fn stop(&self) {
+        let _gone = self.tx.send(CarrierCmd::Stop);
+    }
+
+    pub(super) fn set_session(&self, id: ConnectionId, session: Option<Established>) {
+        let _gone = self.tx.send(CarrierCmd::Session { id, session });
+    }
+
+    /// The zone's slots and covered sessions, when either changed, and an
+    /// epoch boundary when the epoch count moved.
+    pub(super) fn tell(&mut self, zone: &Relay) {
+        let view = zone.carrier_view();
+        let epochs = zone.epochs_started();
+        let boundary = epochs != self.last_epochs;
+        if view == self.last_view && !boundary {
+            return;
+        }
+        let _gone = self.tx.send(CarrierCmd::View {
+            view: view.clone(),
+            boundary,
+        });
+        self.last_view = view;
+        self.last_epochs = epochs;
+    }
+
+    pub(super) fn holds(&self, tx: &TxId) -> bool {
+        self.pending.values().any(|pending| pending.tx == *tx)
+    }
+
+    /// Frame `blob` and hand it to `channel`. `true` when the carrier holds
+    /// it, including when it already did. `false` when the frame or the
+    /// task refused it: the caller takes the no-window path.
+    pub(super) fn offer(&mut self, channel: usize, blob: &TxBlob, stem: PendingStem) -> bool {
+        if self.holds(&stem.tx) {
+            return true;
+        }
+        let Some(message) = self.frame(blob) else {
+            return false;
+        };
+        let token = self.next_token;
+        self.next_token = self.next_token.wrapping_add(1);
+        self.pending.insert(token, stem);
+        let handed = self
+            .tx
+            .send(CarrierCmd::Enqueue {
+                channel,
+                message,
+                token: CarrierToken(token),
+            })
+            .is_ok();
+        if !handed {
+            self.pending.remove(&token);
+        }
+        handed
+    }
+
+    pub(super) fn take(&mut self, token: CarrierToken) -> Option<PendingStem> {
+        self.pending.remove(&token.0)
+    }
+
+    /// One 2002 with the one blob, cut into the carrier's windows.
+    fn frame(&self, blob: &TxBlob) -> Option<Vec<u8>> {
+        let payload = NewTransactions {
+            txs: vec![blob.to_vec()],
+            padding: Vec::new(),
+            dandelionpp_fluff: false,
+        }
+        .store()
+        .ok()?;
+        fragmented_notify(self.window, NOTIFY_NEW_TRANSACTIONS, &payload).ok()
     }
 }

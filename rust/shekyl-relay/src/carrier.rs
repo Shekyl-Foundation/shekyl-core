@@ -344,3 +344,6 @@ pub(crate) mod pair {
         }
     }
 }
+
+#[cfg(test)]
+mod schedule_tests;

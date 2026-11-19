@@ -30,13 +30,16 @@ fn tx(byte: u8) -> (TxId, TxBlob) {
     )
 }
 
-/// A clearnet zone in a stem epoch with outbound sessions on `peers`.
+/// A cover-on clearnet zone in a stem epoch, outbound sessions on `peers`.
+///
+/// Plaintext clearnet carries no cover, so a stem leaves on the ordinary
+/// connection. Cover off is a different node: it broadcasts a received stem.
 fn stem_zone(peers: &[u8], rng: &mut SplitMix64) -> Relay {
     for _ in 0..10_000 {
         let mut z = Relay::new(
             DandelionParams::inherited(),
             2,
-            false,
+            true,
             &[ConnectorId::Clearnet],
             &[],
             0,
@@ -145,7 +148,19 @@ fn a_dropped_stem_gets_one_reaction_own_or_relayed() {
         );
         let first_fire = z.stem_observation_deadline().expect("armed");
         let first = z.fire_embargoes(first_fire, &mut SplitMix64::new(seed ^ 0x55));
-        let second_fire = z.stem_observation_deadline().expect("re-armed");
+        assert!(
+            z.stem_observation_deadline().is_none(),
+            "the fire asks for the reshape; the write arms it"
+        );
+        let stem = &first.stems[0];
+        z.record_stem(
+            &[(stem.tx, TxBlob::clone(&stem.blob))],
+            stem.peer,
+            stem.source,
+            first_fire,
+            &mut SplitMix64::new(seed ^ 0x55),
+        );
+        let second_fire = z.stem_observation_deadline().expect("the write armed it");
         let second = z.fire_embargoes(second_fire, &mut SplitMix64::new(seed ^ 0xAA));
         assert!(first.published.is_empty() && second.stems.is_empty());
         Reaction {
@@ -263,8 +278,23 @@ fn the_daemon_judges_an_origin_hold_against_its_own_budget() {
     let broadcast = tx(9);
     originate(&mut fired, &broadcast, &mut rng);
     let first = fired.stem_observation_deadline().expect("armed");
-    let _ = fired.fire_embargoes(first, &mut rng);
-    let second_at = fired.stem_observation_deadline().expect("re-armed");
+    let reshape = fired.fire_embargoes(first, &mut rng);
+    assert!(
+        fired.stem_observation_deadline().is_none(),
+        "the fire asks for the reshape; the write arms it"
+    );
+    for stem in &reshape.stems {
+        fired.record_stem(
+            &[(stem.tx, TxBlob::clone(&stem.blob))],
+            stem.peer,
+            stem.source,
+            first,
+            &mut rng,
+        );
+    }
+    let second_at = fired
+        .stem_observation_deadline()
+        .expect("armed by the write");
     let second = fired.fire_embargoes(second_at, &mut rng);
     assert_eq!(second.published, vec![broadcast.0]);
     assert_eq!(
@@ -315,6 +345,7 @@ fn an_own_transaction_re_stems_once_to_its_alternate_then_is_broadcast() {
             tx: sent.0,
             blob: TxBlob::clone(&sent.1),
             source: None,
+            carrier: RelayCarrier::Ordinary,
         }],
         "the first fire re-stems to the alternate"
     );
@@ -322,8 +353,20 @@ fn an_own_transaction_re_stems_once_to_its_alternate_then_is_broadcast() {
         first.published.is_empty(),
         "the first fire does not publish"
     );
+    assert!(
+        z.stem_observation_deadline().is_none(),
+        "the fire asks for the reshape; the write arms it"
+    );
+    let stem = &first.stems[0];
+    z.record_stem(
+        &[(stem.tx, TxBlob::clone(&stem.blob))],
+        stem.peer,
+        stem.source,
+        fire,
+        &mut rng,
+    );
 
-    let second_at = z.stem_observation_deadline().expect("re-armed");
+    let second_at = z.stem_observation_deadline().expect("armed by the write");
     let second = z.fire_embargoes(second_at, &mut rng);
     assert!(second.stems.is_empty(), "the cap is one re-stem");
     assert_eq!(second.published, vec![sent.0], "the second fire publishes");
@@ -433,6 +476,7 @@ fn a_relay_position_re_stems_to_its_own_alternate() {
             tx: sent.0,
             blob: TxBlob::clone(&sent.1),
             source: Some(id(9)),
+            carrier: RelayCarrier::Ordinary,
         }]
     );
     assert_ne!(alternate, id(9), "never back to the source");
@@ -525,18 +569,35 @@ fn an_unsynchronised_origin_is_held_and_sent_once_synchronised() {
     assert!(z.holds_unsent(&sent.0));
 
     z.set_node_sync(NodeSync::Synchronised, NEVER_SENT_RETRY_MS + 1);
-    let sent_now = z.due_unsent(NEVER_SENT_RETRY_MS + 1, &mut rng);
+    let now = NEVER_SENT_RETRY_MS + 1;
+    let sent_now = z.due_unsent(now, &mut rng);
     assert_eq!(
         sent_now.stems.len(),
         1,
-        "sent at the sync turn, not a grid later"
+        "planned at the sync turn, not a grid later"
     );
     assert_eq!(sent_now.stems[0].blob, sent.1);
+    assert!(z.holds_unsent(&sent.0), "unsent until the write lands");
+    assert_eq!(
+        z.stem_observations_in_flight(),
+        0,
+        "the plan does not arm the embargo"
+    );
+    let again = z.due_unsent(now, &mut rng);
+    assert!(again.stems.is_empty(), "a handed stem is not planned twice");
+    let stem = &sent_now.stems[0];
+    z.record_stem(
+        &[(stem.tx, TxBlob::clone(&stem.blob))],
+        stem.peer,
+        stem.source,
+        now,
+        &mut rng,
+    );
     assert!(!z.holds_unsent(&sent.0));
     assert_eq!(
         z.stem_observations_in_flight(),
         1,
-        "the send armed its embargo"
+        "the write armed its embargo"
     );
 }
 
@@ -644,18 +705,48 @@ fn the_wire_carries_only_the_transaction() {
     let stems: Vec<_> = first
         .iter()
         .filter_map(|effect| match effect {
-            Effect::Stem { peer, tx, blob, .. } => Some((*peer, *tx, TxBlob::clone(blob))),
+            Effect::Stem {
+                peer,
+                tx,
+                blob,
+                source,
+                carrier,
+            } => Some((*peer, *tx, TxBlob::clone(blob), *source, *carrier)),
             _ => None,
         })
         .collect();
-    assert_eq!(stems, vec![(alternate, sent.0, TxBlob::clone(&sent.1))]);
+    assert_eq!(
+        stems,
+        vec![(
+            alternate,
+            sent.0,
+            TxBlob::clone(&sent.1),
+            Some(id(9)),
+            RelayCarrier::Ordinary,
+        )]
+    );
     assert_eq!(
         stems[0].2.as_ref(),
         sent.1.as_ref(),
         "byte for byte the transaction"
     );
+    assert!(
+        d.zone().stem_observation_deadline().is_none(),
+        "the poll asks for the reshape; the write arms it"
+    );
+    let (peer, tx, blob, source, _) = &stems[0];
+    d.zone_mut().record_stem(
+        &[(*tx, TxBlob::clone(blob))],
+        *peer,
+        *source,
+        fire,
+        &mut rng,
+    );
 
-    let second_fire = d.zone().stem_observation_deadline().expect("re-armed");
+    let second_fire = d
+        .zone()
+        .stem_observation_deadline()
+        .expect("armed by the write");
     let second = d.poll(second_fire, &mut rng);
     assert!(
         second

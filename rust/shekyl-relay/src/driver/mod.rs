@@ -54,10 +54,11 @@ pub enum Effect {
         blobs: Vec<TxBlob>,
     },
     /// Stem this transaction to `peer`: an embargo's reshape to the
-    /// alternate (§12.2), or a held origin's first send (RX-2). It leaves as
-    /// [`Relay::carrier_to`] the peer says (`CVR-R6`): inside a window on a
-    /// covered session, on the ordinary connection otherwise. The bytes are
-    /// the transaction's own; no relay or retry state rides them (§12.2
+    /// alternate (§12.2), or a held origin's first send (RX-2).
+    ///
+    /// [`carrier`](Effect::Stem::carrier) is the zone's decision. The caller
+    /// sends as it says and records the stem when the write lands. The bytes
+    /// are the transaction's own; no relay or retry state rides them (§12.2
     /// item 5).
     Stem {
         /// The successor.
@@ -68,6 +69,8 @@ pub enum Effect {
         blob: TxBlob,
         /// The session it arrived on; `None` for this node's own.
         source: Option<ConnectionId>,
+        /// How the stem leaves.
+        carrier: crate::RelayCarrier,
     },
     /// The zone fluffed these relayed transactions when their stem phase
     /// ended at an embargo: the pool's shown bit is set for each
@@ -170,6 +173,7 @@ impl Driver {
                 tx: stem.tx,
                 blob: stem.blob,
                 source: stem.source,
+                carrier: stem.carrier,
             });
         }
         if !fired.published.is_empty() {

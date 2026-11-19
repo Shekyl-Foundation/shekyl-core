@@ -59,7 +59,7 @@ fn the_origin_pin_walks_to_its_alternate_and_then_holds_until_the_epoch() {
         let mut z = Relay::new(
             DandelionParams::inherited(),
             2,
-            false,
+            true,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
             &[],
             0,
@@ -288,7 +288,7 @@ fn a_mixed_node_with_its_only_hidden_session_in_slot_one_still_plans_own_edge() 
         let mut z = Relay::new(
             DandelionParams::inherited(),
             2,
-            false,
+            true,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
             &[],
             0,
@@ -427,7 +427,7 @@ fn relayed_sources_reach_both_slots_under_a_hidden_connector() {
         let built = Relay::new(
             DandelionParams::inherited(),
             2,
-            false,
+            true,
             &[ConnectorId::Clearnet, ConnectorId::Tor],
             &[],
             0,

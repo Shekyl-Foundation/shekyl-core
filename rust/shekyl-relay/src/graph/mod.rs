@@ -413,10 +413,9 @@ impl Relay {
     /// [`inherited::NOISE_CHANNELS`]; width one is reachable only from tests.
     ///
     /// The refusals are distinct [`RelayNewError`] variants. The FFI
-    /// maps every one to null. C++ passes the noise flag only behind the
-    /// development opt-in and does not pre-decide which connector can carry
-    /// it. The flag defaults off, so a shipped construction does not hit
-    /// the noise refusals.
+    /// maps every one to null. Cover is on unless the operator opts out
+    /// (`CVR-R1`), so a shipped construction hits the channel-count refusal
+    /// when `stems` is not the carrier's width.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
@@ -810,20 +809,23 @@ impl Relay {
 
     /// Decide whether a batch stems or fluffs, and to whom.
     ///
-    /// Ports `dandelionpp_notify`. Two properties the inherited condition
-    /// `if (!zone_->fluffing || tx_relay == relay_method::local)` encodes, both
-    /// preserved deliberately:
+    /// Ports `dandelionpp_notify`. The stem predicate is RD-4 joined with
+    /// the cover opt-out (`CVR-R1`):
     ///
-    /// 1. During a **stem epoch** everything stems (subject to a routable slot).
+    /// 1. During a **stem epoch**, with cover on, everything stems (subject
+    ///    to a routable slot).
     /// 2. **The origin always stems** — a locally originated transaction stems
-    ///    *even during a fluff epoch*. This is RD-4, and it is the reason the
-    ///    adopted embargo is 144 s rather than the 31 s an origin-may-fluff
-    ///    model gives (§10.5). Reading `|| local` cold, it looks like a
-    ///    redundant clause on a fluff check; deleting it silently reverts a
-    ///    correction four rounds old, so
+    ///    *even during a fluff epoch*, and even when cover is off. This is
+    ///    RD-4, and it is the reason the adopted embargo is 144 s rather than
+    ///    the 31 s an origin-may-fluff model gives (§10.5). Reading the local
+    ///    arm cold, it looks like a redundant clause on a fluff check;
+    ///    deleting it silently reverts a correction four rounds old, so
     ///    `a_local_tx_stems_during_a_fluff_epoch_rd4` asserts the stem-vs-fluff
     ///    axis the reversion would show on — not merely that the batch went
     ///    somewhere.
+    /// 3. **Cover off broadcasts a received stem.** The same answer as a fluff
+    ///    epoch: [`RelayPlan::FluffEpoch`]. The origin's own stem is bare,
+    ///    because [`Relay::carrier_to`] is ordinary when cover is off.
     ///
     /// Reporting [`RelayPlan::NoRoute`] rather than a bare fluff when no slot is
     /// routable is what lets the caller mirror the inherited retry-then-fluff:
@@ -849,9 +851,9 @@ impl Relay {
         // No hidden-address connector: the origin's first hop is an
         // ordinary stem slot. On a cover-bearing link that is the channel's
         // cadence. A node with a hidden connector does not take this path.
-        // The inherited predicate, transcribed rather than restated:
-        // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
-        if !self.fluffing || local_origin {
+        // Stem when this node originates (RD-4), and when cover is on during
+        // a stem epoch. Cover off broadcasts a received stem (CVR-R1).
+        if local_origin || (self.noise && !self.fluffing) {
             return match self.map.stem_for(source, rng) {
                 Some(destination) => RelayPlan::Stem(destination),
                 None => RelayPlan::NoRoute,
@@ -1162,6 +1164,8 @@ impl Relay {
     }
 }
 
+#[cfg(test)]
+mod cover_tests;
 #[cfg(test)]
 mod edge;
 #[cfg(test)]

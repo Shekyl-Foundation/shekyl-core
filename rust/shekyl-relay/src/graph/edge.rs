@@ -103,10 +103,12 @@ fn a_fluff_reaches_an_inbound_anonymity_session() {
 #[test]
 fn a_hidden_connector_origin_does_not_draw_a_clear_edge() {
     let mut rng = SplitMix64::new(91);
+    // Cover on: this test is the hidden-slot plan, and cover off broadcasts
+    // a received stem (`CVR-R1`).
     let mut z = Relay::new(
         DandelionParams::inherited(),
         2,
-        false,
+        true,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
         &[],
         0,

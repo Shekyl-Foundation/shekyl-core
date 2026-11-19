@@ -204,8 +204,10 @@ pub struct EmbargoWork {
     pub published: Vec<TxId>,
 }
 
-/// One stem the zone asks for, sent by [`Relay::carrier_to`] its peer: inside
-/// a window on a covered session, on the ordinary connection otherwise.
+/// One stem the zone asks for.
+///
+/// [`carrier`](Self::carrier) is decided here, with the plan. The caller
+/// sends as it says and records the stem only after the write lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StemWork {
     /// The successor.
@@ -216,9 +218,26 @@ pub struct StemWork {
     pub blob: TxBlob,
     /// The session it arrived on; `None` for this node's own.
     pub source: Option<ConnectionId>,
+    /// How the stem leaves: a window, the ordinary connection, or no window.
+    pub carrier: RelayCarrier,
 }
 
 impl Relay {
+    /// The successor's connector and one embargo deadline drawn from it.
+    ///
+    /// `None` when the session is gone or its connector has no assessed
+    /// transit: that session is not a stem path the embargo can be judged on.
+    fn embargo_draw<R: RelayRng + ?Sized>(
+        &self,
+        successor: ConnectionId,
+        now: Millis,
+        rng: &mut R,
+    ) -> Option<(super::ConnectorId, Millis)> {
+        let peer = self.contexts.get(&successor)?;
+        let timer = embargo_timer(&peer.declaration)?;
+        Some((peer.connector, timer.deadline(now, rng)))
+    }
+
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
     /// (`None` = this node's own), and arm each one's embargo.
     ///
@@ -235,16 +254,9 @@ impl Relay {
         now: Millis,
         rng: &mut R,
     ) {
-        let Some(peer) = self.contexts.get(&successor) else {
+        let Some((connector, deadline)) = self.embargo_draw(successor, now, rng) else {
             return;
         };
-        let connector = peer.connector;
-        // A connector with no assessed transit records nothing: it is not a
-        // stem path the embargo can be judged on.
-        let Some(timer) = embargo_timer(&peer.declaration) else {
-            return;
-        };
-        let deadline = timer.deadline(now, rng);
         for (tx, blob) in txs {
             self.stem_watch
                 .stemmed(*tx, successor, source, connector, deadline);
@@ -261,17 +273,39 @@ impl Relay {
         }
     }
 
+    /// The reshape's ordinary write did not land.
+    ///
+    /// [`Relay::fire_embargoes`] has already set `restemmed`, so the next
+    /// fire ends the stem phase. One embargo from `now` is that fire.
+    /// `false` when `successor` can no longer carry an embargo: the caller
+    /// ends the phase now, because nothing would wake it.
+    pub fn arm_missed_reshape<R: RelayRng + ?Sized>(
+        &mut self,
+        tx: TxId,
+        successor: ConnectionId,
+        source: Option<ConnectionId>,
+        now: Millis,
+        rng: &mut R,
+    ) -> bool {
+        let Some((connector, deadline)) = self.embargo_draw(successor, now, rng) else {
+            return false;
+        };
+        self.stem_watch
+            .stemmed(tx, successor, source, connector, deadline);
+        true
+    }
+
     /// Act on every embargo that fired by `now`: re-stem once to the
     /// alternate (§12.2, §14.7), else end the stem phase. One path for this
     /// node's own transactions and relayed ones.
     ///
     /// The reshape leaves as [`Relay::carrier_to`] the alternate says
-    /// (`CVR-R6`). On the ordinary connection its embargo is armed now, as
-    /// the write is immediate; through a window the carrier's verdict arms
-    /// it ([`Relay::record_stem`]), so an embargo cannot expire while the
-    /// carrier still holds the transaction. With no window for a covered
-    /// alternate, or no alternate, the stem phase ends: the transaction is
-    /// fluffed and published.
+    /// (`CVR-R6`). This asks for the send. It does not arm: the caller
+    /// records the stem when the write lands ([`Relay::record_stem`]), and
+    /// a missed ordinary write of a reshape is armed then
+    /// ([`Relay::arm_missed_reshape`]) so the next fire ends the phase.
+    /// With no window for a covered alternate, or no alternate, the stem
+    /// phase ends here: the transaction is fluffed and published.
     pub fn fire_embargoes<R: RelayRng + ?Sized>(
         &mut self,
         now: Millis,
@@ -290,33 +324,25 @@ impl Relay {
                 .filter(|alternate| self.contexts.contains_key(alternate));
             let restem = alternate.and_then(|alternate| {
                 let peer = self.contexts.get(&alternate)?;
-                let timer = embargo_timer(&peer.declaration)?;
+                // No assessed transit: not a stem path. The phase ends below.
+                embargo_timer(&peer.declaration)?;
                 let carrier = self.carrier_to(alternate);
-                (carrier != RelayCarrier::NoWindow).then_some((
-                    alternate,
-                    peer.connector,
-                    timer,
-                    carrier,
-                ))
+                (carrier != RelayCarrier::NoWindow).then_some((alternate, carrier))
             });
             match restem {
-                Some((alternate, connector, timer, carrier)) => {
+                Some((alternate, carrier)) => {
                     let held = self
                         .embargoes
                         .held
                         .get_mut(&tx)
                         .expect("held checked present above");
                     held.restemmed = true;
-                    if carrier == RelayCarrier::Ordinary {
-                        let deadline = timer.deadline(now, rng);
-                        self.stem_watch
-                            .stemmed(tx, alternate, held.source, connector, deadline);
-                    }
                     work.stems.push(StemWork {
                         peer: alternate,
                         tx,
                         blob: TxBlob::clone(&held.blob),
                         source: held.source,
+                        carrier,
                     });
                 }
                 None => {
@@ -375,11 +401,13 @@ impl Relay {
         }
     }
 
-    /// Plan every held origin that is due. A route sends it as
-    /// [`Relay::carrier_to`] its peer says: on the ordinary connection it is
-    /// armed now, through a window the verdict arms it. A hold, no route
-    /// after the refresh, or no window waits another grid: before its first
-    /// send, this node's own transaction waits.
+    /// Plan every held origin that is due.
+    ///
+    /// A route is handed to the caller as [`Relay::carrier_to`] its peer
+    /// says. The row stays unsent until the write is recorded, and it is
+    /// not planned again until the grid, so a second poll does not send it
+    /// twice. A hold, no route after the refresh, or no window waits
+    /// another grid: before its first send, this node's own transaction waits.
     pub fn due_unsent<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) -> EmbargoWork {
         let mut work = EmbargoWork::default();
         let mut due: Vec<TxId> = self
@@ -409,20 +437,13 @@ impl Relay {
                         .get_mut(&tx)
                         .expect("due ids come from the map");
                     let blob = TxBlob::clone(&unsent.blob);
-                    if carrier == RelayCarrier::Ordinary {
-                        // Written at once: armed now. Leave the unsent row
-                        // until `record_stem` copies its `armed_at`.
-                        self.record_stem(&[(tx, TxBlob::clone(&blob))], peer, None, now, rng);
-                    } else {
-                        // Through a window: the verdict arms it. Until then
-                        // the row waits a grid, so it is not planned twice.
-                        unsent.due = now.saturating_add(NEVER_SENT_RETRY_MS);
-                    }
+                    unsent.due = now.saturating_add(NEVER_SENT_RETRY_MS);
                     work.stems.push(StemWork {
                         peer,
                         tx,
                         blob,
                         source: None,
+                        carrier,
                     });
                 }
                 // No route, no window, or a hold: before its first send,

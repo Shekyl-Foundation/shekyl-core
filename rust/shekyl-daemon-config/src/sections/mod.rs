@@ -38,6 +38,8 @@ mod read;
 pub use ban::read_ban_file;
 
 #[cfg(test)]
+mod relay_cover;
+#[cfg(test)]
 mod tests;
 
 use read::{RateBound, Read, Reader, ThreadCount};
