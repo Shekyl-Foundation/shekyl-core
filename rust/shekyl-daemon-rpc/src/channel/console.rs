@@ -203,8 +203,11 @@ fn seen(path: &Path) -> Seen {
             material: KeyMaterial::Bad(BadKey::NotAKey),
             fault: Some(error),
         },
-        // A read waits on nothing; only a commit is held open.
-        Err(error @ (FileRefused::Io(..) | FileRefused::HeldOpen(..))) => Seen {
+        // A read waits on nothing; only a commit is held open or refused
+        // for a read-only file.
+        Err(
+            error @ (FileRefused::Io(..) | FileRefused::HeldOpen(..) | FileRefused::ReadOnly(..)),
+        ) => Seen {
             material: KeyMaterial::Bad(BadKey::Unreadable),
             fault: Some(error),
         },

@@ -943,10 +943,11 @@ impl WalletFile {
                 });
             }
             Err(e) => {
-                return Err(WalletFileError::AtomicWriteRename {
-                    target: new_keys_path,
-                    source: e,
-                });
+                return Err(WalletFileError::save_step(
+                    shekyl_os_account::private_file::Step::Rename,
+                    new_keys_path,
+                    e,
+                ));
             }
         }
 

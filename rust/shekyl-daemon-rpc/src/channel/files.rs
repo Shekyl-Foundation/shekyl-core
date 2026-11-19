@@ -35,6 +35,8 @@ pub enum FileRefused {
     Key(PathBuf, KeyFileError),
     /// Another program held its staged file open past the wait.
     HeldOpen(HeldOpen),
+    /// Its read-only attribute is set, which refused its replace.
+    ReadOnly(PathBuf),
 }
 
 impl std::fmt::Display for FileRefused {
@@ -48,6 +50,7 @@ impl std::fmt::Display for FileRefused {
             ),
             Self::Key(path, e) => write!(f, "{}: {e}", path.display()),
             Self::HeldOpen(held) => held.fmt(f),
+            Self::ReadOnly(path) => PrivateFileError::ReadOnly(path.clone()).fmt(f),
         }
     }
 }
@@ -60,6 +63,7 @@ impl From<PrivateFileError> for FileRefused {
             PrivateFileError::Io(path, e) => Self::Io(path, e),
             PrivateFileError::Exposed(path, why) => Self::Exposed(path, why),
             PrivateFileError::HeldOpen(held) => Self::HeldOpen(held),
+            PrivateFileError::ReadOnly(path) => Self::ReadOnly(path),
         }
     }
 }

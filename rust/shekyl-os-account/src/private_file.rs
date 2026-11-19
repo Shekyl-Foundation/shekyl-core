@@ -41,7 +41,9 @@
 //! that holds the live file, and on a leftover staged file being removed;
 //! a journal a previous process left ([`StagedWrite::resume`]) is reopened
 //! for its rename, and that open waits too. Past the wait the commit is
-//! [`CommitError::HeldOpen`]. No caller retries anything.
+//! [`CommitError::HeldOpen`]. A live file whose read-only attribute is set
+//! refuses the rename at once, [`CommitError::ReadOnly`], which no wait
+//! changes (Rick, 2026-11-19). No caller retries anything.
 //!
 //! **Durable at each step.** A new file's bytes are synced, and then its
 //! directory, before [`write_new`] returns. On Unix a rename is followed by
@@ -49,8 +51,9 @@
 //! commit that returns is [`Durability::Durable`]. Windows has no directory
 //! to sync ([`sync_dir`]): the rename is a request on the write-through
 //! handle, which NTFS documents flushing with it, and the commit reports
-//! [`Durability::Durable`] only on NTFS, on the POSIX rename, with the flush
-//! after the rename returned; any other file system, and a resumed journal
+//! [`Durability::Durable`] only on a local NTFS volume, on the POSIX rename,
+//! with the flush after the rename returned; a network drive whatever file
+//! system it reports, any other file system, and a resumed journal
 //! (reopened, not write-through), is [`Durability::Unconfirmed`] with its
 //! reason (`shekyl_win_sec::replace`'s module docs cite the documentation).
 //! A store transaction that names a journal (the console key's) therefore
@@ -169,16 +172,19 @@ pub enum Durability {
 /// these: on Unix a failed directory sync is [`CommitError::Unsynced`].
 #[derive(Debug)]
 pub enum Unconfirmed {
+    /// The volume is a network drive, which is never durable whatever file
+    /// system it reports (Rick, 2026-11-19): this is the name it reports.
+    Remote(String),
     /// The volume's file system is not NTFS: this is its name (`FAT32`,
     /// `exFAT`, `ReFS`, ...).
     FileSystem(String),
-    /// The volume is NTFS, but it refused the POSIX rename and the classic
-    /// one renamed the file.
+    /// The volume is local and NTFS, but it refused the POSIX rename and
+    /// the classic one renamed the file.
     ClassicRename,
     /// The flush after the rename failed.
     Flush(std::io::Error),
-    /// The volume's file system could not be read.
-    FileSystemUnread(std::io::Error),
+    /// The volume could not be queried, for its device or its file system.
+    VolumeUnread(std::io::Error),
     /// A journal a previous process left, renamed through a handle reopened
     /// on it, which is not write-through.
     Reopened,
@@ -190,9 +196,11 @@ impl Unconfirmed {
     pub fn file_system(&self) -> Option<&str> {
         match self {
             Self::FileSystem(name) => Some(name),
-            Self::ClassicRename | Self::Flush(_) | Self::FileSystemUnread(_) | Self::Reopened => {
-                None
-            }
+            Self::Remote(_)
+            | Self::ClassicRename
+            | Self::Flush(_)
+            | Self::VolumeUnread(_)
+            | Self::Reopened => None,
         }
     }
 }
@@ -200,6 +208,11 @@ impl Unconfirmed {
 impl std::fmt::Display for Unconfirmed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Remote(name) => write!(
+                f,
+                "the volume is a network drive (it reports {name}), where no replace is \
+                 confirmed to survive a power loss"
+            ),
             Self::FileSystem(name) => write!(
                 f,
                 "the volume is {name}, where Windows does not confirm that a replaced file \
@@ -210,8 +223,8 @@ impl std::fmt::Display for Unconfirmed {
                  replace was not confirmed",
             ),
             Self::Flush(error) => write!(f, "the flush after the rename failed: {error}"),
-            Self::FileSystemUnread(error) => {
-                write!(f, "the volume's file system could not be read: {error}")
+            Self::VolumeUnread(error) => {
+                write!(f, "the volume could not be queried: {error}")
             }
             Self::Reopened => f.write_str(
                 "a file left by an earlier start was renamed through a handle that does not \
@@ -232,13 +245,17 @@ pub enum PrivateFileError {
     /// Another program held a file the replace needs open past
     /// [`REPLACE_WAIT`].
     HeldOpen(HeldOpen),
+    /// The file's read-only attribute is set, and the replace was refused
+    /// for it (Windows).
+    ReadOnly(PathBuf),
 }
 
 impl From<CommitError> for PrivateFileError {
     fn from(error: CommitError) -> Self {
         match error {
             CommitError::HeldOpen(held) => Self::HeldOpen(held),
-            CommitError::Io(path, error) | CommitError::Unsynced(path, error) => {
+            CommitError::ReadOnly(path) => Self::ReadOnly(path),
+            CommitError::Io { path, error, .. } | CommitError::Unsynced(path, error) => {
                 Self::Io(path, error)
             }
         }
@@ -255,11 +272,22 @@ impl std::fmt::Display for PrivateFileError {
                 path.display()
             ),
             Self::HeldOpen(held) => held.fmt(f),
+            Self::ReadOnly(path) => read_only(f, path),
         }
     }
 }
 
 impl std::error::Error for PrivateFileError {}
+
+/// The sentence for a live file whose read-only attribute refused its
+/// replace.
+fn read_only(f: &mut std::fmt::Formatter<'_>, path: &Path) -> std::fmt::Result {
+    write!(
+        f,
+        "{} is read-only, so it could not be replaced",
+        path.display()
+    )
+}
 
 /// The bytes of the private file at `path`, checked to be this account's
 /// alone; `None` when there is none.
@@ -470,21 +498,13 @@ pub struct HeldOpen {
     pub held: PathBuf,
     /// The file the replace was to write.
     pub live: PathBuf,
-    /// Whether the held file may instead be one that is not writable: the
-    /// classic rename (FAT32, exFAT) answers both with an access denial.
-    pub or_unwritable: bool,
 }
 
 impl std::fmt::Display for HeldOpen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let or_unwritable = if self.or_unwritable {
-            ", or is not writable"
-        } else {
-            ""
-        };
         write!(
             f,
-            "{} was held open by another program for more than {} s{or_unwritable}, so {} could not be replaced",
+            "{} was held open by another program for more than {} s, so {} could not be replaced",
             self.held.display(),
             REPLACE_WAIT.as_secs(),
             self.live.display()
@@ -494,14 +514,58 @@ impl std::fmt::Display for HeldOpen {
 
 impl std::error::Error for HeldOpen {}
 
-/// Why [`StagedWrite::commit`] failed.
+/// The step of a replace that failed with the disk's error
+/// ([`CommitError::Io`]). The steps after a rename lands are not failures:
+/// they are the [`Durability`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Removing a leftover staged file, or creating, writing or syncing
+    /// the new one.
+    Write,
+    /// Syncing the staged file's directory before the rename (Unix).
+    FolderSync,
+    /// The rename over the live file.
+    Rename,
+}
+
+impl Step {
+    /// The step's name, as the wallet RPC's `data.step` spells it (Rick,
+    /// 2026-11-19).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::FolderSync => "folder-sync",
+            Self::Rename => "rename",
+        }
+    }
+}
+
+impl std::fmt::Display for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Why [`StagedWrite::create`] or [`StagedWrite::commit`] failed.
 #[derive(Debug)]
 pub enum CommitError {
     /// Another program held a file the replace needs (a leftover or resumed
     /// staged file, or the live one) open past [`REPLACE_WAIT`].
     HeldOpen(HeldOpen),
-    /// A step failed, at this path.
-    Io(PathBuf, std::io::Error),
+    /// The live file's read-only attribute is set, and the rename was
+    /// refused for it at once (Windows; Rick, 2026-11-19). The live file is
+    /// untouched.
+    ReadOnly(PathBuf),
+    /// `step` failed, at `path`.
+    Io {
+        /// The step that failed.
+        step: Step,
+        /// The file the step was on.
+        path: PathBuf,
+        /// The disk's error.
+        error: std::io::Error,
+    },
     /// The rename landed, but the directory's sync after it failed: the
     /// new file is in place, its survival of an immediate crash
     /// unconfirmed.
@@ -512,7 +576,8 @@ impl std::fmt::Display for CommitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::HeldOpen(held) => held.fmt(f),
-            Self::Io(path, error) => write!(f, "{}: {error}", path.display()),
+            Self::ReadOnly(path) => read_only(f, path),
+            Self::Io { path, error, .. } => write!(f, "{}: {error}", path.display()),
             Self::Unsynced(path, error) => write!(
                 f,
                 "{} was replaced, but its directory could not be synced: {error}",
@@ -528,7 +593,14 @@ impl From<CommitError> for std::io::Error {
     fn from(error: CommitError) -> Self {
         match error {
             CommitError::HeldOpen(held) => std::io::Error::other(held),
-            CommitError::Io(_, error) | CommitError::Unsynced(_, error) => error,
+            CommitError::ReadOnly(path) => std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} is read-only, so it could not be replaced",
+                    path.display()
+                ),
+            ),
+            CommitError::Io { error, .. } | CommitError::Unsynced(_, error) => error,
         }
     }
 }
@@ -561,7 +633,8 @@ impl<K: Kind> StagedWrite<K> {
     ///
     /// [`CommitError::HeldOpen`] when another program held a leftover
     /// staged file past [`REPLACE_WAIT`]; [`CommitError::Io`] when it could
-    /// not be removed, or the new one created or written.
+    /// not be removed, or the new one created, written or synced, with its
+    /// [`Step`].
     pub fn create(live: &Path, bytes: &[u8], access: Access) -> Result<Self, CommitError> {
         Self::create_with(live, bytes, access, Sharing::Read)
     }
@@ -583,17 +656,22 @@ impl<K: Kind> StagedWrite<K> {
         let deadline = Instant::now() + REPLACE_WAIT;
         let staged = staged_path(live);
         remove_leftover(&staged, live, deadline)?;
+        let failed = |step: Step| {
+            let path = staged.clone();
+            move |error| CommitError::Io { step, path, error }
+        };
         #[cfg(unix)]
         {
             // Unix has no sharing modes: any process this account runs may
             // open the staged file, as it may any of this account's files.
             let _: Sharing = sharing;
-            write_new(&staged, bytes, access)
-                .map_err(|error| CommitError::Io(staged.clone(), error))?;
+            let mut file = create(&staged, access).map_err(failed(Step::Write))?;
+            file.write_all(bytes).map_err(failed(Step::Write))?;
+            file.sync_all().map_err(failed(Step::Write))?;
+            sync_dir(parent(&staged)).map_err(failed(Step::FolderSync))?;
         }
         #[cfg(windows)]
-        let handle = write_staged(&staged, bytes, access, sharing)
-            .map_err(|error| CommitError::Io(staged.clone(), error))?;
+        let handle = write_staged(&staged, bytes, access, sharing).map_err(failed(Step::Write))?;
         Ok(Self {
             staged,
             live: live.to_path_buf(),
@@ -613,8 +691,10 @@ impl<K: Kind> StagedWrite<K> {
     ///
     /// # Errors
     ///
-    /// [`CommitError::HeldOpen`] past the wait; [`CommitError::Io`] when the
-    /// rename failed; [`CommitError::Unsynced`] when the directory's sync
+    /// [`CommitError::HeldOpen`] past the wait; [`CommitError::ReadOnly`]
+    /// when the live file's read-only attribute refused the rename;
+    /// [`CommitError::Io`] when the rename failed ([`Step::Rename`]);
+    /// [`CommitError::Unsynced`] when the directory's sync
     /// after it failed (Unix). A [`Journal`] is left for a later start; a
     /// [`Replace`]'s staged file is removed, and a removal that fails too is
     /// left to the next start's [`StagedWrite::create`]. What happens after
@@ -631,7 +711,7 @@ impl<K: Kind> StagedWrite<K> {
             return handle
                 .commit(&self.live, self.deadline, on_failure)
                 .map(durability_of)
-                .map_err(|error| windows_fault(error, &self.staged, &self.live));
+                .map_err(|error| windows_fault(error, &self.staged, &self.live, Step::Rename));
         }
         if let Err(error) = rename_over(&self.staged, &self.live, self.deadline) {
             if K::REMOVED_ON_FAILURE {
@@ -715,7 +795,11 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
 /// Remove a leftover staged file before a new one is written.
 #[cfg(unix)]
 fn remove_leftover(staged: &Path, _live: &Path, _deadline: Instant) -> Result<(), CommitError> {
-    remove_if_present(staged).map_err(|error| CommitError::Io(staged.to_path_buf(), error))
+    remove_if_present(staged).map_err(|error| CommitError::Io {
+        step: Step::Write,
+        path: staged.to_path_buf(),
+        error,
+    })
 }
 
 /// Remove a leftover staged file before a new one is written, waiting
@@ -724,7 +808,7 @@ fn remove_leftover(staged: &Path, _live: &Path, _deadline: Instant) -> Result<()
 #[cfg(windows)]
 fn remove_leftover(staged: &Path, live: &Path, deadline: Instant) -> Result<(), CommitError> {
     shekyl_win_sec::replace::remove(staged, deadline)
-        .map_err(|error| windows_fault(error, staged, live))
+        .map_err(|error| windows_fault(error, staged, live, Step::Write))
 }
 
 /// Rename `staged` over `live`.
@@ -735,7 +819,11 @@ fn remove_leftover(staged: &Path, live: &Path, deadline: Instant) -> Result<(), 
     reason = "the one Unix file replace: rename(2) over the destination, which every replace in the tree goes through (Rick, 2026-11-18)"
 )]
 fn rename_over(staged: &Path, live: &Path, _deadline: Instant) -> Result<(), CommitError> {
-    std::fs::rename(staged, live).map_err(|error| CommitError::Io(live.to_path_buf(), error))
+    std::fs::rename(staged, live).map_err(|error| CommitError::Io {
+        step: Step::Rename,
+        path: live.to_path_buf(),
+        error,
+    })
 }
 
 /// Rename a resumed journal `staged` over `live` through the one Windows
@@ -744,7 +832,7 @@ fn rename_over(staged: &Path, live: &Path, _deadline: Instant) -> Result<(), Com
 #[cfg(windows)]
 fn rename_over(staged: &Path, live: &Path, deadline: Instant) -> Result<(), CommitError> {
     shekyl_win_sec::replace::replace(staged, live, deadline)
-        .map_err(|error| windows_fault(error, staged, live))
+        .map_err(|error| windows_fault(error, staged, live, Step::Rename))
 }
 
 /// A Windows commit's durability, in this module's terms.
@@ -754,10 +842,11 @@ fn durability_of(durability: shekyl_win_sec::replace::Durability) -> Durability 
     match durability {
         Win::Durable => Durability::Durable,
         Win::Unconfirmed(why) => Durability::Unconfirmed(match why {
+            Why::Remote(name) => Unconfirmed::Remote(name),
             Why::FileSystem(name) => Unconfirmed::FileSystem(name),
             Why::ClassicRename => Unconfirmed::ClassicRename,
             Why::Flush(error) => Unconfirmed::Flush(error),
-            Why::FileSystemUnread(error) => Unconfirmed::FileSystemUnread(error),
+            Why::VolumeUnread(error) => Unconfirmed::VolumeUnread(error),
         }),
     }
 }
@@ -791,24 +880,33 @@ fn write_staged(
     Ok(staged)
 }
 
-/// The commit's error for a Windows replace's, naming the file held.
+/// The commit's error for a Windows replace's at `step`, naming the file
+/// held.
 #[cfg(windows)]
 fn windows_fault(
     error: shekyl_win_sec::replace::ReplaceError,
     staged: &Path,
     live: &Path,
+    step: Step,
 ) -> CommitError {
     use shekyl_win_sec::replace::{Held, ReplaceError};
     match error {
         ReplaceError::HeldOpen(held) => CommitError::HeldOpen(HeldOpen {
             held: match held {
                 Held::Staged => staged.to_path_buf(),
-                Held::Live | Held::LiveOrUnwritable => live.to_path_buf(),
+                Held::Live => live.to_path_buf(),
             },
             live: live.to_path_buf(),
-            or_unwritable: held == Held::LiveOrUnwritable,
         }),
-        ReplaceError::Io(error) => CommitError::Io(live.to_path_buf(), error),
+        ReplaceError::ReadOnly => CommitError::ReadOnly(live.to_path_buf()),
+        ReplaceError::Io(error) => CommitError::Io {
+            step,
+            path: match step {
+                Step::Rename => live.to_path_buf(),
+                Step::Write | Step::FolderSync => staged.to_path_buf(),
+            },
+            error,
+        },
     }
 }
 
@@ -1305,7 +1403,16 @@ mod crash_tests {
         let failed = StagedWrite::<Replace>::create(&blocked, b"new", Access::OwnerOnly)
             .unwrap()
             .commit();
-        assert!(matches!(failed, Err(CommitError::Io(..))), "{failed:?}");
+        assert!(
+            matches!(
+                failed,
+                Err(CommitError::Io {
+                    step: Step::Rename,
+                    ..
+                })
+            ),
+            "{failed:?}"
+        );
         assert!(
             !staged_path(&blocked).exists(),
             "a failed commit removes its own staged file"

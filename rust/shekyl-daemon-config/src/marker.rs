@@ -112,8 +112,9 @@ pub fn read(
 /// # Errors
 /// [`read`]'s refusals; `config.replace.held-open` when another program
 /// held the marker's staged file or the marker past the replace's wait;
-/// and `config.data-dir.unusable` when the marker cannot be written
-/// otherwise.
+/// `config.replace.read-only` when a marker's read-only attribute refused
+/// the replace; and `config.data-dir.unusable` when the marker cannot be
+/// written otherwise.
 pub fn check_or_write(
     lock: &Lock,
     network: Network,
@@ -131,13 +132,19 @@ pub fn check_or_write(
                 private_file::CommitError::HeldOpen(held) => {
                     crate::replace::held_open_refusal(&held, data_dir)
                 }
-                other => Diagnostic::new(Code::DataDirUnusable, Source::Machine)
-                    .option("data-dir")
-                    .param("path", data_dir.display().to_string())
-                    .param(
-                        "error",
-                        format!("the network marker could not be written: {other}"),
-                    ),
+                private_file::CommitError::ReadOnly(path) => {
+                    crate::replace::read_only_refusal(&path)
+                }
+                other @ (private_file::CommitError::Io { .. }
+                | private_file::CommitError::Unsynced(..)) => {
+                    Diagnostic::new(Code::DataDirUnusable, Source::Machine)
+                        .option("data-dir")
+                        .param("path", data_dir.display().to_string())
+                        .param(
+                            "error",
+                            format!("the network marker could not be written: {other}"),
+                        )
+                }
             })?;
             Ok(MarkerOutcome::Written)
         }

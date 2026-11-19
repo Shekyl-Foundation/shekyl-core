@@ -232,10 +232,11 @@ wallet_rpc_error_codes! {
     /// names which.
     SignerFailed = -29119 => "SIGNER_FAILED",
     /// Submit: the send's record could not be saved because the wallet's
-    /// folder is not writable, so nothing was sent; the reservation is kept
-    /// (A19). The save's other causes have their own codes, `-29128` to
-    /// `-29133` (Rick, 2026-11-18).
-    SendNotSaved = -29120 => "SEND_NOT_SAVED",
+    /// folder, file or drive is not writable (`data`: `target`), so nothing
+    /// was sent; the reservation is kept (A19). The save's other causes
+    /// have their own codes, `-29128` to `-29134` (Rick, 2026-11-18 and
+    /// 2026-11-19).
+    SaveNotWritable = -29120 => "SAVE_NOT_WRITABLE",
     /// `tx_resend`: no held send has this id.
     TxNotHeld = -29121 => "TX_NOT_HELD",
     /// `tx_resend`: the held send has no saved bytes to resend.
@@ -261,19 +262,23 @@ wallet_rpc_error_codes! {
     /// saved and nothing was sent; the reservation is kept.
     SaveDiskFull = -29129 => "SAVE_DISK_FULL",
     /// Submit: another program held the wallet's file open past the save's
-    /// wait (a scanner), so nothing was sent; the reservation is kept
-    /// (`data`: `or_unwritable`).
+    /// wait (a scanner), so nothing was sent; the reservation is kept.
     SaveFileHeld = -29130 => "SAVE_FILE_HELD",
-    /// Submit: the disk reported an error saving the send, so nothing was
-    /// sent; the reservation is kept (`data`: `error`).
+    /// Submit: the disk reported an error at a step of saving the send, so
+    /// nothing was sent; the reservation is kept (`data`: `step`, `error`).
     SaveIoFailed = -29131 => "SAVE_IO_FAILED",
-    /// Submit: the wallet's NTFS drive refused the rename Windows confirms,
-    /// so nothing was sent; the reservation is kept.
+    /// Submit: the wallet's local NTFS drive refused the rename Windows
+    /// confirms, so nothing was sent; the reservation is kept. Windows
+    /// builds observed to give it: none observed.
     SaveRenameUnconfirmed = -29132 => "SAVE_RENAME_UNCONFIRMED",
     /// Submit: the wallet could not prepare the send's record to save (a
     /// fault in the wallet, not the disk), so nothing was sent; the
     /// reservation is kept.
     SaveInternalFault = -29133 => "SAVE_INTERNAL_FAULT",
+    /// Submit: the wallet is on a network drive, where no save is confirmed
+    /// to survive a power cut, so nothing was sent; the reservation is kept
+    /// (Rick, 2026-11-19).
+    SaveOnNetworkDrive = -29134 => "SAVE_ON_NETWORK_DRIVE",
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200 => "REFRESH_IN_PROGRESS",
     /// Refresh / rescan / proofs / build: the daemon did not answer.
@@ -865,16 +870,16 @@ pub enum WalletRpcError {
         input: usize,
     },
     /// `-29120`: the send's record (with its signed bytes and tx secret)
-    /// could not be saved because this account may not write the wallet's
-    /// folder (or its volume is read-only), so the wallet sent nothing
-    /// (A19). The reservation is kept: fix the cause and submit it again,
-    /// or discard it. Each other cause of an unsaved send is its own code,
-    /// `-29128` to `-29133` (Rick, 2026-11-18).
-    #[error(
-        "the send was not saved, so it was not sent — the wallet's folder is not writable; \
-         make it writable for this account and submit again, or discard the send"
-    )]
-    SendNotSaved,
+    /// could not be saved because `target` is not writable for this
+    /// account, so the wallet sent nothing (A19). The reservation is kept:
+    /// fix the cause and submit it again, or discard it. Each other cause
+    /// of an unsaved send is its own code, `-29128` to `-29134` (Rick,
+    /// 2026-11-18 and 2026-11-19).
+    #[error("the send was not saved, so it was not sent — {}", target.advice())]
+    SaveNotWritable {
+        /// What could not be written: the folder, the file or the drive.
+        target: SaveTarget,
+    },
     /// `-29128`: the send's record was saved on a volume whose file system
     /// Windows cannot confirm keeps a save through a power cut (anything
     /// but NTFS: FAT32, exFAT, ReFS), so the wallet sent nothing. The
@@ -898,47 +903,40 @@ pub enum WalletRpcError {
     SaveDiskFull,
     /// `-29130`: another program held the wallet's file (or the save's
     /// staged copy of it) open past the save's wait, so the send's record
-    /// was not saved and the wallet sent nothing; on a FAT or exFAT volume
-    /// Windows answers a file that is not writable the same way
-    /// (`or_unwritable`). The reservation is kept. The wording follows the
-    /// daemon's `config.replace.held-open`.
+    /// was not saved and the wallet sent nothing. The reservation is kept.
+    /// A read-only file is `-29120` with `target: file`: the save reads the
+    /// attribute to tell the two apart (Rick, 2026-11-19). The wording
+    /// follows the daemon's `config.replace.held-open`.
     #[error(
-        "the send was not saved, so it was not sent — {}",
-        if *or_unwritable {
-            "another program, most likely an antivirus scanner or a search indexer, held the \
-             wallet's file open, or the file is read-only; exclude the wallet's folder from \
-             scanning (or make the file writable) and submit again, or discard the send"
-        } else {
-            "another program, most likely an antivirus scanner or a search indexer, held the \
-             wallet's file open; exclude the wallet's folder from scanning and submit again, \
-             or discard the send"
-        }
+        "the send was not saved, so it was not sent — another program, most likely an \
+         antivirus scanner or a search indexer, held the wallet's file open; exclude the \
+         wallet's folder from scanning and submit again, or discard the send"
     )]
-    SaveFileHeld {
-        /// Whether the file may instead not be writable: the classic rename
-        /// (FAT32, exFAT) answers both with one access denial.
-        or_unwritable: bool,
-    },
-    /// `-29131`: the disk reported an error while the send's record was
-    /// saved or confirmed (a write, a rename, the folder's sync after the
-    /// rename, the flush after it), so the wallet sent nothing. The
+    SaveFileHeld,
+    /// `-29131`: the disk reported an error at `step` of saving or
+    /// confirming the send's record, so the wallet sent nothing. The
     /// reservation is kept. `error` is the system's words for it, never a
     /// path.
     #[error(
-        "the send was not sent — the disk holding the wallet reported an error while saving \
-         it ({error}); check the disk and submit again, or discard the send"
+        "the send was not sent — the disk holding the wallet reported an error while {} \
+         ({error}); check the disk and submit again, or discard the send",
+        step.words()
     )]
     SaveIoFailed {
+        /// The step the disk failed.
+        step: SaveStep,
         /// The system's description of the error, without a path.
         error: String,
     },
-    /// `-29132`: the wallet is on an NTFS drive that refused the rename
-    /// Windows confirms survives a power cut, and the classic rename saved
-    /// it, so the wallet sent nothing. The reservation is kept.
+    /// `-29132`: the wallet is on a local NTFS drive that refused the
+    /// rename Windows confirms survives a power cut, and the classic rename
+    /// saved it, so the wallet sent nothing. The reservation is kept.
+    /// Windows builds observed to give it: none observed (Rick,
+    /// 2026-11-19).
     #[error(
-        "the send was not sent — the wallet's drive refused the kind of save Windows can \
-         confirm survives a power cut; move the wallet to a local NTFS drive and submit \
-         again, or discard the send"
+        "the send was not sent — the wallet's NTFS drive refused the kind of save Windows \
+         can confirm survives a power cut; move the wallet to another local NTFS drive and \
+         submit again, or discard the send"
     )]
     SaveRenameUnconfirmed,
     /// `-29133`: the wallet could not prepare the send's record to save
@@ -950,6 +948,16 @@ pub enum WalletRpcError {
          in the wallet, not the disk); report it, and discard the send"
     )]
     SaveInternalFault,
+    /// `-29134`: the wallet is on a network drive, where no save is
+    /// confirmed to survive a power cut whatever file system the drive
+    /// reports (a Samba share reports NTFS), so the wallet sent nothing.
+    /// The reservation is kept (Rick, 2026-11-19).
+    #[error(
+        "the send was not sent — the wallet is on a network drive, where no save is \
+         confirmed to survive a power cut; move the wallet to a local drive and submit \
+         again, or discard the send"
+    )]
+    SaveOnNetworkDrive,
     /// `-29121`: `tx_resend` named a transaction that is not a held send:
     /// it confirmed, was released, or was never this wallet's.
     #[error("no held send with this id — tx_alarm lists the held sends")]
@@ -1449,13 +1457,14 @@ impl WalletRpcError {
             Self::TooManyOutputs { .. } => WalletRpcErrorCode::TooManyOutputs,
             Self::InputNotInTree { .. } => WalletRpcErrorCode::InputNotInTree,
             Self::InputUnspendable { .. } => WalletRpcErrorCode::InputUnspendable,
-            Self::SendNotSaved => WalletRpcErrorCode::SendNotSaved,
+            Self::SaveNotWritable { .. } => WalletRpcErrorCode::SaveNotWritable,
             Self::SaveDurabilityUnconfirmed { .. } => WalletRpcErrorCode::SaveDurabilityUnconfirmed,
             Self::SaveDiskFull => WalletRpcErrorCode::SaveDiskFull,
-            Self::SaveFileHeld { .. } => WalletRpcErrorCode::SaveFileHeld,
+            Self::SaveFileHeld => WalletRpcErrorCode::SaveFileHeld,
             Self::SaveIoFailed { .. } => WalletRpcErrorCode::SaveIoFailed,
             Self::SaveRenameUnconfirmed => WalletRpcErrorCode::SaveRenameUnconfirmed,
             Self::SaveInternalFault => WalletRpcErrorCode::SaveInternalFault,
+            Self::SaveOnNetworkDrive => WalletRpcErrorCode::SaveOnNetworkDrive,
             Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
             Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
             Self::ReservationNotFound => WalletRpcErrorCode::ReservationNotFound,
@@ -1608,8 +1617,10 @@ impl WalletRpcError {
             Self::SaveDurabilityUnconfirmed { file_system } => {
                 Some(json!({ "file_system": file_system }))
             }
-            Self::SaveFileHeld { or_unwritable } => Some(json!({ "or_unwritable": or_unwritable })),
-            Self::SaveIoFailed { error } => Some(json!({ "error": error })),
+            Self::SaveNotWritable { target } => Some(json!({ "target": target.as_str() })),
+            Self::SaveIoFailed { step, error } => {
+                Some(json!({ "step": step.as_str(), "error": error }))
+            }
             Self::TooManyInputs { count, limit } | Self::TooManyOutputs { count, limit } => {
                 Some(json!({ "count": count, "limit": limit }))
             }
@@ -2205,7 +2216,11 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
         }
         F::DirectoryMissing { .. } => WalletRpcError::WalletDirMissing,
         F::AlreadyLocked { .. } => WalletRpcError::WalletLockedElsewhere,
-        F::AtomicWriteRename { .. } | F::HeldOpen(_) => WalletRpcError::WalletFileIoFailed,
+        // The step's error by its kind, as an untyped one is; a read-only
+        // file is this account's access refused.
+        F::SaveStep { source, .. } => from_io_kind(source.kind()),
+        F::ReadOnly { .. } => WalletRpcError::WalletFileAccessDenied,
+        F::HeldOpen(_) => WalletRpcError::WalletFileIoFailed,
         F::NetworkMismatch { expected, found } => WalletRpcError::WalletNetworkMismatch {
             wallet: found.to_string(),
             expected: expected.to_string(),
@@ -2285,28 +2300,130 @@ impl From<PersistenceError> for WalletRpcError {
     }
 }
 
+/// What a send's save could not write: `-29120`'s `data.target`, a closed
+/// set, each with its own advice (Rick, 2026-11-19).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveTarget {
+    /// The wallet's folder: this account may not create or replace a file
+    /// in it.
+    Folder,
+    /// The wallet's file: its read-only attribute is set (Windows).
+    File,
+    /// The drive holding the wallet: read-only, or write-protected.
+    Volume,
+}
+
+impl SaveTarget {
+    /// The keyword `data.target` carries.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Folder => "folder",
+            Self::File => "file",
+            Self::Volume => "volume",
+        }
+    }
+
+    /// The cause and the remedy, for the message.
+    const fn advice(self) -> &'static str {
+        match self {
+            Self::Folder => {
+                "the wallet's folder is not writable; make it writable for this account and \
+                 submit again, or discard the send"
+            }
+            Self::File => {
+                "the wallet's file is read-only; clear its read-only attribute and submit again, \
+                 or discard the send"
+            }
+            Self::Volume => {
+                "the drive holding the wallet is read-only; make it writable, or move the wallet \
+                 to a writable drive, and submit again, or discard the send"
+            }
+        }
+    }
+}
+
+/// The step of a send's save the disk failed: `-29131`'s `data.step`, a
+/// closed set (Rick, 2026-11-19).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveStep {
+    /// Writing the record's staged file: removing a leftover, creating,
+    /// writing and syncing it.
+    Write,
+    /// Renaming the staged file over the wallet's file.
+    Rename,
+    /// Syncing the wallet's folder, before the rename or after it (Unix).
+    FolderSync,
+    /// Flushing the wallet's file after the rename (Windows).
+    Flush,
+    /// Asking the wallet's drive what it is: its device and its file system
+    /// (Windows).
+    VolumeQuery,
+}
+
+impl SaveStep {
+    /// The keyword `data.step` carries.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::Rename => "rename",
+            Self::FolderSync => "folder-sync",
+            Self::Flush => "flush",
+            Self::VolumeQuery => "volume-query",
+        }
+    }
+
+    /// The step, as the message names it.
+    const fn words(self) -> &'static str {
+        match self {
+            Self::Write => "writing the send's record",
+            Self::Rename => "putting the record in place of the wallet's file",
+            Self::FolderSync => "syncing the wallet's folder",
+            Self::Flush => "flushing the wallet's file to the disk",
+            Self::VolumeQuery => "asking the wallet's drive what it is",
+        }
+    }
+}
+
+impl From<shekyl_engine_file::Step> for SaveStep {
+    fn from(step: shekyl_engine_file::Step) -> Self {
+        use shekyl_engine_file::Step as S;
+        match step {
+            S::Write => Self::Write,
+            S::FolderSync => Self::FolderSync,
+            S::Rename => Self::Rename,
+        }
+    }
+}
+
 /// A send whose record was not saved, or not confirmed on disk (A19):
 /// nothing was sent and the reservation is kept. Every cause is its own
-/// code and advice (Rick, 2026-11-18): a folder this account cannot write
-/// (`-29120`), a full disk (`-29129`), another program holding the file
-/// (`-29130`), the disk's error (`-29131`), a volume Windows does not confirm
-/// (`-29128`) or an NTFS drive that refused the confirmed rename (`-29132`),
-/// and a fault in the wallet before the disk was touched (`-29133`). The
-/// whole error, paths and all, goes to the wallet's log only.
+/// code and advice (Rick, 2026-11-18 and 2026-11-19): a folder, file or
+/// drive this account cannot write (`-29120`, `data.target`), a full disk
+/// (`-29129`), another program holding the file (`-29130`), the disk's
+/// error at a step (`-29131`, `data.step`), a network drive (`-29134`), a
+/// volume Windows does not confirm (`-29128`), a local NTFS drive that
+/// refused the confirmed rename (`-29132`), and a fault in the wallet
+/// before the disk was touched (`-29133`). The whole error, paths and all,
+/// goes to the wallet's log only.
 fn from_unsaved_send(err: &PersistenceError) -> WalletRpcError {
     use shekyl_engine_file::Unconfirmed as U;
     use WalletFileError as F;
     tracing::error!(error = %err, "the send could not be saved; nothing was sent");
     match err {
         PersistenceError::WalletFile(file) => match file {
-            F::Io(error) | F::AtomicWriteRename { source: error, .. } => from_save_io(error),
-            F::HeldOpen(held) => WalletRpcError::SaveFileHeld {
-                or_unwritable: held.or_unwritable,
+            F::SaveStep { step, source, .. } => from_save_io((*step).into(), source),
+            F::ReadOnly { .. } => WalletRpcError::SaveNotWritable {
+                target: SaveTarget::File,
             },
+            F::HeldOpen(_) => WalletRpcError::SaveFileHeld,
             // Before any file is touched the ledger's own check, its
-            // encoding, the frame or the seal failed; and a state save never
+            // encoding, the frame or the seal failed; a target with no
+            // parent directory is the caller's; and a state save never
             // names the rest, so each would be a fault too.
-            F::Ledger(_)
+            F::Io(_)
+            | F::Ledger(_)
             | F::Payload(_)
             | F::Envelope(_)
             | F::UnexpectedPayloadKind { .. }
@@ -2322,13 +2439,14 @@ fn from_unsaved_send(err: &PersistenceError) -> WalletRpcError {
             | F::Prefs(_) => WalletRpcError::SaveInternalFault,
         },
         PersistenceError::DurabilityUnconfirmed(why) => match why {
+            U::Remote(_) => WalletRpcError::SaveOnNetworkDrive,
             U::FileSystem(name) => WalletRpcError::SaveDurabilityUnconfirmed {
                 file_system: name.clone(),
             },
             U::ClassicRename => WalletRpcError::SaveRenameUnconfirmed,
-            U::DirectoryNotSynced(error) | U::Flush(error) | U::FileSystemUnread(error) => {
-                from_save_io(error)
-            }
+            U::DirectoryNotSynced(error) => from_save_io(SaveStep::FolderSync, error),
+            U::Flush(error) => from_save_io(SaveStep::Flush, error),
+            U::VolumeUnread(error) => from_save_io(SaveStep::VolumeQuery, error),
             // A wallet save stages a fresh file through its creating handle
             // every time and never resumes one a previous process left, so
             // it never reports this; if it did, that would be a fault.
@@ -2339,15 +2457,25 @@ fn from_unsaved_send(err: &PersistenceError) -> WalletRpcError {
     }
 }
 
-/// The disk's error on a send's save, by what the user does about it.
-fn from_save_io(error: &std::io::Error) -> WalletRpcError {
+/// The disk's error at `step` of a send's save, by what the user does
+/// about it: a denial is the folder (the staged file is created and renamed
+/// in it; a read-only file is its own variant upstream), a read-only or
+/// write-protected drive the volume, a full disk or quota the space, and
+/// anything else the step, named.
+fn from_save_io(step: SaveStep, error: &std::io::Error) -> WalletRpcError {
     use std::io::ErrorKind as K;
     match error.kind() {
-        K::PermissionDenied | K::ReadOnlyFilesystem => WalletRpcError::SendNotSaved,
+        K::PermissionDenied => WalletRpcError::SaveNotWritable {
+            target: SaveTarget::Folder,
+        },
+        K::ReadOnlyFilesystem => WalletRpcError::SaveNotWritable {
+            target: SaveTarget::Volume,
+        },
         K::StorageFull | K::QuotaExceeded => WalletRpcError::SaveDiskFull,
         // `io::ErrorKind` is foreign and `#[non_exhaustive]`: every other
-        // kind is the disk failing a step, named in `error`.
+        // kind is the disk failing the step, named in `step` and `error`.
         _ => WalletRpcError::SaveIoFailed {
+            step,
             error: system_words(error),
         },
     }
@@ -3631,11 +3759,25 @@ mod tests {
                 WalletRpcErrorCode::WalletFileIoFailed,
             ),
             (
-                WalletFileError::AtomicWriteRename {
+                WalletFileError::SaveStep {
+                    step: shekyl_engine_file::Step::Rename,
                     target: path(),
                     source: IoErr::other("EXDEV"),
                 },
                 WalletRpcErrorCode::WalletFileIoFailed,
+            ),
+            (
+                // A step's denial is the access code, as an untyped one is.
+                WalletFileError::SaveStep {
+                    step: shekyl_engine_file::Step::Write,
+                    target: path(),
+                    source: IoErr::from(ErrorKind::PermissionDenied),
+                },
+                WalletRpcErrorCode::WalletFileAccessDenied,
+            ),
+            (
+                WalletFileError::ReadOnly { target: path() },
+                WalletRpcErrorCode::WalletFileAccessDenied,
             ),
             (
                 // Outside a send, a file another program held past the
@@ -3644,7 +3786,6 @@ mod tests {
                 WalletFileError::HeldOpen(shekyl_engine_file::HeldOpen {
                     held: path(),
                     live: path(),
-                    or_unwritable: false,
                 }),
                 WalletRpcErrorCode::WalletFileIoFailed,
             ),
@@ -4034,24 +4175,26 @@ mod tests {
 
     /// Every cause of an unsaved send has its own code, `data` and advice,
     /// and none of them leaks a path (Rick, 2026-11-18: the audit of
-    /// `-29120`). A cause is what the user does differently: make the
-    /// folder writable, free disk space, exclude the folder from scanning,
-    /// check the disk, move the wallet, or report a fault.
+    /// `-29120`; 2026-11-19: its target, the step, the network drive). A
+    /// cause is what the user does differently: make the folder writable,
+    /// clear the file's read-only attribute, make the drive writable, free
+    /// disk space, exclude the folder from scanning, check the disk, move
+    /// the wallet, or report a fault.
     #[test]
     fn every_cause_of_an_unsaved_send_has_its_own_code_and_advice() {
-        use shekyl_engine_file::{HeldOpen, Unconfirmed};
+        use shekyl_engine_file::{HeldOpen, Step, Unconfirmed};
         use std::io::{Error as IoErr, ErrorKind};
         use std::path::PathBuf;
         use WalletRpcErrorCode as C;
         let path = || PathBuf::from(LOCAL_PATH);
         let file = PersistenceError::WalletFile;
         let unconfirmed = PersistenceError::DurabilityUnconfirmed;
-        let held = |or_unwritable| {
-            file(WalletFileError::HeldOpen(HeldOpen {
-                held: path(),
-                live: path(),
-                or_unwritable,
-            }))
+        let at = |step, source| {
+            file(WalletFileError::SaveStep {
+                step,
+                target: path(),
+                source,
+            })
         };
         // A generic disk error and a "not a directory's place" error, each
         // in the OS's own text, which names no path. The raw numbers are the
@@ -4069,92 +4212,101 @@ mod tests {
         let eio = || IoErr::from_raw_os_error(GENERIC_IO_ERROR);
         let eio_words = IoErr::from_raw_os_error(GENERIC_IO_ERROR).to_string();
         let eisdir_words = IoErr::from_raw_os_error(OTHER_IO_ERROR).to_string();
+        let failed = |step: &str, words: &str| Some(json!({ "step": step, "error": words }));
         let cases: Vec<(PersistenceError, C, Option<Value>, &str)> = vec![
             (
-                file(WalletFileError::Io(IoErr::from(
-                    ErrorKind::PermissionDenied,
-                ))),
-                C::SendNotSaved,
-                None,
-                "make it writable",
+                at(Step::Write, IoErr::from(ErrorKind::PermissionDenied)),
+                C::SaveNotWritable,
+                Some(json!({ "target": "folder" })),
+                "the wallet's folder is not writable; make it writable",
             ),
             (
-                file(WalletFileError::AtomicWriteRename {
-                    target: path(),
-                    source: IoErr::from(ErrorKind::ReadOnlyFilesystem),
-                }),
-                C::SendNotSaved,
-                None,
-                "make it writable",
+                file(WalletFileError::ReadOnly { target: path() }),
+                C::SaveNotWritable,
+                Some(json!({ "target": "file" })),
+                "the wallet's file is read-only; clear its read-only attribute",
             ),
             (
-                file(WalletFileError::Io(IoErr::from(ErrorKind::StorageFull))),
+                at(Step::Rename, IoErr::from(ErrorKind::ReadOnlyFilesystem)),
+                C::SaveNotWritable,
+                Some(json!({ "target": "volume" })),
+                "the drive holding the wallet is read-only; make it writable",
+            ),
+            (
+                at(Step::Write, IoErr::from(ErrorKind::StorageFull)),
                 C::SaveDiskFull,
                 None,
                 "free disk space",
             ),
             (
-                file(WalletFileError::Io(IoErr::from(ErrorKind::QuotaExceeded))),
+                at(Step::Write, IoErr::from(ErrorKind::QuotaExceeded)),
                 C::SaveDiskFull,
                 None,
                 "free disk space",
             ),
             (
-                held(false),
+                file(WalletFileError::HeldOpen(HeldOpen {
+                    held: path(),
+                    live: path(),
+                })),
                 C::SaveFileHeld,
-                Some(json!({ "or_unwritable": false })),
+                None,
                 "exclude the wallet's folder from scanning",
             ),
             (
-                held(true),
-                C::SaveFileHeld,
-                Some(json!({ "or_unwritable": true })),
-                "or make the file writable",
+                at(Step::Write, eio()),
+                C::SaveIoFailed,
+                failed("write", &eio_words),
+                "while writing the send's record",
             ),
             (
-                file(WalletFileError::Io(eio())),
+                at(Step::FolderSync, eio()),
                 C::SaveIoFailed,
-                Some(json!({ "error": eio_words })),
-                "check the disk",
+                failed("folder-sync", &eio_words),
+                "while syncing the wallet's folder",
             ),
             (
                 // The rename refused, the regtest gate's blocked state path.
-                file(WalletFileError::AtomicWriteRename {
-                    target: path(),
-                    source: IoErr::from_raw_os_error(OTHER_IO_ERROR),
-                }),
+                at(Step::Rename, IoErr::from_raw_os_error(OTHER_IO_ERROR)),
                 C::SaveIoFailed,
-                Some(json!({ "error": eisdir_words })),
-                "check the disk",
+                failed("rename", &eisdir_words),
+                "while putting the record in place of the wallet's file",
             ),
             (
                 // An error this process made up may carry a path; only its
                 // kind is shown.
-                file(WalletFileError::Io(IoErr::new(
-                    ErrorKind::InvalidInput,
-                    format!("target {LOCAL_PATH} has no parent directory"),
-                ))),
+                at(
+                    Step::Write,
+                    IoErr::new(ErrorKind::InvalidData, format!("{LOCAL_PATH} is odd")),
+                ),
                 C::SaveIoFailed,
-                Some(json!({ "error": ErrorKind::InvalidInput.to_string() })),
+                failed("write", &ErrorKind::InvalidData.to_string()),
                 "check the disk",
             ),
             (
                 unconfirmed(Unconfirmed::DirectoryNotSynced(eio())),
                 C::SaveIoFailed,
-                Some(json!({ "error": eio_words })),
-                "check the disk",
+                failed("folder-sync", &eio_words),
+                "while syncing the wallet's folder",
             ),
             (
                 unconfirmed(Unconfirmed::Flush(eio())),
                 C::SaveIoFailed,
-                Some(json!({ "error": eio_words })),
-                "check the disk",
+                failed("flush", &eio_words),
+                "while flushing the wallet's file to the disk",
             ),
             (
-                unconfirmed(Unconfirmed::FileSystemUnread(eio())),
+                unconfirmed(Unconfirmed::VolumeUnread(eio())),
                 C::SaveIoFailed,
-                Some(json!({ "error": eio_words })),
-                "check the disk",
+                failed("volume-query", &eio_words),
+                "while asking the wallet's drive what it is",
+            ),
+            (
+                // A Samba share reports NTFS: the network drive decides.
+                unconfirmed(Unconfirmed::Remote("NTFS".to_owned())),
+                C::SaveOnNetworkDrive,
+                None,
+                "move the wallet to a local drive",
             ),
             (
                 unconfirmed(Unconfirmed::FileSystem("ReFS".to_owned())),
@@ -4166,10 +4318,21 @@ mod tests {
                 unconfirmed(Unconfirmed::ClassicRename),
                 C::SaveRenameUnconfirmed,
                 None,
-                "move the wallet to a local NTFS drive",
+                "move the wallet to another local NTFS drive",
             ),
             (
                 unconfirmed(Unconfirmed::Reopened),
+                C::SaveInternalFault,
+                None,
+                "report it",
+            ),
+            (
+                // A target with no parent directory is the caller's fault,
+                // not the disk's.
+                file(WalletFileError::Io(IoErr::new(
+                    ErrorKind::InvalidInput,
+                    format!("target {LOCAL_PATH} has no parent directory"),
+                ))),
                 C::SaveInternalFault,
                 None,
                 "report it",

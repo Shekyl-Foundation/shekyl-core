@@ -368,7 +368,6 @@ fn a_late_start_fault_keeps_its_refusal_status() {
     let held = shekyl_os_account::private_file::HeldOpen {
         held: dir.join("rpc-channel.bundle"),
         live: dir.join("rpc-channel.bundle"),
-        or_unwritable: false,
     };
     let end = StartEnd::Stderr;
     assert_eq!(

@@ -191,7 +191,10 @@ mod windows {
                 CommitError::HeldOpen(held) => {
                     shekyl_daemon_config::replace::held_open_refusal(&held, &plan.dir)
                 }
-                CommitError::Io(_, e) | CommitError::Unsynced(_, e) => {
+                CommitError::ReadOnly(path) => {
+                    shekyl_daemon_config::replace::read_only_refusal(&path)
+                }
+                CommitError::Io { error: e, .. } | CommitError::Unsynced(_, e) => {
                     unusable(format!("the rendezvous cannot be published: {e}"))
                 }
             })?;

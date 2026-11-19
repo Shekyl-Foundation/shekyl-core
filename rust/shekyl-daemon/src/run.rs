@@ -112,7 +112,8 @@ impl StartEnd {
 
     /// A start fault of the RPC's set-up, at its open (before the node) or
     /// its start (after it): a file held open past the wait
-    /// (`config.replace.held-open`) and a missing or exposed rendezvous key
+    /// (`config.replace.held-open`), a read-only one
+    /// (`config.replace.read-only`) and a missing or exposed rendezvous key
     /// (`config.service.rendezvous-key`) are refusals; anything else fails
     /// with `context` before its words.
     fn rpc_fault(
@@ -126,6 +127,9 @@ impl StartEnd {
                 self.refuse(&[shekyl_daemon_config::replace::held_open_refusal(
                     &held, data_dir,
                 )])
+            }
+            shekyl_daemon_rpc::run::StartFault::ReadOnly(path) => {
+                self.refuse(&[shekyl_daemon_config::replace::read_only_refusal(&path)])
             }
             shekyl_daemon_rpc::run::StartFault::Refused(why) => {
                 self.fail(format!("{context}: {why}"))
