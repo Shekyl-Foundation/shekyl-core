@@ -4543,16 +4543,23 @@ async fn stake_persona_and_submit_bond(
     // point — exactly what WI-3's block-timed driver does when the post
     // comes due (see the module docs for why the driver's decorrelation
     // timing is deliberately not exercised here).
-    let post = {
+    //
+    // The read is the driver's covering cycle: the record goes out only
+    // under the store's witness that a save confirmed in this process
+    // covers it, which `first_stake`'s own confirmed seal gave.
+    let (post, covered) = {
         let pending_gate = { arc.read().await.pending_gate.clone() };
         let store = pending_post_store_for_engine(arc.clone(), pending_gate);
-        store
-            .read(|block| block.posts().first().cloned())
+        let (post, covered) = store
+            .mutate_covering(|block, _| (false, block.posts().first().cloned()))
             .await
-            .expect("pending-post read")
-            .expect("first_stake seals exactly one pending post")
+            .expect("pending-post read");
+        (
+            post.expect("first_stake seals exactly one pending post"),
+            covered.expect("first_stake's confirmed seal covers the pending records"),
+        )
     };
-    let bound = PBoundBytes::from_pending(&post);
+    let bound = PBoundBytes::from_pending(&post, covered);
     let persona_id = *bound.persona();
     let swept_gindexes: Vec<u64> = post.funding_gindexes.iter().map(|g| g.to_raw()).collect();
     let daemon_client = { arc.read().await.daemon().clone() };

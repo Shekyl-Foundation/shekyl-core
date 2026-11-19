@@ -40,7 +40,7 @@ use shekyl_standoff::draw::bounded_uniform;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId};
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::pending_post_gate::PendingPostGate;
+use crate::engine::pending_post_gate::{Coverage, PendingPostGate};
 use crate::engine::stake_timing::OsRngGapAdapter;
 
 #[cfg(feature = "gf7-hooks")]
@@ -445,9 +445,9 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         let held = &self.held_this_session;
         let reservation_alarmed = &self.alarmed_reservations;
         let horizon = self.config.alarm_horizon_blocks;
-        let plan = self
+        let (plan, covered) = self
             .store
-            .mutate(|block| {
+            .mutate_covering(|block, coverage| {
                 let mut changed = false;
 
                 // Confirmation retire (§3.5): state-agnostic — observed
@@ -516,9 +516,14 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
 
                 // Select + mark (§3.2 part 2 / §3.3 step 2): at most one,
                 // deterministic order, sealed as `Dispatched` BEFORE any
-                // send.
-                let candidate =
-                    select_dispatch_candidate(block.posts(), tip, held).map(|p| p.persona);
+                // send. Only from a seal a save confirmed in this process
+                // covers (Rick, 2026-11-19): an uncovered seal's records
+                // are neither marked nor sent, so a volume that cannot
+                // confirm a save does not spend one per tick on them.
+                let candidate = (coverage == Coverage::Covered)
+                    .then(|| select_dispatch_candidate(block.posts(), tip, held))
+                    .flatten()
+                    .map(|p| p.persona);
                 let dispatched = candidate.map(|persona| {
                     // `mark_dispatched` returns the transitioned post from the
                     // same lookup it mutates — no second scan to re-find it.
@@ -636,6 +641,18 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         let Some((post, attempts)) = plan.dispatched else {
             return Ok(());
         };
+        // The mark's own save uncovered the seal: it was not confirmed, so
+        // the record a power loss could take is not sent. It stays
+        // `Dispatched` (maybe sent, which is safe) and goes out once a save
+        // of the seal confirms.
+        let Some(covered) = covered else {
+            tracing::warn!(
+                attempts,
+                "bond-post dispatch: the pending records' save is not confirmed; nothing \
+                 was sent, and the post goes out once a save of them confirms"
+            );
+            return Ok(());
+        };
 
         // Send-time dispersal (§3.2 part 3): an independently drawn uniform
         // delay in [0, tick_interval), fresh OS entropy per dispatch, so the
@@ -668,7 +685,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         let outcome = self
             .broadcast
             .submit_bound(crate::engine::transaction_submitter::BoundForSend::Loaded(
-                PBoundBytes::from_pending(&post),
+                PBoundBytes::from_pending(&post, covered),
             ))
             .await;
 
@@ -748,18 +765,21 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                      resubmit next tick"
                 );
             }
+            // A seal not saved refuses a fresh hand-off. This driver hands
+            // off only covered records ([`Covered`](super::pending_store::Covered)), so the arm is the
+            // type's, not this path's; were it reached, nothing was sent and
+            // the record stays for a later tick.
+            Err(BroadcastSubmitError::SealNotSaved(error)) => {
+                tracing::warn!(
+                    attempts,
+                    %error,
+                    "bond-post dispatch: the seal was not saved; nothing was sent"
+                );
+            }
             // Persona mismatch: a build-path defect (the P-1 single-mint-site
             // pin makes it unreachable from production flow). Nothing was
             // sent; the record stays held (funds-safe) and the defect is
             // loud.
-            Err(BroadcastSubmitError::SealUnconfirmed(error)) => {
-                tracing::warn!(
-                    attempts,
-                    %error,
-                    "bond-post dispatch: the seal was applied but not confirmed; nothing was \
-                     sent, and the next tick resends the stored bytes"
-                );
-            }
             Err(BroadcastSubmitError::PersonaMismatch { .. }) => {
                 tracing::error!(
                     "bond-post dispatch DEFECT: persona mismatch at the submit choke — the \

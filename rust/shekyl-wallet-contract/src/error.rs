@@ -4301,6 +4301,23 @@ mod tests {
             PersistenceError::DurabilityUnconfirmed(Unconfirmed::Remote("NTFS".to_owned())),
         ));
         assert_eq!(network.code().as_i32(), -29134, "{network:?}");
+        // A seal whose save failed outright answers by cause too, never as
+        // an internal fault: here a read-only wallet file.
+        let read_only = WalletRpcError::from(UnstakeError::SealNotSaved(
+            PersistenceError::WalletFile(shekyl_engine_file::WalletFileError::ReadOnly {
+                target: std::path::PathBuf::from("wallet.pending"),
+            }),
+        ));
+        assert_eq!(read_only.code().as_i32(), -29120, "{read_only:?}");
+        assert_eq!(read_only.data(), Some(json!({ "target": "file" })));
+        assert!(
+            read_only
+                .message()
+                .starts_with("the staking transaction was not saved")
+                && !read_only.message().contains("wallet.pending"),
+            "{}",
+            read_only.message()
+        );
     }
 
     /// Every cause of an unsaved send has its own code, `data` and advice,

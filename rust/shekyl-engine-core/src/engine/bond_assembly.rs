@@ -36,14 +36,19 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
 
+use super::pscan::pending_store::Covered;
+
 // ---------------------------------------------------------------------------
 // PBoundBytes — the byte↔persona pairing, minted only here (pin P-1)
 // ---------------------------------------------------------------------------
 
-/// Bytes read back from the pending store.
+/// Bytes read back from the pending store while a save of it confirmed in
+/// this process covered them.
 ///
 /// The field is private. [`PBoundBytes::from_pending`] is the constructor,
-/// so a fresh assembly cannot claim this witness.
+/// and it takes the store's [`Covered`] witness, so a fresh assembly cannot
+/// claim this one, and a record read back from an uncovered store cannot be
+/// sent (Rick, 2026-11-19).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct LoadedSeal {
     bound: PBoundBytes,
@@ -130,9 +135,10 @@ impl PBoundBytes {
     }
 
     /// Re-lift a sealed [`PendingBondPost`] that was read from the pending
-    /// store. The [`LoadedSeal`] is the witness that these bytes came back
-    /// from that store; a fresh assembly does not construct one.
-    pub(crate) fn from_pending(post: &PendingBondPost) -> LoadedSeal {
+    /// store, under the store's [`Covered`] witness: a save of the store
+    /// confirmed in this process covered the record when it was read. A
+    /// fresh assembly does not construct a [`LoadedSeal`].
+    pub(crate) fn from_pending(post: &PendingBondPost, _covered: Covered) -> LoadedSeal {
         LoadedSeal {
             bound: Self::bind(post.persona, post.tx_bytes.clone()),
         }
@@ -971,7 +977,7 @@ mod tests {
             reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
             terminal: None,
         };
-        let bound = PBoundBytes::from_pending(&post);
+        let bound = PBoundBytes::from_pending(&post, Covered::for_test());
         assert_eq!(bound.persona(), &persona);
         assert_eq!(bound.bytes(), bytes.as_slice());
         assert_eq!(

@@ -313,7 +313,7 @@ fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
     // lane can be retried.
     matches!(
         e,
-        BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealUnconfirmed(_)
+        BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealNotSaved(_)
     )
 }
 
@@ -616,7 +616,16 @@ where
                 move |block| block.remove_release(&persona).is_some(),
             )
             .await
-            .map_err(|e| ReleaseRequestError::state("pending-release seal", e))?;
+            .map_err(|e| match e {
+                // The seal's save failed: nothing was sent, and the exit
+                // answers the save's cause (Rick, 2026-11-19).
+                super::pscan::pending_store::SealError::NotSaved(cause) => {
+                    ReleaseRequestError::Submit(BroadcastSubmitError::SealNotSaved(cause))
+                }
+                super::pscan::pending_store::SealError::Store(e) => {
+                    ReleaseRequestError::state("pending-release seal", e)
+                }
+            })?;
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(ReleaseRequestError::ReleasePending),
@@ -638,7 +647,7 @@ where
         //   the wallet and no daemon gave a verdict, so the seal this call
         //   just took is released (`remove_release`: byte-prune +
         //   reservation release + generation bump in one seal).
-        // - `SealUnconfirmed`: the seal's save was not confirmed, so nothing
+        // - `SealNotSaved`: the seal's save was not confirmed, so nothing
         //   was sent; `seal_reporting` removed the seal under its own guard,
         //   so the removal here finds nothing, and the exit answers with the
         //   save's own code (Rick, 2026-11-19).
@@ -748,7 +757,7 @@ mod tests {
         };
         assert!(released_on_first_send_failure(&mismatch));
 
-        let unconfirmed = BroadcastSubmitError::SealUnconfirmed(
+        let unconfirmed = BroadcastSubmitError::SealNotSaved(
             super::super::error::PersistenceError::DurabilityUnconfirmed(
                 shekyl_engine_file::Unconfirmed::ClassicRename,
             ),

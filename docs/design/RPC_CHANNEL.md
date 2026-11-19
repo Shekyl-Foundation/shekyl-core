@@ -2061,7 +2061,10 @@ the rename at once, `config.replace.read-only`, which no wait changes
 the write-through handle's rename is flushed with it (`CreateFileW`'s
 "Caching Behavior"); on a network drive, whatever file system it reports,
 and on any other file system a publish lands, unconfirmed, and the start
-goes on. A stale record, which a crashed daemon
+goes on without reporting it. The daemon's supported storage is a local
+NTFS volume on Windows and a local disk on Unix; network shares are not a
+supported configuration (Rick, 2026-11-19; `INSTALLATION_GUIDE.md`,
+"Supported storage"). A stale record, which a crashed daemon
 left, is replaced by the publish the same way, never removed beside it.
 Every rendezvous path is keyed by the genesis-derived network id, not a
 nettype name (rule 71), so daemons of different networks coexist and a

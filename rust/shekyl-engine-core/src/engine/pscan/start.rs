@@ -77,6 +77,7 @@ use super::cadence::FixedRateSchedule;
 use super::dispatch::{
     BondBroadcast, DispatchConfig, DispatchDriver, PendingPostStore, PendingSealStore,
 };
+use super::pending_store::OpenCover;
 use super::task::{run_pscan_task, PScanConfig, PScanStore};
 use crate::engine::signer::EngineSignerKind;
 use crate::engine::traits::{
@@ -499,6 +500,15 @@ where
             Ok(with_persistence_read(&engine, |wf, key| wf.save_pending_posts(key, &body)).await?)
         }
     }
+
+    fn save_cause(
+        error: Self::Error,
+    ) -> Result<crate::engine::error::PersistenceError, Self::Error> {
+        match error {
+            WalletFilePendingStoreError::File(file) => Ok(file.into()),
+            codec @ WalletFilePendingStoreError::Codec(_) => Err(codec),
+        }
+    }
 }
 
 /// Load the sealed [`PendingPostBlock`] off the engine arc under a brief read
@@ -784,17 +794,38 @@ where
         // this probe a WI-2 v1 `.wallet.pending` under this v2 binary would make the
         // dispatch tick fail every sweep forever while `start_pscan` reported success
         // — the assembled bond post silently never dispatching. The driver re-loads
-        // under its own write lock each tick (the two-writer discipline); this is a
-        // fail-closed decode probe, and its result is intentionally discarded.
+        // under its own write lock each tick (the two-writer discipline).
         // `slot_guard` drops on any early return here, releasing the slot.
+        //
+        // The pending seal's probe is also the open's one save of it, before any
+        // driver sends (Rick, 2026-11-19): what this process loaded is covered,
+        // and so sendable, only when that save is confirmed. It runs under the
+        // pending gate, like every other write of the seal. A save that fails or
+        // is not confirmed is logged and the scan still starts: the records stay
+        // unsent until a later save of the file confirms.
         let initial = store
             .load()
             .await
             .map_err(|e| pscan_load_failure(e, pscan_path))?;
-        pending_seal
-            .load()
+        match pending_post_store_for_engine(self_arc.clone(), pending_gate.clone())
+            .cover_at_open()
             .await
-            .map_err(|e| PScanStartError::LoadFailed(Box::new(e)))?;
+            .map_err(|e| PScanStartError::LoadFailed(Box::new(e)))?
+        {
+            OpenCover::Empty | OpenCover::Saved(shekyl_engine_file::Durability::Confirmed) => {}
+            OpenCover::Saved(shekyl_engine_file::Durability::Unconfirmed(why)) => {
+                tracing::warn!(
+                    %why,
+                    "staking: the pending records were saved at open, but the save is not \
+                     confirmed; none is sent until a save of them confirms"
+                );
+            }
+            OpenCover::NotSaved(error) => tracing::warn!(
+                %error,
+                "staking: the pending records could not be saved at open; none is sent \
+                 until a save of them confirms"
+            ),
+        }
 
         let dispatch_config = DispatchConfig::production(cadence);
         // Sealing-run injection (§19.8.1): split the overrides into the config

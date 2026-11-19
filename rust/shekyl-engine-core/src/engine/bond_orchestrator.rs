@@ -694,7 +694,16 @@ where
                 move |block| block.remove_post(&persona).is_some(),
             )
             .await
-            .map_err(|e| BondAssemblyError::build("pending-post seal", e))?;
+            .map_err(|e| match e {
+                // The seal's save failed: nothing was sent, and the stake
+                // answers the save's cause (Rick, 2026-11-19).
+                super::pscan::pending_store::SealError::NotSaved(cause) => {
+                    BondAssemblyError::SealNotSaved(cause)
+                }
+                super::pscan::pending_store::SealError::Store(e) => {
+                    BondAssemblyError::build("pending-post seal", e)
+                }
+            })?;
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),

@@ -85,12 +85,9 @@
 //! `FileFsDeviceInformation`, on the handle) is
 //! [`Unconfirmed::Remote`] whatever file system it reports. A server names
 //! the file system of the disk it shares, and the write-through sentence
-//! above is NTFS's, on this computer's disk. Measured on an SMB share from
-//! a file server on the local network (Windows 11 23H2, build 22631,
-//! 2026-11-19): it reports `NTFS`, its device is `FILE_REMOTE_DEVICE`, and
-//! it refuses the `FileRenameInfoEx` class with `ERROR_INVALID_PARAMETER`
-//! as FAT32 does, so the commit lands through the classic rename and
-//! reports [`Unconfirmed::Remote`]`("NTFS")`.
+//! above is NTFS's, on this computer's disk. Network shares are not a
+//! supported configuration: the commit lands and says it is unconfirmed, and
+//! the wallet refuses to send or stake from one (Rick, 2026-11-19).
 //!
 //! **One deadline** (Rick, 2026-11-18): the removal of a leftover staged
 //! file ([`remove`]), the source's open and the rename itself share the
@@ -467,16 +464,6 @@ impl Staged {
     /// `GetVolumeInformationByHandleW` failed.
     pub fn file_system(&self) -> io::Result<String> {
         file_system_of(&self.0)
-    }
-
-    /// Whether the volume the staged file is on is a network drive
-    /// (`FILE_REMOTE_DEVICE`).
-    ///
-    /// # Errors
-    ///
-    /// `NtQueryVolumeInformationFile` failed.
-    pub fn is_remote(&self) -> io::Result<bool> {
-        is_remote(&self.0)
     }
 
     /// Rename the staged file over `live` through this handle, waiting
@@ -929,56 +916,6 @@ mod tests {
             panic!("{var} is unset: set it to a directory on the volume this test is about");
         };
         tempfile::tempdir_in(dir).unwrap()
-    }
-
-    /// A commit on a network drive reports [`Unconfirmed::Remote`], naming
-    /// the file system the server reports, and still lands the bytes (Rick,
-    /// 2026-11-19). It prints what it measured: that file system, and what
-    /// the share answers the POSIX rename, which a second staged file asks
-    /// for alone. Red edit: drop the device query from the commit, and a
-    /// share reporting NTFS is `Durable`.
-    #[test]
-    #[ignore = "needs SHEKYL_TEST_SHARE_DIR: a directory on a network share (SMB)"]
-    fn a_commit_on_a_network_share_is_unconfirmed() {
-        let dir = volume_dir("SHEKYL_TEST_SHARE_DIR");
-        let probe_live = dir.path().join("probe");
-        std::fs::write(&probe_live, b"old").unwrap();
-        let (probe, _) = staged_in(dir.path(), "probe", b"new");
-        let posix = rename_with(
-            probe.file(),
-            &probe_live,
-            Rename::Ex(FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS),
-        );
-        println!(
-            "share: file system {:?}, remote {:?}, POSIX rename {:?}",
-            probe.file_system(),
-            probe.is_remote(),
-            posix.as_ref().map_err(io::Error::raw_os_error)
-        );
-        drop(probe);
-
-        let live = dir.path().join("record");
-        std::fs::write(&live, b"old").unwrap();
-        let (staged, staged_path) = staged_in(dir.path(), "record", b"new");
-        assert!(
-            staged.is_remote().unwrap(),
-            "SHEKYL_TEST_SHARE_DIR is not on a network drive"
-        );
-        let durability = staged
-            .commit(
-                &live,
-                Instant::now() + Duration::from_secs(2),
-                OnFailure::Remove,
-            )
-            .unwrap();
-        match &durability {
-            Durability::Unconfirmed(Unconfirmed::Remote(name)) => {
-                println!("share: unconfirmed as a network drive reporting {name}");
-            }
-            other => panic!("expected a network drive, got {other:?}"),
-        }
-        assert_eq!(std::fs::read(&live).unwrap(), b"new");
-        assert!(!staged_path.exists());
     }
 
     /// Set or clear `path`'s read-only attribute.

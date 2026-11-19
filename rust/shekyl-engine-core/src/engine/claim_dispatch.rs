@@ -416,7 +416,16 @@ where
                 move |block| block.remove_claim(&persona).is_some(),
             )
             .await
-            .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
+            .map_err(|e| match e {
+                // The seal's save failed: nothing was sent, by the save's
+                // cause (Rick, 2026-11-19).
+                super::pscan::pending_store::SealError::NotSaved(cause) => {
+                    EmissionClaimRequestError::Submit(BroadcastSubmitError::SealNotSaved(cause))
+                }
+                super::pscan::pending_store::SealError::Store(e) => {
+                    EmissionClaimRequestError::state("pending-claim seal", e)
+                }
+            })?;
         match attempt {
             ClaimSealAttempt::Decided(SealAdmission::Admit) => {}
             ClaimSealAttempt::YieldToForeground => {

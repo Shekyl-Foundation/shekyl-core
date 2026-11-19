@@ -11,9 +11,11 @@
 
 use std::sync::Arc;
 
+use shekyl_engine_file::Durability;
 use shekyl_engine_state::PendingPostBlock;
 
-use crate::engine::pending_post_gate::PendingPostGate;
+use crate::engine::error::PersistenceError;
+use crate::engine::pending_post_gate::{Coverage, PendingPostGate};
 
 /// The durable sink for the pending-post block — the `.wallet.pending` seal,
 /// behind a trait so the driver is testable with an in-memory store and the
@@ -46,6 +48,51 @@ pub(crate) trait PendingSealStore: Send + Sync + 'static {
         &self,
         block: &PendingPostBlock,
     ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send;
+
+    /// The save's own cause, when `error` is a failed save of the file: a
+    /// staking call answers it by cause, as a send does (Rick, 2026-11-19).
+    /// Any other failure (encoding the block) is returned as it was.
+    fn save_cause(error: Self::Error) -> Result<PersistenceError, Self::Error>;
+}
+
+/// The witness that the pending seal was covered by a save confirmed in this
+/// process when its records were read ([`Coverage`]). Only the store mints
+/// it, under its lock, and a record read back from the seal is sent only
+/// with it ([`PBoundBytes::from_pending`](crate::engine::bond_assembly::PBoundBytes::from_pending)).
+#[derive(Debug)]
+pub(crate) struct Covered(());
+
+impl Covered {
+    /// A witness for a unit test that builds a loaded record by hand. Never
+    /// a production mint.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self(())
+    }
+}
+
+/// Why taking a seal for a broadcast failed ([`PendingPostStore::seal_reporting`]).
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SealError<E: std::error::Error + 'static> {
+    /// The seal's save failed, for this cause: nothing was written and
+    /// nothing sent. The caller answers it by cause (Rick, 2026-11-19).
+    #[error("the seal was not saved: {0}")]
+    NotSaved(#[source] PersistenceError),
+    /// Reading the store failed, or the block could not be encoded.
+    #[error(transparent)]
+    Store(E),
+}
+
+/// What the open's one save of the seal did ([`PendingPostStore::cover_at_open`]).
+#[derive(Debug)]
+pub(crate) enum OpenCover<E> {
+    /// No seal on disk: nothing was loaded, so nothing is covered or sent
+    /// until a seal's own save.
+    Empty,
+    /// The loaded seal was saved; only [`Durability::Confirmed`] covers it.
+    Saved(Durability),
+    /// The save failed: the seal stays uncovered and its records unsent.
+    NotSaved(E),
 }
 
 /// The single shared write path over the pending seal (§3.3 writer
@@ -85,7 +132,7 @@ impl<S: PendingSealStore> PendingPostStore<S> {
         &self,
         f: impl FnOnce(&PendingPostBlock) -> R,
     ) -> Result<R, S::Error> {
-        let _guard = self.gate.lock().await;
+        let _coverage = self.gate.lock().await;
         let block = self
             .seal
             .load()
@@ -119,7 +166,7 @@ impl<S: PendingSealStore> PendingPostStore<S> {
         &self,
         f: impl FnOnce(&mut PendingPostBlock) -> (bool, R),
     ) -> Result<(R, shekyl_engine_file::Durability), S::Error> {
-        let _guard = self.gate.lock().await;
+        let mut coverage = self.gate.lock().await;
         let mut block = self
             .seal
             .load()
@@ -127,11 +174,71 @@ impl<S: PendingSealStore> PendingPostStore<S> {
             .unwrap_or_else(PendingPostBlock::empty);
         let (changed, out) = f(&mut block);
         let durability = if changed {
-            self.seal.save(&block).await?
+            self.save(&mut coverage, &block).await?
         } else {
             shekyl_engine_file::Durability::Confirmed
         };
         Ok((out, durability))
+    }
+
+    /// One locked cycle for the dispatch driver, which sends records read
+    /// back from the seal. `f` is told the seal's [`Coverage`] as the cycle
+    /// starts, and returns `(changed, R)` as [`Self::mutate`]'s closure does.
+    /// The [`Covered`] witness comes back only when the seal is covered once
+    /// the cycle's own save, if any, is done: a record read back in this
+    /// cycle is sent only with it.
+    pub(crate) async fn mutate_covering<R>(
+        &self,
+        f: impl FnOnce(&mut PendingPostBlock, Coverage) -> (bool, R),
+    ) -> Result<(R, Option<Covered>), S::Error> {
+        let mut coverage = self.gate.lock().await;
+        let mut block = self
+            .seal
+            .load()
+            .await?
+            .unwrap_or_else(PendingPostBlock::empty);
+        let (changed, out) = f(&mut block, *coverage);
+        if changed {
+            let durability = self.save(&mut coverage, &block).await?;
+            crate::engine::dispatch_durability::accept_applied(&durability);
+        }
+        let covered = (*coverage == Coverage::Covered).then_some(Covered(()));
+        Ok((out, covered))
+    }
+
+    /// The open's one save of the seal, before any driver sends (Rick,
+    /// 2026-11-19): what the process loaded is covered only when this save
+    /// is confirmed. Under the lock, so no writer's seal interleaves.
+    ///
+    /// `Err` is the load: a seal that cannot be read or decoded. A save
+    /// that fails or is not confirmed is the [`OpenCover`] answer, not an
+    /// error: the seal stays uncovered, its records stay unsent, and the
+    /// next confirmed save of the file covers them.
+    pub(crate) async fn cover_at_open(&self) -> Result<OpenCover<S::Error>, S::Error> {
+        let mut coverage = self.gate.lock().await;
+        let Some(block) = self.seal.load().await? else {
+            return Ok(OpenCover::Empty);
+        };
+        Ok(match self.save(&mut coverage, &block).await {
+            Ok(durability) => OpenCover::Saved(durability),
+            Err(error) => OpenCover::NotSaved(error),
+        })
+    }
+
+    /// Every save of the seal: a confirmed one covers the whole file, an
+    /// unconfirmed one uncovers it, and a failed one wrote nothing, so the
+    /// coverage stands.
+    async fn save(
+        &self,
+        coverage: &mut Coverage,
+        block: &PendingPostBlock,
+    ) -> Result<Durability, S::Error> {
+        let durability = self.seal.save(block).await?;
+        *coverage = match durability {
+            Durability::Confirmed => Coverage::Covered,
+            Durability::Unconfirmed(_) => Coverage::Uncovered,
+        };
+        Ok(durability)
     }
 
     /// Take a seal for a broadcast: [`Self::mutate_reporting`], except that
@@ -146,30 +253,41 @@ impl<S: PendingSealStore> PendingPostStore<S> {
     /// The removal is itself a save. One that fails, or whose own
     /// durability is not confirmed, is logged, never the answer: the seal
     /// stays on disk, or a power loss can bring it back (`docs/FOLLOWUPS.md`,
-    /// the dispatch-driver row).
+    /// the dispatch-driver row). Either way the seal is uncovered, so the
+    /// dispatch driver does not send it ([`Self::mutate_covering`]).
+    ///
+    /// A seal whose save fails is [`SealError::NotSaved`], with the save's
+    /// cause; a load that fails is [`SealError::Store`].
     pub(crate) async fn seal_reporting<R>(
         &self,
         seal: impl FnOnce(&mut PendingPostBlock) -> (bool, R),
         unseal: impl FnOnce(&mut PendingPostBlock) -> bool,
-    ) -> Result<(R, shekyl_engine_file::Durability), S::Error> {
-        let _guard = self.gate.lock().await;
+    ) -> Result<(R, shekyl_engine_file::Durability), SealError<S::Error>> {
+        let mut coverage = self.gate.lock().await;
         let mut block = self
             .seal
             .load()
-            .await?
+            .await
+            .map_err(SealError::Store)?
             .unwrap_or_else(PendingPostBlock::empty);
         let (changed, out) = seal(&mut block);
         if !changed {
             return Ok((out, shekyl_engine_file::Durability::Confirmed));
         }
-        let durability = self.seal.save(&block).await?;
+        let durability =
+            self.save(&mut coverage, &block)
+                .await
+                .map_err(|error| match S::save_cause(error) {
+                    Ok(cause) => SealError::NotSaved(cause),
+                    Err(other) => SealError::Store(other),
+                })?;
         if let shekyl_engine_file::Durability::Unconfirmed(why) = &durability {
             let unsealed = unseal(&mut block);
             debug_assert!(
                 unsealed,
                 "the seal just saved is in the block it was saved in"
             );
-            match self.seal.save(&block).await {
+            match self.save(&mut coverage, &block).await {
                 Ok(shekyl_engine_file::Durability::Confirmed) => {}
                 Ok(shekyl_engine_file::Durability::Unconfirmed(again)) => tracing::warn!(
                     %why,

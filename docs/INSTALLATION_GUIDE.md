@@ -34,6 +34,24 @@ of them stops at the account walk's `compile_error!` in `shekyl-daemon-config`.
 The daemon has no iOS or Android arm either: no CI or gitian job builds a node
 for them.
 
+### Supported storage
+
+The wallet and the daemon keep their files on a local disk: a local NTFS
+volume on Windows, a local disk on Unix (Rick, 2026-11-19). Network shares
+are not a supported configuration.
+
+- **The wallet**, on any other storage (a FAT32 or exFAT drive, a network
+  share), still saves its files, but refuses to send or to stake: no save
+  there is confirmed to survive a power cut, so the transaction it would
+  need to remember could be lost after it left. The refusal is the
+  wallet RPC code for the cause (`SAVE_DURABILITY_UNCONFIRMED`,
+  `SAVE_ON_NETWORK_DRIVE`, and the others in `docs/api/wallet_rpc.yaml`),
+  and its message says why and what to change.
+- **The daemon**, on such storage, still starts. A file it replaces at
+  start (its rendezvous record, its console key, the service bundle) is
+  written, but not confirmed to survive a power cut; the daemon does not
+  report that.
+
 ### Practical baseline
 
 If you are starting fresh, prefer:

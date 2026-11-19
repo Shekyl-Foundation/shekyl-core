@@ -1032,7 +1032,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         ReleaseRequestError::Submit(submit) => match submit {
             // The seam removed the unconfirmed seal; nothing was sent, and
             // the answer is the save's own code (Rick, 2026-11-19).
-            BroadcastSubmitError::SealUnconfirmed(error) => UnstakeError::SealNotSaved(error),
+            BroadcastSubmitError::SealNotSaved(error) => UnstakeError::SealNotSaved(error),
             submit @ BroadcastSubmitError::PersonaMismatch { .. } => {
                 // The one class the seam's release predicate names
                 // (`released_on_first_send_failure`): the seal is already
@@ -1093,7 +1093,7 @@ fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
         DrainRequestError::State { context, detail } => {
             CollectUnstakedError::Engine { context, detail }
         }
-        DrainRequestError::Submit(BroadcastSubmitError::SealUnconfirmed(error)) => {
+        DrainRequestError::Submit(BroadcastSubmitError::SealNotSaved(error)) => {
             CollectUnstakedError::SealNotSaved(error)
         }
         DrainRequestError::Submit(e) => CollectUnstakedError::Submit {

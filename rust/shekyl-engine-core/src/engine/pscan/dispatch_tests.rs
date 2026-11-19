@@ -39,12 +39,15 @@ type TestDriver = DispatchDriver<std::sync::Arc<MemStore>, std::sync::Arc<Script
 // -- test doubles --------------------------------------------------------
 
 /// In-memory [`PendingSealStore`] with a save kill-switch (for the
-/// seal-failure half of gate 3).
+/// seal-failure half of gate 3) and scripted saves: each save takes the
+/// next answer (a durability, or a failure that writes nothing), and an
+/// empty script is confirmed.
 #[derive(Default)]
 struct MemStore {
     block: Mutex<Option<PendingPostBlock>>,
     fail_saves: AtomicBool,
     saves: Mutex<u64>,
+    script: Mutex<VecDeque<Result<shekyl_engine_file::Durability, InjectedSealFailure>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -65,10 +68,23 @@ impl PendingSealStore for std::sync::Arc<MemStore> {
         if self.fail_saves.load(Ordering::Relaxed) {
             return Err(InjectedSealFailure);
         }
+        let answer = self
+            .script
+            .lock()
+            .expect("mem store")
+            .pop_front()
+            .unwrap_or(Ok(shekyl_engine_file::Durability::Confirmed))?;
         *self.saves.lock().expect("mem store") += 1;
         *self.block.lock().expect("mem store") = Some(block.clone());
         // The memory store is the store. The assignment is the write.
-        Ok(shekyl_engine_file::Durability::Confirmed)
+        Ok(answer)
+    }
+
+    // The injected failure stands for a store fault, not a save cause.
+    fn save_cause(
+        error: Self::Error,
+    ) -> Result<crate::engine::error::PersistenceError, Self::Error> {
+        Err(error)
     }
 }
 
@@ -145,9 +161,11 @@ fn test_config() -> DispatchConfig {
 }
 
 /// A fresh per-test pending-post gate (in production the `Engine` owns one
-/// per wallet and shares it with the WI-2 assemble path).
+/// per wallet and shares it with the WI-2 assemble path), whose seal the
+/// open's one save covered: the seeded records are sendable, as they are
+/// in production once that save confirms.
 fn test_lock() -> Arc<crate::engine::pending_post_gate::PendingPostGate> {
-    crate::engine::pending_post_gate::PendingPostGate::new()
+    crate::engine::pending_post_gate::PendingPostGate::covered_for_test()
 }
 
 fn driver_with_posts(
@@ -1404,4 +1422,113 @@ async fn a_post_due_after_its_end_date_is_never_sent_and_expires() {
     let block = sealed_block(&store);
     assert!(block.posts().is_empty() && block.reserved_gindexes().is_empty());
     assert_eq!(block.outcomes()[0].outcome, OutcomeKind::Expired);
+}
+
+// -- Coverage: a loaded record is sent only under a confirmed save ----------
+
+/// A volume where Windows cannot confirm a save survives a power loss.
+fn on_fat() -> shekyl_engine_file::Durability {
+    shekyl_engine_file::Durability::Unconfirmed(shekyl_engine_file::Unconfirmed::FileSystem(
+        "FAT32".to_owned(),
+    ))
+}
+
+/// A bond post whose seal was not confirmed is not sent on the next tick,
+/// even when its removal failed and it is still on disk; a later confirmed
+/// save of the file covers it, and it goes out (Rick, 2026-11-19). The
+/// driver runs over a production gate, which starts uncovered. Red edit:
+/// select from an uncovered seal and send without the store's witness (the
+/// driver before coverage), and the post goes out on the first tick.
+#[tokio::test]
+async fn a_bond_post_whose_seal_was_unconfirmed_is_not_sent_on_the_next_tick() {
+    let store = std::sync::Arc::new(MemStore::default());
+    let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(Vec::new()));
+    let mut driver = DispatchDriver::new(
+        store.clone(),
+        broadcast.clone(),
+        test_config(),
+        crate::engine::pending_post_gate::PendingPostGate::new(),
+    );
+    // The seal's save is applied and unconfirmed, and its removal fails, so
+    // the post stays on disk: the case a power loss can also bring back.
+    store
+        .script
+        .lock()
+        .expect("mem store")
+        .extend([Ok(on_fat()), Err(InjectedSealFailure)]);
+    let sealed = post(1, 10, 5, &[7]);
+    let (admission, durability) = driver
+        .store()
+        .seal_reporting(
+            |block| {
+                let g = block.generation();
+                let admission = block.seal_post(sealed, g);
+                (
+                    admission == shekyl_engine_state::pending_post_block::SealAdmission::Admit,
+                    admission,
+                )
+            },
+            |block| block.remove_post(&persona(1)).is_some(),
+        )
+        .await
+        .expect("the seal's own save was applied");
+    assert_eq!(
+        admission,
+        shekyl_engine_state::pending_post_block::SealAdmission::Admit
+    );
+    assert!(
+        matches!(durability, shekyl_engine_file::Durability::Unconfirmed(_)),
+        "{durability:?}"
+    );
+    assert_eq!(
+        sealed_state(&store, &persona(1)),
+        Some(PendingPostState::Pending),
+        "fixture: the failed removal leaves the post on disk"
+    );
+    let saves = *store.saves.lock().expect("mem store");
+
+    tick(&mut driver, 15).await;
+    assert!(broadcast.sent().is_empty(), "an uncovered post is not sent");
+    assert_eq!(
+        sealed_state(&store, &persona(1)),
+        Some(PendingPostState::Pending),
+        "an uncovered post is not marked dispatched either"
+    );
+    assert_eq!(
+        *store.saves.lock().expect("mem store"),
+        saves,
+        "an uncovered tick spends no save"
+    );
+
+    // A later confirmed save of the file covers every record in it.
+    driver
+        .store()
+        .mutate(|_| (true, ()))
+        .await
+        .expect("a confirmed save");
+    tick(&mut driver, 15).await;
+    assert_eq!(
+        broadcast.sent(),
+        vec![(persona(1), vec![1, 0xBE, 0xEF])],
+        "once covered, the post goes out with its stored bytes"
+    );
+}
+
+/// The mark's own save uncovers the seal: a covered post whose `Dispatched`
+/// mark is not confirmed is not sent on that tick (Rick, 2026-11-19). Red
+/// edit: send when the mark's save is unconfirmed (the driver before
+/// coverage, which accepted any applied save), and it goes out.
+#[tokio::test]
+async fn a_post_whose_mark_is_unconfirmed_is_not_sent() {
+    let (mut driver, store, broadcast) = driver_with_posts(vec![post(1, 10, 5, &[7])], Vec::new());
+    store
+        .script
+        .lock()
+        .expect("mem store")
+        .push_back(Ok(on_fat()));
+    tick(&mut driver, 15).await;
+    assert!(
+        broadcast.sent().is_empty(),
+        "an unconfirmed mark sends nothing"
+    );
 }

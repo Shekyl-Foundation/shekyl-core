@@ -723,6 +723,31 @@ mod tests {
         assert_eq!(fs::read(&target).unwrap(), b"sealed");
     }
 
+    /// A save on a network share is refused as unconfirmed, and its message
+    /// says so and names the fix (Rick, 2026-11-19). Network shares are not a
+    /// supported configuration; this checks only that the refusal and its
+    /// message fire, whatever file system the server reports.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs SHEKYL_TEST_SHARE_DIR: a directory on a network share"]
+    fn a_save_on_a_network_share_is_refused_and_says_so() {
+        let Some(dir) = std::env::var_os("SHEKYL_TEST_SHARE_DIR") else {
+            panic!("SHEKYL_TEST_SHARE_DIR is unset: set it to a directory on a network share");
+        };
+        let dir = tempfile::tempdir_in(dir).unwrap();
+        let target = dir.path().join("x.wallet");
+        let durability = atomic_write_file(&target, b"sealed").unwrap();
+        let Durability::Unconfirmed(why @ Unconfirmed::Remote(_)) = durability else {
+            panic!("a save on a network share was not refused as one: {durability:?}");
+        };
+        let refusal = why.to_string();
+        assert!(
+            refusal.contains("network drive")
+                && refusal.contains("move the wallet to a local drive"),
+            "the refusal does not say why and what to do: {refusal}"
+        );
+    }
+
     /// The file-system reason's sentence names the file system and the
     /// fix, on every platform; the other reasons do not send the user to
     /// NTFS. Red edit: drop the volume's name from the sentence.

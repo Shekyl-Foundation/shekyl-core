@@ -255,7 +255,7 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                 },
             },
             DrainRequestError::Submit(
-                super::transaction_submitter::BroadcastSubmitError::SealUnconfirmed(error),
+                super::transaction_submitter::BroadcastSubmitError::SealNotSaved(error),
             ) => Self::SealNotSaved(error),
             DrainRequestError::Submit(e) => Self::Submit {
                 detail: e.to_string(),

@@ -624,6 +624,12 @@ impl crate::engine::pscan::dispatch::PendingSealStore for StdArc<MemPending> {
             .take()
             .unwrap_or(shekyl_engine_file::Durability::Confirmed))
     }
+
+    fn save_cause(
+        error: Self::Error,
+    ) -> Result<crate::engine::error::PersistenceError, Self::Error> {
+        match error {}
+    }
 }
 
 /// Seal persona 1's exit through `store` as the seam does
@@ -678,7 +684,7 @@ async fn retry_target(
 /// guard, so no pending record is left and no other writer ever saw it;
 /// and a retry resolves the same bond as its target again, never "an exit
 /// is in progress". The test first asserts its own subject: a confirmed
-/// seal closes the lane. Red edits: drop the `SealUnconfirmed` arm from
+/// seal closes the lane. Red edits: drop the `SealNotSaved` arm from
 /// `flatten_unstake_error`, and the answer is `ExitFateUnknown`; drop the
 /// unseal from `seal_reporting`, and the seal stays and the retry resolves
 /// `ExitInProgress`.
@@ -709,7 +715,7 @@ async fn an_unconfirmed_exit_seal_answers_its_save_code_and_reopens_the_lane() {
     );
     let durability = seal_exit(&unconfirmed).await;
     // What the seam's `submit_bound` hands back for that durability.
-    let refused = BroadcastSubmitError::SealUnconfirmed(
+    let refused = BroadcastSubmitError::SealNotSaved(
         require_confirmed(durability).expect_err("an unconfirmed seal is refused before any send"),
     );
     assert!(
@@ -734,6 +740,88 @@ async fn an_unconfirmed_exit_seal_answers_its_save_code_and_reopens_the_lane() {
         retry_target(&unconfirmed).await,
         UnstakeTarget::Post(PSlot::from_raw(1)),
         "a retry exits the same bond, never an exit in progress"
+    );
+}
+
+/// A pending store whose every save fails with a read-only wallet file:
+/// nothing is written.
+struct ReadOnlyPending;
+
+impl crate::engine::pscan::dispatch::PendingSealStore for StdArc<ReadOnlyPending> {
+    type Error = shekyl_engine_file::WalletFileError;
+
+    async fn load(&self) -> Result<Option<PendingPostBlock>, Self::Error> {
+        Ok(None)
+    }
+
+    async fn save(
+        &self,
+        _block: &PendingPostBlock,
+    ) -> Result<shekyl_engine_file::Durability, Self::Error> {
+        Err(shekyl_engine_file::WalletFileError::ReadOnly {
+            target: std::path::PathBuf::from("wallet.pending"),
+        })
+    }
+
+    fn save_cause(
+        error: Self::Error,
+    ) -> Result<crate::engine::error::PersistenceError, Self::Error> {
+        Ok(error.into())
+    }
+}
+
+/// An exit whose seal's save fails outright answers the save's cause, as an
+/// unconfirmed one does, never an internal fault (Rick, 2026-11-19): here a
+/// read-only wallet file, which the contract answers as `SAVE_NOT_WRITABLE`
+/// with its target. Nothing was written, so no pending record is left. Red
+/// edit: fold a failed seal save into `SealError::Store`, and the release
+/// path answers `Engine` (`-29107`).
+#[tokio::test]
+async fn a_failed_exit_seal_answers_its_save_cause() {
+    use crate::engine::error::PersistenceError;
+    use crate::engine::pending_post_gate::PendingPostGate;
+    use crate::engine::pscan::dispatch::PendingPostStore;
+    use crate::engine::pscan::pending_store::SealError;
+    use crate::engine::transaction_submitter::BroadcastSubmitError;
+
+    let store = PendingPostStore::new(StdArc::new(ReadOnlyPending), PendingPostGate::new());
+    let failed = store
+        .seal_reporting(
+            |block| {
+                let g = block.generation();
+                let admission = block.seal_release(
+                    PendingRelease {
+                        persona: persona(1),
+                        tx_bytes: vec![0xEE; 4],
+                        funding_gindexes: Vec::new(),
+                        state: PendingPostState::Pending,
+                        reference_height: BlockHeight::from_raw(1_000_000),
+                        terminal: None,
+                    },
+                    ChainCount::from_raw(5_000),
+                    g,
+                );
+                (admission == SealAdmission::Admit, ())
+            },
+            |block| block.remove_release(&persona(1)).is_some(),
+        )
+        .await
+        .expect_err("a read-only file refuses the seal");
+    let SealError::NotSaved(cause) = failed else {
+        panic!("a failed save is the save's cause, not a store fault: {failed:?}");
+    };
+    // What the release seam hands back for it.
+    let answer = flatten_unstake_error(ReleaseRequestError::Submit(
+        BroadcastSubmitError::SealNotSaved(cause),
+    ));
+    assert!(
+        matches!(
+            answer,
+            UnstakeError::SealNotSaved(PersistenceError::WalletFile(
+                shekyl_engine_file::WalletFileError::ReadOnly { .. }
+            ))
+        ),
+        "{answer:?}"
     );
 }
 

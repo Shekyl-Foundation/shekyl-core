@@ -553,10 +553,17 @@ info:
   # and -29134 SAVE_ON_NETWORK_DRIVE (a network drive, never confirmed,
   # whatever file system it reports; move the wallet to a local drive).
   # Each sent nothing and keeps the reservation. stake, unstake, drain and
-  # collect_unstaked answer the same codes by cause when their seal was
-  # saved but not confirmed: nothing was sent and the seal was removed, so
-  # the call is retried; unstake never answers -29522 for it, nor drain and
-  # collect_unstaked -29107. api_version stays 1.
+  # collect_unstaked answer the same codes by cause when their seal was not
+  # saved, or saved but not confirmed: nothing was sent and the seal was
+  # removed, so the call is retried; unstake never answers -29522 for it,
+  # nor drain and collect_unstaked -29107. A staking record read back from
+  # disk is sent only after a save of the pending records confirmed in
+  # this process; the wallet saves them once at open for that.
+  # Supported storage (Rick, 2026-11-19): a local NTFS volume on Windows,
+  # a local disk on Unix. On anything else the wallet still saves, but
+  # refuses to send or stake, answering the code for the cause, whose
+  # message says why. Network shares are not a supported configuration.
+  # api_version stays 1.
   version: 0.21.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
