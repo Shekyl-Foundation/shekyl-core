@@ -46,25 +46,28 @@ use fips203::{
 };
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use shekyl_curve_generators::{H, T};
 use shekyl_network::envelope::Framed64;
 
-/// Set by `ml_kem_decap_prefilter_with_dk` when a tag mismatch runs an explicit
-/// `ml_kem_ss` wipe before returning `Err` (test-only observability).
 #[cfg(test)]
-static ML_KEM_SS_WIPED_ON_PREFILTER_REJECT: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    /// Set by `ml_kem_decap_prefilter_with_dk` when a tag mismatch runs an
+    /// explicit `ml_kem_ss` wipe before returning [`Prefilter::NotForThisKey`]
+    /// (test-only observability). Per thread: the decapsulation runs on the
+    /// test's own thread, so tests running in parallel each see only their
+    /// own calls.
+    static ML_KEM_SS_WIPED_ON_PREFILTER_REJECT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
 
 #[cfg(test)]
 pub(crate) fn reset_ml_kem_ss_wipe_probe() {
-    ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.store(false, Ordering::SeqCst);
+    ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.with(|wiped| wiped.set(false));
 }
 
 #[cfg(test)]
 pub(crate) fn ml_kem_ss_wiped_on_last_prefilter_reject() -> bool {
-    ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.load(Ordering::SeqCst)
+    ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.with(std::cell::Cell::get)
 }
 
 /// How many wrong KEM keys a view-tag test draws before it requires a miss.
@@ -695,7 +698,7 @@ pub(crate) fn ml_kem_decap_prefilter_with_dk(
     if expected != view_tag_on_chain {
         ml_ss_bytes.zeroize();
         #[cfg(test)]
-        ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.store(true, Ordering::SeqCst);
+        ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.with(|wiped| wiped.set(true));
         return Ok(Prefilter::NotForThisKey);
     }
 
