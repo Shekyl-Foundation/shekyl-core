@@ -70,9 +70,9 @@
 
 use std::hint::black_box;
 
-// Valgrind client requests exist only where Valgrind does (the
-// crate's `cfg(unix)` dev-dependency).
-#[cfg(unix)]
+// Valgrind client requests exist only where the Callgrind benches
+// measure (the crate's `cfg(target_os = "linux")` dev-dependency).
+#[cfg(target_os = "linux")]
 use gungraun::client_requests::callgrind as callgrind_cr;
 use gungraun::{
     library_benchmark, library_benchmark_group, main, Callgrind, EntryPoint, LibraryBenchmarkConfig,
@@ -105,10 +105,10 @@ fn engine_trait_bench_key_merge_projection(
 /// "Why Callgrind client requests" note). Mirrors
 /// `engine_trait_bench_key_dispatch_baseline_iai`'s `measure`.
 fn measure<T>(f: impl FnOnce() -> T) -> T {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     callgrind_cr::start_instrumentation();
     let out = f();
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     callgrind_cr::stop_instrumentation();
     out
 }

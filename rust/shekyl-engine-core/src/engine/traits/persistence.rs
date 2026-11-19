@@ -31,10 +31,11 @@
 //! # Durability and nonces
 //!
 //! `save_state` returns [`shekyl_engine_file::Durability`] once the rename has
-//! landed. [`shekyl_engine_file::Durability::Confirmed`] means the parent
-//! directory was fsynced too. [`shekyl_engine_file::Durability::Unconfirmed`]
-//! means that fsync missed: the write is applied, and a caller must not undo
-//! it. Only a confirmed save authorizes a broadcast. Region-2 AEAD uses a
+//! landed. [`shekyl_engine_file::Durability::Confirmed`] means the rename was
+//! confirmed durable too: the parent directory fsynced on Unix; on Windows an
+//! NTFS volume and the write-through handle's rename.
+//! [`shekyl_engine_file::Durability::Unconfirmed`] carries why it was not: the
+//! write is applied, and a caller must not undo it. Only a confirmed save authorizes a broadcast. Region-2 AEAD uses a
 //! fresh 24-byte nonce from the OS CSPRNG on every save — never
 //! counter-derived (`seal_state_file` in `shekyl-crypto-pq`).
 //!

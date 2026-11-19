@@ -27,7 +27,7 @@
 //!
 //! ## The principal destination (T-DS-3)
 //!
-//! A drain's vout 0 pays the wallet's **own** principal address, and that
+//! A drain's principal output pays the wallet's **own** principal address, and that
 //! destination is **never caller-supplied** — a caller-chosen target would let
 //! a drain move `P` value to an arbitrary address, defeating the point of the
 //! firewall's value-out leg being a self-sweep. The seam resolves it
@@ -235,7 +235,7 @@ where
     /// `p_slot` — the CB-3 request path (module docs).
     ///
     /// `intent` names what moves. `Payment(p)`: `p` is paid to the wallet's
-    /// own principal (vout 0), and the residual (`swept − payment − fee`)
+    /// own principal, and the residual (`swept − payment − fee`)
     /// returns to `P` as change on a partial drain. `TerminalSweep`: the
     /// payment is the pipeline's own `Σ selected − fee` (zero change), legal
     /// only for a terminally-released persona — this seam's basis resolution

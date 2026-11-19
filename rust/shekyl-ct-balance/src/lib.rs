@@ -26,6 +26,10 @@
 //! Bulletproof+ range-proof verification remains in C++ (`ct_semantics`); this crate
 //! is only the commitment-sum balance.
 //!
+//! It is also the one place a spend's pseudo-out blinds are balanced:
+//! [`PseudoOutBlinds`], whose last blind is the outputs' masks less the
+//! others', for every spend, solo or group.
+//!
 //! The crate is also the single home for the §2.3 **output-point validity**
 //! rule ([`check_output_keys`] / [`check_commitment_masks`]): the same
 //! canonical-prime-order gate the balance equation applies to its commitments,
@@ -33,6 +37,10 @@
 //! public keys, and coinbase `outPk` masks under `CTTypeNull`).
 
 #![deny(unsafe_code)]
+
+pub mod blinds;
+
+pub use blinds::PseudoOutBlinds;
 
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT,

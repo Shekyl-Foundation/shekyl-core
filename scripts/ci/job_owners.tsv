@@ -48,6 +48,7 @@ scripts/ci/check_drs_e6_partition.py	docs-gates:check-doc-links
 scripts/ci/check_drs_p0d_digest_coverage.py	docs-gates:check-doc-links
 scripts/ci/check_economic_accessors.py	docs-gates:check-doc-links
 scripts/ci/check_engine_decomposition.sh	grep-gates:grep-gates
+scripts/ci/check_feature_gated_members.py	grep-gates:grep-gates
 scripts/ci/check_fn_dsa_genesis_gate.py	gitian:fn-dsa-genesis-gate,grep-gates:grep-gates
 scripts/ci/check_followups_owners.py	docs-gates:check-doc-links
 scripts/ci/check_followups_row_prose.py	docs-gates:check-doc-links

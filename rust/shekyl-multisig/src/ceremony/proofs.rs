@@ -9,10 +9,10 @@
 //!
 //! - [`CommittedMemberKey`]: a per-output key that hashes to `h_i` at its
 //!   member's index of the input's committed form.
-//! - [`VerifiedMembershipProof`]: the FCMP++ proof, SALs included, verified
+//! - `VerifiedMembershipProof`: the FCMP++ proof, SALs included, verified
 //!   against this member's own key images, pseudo-outs, committed forms,
 //!   tree root, depth and `tx_signable`.
-//! - [`VerifiedRangeProof`]: the range proof, verified against the
+//! - `VerifiedRangeProof`: the range proof, verified against the
 //!   outputs' commitments in this member's own base.
 //! - [`SignableTransaction`]: assembled by this member from its own
 //!   context, the two verified proofs and the checked keys, and well formed
@@ -39,6 +39,7 @@ use shekyl_types::SigningPayloadHash;
 use shekyl_wire::{BpPlus, PqcAuth, Prunable, Transaction};
 
 use super::context::SigningContext;
+use super::derivation::InputContext;
 use super::CeremonyError;
 
 /// A per-output key that hashes, under this network, to the committed
@@ -57,7 +58,7 @@ impl CommittedMemberKey {
         member_index: u8,
         key: HybridPublicKey,
     ) -> Result<Self, CeremonyError> {
-        let committed = &ctx.inputs[input].committed_form;
+        let committed = ctx.inputs[input].committed_form();
         let expected = committed
             .key_hashes()
             .get(usize::from(member_index))
@@ -148,7 +149,7 @@ impl SignerKeys {
 
     fn key_blob(&self, ctx: &SigningContext<'_>, input: usize) -> Result<Vec<u8>, CeremonyError> {
         MultisigKeyBlob::assemble(
-            ctx.inputs[input].committed_form.clone(),
+            ctx.inputs[input].committed_form().clone(),
             self.per_input[input]
                 .iter()
                 .map(|k| (k.member_index, k.key.clone()))
@@ -179,11 +180,11 @@ impl VerifiedMembershipProof {
                     .to_bytes()
             })
             .collect();
-        let key_images: Vec<_> = ctx.inputs.iter().map(|i| i.key_image).collect();
+        let key_images: Vec<_> = ctx.inputs.iter().map(InputContext::key_image).collect();
         let pqc_keys: Vec<PqcKeyScalar> = ctx
             .inputs
             .iter()
-            .map(|i| PqcKeyScalar::from_pqc_public_key(&i.committed_form.to_bytes()))
+            .map(|i| PqcKeyScalar::from_pqc_public_key(&i.committed_form().to_bytes()))
             .collect();
         let proof = ShekylFcmpProof {
             data,

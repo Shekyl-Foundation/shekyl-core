@@ -33,18 +33,14 @@
 //!   alone is insufficient (rule 35: secrets must not be re-written on every
 //!   autosave path).
 //! - [`WalletFileError::AtomicWriteRename`] carries the `io::Error` from the
-//!   `rename(2)` step specifically, so callers can distinguish "wrote the
-//!   tmp OK but could not atomically swap it in" from generic I/O.
-//! - [`WalletFileError::AtomicWriteFinalizeStaged`] is its sibling for the
-//!   step *before* the swap (clearing the staged file's temporary marking).
-//!   Two variants rather than one so `AtomicWriteRename` keeps meaning the
-//!   rename: a single variant covering both would name a step the failure
-//!   may never have reached.
+//!   rename step specifically, so callers can distinguish "wrote the
+//!   staged file OK but could not atomically swap it in" from generic I/O.
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
 use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
+use shekyl_os_account::private_file::HeldOpen;
 use std::io;
 use std::path::PathBuf;
 
@@ -119,13 +115,15 @@ pub enum WalletFileError {
     #[error("wallet is already open by another process (lock held on {path})")]
     AlreadyLocked { path: PathBuf },
 
-    /// The atomic-write sequence wrote a fresh temp file successfully but
-    /// could not `rename(2)` it into place.
+    /// The atomic-write sequence wrote a fresh staged file successfully but
+    /// could not rename it into place: the rename failed. Another program
+    /// holding a file past the wait is [`Self::HeldOpen`].
     ///
     /// The original target (if any) is **untouched** — that is the
-    /// guarantee. Removal of the staged file is attempted and logged on
-    /// failure, but not guaranteed: a leftover `.<random>.shekyl-tmp`
-    /// sibling is possible and is clutter, never a wallet artifact.
+    /// guarantee. Removal of the staged file is attempted on failure, but
+    /// not guaranteed: a leftover `<name>.new` sibling is possible and is
+    /// clutter, never a wallet artifact, and the next write of the target
+    /// removes it.
     #[error("atomic rename into {target} failed: {source}")]
     AtomicWriteRename {
         target: PathBuf,
@@ -133,32 +131,15 @@ pub enum WalletFileError {
         source: io::Error,
     },
 
-    /// The atomic-write sequence wrote and fsynced the staged file but
-    /// could not **finalize** it for the swap, so no `rename(2)` was ever
-    /// attempted and the target is untouched.
-    ///
-    /// Distinct from [`Self::AtomicWriteRename`] on purpose. On Windows
-    /// finalizing is `SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`, clearing
-    /// the `FILE_ATTRIBUTE_TEMPORARY` that the staged file is created with.
-    /// It must succeed *before* the rename, because `rename` does not clear
-    /// it and the attribute would otherwise ride onto the target — leaving a
-    /// permanent wallet artifact marked temporary, which is false metadata
-    /// and a standing cache-manager hint for every later writer that does
-    /// not flush explicitly. It does **not** undo the preceding `sync_all`
-    /// (`FlushFileBuffers` flushes unconditionally). That is a different
-    /// failure from a refused swap, with a different remedy, so it gets a
-    /// different variant: collapsing the two would leave
-    /// `AtomicWriteRename` unable to mean what its own name says.
-    ///
-    /// Structurally Unix-unreachable — `tempfile`'s `imp::keep` is `Ok(())`
-    /// there — but the variant is not `cfg`-gated, because an error type
-    /// that changes shape by platform makes every caller platform-aware.
-    #[error("atomic write into {target}: the staged file could not be finalized: {source}")]
-    AtomicWriteFinalizeStaged {
-        target: PathBuf,
-        #[source]
-        source: io::Error,
-    },
+    /// Another program held a file the Windows replace needs (a leftover
+    /// staged file, or the target) open past the replace's wait, most
+    /// likely an antivirus scanner or a search indexer; or, on a FAT or
+    /// exFAT volume, the target may instead not be writable
+    /// ([`HeldOpen::or_unwritable`]). The target is untouched. Its own
+    /// variant because its remedy, excluding the wallet's folder from
+    /// scanning, is not the disk's (Rick, 2026-11-18).
+    #[error("{0}")]
+    HeldOpen(HeldOpen),
 
     /// The keys file decoded cleanly but declared a `network` byte that
     /// does not map to any known [`Network`]. Envelope-level validation
@@ -230,16 +211,11 @@ pub enum WalletFileError {
 }
 
 impl WalletFileError {
-    /// Convenience: wraps an `io::Error` from a `rename(2)` call into the
+    /// Convenience: wraps an `io::Error` from a rename into the
     /// dedicated variant. Centralizing the wrap here keeps the orchestrator
     /// free of ad-hoc `Err(WalletFileError::AtomicWriteRename { … })`
     /// construction at every call site.
     pub(crate) fn rename(target: PathBuf, source: io::Error) -> Self {
         Self::AtomicWriteRename { target, source }
-    }
-
-    /// Companion to [`Self::rename`] for the finalize step that precedes it.
-    pub(crate) fn finalize_staged(target: PathBuf, source: io::Error) -> Self {
-        Self::AtomicWriteFinalizeStaged { target, source }
     }
 }

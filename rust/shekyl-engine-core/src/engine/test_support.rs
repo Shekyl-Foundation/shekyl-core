@@ -1593,6 +1593,11 @@ pub(crate) struct BlockedStateSave {
 }
 
 impl BlockedStateSave {
+    // CLIPPY: disallowed_methods — test support.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test support: moves the state file aside and proves a rename onto the blocked path fails"
+    )]
     pub(crate) fn block(state: &std::path::Path) -> Self {
         let aside = state.with_extension("blocked-aside");
         std::fs::rename(state, &aside).expect("move the state file aside");
@@ -1614,6 +1619,11 @@ impl BlockedStateSave {
 }
 
 impl Drop for BlockedStateSave {
+    // CLIPPY: disallowed_methods — test support.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test support: puts the state file moved aside back"
+    )]
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.state).expect("remove the blocking directory");
         std::fs::rename(&self.aside, &self.state).expect("put the state file back");

@@ -354,3 +354,57 @@ fn an_asked_for_stop_is_announced_and_a_forced_one_is_an_error() {
         )
     );
 }
+
+/// A start fault of the RPC exits with its class's status (IG-11), whether
+/// it comes at the RPC's open, before the node, or at its start, after the
+/// node and the logger: a held file and a bad rendezvous key are refusals
+/// (2), anything else a failure (1). Red edit: log the start's fault and
+/// return the teardown's status, and a held record exits 1 (Copilot,
+/// #1439).
+#[test]
+fn a_late_start_fault_keeps_its_refusal_status() {
+    use shekyl_daemon_rpc::run::StartFault;
+    let dir = Path::new("data");
+    let held = shekyl_os_account::private_file::HeldOpen {
+        held: dir.join("rpc-channel.bundle"),
+        live: dir.join("rpc-channel.bundle"),
+        or_unwritable: false,
+    };
+    let end = StartEnd::Stderr;
+    assert_eq!(
+        end.rpc_fault(StartFault::HeldOpen(held), dir, "the RPC did not start"),
+        EXIT_REFUSED
+    );
+    assert_eq!(
+        end.rpc_fault(
+            StartFault::RendezvousKey {
+                key: r"HKEY_LOCAL_MACHINE\SOFTWARE\Shekyl\Rendezvous".to_owned(),
+                found: "it does not exist".to_owned(),
+            },
+            dir,
+            "the RPC did not start"
+        ),
+        EXIT_REFUSED
+    );
+    assert_eq!(
+        end.rpc_fault(
+            StartFault::Refused("bind failed".to_owned()),
+            dir,
+            "the RPC did not start"
+        ),
+        EXIT_FAILED
+    );
+}
+
+/// The run's exit is the start refusal's status over the teardown's: a
+/// refusal at the RPC's start (2) is not overwritten by the failed run's
+/// teardown (1), and with no refusal the teardown decides. Red edit:
+/// return the teardown's status, and a held record exits 1 (Copilot,
+/// #1439).
+#[test]
+fn a_start_refusal_s_status_survives_the_teardown() {
+    assert_eq!(exit_status(Some(EXIT_REFUSED), EXIT_FAILED), EXIT_REFUSED);
+    assert_eq!(exit_status(Some(EXIT_FAILED), 0), EXIT_FAILED);
+    assert_eq!(exit_status(None, EXIT_FAILED), EXIT_FAILED);
+    assert_eq!(exit_status(None, 0), 0);
+}

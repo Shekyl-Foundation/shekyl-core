@@ -570,10 +570,14 @@ jobs:
         working-directory: rust
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport --no-fail-fast *> daemon-crates.out
+          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport -p shekyl-os-account --no-fail-fast *> daemon-crates.out
           $rc = $LASTEXITCODE
+          # shekyl-win-sec's library alone: its probes are the step below.
+          cargo test --locked -p shekyl-win-sec --lib *>> daemon-crates.out
+          $rc_winsec = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
+          if ($rc_winsec -ne 0) { exit $rc_winsec }
           # A floor is per test binary, keyed by its name under deps\. The
           # libs are the crates' own; shekyl-process's lib tests are all Unix
           # (core limits, dumpable, procctl), so its Windows floor is the
@@ -592,7 +596,15 @@ jobs:
           # local_peer_check, the Windows-only test 7 (a pipe failing the
           # peer check is a security failure, dialled once), which no other
           # job compiles; 42 passed in the lib on the Windows host.
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4; 'shekyl_spawn-' = 3; 'shekyl_rpc_transport-' = 40; 'local_peer_check-' = 1 }
+          # shekyl-os-account and shekyl-win-sec (Rick, 2026-11-18): the one
+          # place a file is replaced, its handle-based rename and its wait
+          # for a scanner that holds the staged file, which only Windows
+          # runs. Counted on the Windows host at #1439's e7e934e5ed
+          # (2026-11-18): os-account 8 (the wait tests, the resume and crash
+          # tests); win-sec 5 (the rename and rendezvous tests; the RT-P8
+          # probe is ignored), plus the two registry-key tests that need
+          # this elevated runner (7).
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4; 'shekyl_spawn-' = 3; 'shekyl_rpc_transport-' = 40; 'local_peer_check-' = 1; 'shekyl_os_account-' = 8; 'shekyl_win_sec-' = 7 }
           $lines = Get-Content daemon-crates.out
           foreach ($binary in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber

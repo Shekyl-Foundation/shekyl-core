@@ -3,6 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use super::*;
 
 const RATE: Kind = Kind::Quantity {
@@ -234,11 +237,64 @@ fn commands_are_file_only_arrays_with_named_placeholders() {
 #[test]
 fn a_path_is_absolute_only() {
     assert!(matches!(
-        Kind::Path.parse_text(&abs("/etc/shekyl")),
+        Kind::PATH.parse_text(&abs("/etc/shekyl")),
         Ok(Value::Path(_))
     ));
-    assert_eq!(code(Kind::Path.parse_text("etc/shekyl")), Code::ValueSyntax);
-    assert_eq!(code(Kind::Path.parse_text("./x")), Code::ValueSyntax);
+    assert_eq!(code(Kind::PATH.parse_text("etc/shekyl")), Code::ValueSyntax);
+    assert_eq!(code(Kind::PATH.parse_text("./x")), Code::ValueSyntax);
+    // `none` is a word only where the row takes it; elsewhere it is a
+    // relative path, refused.
+    assert_eq!(code(Kind::PATH.parse_text("none")), Code::ValueSyntax);
+}
+
+/// A path row that names a default file may take `none`: no file at all.
+/// The word is never read as a path. The row names the word; [`Kind::PATH`]
+/// does not. Red edit: drop the keyword check in `Kind::Path`'s parse
+/// (`none` is refused as a relative path).
+#[test]
+fn a_path_row_may_take_none_for_no_file() {
+    let or_none = Kind::Path {
+        keywords: &["none"],
+    };
+    assert_eq!(or_none.parse_text("none"), Ok(Value::Word("none")));
+    assert!(matches!(
+        or_none.parse_text(&abs("/etc/shekyl/shekyld-mainnet.toml")),
+        Ok(Value::Path(_))
+    ));
+    assert_eq!(code(or_none.parse_text("None")), Code::ValueSyntax);
+}
+
+/// A value the operator set either confirms a parent that refuses its row
+/// or asks for something that parent forbids. Absence is the empty
+/// collection, the word `none`, the word `off`, or a switch that is off.
+/// The integer `0` is a request. Red edit: classify an empty list as
+/// [`Bearing::Request`].
+#[test]
+fn a_value_that_asks_for_nothing_confirms() {
+    let confirm = |value: Value| assert_eq!(value.bearing(), Bearing::Confirmation, "{value:?}");
+    let request = |value: Value| assert_eq!(value.bearing(), Bearing::Request, "{value:?}");
+
+    confirm(Value::List(Vec::new()));
+    confirm(Value::Map(BTreeMap::new()));
+    confirm(Value::Word("none"));
+    confirm(Value::Word("off"));
+    confirm(Value::Switch(false));
+    confirm(
+        Kind::List(&ENDPOINT)
+            .parse_cli(&["none".to_owned()])
+            .expect("`none` is the empty list"),
+    );
+
+    request(Value::List(vec![Value::Integer(0)]));
+    request(Value::Map(BTreeMap::from([(
+        "k".into(),
+        Value::Integer(1),
+    )])));
+    request(Value::Word("on"));
+    request(Value::Word("unlimited"));
+    request(Value::Switch(true));
+    request(Value::Integer(0));
+    request(Value::Path(PathBuf::from(abs("/etc/shekyl"))));
 }
 
 #[test]

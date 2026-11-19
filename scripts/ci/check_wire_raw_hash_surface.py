@@ -89,6 +89,11 @@ ALLOWED: dict[str, Allow] = {
         "derivation/match sites' call",
         "shekyl-tx-builder / shekyl-scanner",
     ),
+    "transaction.rs::confidential()": Allow(
+        "the constructor of an Output takes its key as Output.key holds it "
+        "(the curve point above); it is typed when that field is",
+        "shekyl-tx-builder / shekyl-scanner",
+    ),
     "transaction.rs::CtBase.commitments": Allow(
         "Pedersen commitments (curve points); CommitmentBytes, same provenance",
         "shekyl-tx-builder",

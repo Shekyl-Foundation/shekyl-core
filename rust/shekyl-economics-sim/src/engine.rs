@@ -147,8 +147,9 @@ pub struct SimParams {
     /// What the fold's blocks read from the volume window: production's
     /// sum, or one of J's arms (§5.33). The sim's own input.
     pub volume_signal: crate::volume_window::VolumeSignal,
-    /// Whether each block is offered its scenario's demand or a count drawn
-    /// around it (§5.34). The sim's own input.
+    /// What each block is offered: standard traffic, drawn around the
+    /// scenario's demand ([`crate::chain_cursor::STANDARD_TRAFFIC`]), or the
+    /// `steady` control (§5.35). The sim's own input.
     pub traffic: crate::chain_cursor::Traffic,
 }
 
@@ -159,7 +160,7 @@ impl Default for SimParams {
             overrides: Vec::new(),
             fee: FeeModel::PRODUCTION_DEFAULT,
             volume_signal: crate::volume_window::VolumeSignal::Sum,
-            traffic: crate::chain_cursor::Traffic::Steady,
+            traffic: crate::chain_cursor::STANDARD_TRAFFIC,
         }
     }
 }
@@ -178,7 +179,7 @@ impl SimParams {
             overrides,
             fee: FeeModel::PRODUCTION_DEFAULT,
             volume_signal: crate::volume_window::VolumeSignal::Sum,
-            traffic: crate::chain_cursor::Traffic::Steady,
+            traffic: crate::chain_cursor::STANDARD_TRAFFIC,
         })
     }
 
@@ -259,6 +260,17 @@ impl SimParams {
         Self {
             fee: FeeModel::SECTION_12_14_CONTROL,
             ..Self::default()
+        }
+    }
+
+    /// This run on the `steady` control's traffic: every block offered its
+    /// scenario's demand (§5.35). The regression anchor, and the arm a pin
+    /// of steady arithmetic names.
+    #[must_use]
+    pub fn on_steady(self) -> Self {
+        Self {
+            traffic: crate::chain_cursor::Traffic::Steady,
+            ..self
         }
     }
 }

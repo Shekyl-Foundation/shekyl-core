@@ -42,10 +42,12 @@ pub(crate) type OutputId = usize;
 ///   *change address* every time; the fingerprint carries the change *amount*
 ///   only, never the address, or transparent reprove would spuriously bump
 ///   `content_gen` (F-G).
-/// - **Canonically ordered** — CryptoNote-lineage txs shuffle outputs so the
-///   change output is not positionally identifiable, and a reprove re-runs the
-///   build internals → re-shuffles; the destinations are sorted here so the
-///   fingerprint is invariant under that privacy permutation (F-G′).
+/// - **Canonically ordered** — every wallet-built transaction places its
+///   outputs in the order its transaction key derives (R-24,
+///   `TxKey::output_order`), so the change output is not positionally
+///   identifiable, and a reprove draws a fresh key and so a fresh order; the
+///   destinations are sorted here so the fingerprint is invariant under that
+///   permutation (F-G′).
 ///
 /// Consent is over *who gets how much* and the fee — not the wallet's own change
 /// address or the output order — so two builds that pay the same recipients the

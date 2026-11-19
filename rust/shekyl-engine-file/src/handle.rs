@@ -626,7 +626,9 @@ impl WalletFile {
     /// on the save path — amended `docs/WALLET_FILE_FORMAT_V1.md` §4.3).
     /// Returns the write's durability once the rename has landed.
     /// [`Durability::Unconfirmed`] is still an applied write: the bytes are
-    /// the new file, and only the post-rename parent-directory fsync missed.
+    /// the new file, and only the rename's durability is unconfirmed (the
+    /// post-rename parent-directory fsync missed, or on Windows the volume
+    /// is not NTFS; the reason says which).
     /// A caller that would broadcast on this save must require
     /// [`Durability::Confirmed`] and must not undo the applied record.
     pub fn save_state(
@@ -926,7 +928,13 @@ impl WalletFile {
         // advisory lock survives the rename (per-OFD on POSIX, per-
         // handle on Windows). `EXDEV` translation is the belt-and-
         // suspenders for layered filesystems whose `st_dev` lies.
-        match std::fs::rename(&self.keys_path, &new_keys_path) {
+        // CLIPPY: disallowed_methods — save_as moves the keys file, not a replace.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "save_as moves the locked keys file to a new name that must not exist, keeping its inode and lock; not a file replace"
+        )]
+        let moved = std::fs::rename(&self.keys_path, &new_keys_path);
+        match moved {
             Ok(()) => {}
             Err(e) if is_cross_device_error(&e) => {
                 return Err(WalletFileError::SaveAsCrossFilesystem {

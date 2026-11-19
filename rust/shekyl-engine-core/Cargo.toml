@@ -264,9 +264,12 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
 # `test-tamper` compiles `CurveTreeClient::test_tamper_poison`, which the
-# curve-tree actor's in-place recovery tests poison a client with. Test
+# curve-tree actor's in-place recovery tests poison a client with;
+# `test-paths` compiles `AssembledPaths::from_parts_unchecked`, the
+# placeholder batch a pre-proof refusal test hands the assembly (R-25,
+# R-26). Test
 # builds only (resolver v2); production keeps the plain dependency above.
-shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper"] }
+shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper", "test-paths"] }
 # Test doubles answer with the daemon's own wire types (RK-D1), so a double
 # cannot drift from the contract the way a hand-written JSON literal can.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
@@ -464,12 +467,15 @@ dalek-ff-group = "0.5"
 rand_core = "0.6"
 
 # `client_requests` builds `valgrind-requests`, whose build script refuses
-# a target Valgrind does not support, Windows among them, so it is
-# Unix-only: every `--all-targets` lane on the Windows runner failed on it
-# (feature unification carries it to every crate in a workspace build).
-# The benches' Callgrind start/stop calls are `cfg(unix)` to match; the
-# benches compile on Windows and run only where Valgrind does.
-[target.'cfg(unix)'.dev-dependencies]
+# a target Valgrind does not support and runs bindgen, so libclang must be
+# installed wherever it builds. It is Linux-only, the one OS the Callgrind
+# benches measure on (`ci/benchmarks`): every `--all-targets` lane on the
+# Windows runner failed on it, and a FreeBSD test build needed libclang,
+# which base FreeBSD does not ship (Rick, 2026-11-18). Feature
+# unification carries it to every crate in a workspace build. The
+# benches' Callgrind start/stop calls are `cfg(target_os = "linux")` to
+# match; the benches compile everywhere and measure only on Linux.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { version = "0.19", features = ["client_requests"] }
 
 [[bench]]

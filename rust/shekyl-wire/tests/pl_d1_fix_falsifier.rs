@@ -211,11 +211,12 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     client
         .sync_owned(&[(target.gindex, target.output_key)])
         .expect("register the spent output");
-    let path = client
-        .assemble_path(&target, &reference)
+    let paths = client
+        .assemble_paths(std::slice::from_ref(&target), &reference)
         .expect("assemble membership path");
+    let (_, path) = paths.paths().next().expect("one input, one path");
     let leaf_chunk: Vec<LeafEntry> = path
-        .leaf_chunk
+        .leaf_chunk()
         .iter()
         .map(|cl| LeafEntry {
             output_key: cl.output_key.to_bytes(),
@@ -234,8 +235,8 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers().to_vec(),
+        c2_layers: path.c2_layers().to_vec(),
     };
     // A payment to a random recipient; the prefix hash is what the PQC auth
     // signs, and the auth is what reveals the key.
@@ -291,7 +292,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     // Surface 2: every leaf 4th scalar the chain serves in the assembled
     // chunk (the served-leaf surface) against K.x.
     let chunk_matches: Vec<usize> = path
-        .leaf_chunk
+        .leaf_chunk()
         .iter()
         .enumerate()
         .filter(|(_, cl)| cl.cm_x == observed_x)

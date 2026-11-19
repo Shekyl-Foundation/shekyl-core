@@ -2,7 +2,7 @@
 //! `config/consensus_constants.json`, the same source
 //! `rust/shekyl-engine-core/build.rs` reads.
 //!
-//! `src/intent.rs` `include!`s the emitted file and pins it, and the wire's
+//! `src/intent/mod.rs` `include!`s the emitted file and pins it, and the wire's
 //! `CT_TYPE_FCMP`, to the genesis value. The reference-block window is not
 //! emitted here: `shekyl-curve-tree::reference` owns it (R-13).
 

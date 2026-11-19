@@ -15,7 +15,6 @@ use shekyl_archival_retention::{
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_crypto_pq::TxKey;
-use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     open_spend, prove_backing_membership, sign_transaction_with_terms,
     tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, SpendLayout,
@@ -184,10 +183,11 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
 
         // ── Step 6: outputs. One LOUD reward vout (plaintext amount on the
         // wire, §5.5) paying the full mint to P's base address, plus two
-        // confidential change vouts (daemon prunable-tx floor). The daemon's
-        // ordered reward-commit set is "non-zero wire amounts, in vout
-        // order" — exactly the reward vout here, so the auth digest binds
-        // one commit.
+        // confidential change vouts (daemon prunable-tx floor), at the
+        // positions the key derives (R-24). The daemon's ordered
+        // reward-commit set is "non-zero wire amounts, in vout order"
+        // (CEN-J24), which fixes no position — exactly the reward vout
+        // here, wherever it sits, so the auth digest binds one commit.
         let tx_key = msg.tx_key;
 
         let mut reward_commit: Option<RewardCommit> = None;
@@ -195,8 +195,8 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             output_infos,
             output_keys,
             view_tags,
-            kem_blobs,
-            leaf_entry_blob,
+            tx_extra,
+            positions,
         } = construct_vouts_to_base(
             keys,
             &tx_key,
@@ -205,7 +205,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             |idx, constructed| {
                 if idx == 0 {
                     // The auth digest must bind the commitment the daemon
-                    // reads from the tx's outPk. `construct_output`'s C =
+                    // reads from the tx's outPk. `build_output`'s C =
                     // z·G + amount·H is the same formula (and mask) the
                     // signer emits; the post-sign cross-check below fails
                     // loudly if they ever diverge.
@@ -219,15 +219,18 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         )?;
         let reward_commits =
             vec![reward_commit.expect("vout_amounts is non-empty; index 0 always constructs")];
-        // The reward vout is loud (plaintext amount on the wire); the change
-        // vouts stay confidential (wire amount 0).
-        let output_amounts: Vec<u64> = vec![total_reward, 0, 0];
-
-        // ── Step 7: tx_extra — tx pubkey + per-output KEM blobs + 0x07 PQC
-        // leaf hashes (same shape as the bond path).
-        let mut extra = Extra::for_hybrid_transfer(tx_key.public(), kem_blobs);
-        extra.push_pqc_leaf_entries(leaf_entry_blob);
-        let tx_extra = extra.serialize();
+        // The reward vout is loud (plaintext amount on the wire) at its
+        // position; the change vouts stay confidential (wire amount 0).
+        let reward_position = positions[0];
+        let output_amounts: Vec<u64> = (0..positions.len())
+            .map(|position| {
+                if position == reward_position {
+                    total_reward
+                } else {
+                    0
+                }
+            })
+            .collect();
 
         // ── Step 8: fee spend inputs — shared spend-side leg with the bond
         // path (descending key-image order).
@@ -425,7 +428,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // verifies against the tx's outPk (the signer's commitment). Both
         // are z·G + amount·H over the same mask — divergence is a build
         // defect, failed loudly before any bytes leave the builder.
-        if signed.commitments.first() != Some(&reward_commits[0].commitment) {
+        if signed.commitments.get(reward_position) != Some(&reward_commits[0].commitment) {
             debug_assert!(
                 false,
                 "signer reward commitment diverged from the auth-bound commit"
