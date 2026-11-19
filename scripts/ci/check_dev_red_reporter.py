@@ -3,7 +3,7 @@
 #
 # All rights reserved.
 # BSD-3-Clause
-"""A red push run on `dev` reaches the dev-red reporter from every job.
+"""Every push run on `dev` reaches the dev-red reporter from every job.
 
 `dev` has no merge queue, so the push runs of `build.yml`,
 `rust-audit-test.yml`, `benchmarks.yml` and `fuzz-harness.yml` on `dev`
@@ -11,8 +11,9 @@ are the first to test what the merges made (06-branching.mdc). A pull
 request whose last run predates a workflow merges untested by it: #1399
 merged with no fuzz-harness run, and the push run on `dev` that went red
 after it reported to no one. Each ends in a job that
-calls `report-dev-red.yml`, which opens or threads an issue. That job
-reads only the results of the jobs it `needs`: a job added to the
+calls `report-dev-red.yml`, which opens or threads an issue per red job
+and closes a job's issue when it is green again (Brief C, ruled
+2026-11-19). That job runs after the jobs it `needs`: a job added to the
 workflow and left out of that list could go red on `dev` with no issue.
 This holds the list, and the condition, to the file.
 
@@ -21,11 +22,11 @@ What passes, in each of these workflows:
 * exactly one job calls `./.github/workflows/report-dev-red.yml`;
 * its `needs` is every other job in the file, no more and no fewer;
 * its `if` is exactly `CONDITION` below: a push run on `dev`, not
-  cancelled as a whole, in which a needed job failed or was cancelled. A
-  job past its `timeout-minutes` is cancelled, not failed, and
-  `failure()` does not see it; a run superseded by a newer merge is
-  cancelled as a whole and reports nothing. An exact match, because a
-  check for the parts would pass the same parts joined by `||`.
+  cancelled as a whole, red or green. A green run is how an issue closes,
+  so a condition that runs the reporter only on red leaves every issue
+  open; a run superseded by a newer merge is cancelled as a whole and
+  reports nothing. An exact match, because a check for the parts would
+  pass the same parts joined by `||`.
 
 `gui-drift.yml` and `chain-forge.yml` are the scheduled subjects: the
 first's nightly holds the GUI wallet's pinned shekyl-core edges to the
@@ -51,17 +52,11 @@ from check_workflows_parse import StrictLoader
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 REPORTER = "./.github/workflows/report-dev-red.yml"
-CONDITION = (
-    "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && "
-    "(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}"
-)
+CONDITION = "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}"
 # gui-drift.yml's nightly holds the GUI wallet's pin to its manifest
 # (CHAIN_FORGE.md CF-R26), and chain-forge.yml's holds the small plan to the
 # committed chain (§9); their reds reach the reporter from the schedule.
-SCHEDULE_CONDITION = (
-    "${{ !cancelled() && github.event_name == 'schedule' && "
-    "(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}"
-)
+SCHEDULE_CONDITION = "${{ !cancelled() && github.event_name == 'schedule' }}"
 # Each subject workflow, and the exact condition its reporter runs under.
 SUBJECTS = {
     "build.yml": CONDITION,
@@ -127,8 +122,10 @@ def selftest() -> int:
         ("two reporters", variant(lambda j: j.__setitem__("s", dict(j["r"]))), 1),
         ("a reporter that reports PR runs too", variant(lambda j: j["r"].__setitem__(
             "if", CONDITION.replace("github.event_name == 'push' && ", ""))), 1),
-        ("a reporter blind to a timed-out job", variant(lambda j: j["r"].__setitem__(
+        ("a reporter that runs only on red, so no issue closes", variant(lambda j: j["r"].__setitem__(
             "if", "${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}")), 1),
+        ("a reporter that runs when the run was superseded", variant(lambda j: j["r"].__setitem__(
+            "if", CONDITION.replace("!cancelled()", "always()"))), 1),
         ("the same parts joined by ||", variant(lambda j: j["r"].__setitem__(
             "if", CONDITION.replace("github.event_name == 'push' &&", "github.event_name == 'push' ||"))), 1),
         ("no condition", variant(lambda j: j["r"].pop("if")), 1),
@@ -155,7 +152,7 @@ def selftest() -> int:
     print(
         "SELFTEST PASS: a reporter needing every job passes; a missing or extra "
         "need, no reporter, two reporters, and any condition but the reporting "
-        "one (PR runs, blind to a timeout, joined by ||, absent) each fail; a "
+        "one (PR runs, red only, superseded runs, joined by ||, absent) each fail; a "
         "scheduled subject takes the schedule condition and no other"
     )
     return 0
@@ -183,8 +180,8 @@ def main(argv: list[str]) -> int:
         return 1
     print(
         f"dev-red reporter: {', '.join(SUBJECTS)} each end in one reporter "
-        "that needs every other job and reports a failed or timed-out job of a "
-        "push run on dev (gui-drift.yml, chain-forge.yml: of their scheduled runs)"
+        "that needs every other job and runs on every push run on dev, red or "
+        "green (gui-drift.yml, chain-forge.yml: on their scheduled runs)"
     )
     return 0
 

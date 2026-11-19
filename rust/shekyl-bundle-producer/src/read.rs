@@ -121,7 +121,7 @@ pub async fn read_due<F: ShardFacts, H: HolderSource>(
 
 /// [`read_due`], with the failure itself when the read did not pass: the
 /// pass record, or what the scheduler reported. For a caller that logs why
-/// a read ended (the ingest crate's task does, at debug).
+/// a read ended (the ingest crate's task does, at info).
 ///
 /// # Errors
 ///

@@ -114,7 +114,63 @@ fn log_tail(log_path: &std::path::Path) -> String {
             let start = lines.len().saturating_sub(40);
             lines[start..].join("\n")
         })
-        .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
+        .unwrap_or_else(|e| format!("(log unreadable: {e})"))
+}
+
+/// The wait after each block while a drawn block's read window is open
+/// (`RegtestDaemon::watch_draws`), at block target `daa_target_seconds`.
+///
+/// The persona answers a read only when its anchor is within
+/// `PASS_ANCHOR_LAG_BLOCKS` (`L`) of the persona's own view of the tip, and
+/// that view is the daemon's tip as of the last refresh: up to one
+/// `tip_refresh_interval` old (`stake_engine/serving/daemon_tip.rs`). While
+/// a window is open, a read in flight while the next block is mined lags
+/// one more, so this wait is the refresh interval divided by `L − 1`: ten
+/// seconds a block at the 120 s target. At five seconds an open window put
+/// six blocks between refreshes and a valid anchor could miss its gate, a
+/// failed read the chain then counts. The pace is derived, so a change to
+/// the refresh interval or to `L` moves it. Blocks mined before a window
+/// opens are not waited on: the walk first watches a whole epoch out, and
+/// this pace is the open window's.
+///
+/// The producer's reads fit inside it: up to three a draw, at least
+/// `READ_SPACING` (30) blocks apart, each after a start delay drawn below
+/// one target interval (`shekyl-bundle-producer`). The read's ceiling
+/// (three fetches at their timeouts, about 38 minutes) is not paced for: a
+/// read slower than the window is a miss, which the settled row shows.
+fn read_window_pace(daa_target_seconds: u64) -> Duration {
+    let refresh =
+        super::stake_engine::serving::daemon_tip::tip_refresh_interval(daa_target_seconds);
+    let blocks_per_refresh = shekyl_archival_retention::pass_anchor::PASS_ANCHOR_LAG_BLOCKS
+        .to_raw()
+        .checked_sub(1)
+        .and_then(|blocks| u32::try_from(blocks).ok())
+        .filter(|&blocks| blocks > 0)
+        .expect("the anchor gate admits more than one block of lag");
+    refresh / blocks_per_refresh
+}
+
+/// [`read_window_pace`] is the wait while a read window is open. In one tip
+/// refresh interval that wait covers fewer blocks than the gate's lag `L`,
+/// leaving one for a read in flight. Pinned at the chain's block target,
+/// where the wait is ten seconds a block. Blocks mined before a window
+/// opens are outside this pace.
+#[test]
+fn the_read_window_pace_keeps_the_persona_inside_its_anchor_gate() {
+    let target = shekyl_economics::economic_params().daa_target_seconds;
+    let pace = read_window_pace(target);
+    let refresh = super::stake_engine::serving::daemon_tip::tip_refresh_interval(target);
+    let lag = shekyl_archival_retention::pass_anchor::PASS_ANCHOR_LAG_BLOCKS.to_raw();
+    let mined_per_refresh = refresh.as_nanos().div_ceil(pace.as_nanos());
+    assert!(
+        mined_per_refresh < u128::from(lag),
+        "{mined_per_refresh} blocks a refresh interval: the persona's view can fall {lag} behind"
+    );
+    assert_eq!(
+        pace,
+        Duration::from_secs(10),
+        "the pace at the {target} s target; a change here moves the walk's length"
+    );
 }
 
 /// The regtest-only schedule levers, as one value so the pair cannot be
@@ -4772,17 +4828,10 @@ async fn e2e_emission_claim_accepted_and_applied() {
     use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
-    /// The wait after each block while a drawn block's read window is open
-    /// (`RegtestDaemon::watch_draws`; Rick, 2026-11-14). The producer
-    /// plans up to three reads of a draw, at least `READ_SPACING` (30)
-    /// blocks apart, and each waits a start delay drawn below
-    /// `READ_START_SPREAD` (one target block interval, 120 s) before it
-    /// dials (`shekyl-bundle-producer`). 120 s and an honest read of about
-    /// 30 s over the 30 blocks between reads is 5 s a block. The read's
-    /// ceiling (three fetches at their timeouts, about 38 minutes) is not
-    /// paced for: a read slower than this is a miss, which the settled row
-    /// shows.
-    const READ_WINDOW_PACE: Duration = Duration::from_secs(5);
+    // The wait after each block while a drawn block's read window is open:
+    // [`read_window_pace`] at the block target the persona's tip cache runs
+    // on.
+    let read_window_pace = read_window_pace(shekyl_economics::economic_params().daa_target_seconds);
     /// Blocks the bond needs to confirm before its epoch ends, so the
     /// serving host is up before the epoch it serves begins.
     const BOND_ROOM: u64 = 48;
@@ -4871,6 +4920,13 @@ async fn e2e_emission_claim_accepted_and_applied() {
     let wallet = staker_wallet(daemon.rpc_port, &seed, slot).await;
     let pscan_seal =
         shekyl_engine_file::paths::pscan_state_path_from(&wallet.1.path().join("wallet"));
+    // The persona's serving host runs its own tor, whose notice log is in
+    // the wallet's tor data directory. That directory goes with the
+    // wallet's temp dir as a failure unwinds, so the failure below inlines
+    // the log's tail, as `panic_with_log` does the daemon's.
+    let serving_tor_log =
+        shekyl_engine_file::paths::tor_data_dir_from(&wallet.1.path().join("wallet"))
+            .join(shekyl_tor_control_wallet::service::LOG_FILE_NAME);
     let closed = shard::close_shard_through_the_daemon(
         &daemon,
         &wallet.0,
@@ -4897,7 +4953,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     }
     let bond_epoch = daemon.height().await / SEB;
     let w2 = SEB / shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
-    daemon.watch_draws((bond_epoch + 1) * SEB..u64::MAX, w2, READ_WINDOW_PACE);
+    daemon.watch_draws((bond_epoch + 1) * SEB..u64::MAX, w2, read_window_pace);
     let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
         kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
@@ -4912,6 +4968,38 @@ async fn e2e_emission_claim_accepted_and_applied() {
         Some(wallet),
     )
     .await;
+    // Pre-flight (Rick, 2026-11-18): after the bond, the persona's body
+    // store holds the shard the bond names. An empty store answers every
+    // read 404 (`stake_engine/serving/start.rs`), so no draw of the served
+    // epoch could pass, and the walk would learn it hours later at the
+    // epoch's close. Filling the store is the wallet's, before it posts the
+    // bond (`WSS-Q4`); this walk does not fill it (FOLLOWUPS: the emission
+    // walk).
+    let bodies = fixture
+        .arc
+        .read()
+        .await
+        .stake_handle()
+        .expect("a bonded staker has a stake engine")
+        .bodies
+        .reads();
+    let held = tokio::task::spawn_blocking(move || {
+        use shekyl_p_host::HeldShardSource as _;
+        bodies.open_shard(ShardId::from_raw(SHARD_ID))
+    })
+    .await
+    .expect("the body store read ran to its end");
+    match held {
+        Ok(Some(_)) => {}
+        Ok(None) => daemon.panic_with_log(
+            "pre-flight",
+            format!(
+                "the persona's body store does not hold shard {SHARD_ID} after the bond, so \
+                 every read of the served epoch would answer 404 (the fill, WSS-Q4)"
+            ),
+        ),
+        Err(e) => daemon.panic_with_log("pre-flight: the persona's body store", e),
+    }
     // The persona serves its shard on its onion, through the same pinned
     // Tor, from the bond on: its endpoint is the bond record's.
     fixture.arc.write().await.prefs_mut().device.tor_binary_path = tor.display().to_string();
@@ -4964,7 +5052,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     daemon.watch_draws(
         target_epoch * SEB..(target_epoch + 1) * SEB,
         w2,
-        READ_WINDOW_PACE,
+        read_window_pace,
     );
     // The pass of epoch `w` is the last block of `w + 1` (the grace
     // epoch), so a join J15 admits sits two epochs past the pricing
@@ -5104,7 +5192,13 @@ async fn e2e_emission_claim_accepted_and_applied() {
     let first_pass_height = first_pass_height.unwrap_or_else(|| {
         daemon.panic_with_log(
             "no draw of the served epoch passed",
-            format!("{drawn} draw(s) admitted in epoch {target_epoch}"),
+            format!(
+                "{drawn} draw(s) admitted in epoch {target_epoch}; the persona's serving \
+                 status {:?} and alarm board {:?}; its tor's log tail:\n{}",
+                serving.status(),
+                serving.alarms().board(),
+                log_tail(&serving_tor_log),
+            ),
         )
     });
     assert!(
