@@ -47,7 +47,11 @@ pass. Rule 06's trap, a skipped job counting as a pass, does not reach it.
 
 A check run created by the labelling itself (another workflow listening for
 labels, whose jobs skip at once) is given `SETTLE_SECONDS` to conclude
-before it counts as running.
+before it counts as running. One that started before the label went on
+(its check suite, the run of its workflow, was created before
+`LABELLED_AT` less `GRACE_SECONDS`) is not waited for: the label is
+refused at once. A check run's own start time cannot tell: it is when a
+runner picked the job up, which a queue puts minutes after the event.
 
 Not seen: a check re-run on the head after the label went on. The events
 that report a finished run (`check_suite`, `workflow_run`) take their
@@ -56,7 +60,7 @@ lane labels last and pushes, which clears the label, to change anything.
 
   merge_ready.py run        merge-ready.yml's step; reads EVENT, PR, HEAD,
                             DRAFT, LABEL (the event's label), HAS_LABEL,
-                            RUN_URL, GITHUB_REPOSITORY, GH_TOKEN
+                            LABELLED_AT, RUN_URL, GITHUB_REPOSITORY, GH_TOKEN
   merge_ready.py --selftest
 """
 
@@ -67,6 +71,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta
 
 LABEL = "merge-ready"
 CONTEXT = "merge-ready"
@@ -81,6 +86,9 @@ EXCLUDED: dict[str, str] = {}
 # labels, its jobs skipped at once) concludes within seconds.
 SETTLE_SECONDS = 90
 POLL_SECONDS = 10
+# How far before the label event a check suite the labelling created may
+# read as created: the two timestamps come from different services.
+GRACE_SECONDS = 5
 GREEN = {"success", "neutral", "skipped"}
 WAITING = "waiting for the owner's merge-ready label"
 
@@ -93,30 +101,45 @@ def repo() -> str:
     return os.environ["GITHUB_REPOSITORY"]
 
 
-def judge(check_runs: list[dict], statuses: list[dict], open_threads: int, draft: bool) -> list[str]:
-    """Why the label cannot stand on this head: each check still running or
-    red, by name, an open review thread, a draft. Empty means it stands."""
+def when(stamp: str | None) -> datetime | None:
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp else None
+
+
+def settling(check: dict, labelled_at: str | None) -> bool:
+    """Whether a running check may have been started by the labelling: its
+    check suite was created no earlier than the label, less GRACE_SECONDS.
+    Without either time, every running check may wait."""
+    at, created = when(labelled_at), when(check.get("suite_created_at"))
+    return at is None or created is None or created >= at - timedelta(seconds=GRACE_SECONDS)
+
+
+def judge(check_runs: list[dict], statuses: list[dict], open_threads: int, draft: bool,
+          labelled_at: str | None = None) -> list[tuple[str, bool]]:
+    """Why the label cannot stand on this head, each with whether it may
+    still settle: each check still running (settling when the labelling may
+    have started it) or red, by name, an open review thread, a draft. Empty
+    means it stands."""
     out = []
     for c in check_runs:
         name = c.get("name", "")
         if name in SELF_JOBS or name in EXCLUDED:
             continue
         if c.get("status") != "completed":
-            out.append(f"`{name}` is {c.get('status')}")
+            out.append((f"`{name}` is {c.get('status')}", settling(c, labelled_at)))
         elif c.get("conclusion") not in GREEN:
-            out.append(f"`{name}` concluded {c.get('conclusion')}")
+            out.append((f"`{name}` concluded {c.get('conclusion')}", False))
     for s in statuses:
         context = s.get("context", "")
         if context == CONTEXT or context in EXCLUDED:
             continue
         if s.get("state") == "pending":
-            out.append(f"`{context}` is pending")
+            out.append((f"`{context}` is pending", False))
         elif s.get("state") != "success":
-            out.append(f"`{context}` is {s.get('state')}")
+            out.append((f"`{context}` is {s.get('state')}", False))
     if open_threads:
-        out.append(f"{open_threads} review thread(s) open")
+        out.append((f"{open_threads} review thread(s) open", False))
     if draft:
-        out.append("the pull request is a draft, whose expensive jobs are skipped")
+        out.append(("the pull request is a draft, whose expensive jobs are skipped", False))
     return out
 
 
@@ -153,6 +176,18 @@ def check_runs(sha: str) -> list[dict]:
     return [json.loads(x) for x in out.splitlines() if x]
 
 
+def with_suite_times(runs: list[dict]) -> list[dict]:
+    """Each running check run with its check suite's creation time."""
+    created: dict[int, str] = {}
+    for c in runs:
+        suite = (c.get("check_suite") or {}).get("id")
+        if c.get("status") != "completed" and suite is not None:
+            if suite not in created:
+                created[suite] = json.loads(gh(f"repos/{repo()}/check-suites/{suite}"))["created_at"]
+            c["suite_created_at"] = created[suite]
+    return runs
+
+
 def statuses(sha: str) -> list[dict]:
     return json.loads(gh(f"repos/{repo()}/commits/{sha}/status"))["statuses"]
 
@@ -179,12 +214,13 @@ def run() -> int:
         post(head, "pending", f"{WAITING}: a push or a draft marked ready took it off")
         return 0
     deadline = time.monotonic() + SETTLE_SECONDS
+    labelled_at = os.environ.get("LABELLED_AT")
     while True:
-        why = judge(check_runs(head), statuses(head), open_threads(pr), draft)
-        running = [w for w in why if w.endswith((" is queued", " is in_progress", " is pending", " is waiting"))]
-        if not why or len(running) < len(why) or time.monotonic() >= deadline:
+        found = judge(with_suite_times(check_runs(head)), statuses(head), open_threads(pr), draft, labelled_at)
+        if not found or not all(may_settle for _, may_settle in found) or time.monotonic() >= deadline:
             break
         time.sleep(POLL_SECONDS)
+    why = [w for w, _ in found]
     if not why:
         post(head, "success", f"labelled at {head[:10]}: every check concluded green, no review thread open")
         return 0
@@ -221,6 +257,17 @@ def selftest() -> int:
         got = len(judge(runs, sts, threads, draft))
         if got != want:
             problems.append(f"judge, {label}: {got} reason(s), want {want}")
+    # Waiting: only a check the labelling may have started settles; one
+    # running from before the label refuses it at once.
+    t = "2026-11-19T22:10:24Z"
+    for label, created, want in [
+        ("a check whose run began before the label", "2026-11-19T22:10:06Z", False),
+        ("a check whose run the labelling began", "2026-11-19T22:10:25Z", True),
+        ("a check whose run began just inside the grace", "2026-11-19T22:10:20Z", True),
+    ]:
+        got = judge([{**going("x"), "suite_created_at": created}], [], 0, False, t)[0][1]
+        if got != want:
+            problems.append(f"settling, {label}: {got} != {want}")
     for label, event, lab, has, want in [
         # Negative control: a push clears the label.
         ("a push to a labelled head clears the label", "synchronize", "", True, "clear"),
@@ -249,6 +296,7 @@ def selftest() -> int:
         ("types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]", "the six events"),
         (f"    name: {SELF_JOBS[0]}\n", "the job named as SELF_JOBS"),
         ("python3 scripts/ci/merge_ready.py run", "the step that runs this"),
+        ("LABELLED_AT: ${{ github.event.pull_request.updated_at }}", "the label event's time"),
     ]:
         if needle not in workflow:
             problems.append(f"merge-ready.yml lacks {what} ({needle.strip()!r})")

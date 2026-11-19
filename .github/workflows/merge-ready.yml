@@ -72,5 +72,8 @@ jobs:
           DRAFT: ${{ github.event.pull_request.draft }}
           LABEL: ${{ github.event.label.name }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'merge-ready') }}
+          # The label event's time: a check that was already running then
+          # refuses the label at once, without the settle wait.
+          LABELLED_AT: ${{ github.event.pull_request.updated_at }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 scripts/ci/merge_ready.py run
