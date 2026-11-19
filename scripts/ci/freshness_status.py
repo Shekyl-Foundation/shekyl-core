@@ -93,11 +93,15 @@ PASS_JOB = "rust-pass"
 RUST_WORKFLOW = "rust-audit-test.yml"
 FRESHNESS_WORKFLOW = ".github/workflows/freshness.yml"
 # freshness-retest.yml's names, held to the file by the selftest: the
-# report finds its re-test job by name, and reads a conflict and the time
-# budget from the job's outputs.
+# report finds its re-test job by name, and reads the verdict from the
+# job's outputs. The merge and the tests steps end green whatever they
+# find, so a red re-test is the pull request's and never fails the run (a
+# push run on `dev` would mark the `dev` commit red); the outputs carry it.
 RETEST_WORKFLOW = ".github/workflows/freshness-retest.yml"
 RETEST_JOB = "re-test"
-RETEST_OUTPUTS = ("conflict", "timed_out")
+RETEST_OUTPUTS = ("conflict", "tests_failed", "timed_out")
+MERGE_STEP = "merge the new dev into the head"
+TESTS_STEP = "the shared tests against the new dev"
 # GitHub re-runs a workflow run at most 50 times (attempt 51 is refused).
 MAX_RUN_ATTEMPT = 50
 # How long a report waits for a rust-pass re-run already in flight (the
@@ -326,6 +330,22 @@ def mark() -> int:
     return 0
 
 
+def verdict_of(result: str, conflict: bool, tests_failed: bool, timed_out: bool) -> str:
+    """The re-test's result as the pull request sees it: the job's own
+    result, except that a job which ended green with a conflict, failing
+    tests or the time budget in its outputs is a failure."""
+    if result == "success" and (conflict or tests_failed or timed_out):
+        return "failure"
+    return result
+
+
+def red_steps(info: dict, conflict: bool, tests_failed: bool, timed_out: bool) -> dict:
+    """The job's failed steps with the step that carried the verdict added:
+    that step ended green, so the API does not list it."""
+    carried = [MERGE_STEP] if conflict else [TESTS_STEP] if (tests_failed or timed_out) else []
+    return {**info, "failed_steps": info["failed_steps"] + [x for x in carried if x not in info["failed_steps"]]}
+
+
 def describe(result: str, conflict: bool, timed_out: bool, info: dict | None, merged: str) -> tuple[str, str, str]:
     """(state, kind, words) for a re-test's result. `conflict` and
     `timed_out` are the re-test job's outputs."""
@@ -386,11 +406,15 @@ def report(pr: int, head: str, result: str) -> int:
     job = next((j for j in jobs if j["name"] == f"#{pr} / {RETEST_JOB}"), None)
     import failed_tests
 
+    conflict = os.environ.get("CONFLICT") == "true"
+    tests_failed = os.environ.get("TESTS_FAILED") == "true"
+    timed_out = os.environ.get("TIMED_OUT") == "true"
+    result = verdict_of(result, conflict, tests_failed, timed_out)
     info = failed_tests.describe(job) if job and result == "failure" else None
+    if info is not None:
+        info = red_steps(info, conflict, tests_failed, timed_out)
     if result == "failure" and job is None:
         print(f"::warning::no job named '#{pr} / {RETEST_JOB}' in this run; the description cannot name the failure")
-    conflict = os.environ.get("CONFLICT") == "true"
-    timed_out = os.environ.get("TIMED_OUT") == "true"
     state, kind, words = describe(result, conflict, timed_out, info, merged)
     post(head, state, describe_status(kind, dev, since, words))
     if current_head(pr) != head:
@@ -473,6 +497,25 @@ def selftest() -> int:
             problems.append(f"describe, {label}: {state} {words!r} lacks {want!r}")
         if state == "pending" or (state == "success") != (kind == "green"):
             problems.append(f"describe, {label}: {state} with kind {kind}")
+    # A job that ended green carries a red verdict in its outputs; a job
+    # that failed or was cancelled stays as it is.
+    for label, args, want in [
+        ("green, nothing in the outputs", ("success", False, False, False), "success"),
+        ("green with failing tests", ("success", False, True, False), "failure"),
+        ("green with a conflict", ("success", True, False, False), "failure"),
+        ("green past the time budget", ("success", False, False, True), "failure"),
+        ("a setup step failed", ("failure", False, False, False), "failure"),
+        ("cancelled", ("cancelled", False, False, False), "cancelled"),
+    ]:
+        if verdict_of(*args) != want:
+            problems.append(f"verdict_of, {label}: {verdict_of(*args)} != {want}")
+    base = {"failed_steps": [], "tests": ["a b"], "builds": [], "url": "u"}
+    if red_steps(base, False, True, False)["failed_steps"] != [TESTS_STEP]:
+        problems.append("red_steps: failing tests do not name the tests step")
+    if red_steps(base, True, False, False)["failed_steps"] != [MERGE_STEP]:
+        problems.append("red_steps: a conflict does not name the merge step")
+    if red_steps({**base, "failed_steps": ["install Rust"]}, False, False, False)["failed_steps"] != ["install Rust"]:
+        problems.append("red_steps: a setup failure gained a step it did not have")
     for action, want in [("stale", ("pending", "stale")), ("retest", ("pending", "re-testing")),
                          ("fresh", ("success", "green"))]:
         state, kind, _ = mark_words({"action": action, "crates": ["c"], "merged": "#1"})
@@ -494,7 +537,10 @@ def selftest() -> int:
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     for path, needles in [
         (RETEST_WORKFLOW, [(f"    name: {RETEST_JOB}\n", "the re-test job's name"),
-                           ("SINCE: ${{ inputs.since }}", "the report's SINCE"),
+                           (f"- name: {MERGE_STEP}\n", "the merge step's name"),
+                           (f"- name: {TESTS_STEP}\n", "the tests step's name"),
+                           ("if: steps.merge.outputs.conflict != 'true'\n", "the steps a conflict skips")]
+                         + [("SINCE: ${{ inputs.since }}", "the report's SINCE"),
                            ("ref: ${{ inputs.dev }}", "the report's checkout of dev's scripts")]
          + [n for out in RETEST_OUTPUTS for n in [
              (f"{out}: ${{{{ steps.", f"the job output {out}"),

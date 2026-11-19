@@ -130,10 +130,12 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   both the PR and every merge since it was last fresh reach; with none,
   the head goes green without a run. Green posts success; red, a
   conflict, the time budget or a cancelled re-test posts failure, with a
-  comment naming the merges and the failing tests. One re-test per PR at
-  a time, the newest, and the newest `dev`'s status stands. A draft is
-  tested by its own run when marked ready; a fork is not re-tested, since
-  its code would run with `dev`'s tokens. GitHub starts no run for a PR
+  comment naming the merges and the failing tests. A red re-test is the
+  PR's: it fails the PR's status and `rust-pass`, never the run on `dev`,
+  which goes red only when the freshness jobs themselves fault. One
+  re-test per PR at a time, the newest, and the newest `dev`'s status
+  stands. A draft is tested by its own run when marked ready; a fork is
+  not re-tested, since its code would run with `dev`'s tokens. GitHub starts no run for a PR
   that conflicts with `dev`, so a labelled head that conflicts stays stale
   until it merges `dev`.
 - **A run on `dev` that has started finishes** (ruled 2026-11-19, every

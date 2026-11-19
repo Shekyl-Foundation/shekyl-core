@@ -19,10 +19,17 @@
 #            a cancelled re-test), and a comment naming the merge and the
 #            failing tests when red; then re-runs the pull request's
 #            `rust-pass` to read it (scripts/ci/freshness_status.py). Runs
-#            whatever the re-test did, so no head is left pending. The
-#            re-test hands it a conflict and the time budget as job outputs:
-#            the log carries each step's script, so text a step can print
-#            is already in it before the step runs.
+#            whatever the re-test did, so no head is left pending.
+#
+# A red re-test is the pull request's, not the run's (ruled 2026-11-19): a
+# push run on `dev` that turned red for it would mark the `dev` commit red
+# when `dev` is not, and the pull request already carries the red in its
+# status, its comment and `rust-pass`. So the merge and the tests steps end
+# green and hand their verdict to the report as job outputs (`conflict`,
+# `tests_failed`, `timed_out`); only a fault of the jobs themselves (a
+# setup step, the report) fails the run. Outputs, not log text: the log
+# carries each step's script, so text a step can print is already in it
+# before the step runs.
 #
 # One re-test per pull request at a time: a newer merge's re-test of the
 # same pull request cancels this one, and the newer run reports.
@@ -80,6 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       conflict: ${{ steps.merge.outputs.conflict }}
+      tests_failed: ${{ steps.tests.outputs.tests_failed }}
       timed_out: ${{ steps.tests.outputs.timed_out }}
     concurrency:
       group: freshness-pr-${{ inputs.pr }}
@@ -113,7 +121,8 @@ jobs:
           persist-credentials: false
       - name: merge the new dev into the head
         # Locally: the pull request's branch is never changed. A conflict
-        # is a red result of its own ("does not merge with dev").
+        # is the pull request's red result ("does not merge with dev"),
+        # handed to the report; the steps after it are skipped.
         id: merge
         shell: bash
         env:
@@ -124,13 +133,15 @@ jobs:
             echo "conflict=true" >> "$GITHUB_OUTPUT"
             echo "::error::#${{ inputs.pr }} does not merge with dev at ${DEV:0:10}:"
             git diff --name-only --diff-filter=U
-            exit 1
+            exit 0
           fi
           git submodule update --init --recursive
           echo "re-testing $(git rev-parse --short=10 HEAD^1) (the head) merged with ${DEV:0:10}"
       - name: install Rust
+        if: steps.merge.outputs.conflict != 'true'
         uses: ./.github/actions/install-rust
-      - uses: Swatinem/rust-cache@v2
+      - if: steps.merge.outputs.conflict != 'true'
+        uses: Swatinem/rust-cache@v2
         with:
           # The Rust job's cache: its key is the job id `rust-audit-and-test`
           # plus the toolchain and the lockfiles, and `shared-key` puts the
@@ -143,8 +154,10 @@ jobs:
             docs/formal/checkct/dynamic -> target
           save-if: false
       - name: install cargo-nextest
+        if: steps.merge.outputs.conflict != 'true'
         run: bash scripts/ci/rust_scoped_tests.sh install-nextest
       - name: the shared tests against the new dev
+        if: steps.merge.outputs.conflict != 'true'
         id: tests
         working-directory: rust
         shell: bash
@@ -166,8 +179,10 @@ jobs:
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
             echo "timed_out=true" >> "$GITHUB_OUTPUT"
             echo "::error::the tests passed the re-test's time budget (${TEST_BUDGET_MINUTES} min)"
+          elif [ "$rc" -ne 0 ]; then
+            echo "tests_failed=true" >> "$GITHUB_OUTPUT"
+            echo "::error::the shared tests failed against the new dev (exit $rc); the report posts it on the pull request"
           fi
-          exit "$rc"
 
   report:
     name: report
@@ -201,5 +216,6 @@ jobs:
           SINCE: ${{ inputs.since }}
           CRATES: ${{ inputs.crates }}
           CONFLICT: ${{ needs.retest.outputs.conflict }}
+          TESTS_FAILED: ${{ needs.retest.outputs.tests_failed }}
           TIMED_OUT: ${{ needs.retest.outputs.timed_out }}
         run: python3 scripts/ci/freshness_status.py report "${{ inputs.pr }}" "${{ inputs.head }}" "${{ needs.retest.result }}"
