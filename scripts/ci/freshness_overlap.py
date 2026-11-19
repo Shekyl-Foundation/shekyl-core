@@ -3,63 +3,71 @@
 #
 # All rights reserved.
 # BSD-3-Clause
-"""Which open pull requests a merge to `dev` can break (Brief C, option (a)).
+"""Which open pull requests a merge to `dev` makes stale, and what their
+re-test runs (Brief C, ruled 2026-11-19).
 
 # The question
 
 A pull request is tested on its head merged onto the `dev` of its last
 push. When another pull request merges first, the one still open was never
 tested against it. Each is green alone; together they can be red (#1404 and
-#1409, #1425 and #1426, #1440 and #1447). After every merge to `dev`, the
-freshness workflow asks this script which open pull requests overlap the
-merge, and re-tests exactly those against the new `dev`.
+#1409, #1425 and #1426, #1440 and #1447).
 
-# Overlap
+# The shared tests
 
 Both sides are scoped by `change_scope.py`'s own `rust_scope`, the decision
 the Rust job's scope makes, so the two never disagree about what a file
-belongs to:
+belongs to. A side's **tests** are its changed packages and every member
+that depends on one of them (nextest's `rdeps()`, what its CI runs). The
+**shared tests** of a merge and a pull request are the tests in both: the
+only tests whose result the two changes together can move. A test of a
+member neither change reaches cannot change; a test only one reaches was
+run by that one's own CI.
 
-  - the merge's **changed** packages: the members its files are in, and the
-    members that read a changed non-Rust file (a fixture, a packaged config,
-    a workflow a test parses);
-  - an open pull request's **closure**: its changed packages, every member
-    that depends on one of them (the packages its CI tests, nextest's
-    `rdeps()`), and everything those depend on (the code its tests compile).
+A merge **overlaps** a pull request when the shared tests are not empty
+(`shared_tests`, the one definition). `all` on a side (the workspace
+manifest, the lock, the toolchain, a path nothing claims) makes its tests
+every member. A documentation-only side has none.
 
-They overlap when the merge changed a package in the pull request's
-closure. `all` on either side (the workspace manifest, the lock, the
-toolchain, a path nothing claims) overlaps every pull request that tests
-anything. A documentation-only side overlaps nothing.
+The shared tests are closed under `rdeps()` (an intersection of two closed
+sets), so the re-test passes a few members whose `rdeps()` is the set as `rust_tests`
+(`generators`), and nextest selects exactly the shared set.
 
-FAILS CLOSED: any error answers "overlaps", naming the reason, so a pull
-request is re-tested rather than skipped.
+# On demand (ruled 2026-11-19)
+
+After a merge, an overlapping pull request is marked **stale**
+(freshness_status.py) and no re-test runs. The re-test runs when the pull
+request carries the `merge-next` label: when the label is added to a head
+that is not fresh, and when a merge overlaps a head that carries it.
+
+A re-test covers every merge since the head was last fresh (`since`), not
+only the latest: its shared tests are the pull request's against the whole
+`since..dev` diff. `since` is the `dev` of the head's last green, else the
+merge base of the head with `dev` (the `dev` its own push was tested on;
+`shekyl-push` merges `dev` before every push), and is carried in each status
+until a green resets it.
+
+FAILS CLOSED: an error answers "overlaps" with the pull request's whole own
+scope, naming the reason, so a pull request is re-tested rather than
+skipped.
 
 # Use
 
+    freshness_overlap.py --plan --base REF [--before SHA] [--pr N]
+        freshness.yml's step, on a checkout of REF's `dev`. Without --pr, a
+        push: `--before` is the `dev` it replaced; every open pull request
+        on REF is judged. With --pr, the label: that one pull request.
+        Drafts (their own run tests them when marked ready) and forks
+        (their code would run with `dev`'s tokens) are left out. Writes
+        `dev`, `marks` (each head to mark: stale, re-testing, or green with
+        nothing shared) and `retests` (the re-test matrix) to
+        $GITHUB_OUTPUT. Needs GITHUB_REPOSITORY and GH_TOKEN.
     freshness_overlap.py --merge SHA [--before SHA] --pr N:BASE:HEAD [--pr ...]
-        the push to `dev` (`--before` is the `dev` it replaced, by default
-        the merge's first parent) against each open pull request, given as
-        its number, a `dev` commit to measure it from and its head; prints
-        one JSON object per pull request: its overlap, the shared crates,
-        and the scope its re-test runs (`rust_tests`, `rust_doc_pkgs`)
-
-# The re-test's scope
-
-As ruled, the pull request's own: what its own Rust job would run on its
-head merged with the new `dev` (`change_scope.py`'s `rust_tests` and
-`rust_doc_pkgs` for the same files), so the re-test is the run it would
-have had, had it been pushed after the merge.
-    freshness_overlap.py --plan --merge SHA [--before SHA] --base REF
-        the freshness workflow's step: lists the open pull requests on REF,
-        leaves out drafts (their own run tests them when marked ready) and
-        forks (their code would run in a push run on `dev`), fetches the
-        heads, judges each, and writes `retests` (a JSON list) and `merged`
-        (the merged pull requests, `#N` each) to $GITHUB_OUTPUT. Needs
-        GITHUB_REPOSITORY and GH_TOKEN.
+        the push to `dev` against each pull request (its number, a `dev`
+        commit to measure it from, its head); one JSON object each
     freshness_overlap.py --replay FIRST SECOND
-        two merge commits on `dev`: was the second's pull request overlapping
-        when the first merged?
+        two merge commits on `dev`: did the first overlap the second's pull
+        request, and on which tests?
     freshness_overlap.py --selftest
 """
 
@@ -73,6 +81,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import change_scope as cs  # noqa: E402
+import freshness_status as fs  # noqa: E402
 
 ALL = "all"
 
@@ -104,31 +113,64 @@ def changed_packages(files, ctx):
     return set(tests)
 
 
-def closure(changed, deps, rdeps):
-    """What a pull request's tests reach: its changed packages, their
-    dependents (what its CI tests) and everything those depend on."""
-    if changed == ALL:
-        return ALL
-    tested = rdeps(changed)
-    out, stack = set(tested), list(tested)
-    while stack:
-        for dep in deps.get(stack.pop(), ()):
-            if dep not in out:
-                out.add(dep)
-                stack.append(dep)
+def tests_of(changed, rdeps):
+    """A side's tests: its changed packages and their dependents."""
+    return ALL if changed == ALL else rdeps(changed)
+
+
+def shared_tests(merged, pr, rdeps):
+    """The tests both changes reach. Not empty is what "overlaps" means."""
+    if not merged or not pr:
+        return set()
+    a, b = tests_of(merged, rdeps), tests_of(pr, rdeps)
+    if a == ALL:
+        return b
+    if b == ALL:
+        return a
+    return a & b
+
+
+def generators(tests, rdeps):
+    """Few members of a closed set `tests` whose `rdeps()` is the set again:
+    the member reaching most first, then whatever it left. A
+    dev-dependency may close a cycle, where no member is minimal, so this
+    covers rather than looks for the bottom."""
+    reach = {t: rdeps({t}) for t in tests}
+    out, covered = set(), set()
+    for t in sorted(tests, key=lambda t: (-len(reach[t]), t)):
+        if t not in covered:
+            out.add(t)
+            covered |= reach[t]
     return out
 
 
-def overlap(merged, reach):
-    """The packages the merge changed inside the pull request's reach; a
-    non-empty answer means re-test."""
-    if not merged or not reach:
-        return set()
+def scope_values(tests, ws):
+    """The re-test's `rust_tests` and `rust_doc_pkgs` for a shared set."""
+    if tests == ALL:
+        return "all", ""
+    if not tests:
+        return "none", ""
+    mins = generators(tests, ws.rdeps)
+    return cs.rust_tests_value(mins), cs.doc_pkgs(ws, mins)
+
+
+def crates_named(merged, pr, ws):
+    """The merge's changed packages the pull request's tests compile (its
+    tests and everything they depend on): the crates a person reads in the
+    status. Not the decision; `shared_tests` is."""
+    if not merged or not pr:
+        return []
     if merged == ALL:
-        return {ALL}
-    if reach == ALL:
-        return set(merged)
-    return merged & reach
+        return [ALL]
+    if pr == ALL:
+        return sorted(merged)
+    reach, stack = set(), list(ws.rdeps(pr))
+    while stack:
+        n = stack.pop()
+        if n not in reach:
+            reach.add(n)
+            stack.extend(ws.deps.get(n, ()))
+    return sorted(merged & reach)
 
 
 def diff_files(base, head):
@@ -138,62 +180,106 @@ def diff_files(base, head):
     return [f for f in out.splitlines() if f]
 
 
-def judge(merged_files, pr_files, ctx):
-    ws = ctx.workspace
-    merged = changed_packages(merged_files, ctx)
-    reach = closure(changed_packages(pr_files, ctx), ws.deps, ws.rdeps)
-    return sorted(overlap(merged, reach))
-
-
-def retest_scope(pr_files, ctx):
-    """The re-test's `rust_tests` and `rust_doc_pkgs`: the pull request's
-    own scope, as its Rust job computes it."""
-    docs_only, _ = cs.classify(pr_files, ctx.inputs, ctx.trees)
-    if docs_only:
-        return "none", ""
-    _, tests, _ = cs.rust_scope(pr_files, ctx.inputs, ctx.trees, ctx.workspace, ctx.owners, ctx.workflows)
-    return cs.rust_tests_value(tests), cs.doc_pkgs(ctx.workspace, tests)
-
-
-# The widest re-test, for a pull request this script could not judge.
-FAIL_CLOSED_SCOPE = {"rust_tests": "all", "rust_doc_pkgs": ""}
-
-
-def run_merge(merge, prs, before=None):
-    out = []
-    try:
-        ctx = Context()
-        merged_files = diff_files(before or f"{merge}^1", merge)
-    except Exception as e:  # fail closed: every pull request is re-tested
-        for number, _, head in prs:
-            out.append({"pr": number, "head": head, "overlap": True, "crates": [], "why": f"cannot decide ({e})",
-                        **FAIL_CLOSED_SCOPE})
-        return out
-    for number, base, head in prs:
-        try:
-            pr_files = diff_files(base, head)
-            crates = judge(merged_files, pr_files, ctx)
-            tests, docs = retest_scope(pr_files, ctx)
-            out.append({"pr": number, "head": head, "overlap": bool(crates), "crates": crates,
-                        "why": "the merge changed a crate this pull request's tests reach" if crates else "no shared crate",
-                        "rust_tests": tests, "rust_doc_pkgs": docs})
-        except Exception as e:
-            out.append({"pr": number, "head": head, "overlap": True, "crates": [], "why": f"cannot decide ({e})",
-                        **FAIL_CLOSED_SCOPE})
-    return out
+def merge_base(a, b):
+    return subprocess.run(["git", "merge-base", a, b], check=True, capture_output=True, text=True).stdout.strip()
 
 
 def merged_prs(before, merge):
-    """The pull requests the push merged, `#N` each, from the merge commits'
-    subjects; a push with none is named by its commit."""
+    """The pull requests merged in `before..merge`, `#N` each, from the merge
+    commits' subjects; a range with none is named by its commits."""
+    if before == fs.UNKNOWN:
+        return f"dev up to {merge[:10]}"
     subjects = subprocess.run(
         ["git", "log", "--format=%s", f"{before}..{merge}"], check=True, capture_output=True, text=True
     ).stdout.splitlines()
     numbers = [m.group(1) for m in (MERGE_SUBJECT.match(x) for x in subjects) if m]
-    return " ".join(f"#{n}" for n in reversed(numbers)) or f"dev {merge[:10]}"
+    return " ".join(f"#{n}" for n in reversed(numbers)) or f"dev {before[:10]}..{merge[:10]}"
 
 
 MERGE_SUBJECT = re.compile(r"^Merge pull request #(\d+) from ")
+
+
+def since_for(current, head, dev):
+    """The `dev` the head was last fresh against: carried by a status that
+    is not green, the green's own `dev`, else the merge base of the head
+    with `dev`. A status outside the grammar gives UNKNOWN."""
+    if current is None:
+        return merge_base(head, dev)
+    if current["kind"] == "green":
+        return resolve(current["dev"])
+    if current["since"] == fs.UNKNOWN:
+        return fs.UNKNOWN
+    return resolve(current["since"])
+
+
+def resolve(short_sha):
+    return subprocess.run(["git", "rev-parse", "--verify", f"{short_sha}^{{commit}}"],
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+def decide(event, labelled, kind, this_merge, cumulative):
+    """The action for one pull request: 'stale', 'retest', 'fresh' (green
+    without a run: nothing shared) or None.
+
+    `kind` is the head's status (None, or freshness_status's kinds, '?'
+    for one outside the grammar); `this_merge` the shared tests with the
+    push alone, `cumulative` those with everything since the head was last
+    fresh."""
+    if event == "push":
+        if not this_merge:
+            return None
+        if not labelled:
+            return "stale"
+        return "retest" if cumulative else "fresh"
+    if event == "label":
+        if kind in (None, "green"):
+            return None
+        return "retest" if cumulative else "fresh"
+    raise ValueError(event)
+
+
+def judge_pr(event, number, head, labelled, current, dev, before, ctx, merged_push):
+    """One plan row, or None. Raises on anything it cannot read; the caller
+    fails closed."""
+    ws = ctx.workspace
+    pr = changed_packages(diff_files(dev, head), ctx)
+    this_merge = shared_tests(merged_push, pr, ws.rdeps) if event == "push" else set()
+    if event == "push" and not this_merge:
+        return None
+    if event == "label" and (current is None or current["kind"] == "green"):
+        return None
+    since = since_for(current, head, dev)
+    if event == "push" and not labelled:
+        cumulative = this_merge
+    elif since == fs.UNKNOWN:
+        cumulative = tests_of(pr, ws.rdeps) if pr else set()
+    else:
+        cumulative = shared_tests(changed_packages(diff_files(since, dev), ctx), pr, ws.rdeps)
+    action = decide(event, labelled, current and current["kind"], this_merge, cumulative)
+    if action is None:
+        return None
+    if action == "stale":
+        merged, named = merged_prs(before, dev), crates_named(merged_push, pr, ws)
+        tests, docs = "none", ""
+    else:
+        merged_side = ALL if since == fs.UNKNOWN else changed_packages(diff_files(since, dev), ctx)
+        merged, named = merged_prs(since, dev), crates_named(merged_side, pr, ws)
+        tests, docs = scope_values(cumulative, ws)
+    return {"pr": number, "head": head, "action": action, "since": since, "merged": merged, "crates": named,
+            "rust_tests": tests, "rust_doc_pkgs": docs,
+            "why": f"{action}: shares {tests if action != 'stale' else scope_values(this_merge, ws)[0]}"}
+
+
+def fail_closed(number, head, labelled, why, since):
+    """A pull request this script could not judge: stale, or re-tested on
+    the widest scope when it carries the label."""
+    return {"pr": number, "head": head, "action": "retest" if labelled else "stale", "since": since,
+            "merged": "dev", "crates": [], "rust_tests": "all", "rust_doc_pkgs": "",
+            "why": f"cannot decide ({why})"}
+
+
+def gh_json(path):
+    return json.loads(subprocess.run(["gh", "api", path], check=True, capture_output=True, text=True).stdout)
 
 
 def gh_lines(path):
@@ -201,52 +287,107 @@ def gh_lines(path):
     return [json.loads(line) for line in out.stdout.splitlines() if line]
 
 
-def plan(merge, before, base_ref):
+def plan(base_ref, before, only_pr):
     repo = os.environ["GITHUB_REPOSITORY"]
+    dev = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    event = "label" if only_pr else "push"
     # A push that created the branch has no `before` (all zeros).
     if not before or set(before) == {"0"}:
-        before = f"{merge}^1"
+        before = f"{dev}^1"
+    before = resolve(before) if event == "push" else before
+    listed = [gh_json(f"repos/{repo}/pulls/{only_pr}")] if only_pr else \
+        gh_lines(f"repos/{repo}/pulls?state=open&base={base_ref}&per_page=100")
     prs, skipped = [], []
-    for p in gh_lines(f"repos/{repo}/pulls?state=open&base={base_ref}&per_page=100"):
+    for p in listed:
         number = p["number"]
-        if p.get("draft"):
+        if p["state"] != "open" or p["base"]["ref"] != base_ref:
+            skipped.append((number, f"not open on {base_ref}"))
+        elif p.get("draft"):
             skipped.append((number, "a draft: its own run tests it against `dev` when it is marked ready"))
         elif (p["head"].get("repo") or {}).get("full_name") != repo:
-            skipped.append((number, "a fork: its code would run in a push run on `dev`"))
+            skipped.append((number, "a fork: its code would run with `dev`'s tokens"))
         else:
-            prs.append((number, merge, p["head"]["sha"]))
+            labelled = any(lb["name"] == fs.LABEL for lb in p.get("labels", []))
+            prs.append((number, p["head"]["sha"], labelled))
     if prs:
         # By SHA: the head the listing saw, even if the branch moved since.
-        subprocess.run(["git", "fetch", "--no-tags", "--quiet", "origin", *[h for _, _, h in prs]], check=True)
-    rows = run_merge(merge, prs, before) if prs else []
-    merged = merged_prs(before, merge)
-    retests = [{k: r[k] for k in ("pr", "head", "crates", "rust_tests", "rust_doc_pkgs")} for r in rows if r["overlap"]]
-    lines = [f"Freshness after {merged} ({merge[:10]}), {len(retests)} re-test(s):", ""]
-    lines += [f"- #{r['pr']} {r['head'][:10]}: {'re-test' if r['overlap'] else 'no re-test'}: {r['why']}"
-              + (f" ({', '.join(r['crates'])})" if r["crates"] else "") for r in rows]
-    lines += [f"- #{n}: not re-tested: {why}" for n, why in skipped]
+        subprocess.run(["git", "fetch", "--no-tags", "--quiet", "origin", *[h for _, h, _ in prs]], check=True)
+    rows = []
+    try:
+        ctx = Context()
+        merged_push = changed_packages(diff_files(before, dev), ctx) if event == "push" else set()
+    except Exception as e:  # fail closed: every pull request is judged stale
+        ctx, merged_push = None, ALL
+        context_error = str(e)
+    for number, head, labelled in prs:
+        current = None
+        try:
+            current = fs.parse(fs.newest(fs.statuses(head)))
+            if ctx is None:
+                raise RuntimeError(context_error)
+            row = judge_pr(event, number, head, labelled, current, dev, before, ctx, merged_push)
+        except Exception as e:
+            if event == "label" and current is not None and current["kind"] == "green":
+                row = None
+            else:
+                since = current["since"] if current and current["kind"] not in ("green", "?") else fs.UNKNOWN
+                row = fail_closed(number, head, labelled or event == "label", e, since)
+        if row:
+            rows.append(row)
+        else:
+            skipped.append((number, "fresh: nothing it tests changed" if event == "push" else "fresh: nothing to re-test"))
+    retests = [{k: r[k] for k in ("pr", "head", "since", "merged", "crates", "rust_tests", "rust_doc_pkgs")}
+               for r in rows if r["action"] == "retest"]
+    title = f"Freshness after {merged_prs(before, dev)}" if event == "push" else f"Freshness on the {fs.LABEL} label"
+    lines = [f"{title} (dev {dev[:10]}): {len(rows)} to mark, {len(retests)} re-test(s)", ""]
+    lines += [f"- #{r['pr']} {r['head'][:10]}: {r['why']}" + (f" ({', '.join(r['crates'])})" if r["crates"] else "")
+              for r in rows]
+    lines += [f"- #{n}: {why}" for n, why in skipped]
     print("\n".join(lines))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
+    marks = [{k: r[k] for k in ("pr", "head", "action", "since", "merged", "crates")} for r in rows]
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+        f.write(f"dev={dev}\n")
+        f.write(f"marks={json.dumps(marks)}\n")
         f.write(f"retests={json.dumps(retests)}\n")
-        f.write(f"merged={merged}\n")
     return 0
+
+
+def run_merge(merge, prs, before=None):
+    """The push against each (number, base, head): its shared tests."""
+    out = []
+    try:
+        ctx = Context()
+        merged = changed_packages(diff_files(before or f"{merge}^1", merge), ctx)
+    except Exception as e:  # fail closed: every pull request overlaps
+        return [{"pr": n, "head": h, "overlap": True, "crates": [], "rust_tests": "all", "rust_doc_pkgs": "",
+                 "why": f"cannot decide ({e})"} for n, _, h in prs]
+    for number, base, head in prs:
+        try:
+            pr = changed_packages(diff_files(base, head), ctx)
+            shared = shared_tests(merged, pr, ctx.workspace.rdeps)
+            tests, docs = scope_values(shared, ctx.workspace)
+            out.append({"pr": number, "head": head, "overlap": bool(shared),
+                        "crates": crates_named(merged, pr, ctx.workspace), "rust_tests": tests,
+                        "rust_doc_pkgs": docs, "why": "shared tests" if shared else "no shared test"})
+        except Exception as e:
+            out.append({"pr": number, "head": head, "overlap": True, "crates": [], "rust_tests": "all",
+                        "rust_doc_pkgs": "", "why": f"cannot decide ({e})"})
+    return out
 
 
 def replay(first, second):
     """Two merge commits on `dev`, in merge order: the second's pull request
     was open when the first merged. Its own files are its merge's diff."""
-    ctx = Context()
-    crates = judge(diff_files(f"{first}^1", first), diff_files(f"{second}^1", second), ctx)
-    return crates
+    return run_merge(first, [(0, f"{second}^1", second)], f"{first}^1")[0]
 
 
 def selftest():
-    """The closure and overlap rules on a small graph: core <- mid <- leaf,
-    and an unrelated island."""
+    """The shared-test rules on a small graph: core <- mid <- leaf, and an
+    unrelated island; and the action for each state and event."""
     deps = {"core": set(), "mid": {"core"}, "leaf": {"mid"}, "island": set()}
 
     def rdeps(names):
@@ -259,31 +400,83 @@ def selftest():
                     grew = True
         return out
 
-    cases = [
-        # (merged, pr changed, expected overlap)
-        ("a merge to a dependency of the PR's crate", {"core"}, {"leaf"}, {"core"}),
+    class Ws:
+        pass
+
+    ws = Ws()
+    ws.deps, ws.rdeps = deps, rdeps
+    failed = []
+    for label, merged, pr, want in [
+        # (merged, pr changed, expected shared tests)
+        ("a merge to a dependency of the PR's crate", {"core"}, {"leaf"}, {"leaf"}),
         ("a merge to a dependent of the PR's crate", {"leaf"}, {"core"}, {"leaf"}),
-        ("a merge to the PR's own crate", {"mid"}, {"mid"}, {"mid"}),
+        ("a merge to the PR's own crate", {"mid"}, {"mid"}, {"mid", "leaf"}),
         ("a merge to an unrelated crate", {"island"}, {"leaf"}, set()),
         ("a docs-only merge", set(), {"leaf"}, set()),
         ("a docs-only pull request", {"core"}, set(), set()),
-        ("a merge that changes everything", ALL, {"island"}, {ALL}),
-        ("a pull request that changes everything", {"island"}, ALL, {"island"}),
-    ]
-    failed = 0
-    for label, merged, pr, want in cases:
-        got = overlap(merged, closure(pr, deps, rdeps))
+        ("a merge that changes everything", ALL, {"island"}, {"island"}),
+        ("a pull request that changes everything", {"mid"}, ALL, {"mid", "leaf"}),
+        ("both change everything", ALL, ALL, ALL),
+    ]:
+        got = shared_tests(merged, pr, rdeps)
         if got != want:
-            print(f"selftest FAIL: {label}: {sorted(got)} != {sorted(want)}")
-            failed = 1
-    # Fail closed: a context that cannot be read re-tests every pull request.
+            failed.append(f"shared_tests, {label}: {got} != {want}")
+        # Overlap by the crates a person reads agrees with the decision.
+        if bool(crates_named(merged, pr, ws)) != bool(got):
+            failed.append(f"crates_named disagrees with shared_tests: {label}")
+        # The generators select the shared set again.
+        if got and got != ALL and rdeps(generators(got, rdeps)) != got:
+            failed.append(f"generators, {label}: rdeps({generators(got, rdeps)}) != {got}")
+    # A dev-dependency cycle (mid and leaf each need the other): the shared
+    # set still has generators that select it.
+    deps["mid"] = {"core", "leaf"}
+    cyc = shared_tests({"mid"}, {"leaf"}, rdeps)
+    if not cyc or rdeps(generators(cyc, rdeps)) != cyc:
+        failed.append(f"generators, a dev-dependency cycle: {cyc} from {generators(cyc, rdeps)}")
+    deps["mid"] = {"core"}
+    # Cumulative: a merge to core, then one to the island, then the label.
+    # The last merge alone shares nothing with a pull request on leaf; the
+    # range since the head was fresh does.
+    pr = {"leaf"}
+    if shared_tests({"island"}, pr, rdeps) or shared_tests({"core", "island"}, pr, rdeps) != {"leaf"}:
+        failed.append("cumulative: the range since the head was fresh is not what the re-test runs")
+    # The state table.
+    S = {"leaf"}
+    for event, labelled, kind, this_merge, cumulative, want in [
+        ("push", False, None, S, S, "stale"),
+        ("push", False, "stale", S, S, "stale"),
+        ("push", False, "green", S, S, "stale"),
+        ("push", False, "red", S, S, "stale"),
+        ("push", False, None, set(), set(), None),
+        ("push", True, None, S, S, "retest"),
+        ("push", True, "stale", S, S, "retest"),
+        ("push", True, "re-testing", S, S, "retest"),
+        ("push", True, "red", S, S, "retest"),
+        ("push", True, "green", set(), set(), None),
+        ("label", True, None, set(), S, None),
+        ("label", True, "green", set(), S, None),
+        ("label", True, "stale", set(), S, "retest"),
+        ("label", True, "red", set(), S, "retest"),
+        ("label", True, "re-testing", set(), S, "retest"),
+        ("label", True, "?", set(), S, "retest"),
+        ("label", True, "stale", set(), set(), "fresh"),
+    ]:
+        got = decide(event, labelled, kind, this_merge, cumulative)
+        if got != want:
+            failed.append(f"decide({event}, labelled={labelled}, {kind}): {got} != {want}")
+    # Fail closed: a merge that cannot be read overlaps every pull request.
     broken = run_merge("not-a-commit", [(7, "x", "y")])
-    if not (broken and broken[0]["overlap"] and "cannot decide" in broken[0]["why"]):
-        print(f"selftest FAIL: an unreadable merge did not fail closed: {broken}")
-        failed = 1
+    if not (broken and broken[0]["overlap"] and broken[0]["rust_tests"] == "all"):
+        failed.append(f"an unreadable merge did not fail closed: {broken}")
+    row = fail_closed(7, "y", True, "boom", fs.UNKNOWN)
+    if (row["action"], row["rust_tests"]) != ("retest", "all"):
+        failed.append(f"a labelled pull request that cannot be judged: {row}")
+    for f in failed:
+        print(f"selftest FAIL: {f}")
     if not failed:
-        print(f"selftest: {len(cases)} overlap cases, and an unreadable merge fails closed")
-    return failed
+        print("selftest: shared tests, their generators, the cumulative range, the state table, "
+              "and failing closed")
+    return 1 if failed else 0
 
 
 def main(argv):
@@ -292,14 +485,15 @@ def main(argv):
     if "--replay" in argv:
         i = argv.index("--replay")
         first, second = argv[i + 1], argv[i + 2]
-        crates = replay(first, second)
-        print(json.dumps({"first": first, "second": second, "overlap": bool(crates), "crates": crates}))
+        print(json.dumps({"first": first, "second": second, **replay(first, second)}))
         return 0
+    if "--plan" in argv:
+        before = argv[argv.index("--before") + 1] if "--before" in argv else None
+        pr = int(argv[argv.index("--pr") + 1]) if "--pr" in argv else None
+        return plan(argv[argv.index("--base") + 1], before, pr)
     if "--merge" in argv:
         merge = argv[argv.index("--merge") + 1]
         before = argv[argv.index("--before") + 1] if "--before" in argv else None
-        if "--plan" in argv:
-            return plan(merge, before, argv[argv.index("--base") + 1])
         prs = []
         for i, a in enumerate(argv):
             if a == "--pr":

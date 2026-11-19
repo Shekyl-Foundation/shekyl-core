@@ -12,25 +12,26 @@ merges then never finishes, and `dev` has no verdict for hours: from
 2026-11-10 to 11-17, 50 of 84 Rust runs on `dev` were cancelled, and
 1,595 runner-minutes went to runs that reported nothing.
 
-What passes: each workflow named in `FINISHING` triggers on push to
-`dev` (every branch, or a literal `branches` list naming `dev`; a branch
-pattern or `branches-ignore` is refused, not evaluated), and its top-level
-concurrency has `cancel-in-progress` equal to
-`CANCEL_ONLY_PRS`. A pull request's newer push still cancels its older
+What passes: every workflow that triggers on push to `dev` (every branch,
+or a literal `branches` list naming `dev`; a branch pattern or
+`branches-ignore` is refused, not evaluated) has a top-level concurrency
+whose `cancel-in-progress` equals `CANCEL_ONLY_PRS`. A pull request's newer push still cancels its older
 run, since that run tests a head nobody will merge. Any other event
 queues: the running run finishes, one run waits, and a newer push
 replaces the waiting one, so a burst of merges still costs one more run,
 not one per merge. A job-level `cancel-in-progress` in those files is
 refused too, because it would cancel the job the workflow keeps.
 
-The list holds the workflows whose `dev` runs outlast the gap between
-merges. A workflow that grows past that gap joins it in the PR that
-lengthens it; the short gates may keep `true`, because the next run
-tests every commit the cancelled one held.
+Every workflow, not only the long ones (ruled 2026-11-19): the post-merge
+run on `dev` is never cancelled once it runs, so each run that starts
+gives `dev` a verdict and a red issue names the whole range since the last
+green. `UNGROUPED` names the workflows that take no group at all, each
+with its reason: there every push gets a run of its own.
 
-Rule 47: a named file that is missing, does not parse, or no longer
-pushes on `dev` fails by name, since this gate would otherwise grade
-nothing for it.
+Rule 47: the four long workflows (`LONG`) must be among those read as
+pushing on `dev`, a file that does not parse fails by name, and fewer than
+`MIN_SUBJECTS` subjects fails, since this gate would otherwise grade
+nothing.
 """
 
 from __future__ import annotations
@@ -49,14 +50,25 @@ WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 # a schedule or a dispatch never cancels a run that has started.
 CANCEL_ONLY_PRS = "${{ github.event_name == 'pull_request' }}"
 
-# Each with its median full run on `dev`, 2026-11-10 to 11-17, in
-# runner-minutes (wall-minutes in a queue run longer).
-FINISHING = (
+# The workflows whose `dev` runs outlast the gap between merges, each with
+# its median full run on `dev`, 2026-11-10 to 11-17, in runner-minutes
+# (wall-minutes in a queue run longer). They were the whole list before
+# the 2026-11-19 ruling; they stay named as the gate's subject assertion.
+LONG = (
     "benchmarks.yml",  # publishes the baseline, then raises the drift alarm
     "build.yml",  # 77
     "fuzz-harness.yml",  # 22, but 60 wall-minutes behind the queue
     "rust-audit-test.yml",  # 123
 )
+# Workflows that push on `dev` with no concurrency group: no run of theirs
+# is ever cancelled or replaced.
+UNGROUPED = {
+    # Each push's run judges that push's own diff against the open pull
+    # requests; a replaced run would leave its merge unjudged. Seconds each.
+    "freshness.yml",
+}
+# Workflows read as pushing on `dev`, 2026-11-19: 20.
+MIN_SUBJECTS = 15
 
 
 # A branch filter entry with any of these is a pattern, not a name.
@@ -112,7 +124,10 @@ def problems_in(filename: str, doc: object) -> list[str]:
         ]
     problems: list[str] = []
     concurrency = doc.get("concurrency")
-    if not isinstance(concurrency, dict):
+    if filename in UNGROUPED:
+        if concurrency is not None:
+            problems.append(f"{filename}: is in UNGROUPED but has a concurrency group")
+    elif not isinstance(concurrency, dict):
         problems.append(
             f"{filename}: no concurrency mapping, so a pull request's "
             "superseded runs stack behind each other"
@@ -139,28 +154,40 @@ def problems_in(filename: str, doc: object) -> list[str]:
     return problems
 
 
+# Why a workflow is not a subject: it does not push on `dev` at all.
+NOT_ON_DEV = ("has no push trigger", "does not push on dev", "filters push on tags only")
+
+
 def check_tree() -> int:
     problems: list[str] = []
-    for filename in FINISHING:
-        path = os.path.join(WORKFLOWS, filename)
-        if not os.path.isfile(path):
-            problems.append(
-                f"{filename}: missing; take it off FINISHING in "
-                "check_dev_push_runs_finish.py if it was retired"
-            )
+    subjects = []
+    for filename in sorted(os.listdir(WORKFLOWS)):
+        if not filename.endswith((".yml", ".yaml")):
             continue
-        with open(path, encoding="utf-8") as handle:
+        with open(os.path.join(WORKFLOWS, filename), encoding="utf-8") as handle:
             try:
                 doc = yaml.load(handle, Loader=StrictLoader)
             except yaml.YAMLError as error:
                 problems.append(f"{filename}: does not parse, so nothing in it is graded: {error}")
                 continue
+        why = push_trigger_problem(doc) if isinstance(doc, dict) else None
+        if why is not None and why.startswith(NOT_ON_DEV):
+            continue
+        subjects.append(filename)
         problems.extend(problems_in(filename, doc))
+    missing = sorted(set(LONG) - set(subjects))
+    if missing:
+        problems.append(f"{', '.join(missing)}: not read as pushing on dev; the gate's subjects are gone")
+    if len(subjects) < MIN_SUBJECTS:
+        problems.append(f"only {len(subjects)} workflows read as pushing on dev (fewer than {MIN_SUBJECTS})")
+    stray = sorted(UNGROUPED - set(subjects))
+    if stray:
+        problems.append(f"UNGROUPED names {', '.join(stray)}, which does not push on dev")
     for problem in problems:
         print(f"::error::{problem}")
     if problems:
         return 1
-    print(f"dev push runs finish: {len(FINISHING)} workflows, each cancels only a pull request's run")
+    print(f"dev push runs finish: {len(subjects)} workflows push on dev, and none cancels a run on dev once it runs")
     return 0
 
 
@@ -201,10 +228,13 @@ def selftest() -> int:
             1,
         ),
         ("not a mapping", ["a"], 1),
+        ("an ungrouped workflow", {k: v for k, v in doc(CANCEL_ONLY_PRS).items() if k != "concurrency"}, 0,
+         "freshness.yml"),
+        ("an ungrouped workflow that takes a group", doc(CANCEL_ONLY_PRS), 1, "freshness.yml"),
     ]
     failed = 0
-    for label, fixture, want in cases:
-        problems = problems_in("fixture.yml", fixture)
+    for label, fixture, want, *name in cases:
+        problems = problems_in(name[0] if name else "fixture.yml", fixture)
         if len(problems) != want:
             print(f"selftest FAIL: {label}: {len(problems)} problem(s), want {want}: {problems}")
             failed = 1

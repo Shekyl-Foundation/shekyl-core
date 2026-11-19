@@ -211,11 +211,12 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/ci/workflow_pass.py --decide --scope changes
-      # Brief C: a merge to `dev` that reaches this pull request's tests
-      # re-tests its head against the new `dev` (freshness.yml) and reports
-      # `fresh-against-dev` on the head. Absent or green passes; pending or
-      # red fails, so the pull request waits for, or fixes, the re-test.
-      # freshness.yml re-runs this job when it posts.
+      # Brief C: a merge to `dev` that shares a test with this pull request
+      # marks its head stale (freshness.yml), and the `merge-next` label
+      # re-tests it against the new `dev`; both report `fresh-against-dev`
+      # on the head. Absent or green passes; stale, re-testing or red fails,
+      # so a stale pull request cannot merge untested. freshness.yml re-runs
+      # this job when the verdict changes.
       - name: fresh against dev (absent or green)
         if: github.event_name == 'pull_request' && !github.event.pull_request.draft
         env:
