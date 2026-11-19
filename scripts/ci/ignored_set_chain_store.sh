@@ -48,7 +48,7 @@ for subject in \
   'store::slash_scan_bench_tests::slash_scan_bench' \
   'store::weights_read_bench_tests::weights_read_bench'
 do
-  matches=$(printf '%s\n' "$list" | grep -cx "${subject}: test" || true)
+  matches=$(printf '%s\n' "$list" | grep -cxF -- "${subject}: test" || true)
   if [ "${matches}" -eq 0 ]; then
     echo "::error::${subject} is not in shekyl-chain-store's ignored set"
     exit 1
@@ -68,7 +68,7 @@ decided_dark=(
 )
 skips=()
 for subject in "${decided_dark[@]}"; do
-  matches=$(printf '%s\n' "$list" | grep -cx "${subject}: test" || true)
+  matches=$(printf '%s\n' "$list" | grep -cxF -- "${subject}: test" || true)
   if [ "${matches}" -eq 0 ]; then
     echo "::error::${subject} is decided dark here but is not in shekyl-chain-store's ignored set"
     exit 1
