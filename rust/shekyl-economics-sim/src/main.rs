@@ -632,9 +632,10 @@ mod tests {
     /// `Instrument::ALL`.
     #[test]
     fn every_flag_main_reads_is_refused_beside_the_trace() {
-        let code = include_str!("main.rs")
-            .split("#[cfg(test)]")
-            .next()
+        // Cut at this module's own header: a comment above `mod record`
+        // names the attribute too.
+        let (code, _) = include_str!("main.rs")
+            .split_once("#[cfg(test)]\nmod tests {")
             .expect("main's code precedes its tests");
         let flags: Vec<&str> = code
             .match_indices("\"--")
