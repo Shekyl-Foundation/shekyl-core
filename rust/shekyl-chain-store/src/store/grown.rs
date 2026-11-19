@@ -532,9 +532,9 @@ impl Grown {
 
     /// The key image a spend of block `height`'s coinbase carries for the
     /// harness miner, or `None` when the miner does not own it.
-    pub(in super::super) fn coinbase_key_image(&self, height: u64) -> Option<KeyImage> {
+    pub(in super::super) fn coinbase_key_image(&self, height: BlockHeight) -> Option<KeyImage> {
         self.spender
-            .coinbase_key_image(MinerWallet::harness(), BlockHeight::from_raw(height))
+            .coinbase_key_image(MinerWallet::harness(), height)
     }
 
     /// The matured coinbase, spent by no earlier block, whose spend
@@ -547,7 +547,8 @@ impl Grown {
         let connected = self.height().to_raw().checked_sub(1)?;
         let newest = connected.checked_sub(FIRST_SPEND_HEIGHT)?;
         while (self.coinbase_images.len() as u64) <= newest {
-            let image = self.coinbase_key_image(self.coinbase_images.len() as u64);
+            let image =
+                self.coinbase_key_image(BlockHeight::from_raw(self.coinbase_images.len() as u64));
             self.coinbase_images
                 .push(image.map(|image| *image.as_bytes()));
         }

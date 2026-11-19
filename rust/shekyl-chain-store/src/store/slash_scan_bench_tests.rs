@@ -132,9 +132,11 @@ use shekyl_types::archival::{
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{Grown, Listed};
+use super::connect_fixtures::{
+    connect_chain_anchored, spend, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
+};
 use super::shard_fill;
-use super::store_tests::{tmp, TestErr};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
 use crate::codec::{Canonical, SettlementEpochBlocks, SlashLogEntry};
@@ -858,60 +860,52 @@ fn body_sections(body: &[u8]) -> Vec<std::ops::Range<usize>> {
     sections
 }
 
-/// A chain replayed from the captured prefix knows which coinbases the
-/// capture spent (#1381): every coinbase it offers the next spend is one
-/// whose key image the store has not recorded. The capture leaves its first
-/// `RESERVED_COINBASES` unspent and spends the ones after, so a replay that
-/// learned only the spends it built offered those again: the bench's joins
-/// past the reserved coinbases spent one the chain had spent, and CEN-I7
+/// A chain replayed from blocks it did not build knows which coinbases
+/// those blocks spent (#1381). `shard_fill::regrown` replays the captured
+/// prefix that way; a replay that learned only the spends it built offered
+/// the capture's spent coinbases again, so the bench's joins past the
+/// capture's reserved coinbases spent one the chain had spent, and CEN-I7
 /// refused the block. The witness's four joins stayed inside the reserved
-/// ones and never saw it.
+/// ones and never saw it. The chain here is built in the test, not read
+/// from the frozen shard-fill chain (`CHAIN_FORGE.md` `CF-R17`): three
+/// blocks that each spend a coinbase, connected by a `Grown` that built
+/// them, then replayed block by block into one that built nothing.
 #[test]
-fn the_replayed_prefix_offers_only_coinbases_the_chain_has_not_spent() {
-    let Under {
-        rules,
-        retention,
-        schedule_key,
-    } = Under::BENCH;
-    let horizons = Horizons::new(
-        rules.settlement_schedule().blocks(),
-        BlockCount::from_raw(retention),
-        rules.reorg_cap(),
-    )
-    .expect("cap ≤ retention < epoch");
-    let path = tmp("replayed-prefix-coinbases");
-    let (store, grown) =
-        shard_fill::store_with_prefix(&path, schedule_key, rules, horizons, prefix());
+fn a_replayed_chain_offers_only_coinbases_its_blocks_have_not_spent() {
+    let path = tmp("replayed-chain-coinbases");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let listing = spendable_prefix(vec![vec![spend()], vec![spend()], vec![spend()]]);
+    let (built, connected) = connect_chain_anchored(&store, &listing);
+
+    let mut replayed = Grown::new();
+    for (height, listed) in (0u64..).zip(&connected) {
+        replayed.record(built.block(BlockHeight::from_raw(height)), listed);
+    }
+
+    // The subject (rule 47): the chain spent coinbases, so a replay that
+    // missed them would offer more than the chain that built them.
+    let newest = replayed
+        .height()
+        .to_raw()
+        .checked_sub(FIRST_SPEND_HEIGHT)
+        .expect("the chain reaches the first spending height");
+    let spent = (0..=newest).count() - built.matured().len();
+    assert_eq!(spent, 3, "the chain spent one coinbase a block");
+    assert_eq!(
+        replayed.matured(),
+        built.matured(),
+        "the replay offers what the chain that built the blocks offers"
+    );
     let snap = store.begin_read().expect("read");
-    let on_chain = |height: u64| {
-        let image = grown
-            .coinbase_key_image(height)
-            .expect("every prefix coinbase pays the harness miner");
-        snap.has_key_image(&image).expect("read")
-    };
-    let matured = grown.matured();
-    for &height in &matured {
+    for height in replayed.matured() {
+        let image = replayed
+            .coinbase_key_image(BlockHeight::from_raw(height))
+            .expect("every coinbase pays the harness miner");
         assert!(
-            !on_chain(height),
+            !snap.has_key_image(&image).expect("read"),
             "coinbase {height} is offered as unspent, and the chain spent it"
         );
     }
-    // The subject (rule 47): the capture spent matured coinbases, and the
-    // replay holds them back.
-    let newest = matured
-        .last()
-        .copied()
-        .expect("the prefix has matured coinbases");
-    let spent = (0..=newest).filter(|&height| on_chain(height)).count();
-    assert!(
-        spent > 0,
-        "the captured prefix spent no coinbase; the test has no subject"
-    );
-    assert_eq!(
-        matured.len() + spent,
-        usize::try_from(newest + 1).expect("small"),
-        "every matured coinbase is offered or spent on the chain"
-    );
 }
 
 /// The 9b slash writes, witnessed in the unit lane: `M` epochs of misses
