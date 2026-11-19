@@ -24,7 +24,7 @@ use std::sync::Arc;
 use shekyl_chain_ingest::service::{
     Arrival, ArrivalTag, Follow, Origin, Reply, Service, ServiceConfig,
 };
-use shekyl_chain_ingest::{ChainRules, CorpusReader, IngestEvent, ProductionPow, Source};
+use shekyl_chain_ingest::{ChainRules, CorpusSource, IngestEvent, ProductionPow, Source};
 use shekyl_chain_rules::{AtHeight, CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
@@ -146,7 +146,7 @@ impl Corpus {
     #[must_use]
     pub fn steps_through(&self, last: u64) -> Vec<Step> {
         let bytes = std::fs::read(self.dir.join("corpus.e2")).expect("the corpus");
-        let mut reader = CorpusReader::open(std::io::Cursor::new(bytes)).expect("a corpus");
+        let mut reader = CorpusSource::open(std::io::Cursor::new(bytes)).expect("a corpus");
         let mut steps = Vec::new();
         let mut blocks = 0u64;
         while blocks <= last {

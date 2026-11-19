@@ -73,9 +73,9 @@ use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 #[cfg(feature = "pipeline")]
 use crate::connector::{Connector, ConnectorArgs};
-use crate::corpus::CorpusWriter;
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
 use crate::trace::{Digest, Facts, Trace, TraceWriter};
+use shekyl_corpus::CorpusWriter;
 use shekyl_network::Network;
 
 mod growing;

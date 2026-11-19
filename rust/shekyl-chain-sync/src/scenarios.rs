@@ -19,7 +19,7 @@ use std::num::NonZeroU128;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use shekyl_chain_ingest::{CorpusReader, IngestEvent, Source};
+use shekyl_chain_ingest::{CorpusSource, IngestEvent, Source};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{
     AtHeight, CappedEpoch, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip, Trust,
@@ -91,7 +91,7 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../shekyl-chain-ingest/tests/vectors/spend-1in-2out/corpus.e2");
     let file = std::fs::File::open(&path).expect("the spend corpus");
-    let mut reader = CorpusReader::open(BufReader::new(file)).expect("the corpus opens");
+    let mut reader = CorpusSource::open(BufReader::new(file)).expect("the corpus opens");
     let mut candidates = Vec::new();
     while let Some(sequenced) = Source::next(&mut reader).expect("the corpus reads") {
         if let IngestEvent::Extend(candidate) = sequenced.event {
