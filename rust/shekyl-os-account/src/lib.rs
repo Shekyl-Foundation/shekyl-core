@@ -301,7 +301,10 @@ mod tests {
     fn an_unset_or_nonexistent_passwd_home_is_no_home() {
         assert_eq!(home_of_passwd_dir(b""), None);
         assert_eq!(home_of_passwd_dir(b"/nonexistent"), None);
-        assert_eq!(home_of_passwd_dir(b"/home/a"), Some(&b"/home/a"[..]));
+        assert_eq!(
+            home_of_passwd_dir(b"/var/lib/shekyl"),
+            Some(&b"/var/lib/shekyl"[..])
+        );
         assert_eq!(
             home_of_passwd_dir(b"/nonexistent/a"),
             Some(&b"/nonexistent/a"[..])
