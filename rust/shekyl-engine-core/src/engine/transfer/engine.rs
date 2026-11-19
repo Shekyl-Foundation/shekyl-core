@@ -1194,17 +1194,31 @@ where
 
         // --- re-anchor if stale (three-phase, lock-free prover) ---
         if stale {
-            match self.reanchor_consumer_held(id).await {
-                // Reproved or ContentChanged: the entry now carries a fresh proof
-                // and a possibly-advanced content_gen. The broadcast gate below
-                // enforces consent uniformly via seen_gen, so both fall through.
-                Ok(_) => {}
-                Err(ReanchorError::ReselectionRequired { .. }) => {
-                    return Err(SubmitError::ReselectionRequired { reservation_id: id });
+            // Reproved or ContentChanged: the entry now carries a fresh proof and
+            // a possibly-advanced content_gen. The broadcast gate below enforces
+            // consent uniformly via seen_gen, so both fall through.
+            if let Err(reanchor) = self.reanchor_consumer_held(id).await {
+                // The state lock was released across the re-anchor, so a
+                // concurrent submit or discard may have moved the entry, and
+                // the re-anchor's own failure may be that it found it gone. Its
+                // errors say the reservation is still held (`Held`), so they
+                // stand only while it is: otherwise the error says where it
+                // went, in flight or gone.
+                let state = self
+                    .state
+                    .lock()
+                    .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+                if let Some(moved) = left_consumer_held(&state, id) {
+                    return Err(moved);
                 }
-                Err(ReanchorError::ReferenceResyncing { .. } | ReanchorError::Failed(_)) => {
-                    return Err(SubmitError::ReanchorUnavailable { reservation_id: id });
-                }
+                return Err(match reanchor {
+                    ReanchorError::ReselectionRequired { .. } => {
+                        SubmitError::ReselectionRequired { reservation_id: id }
+                    }
+                    ReanchorError::ReferenceResyncing { .. } | ReanchorError::Failed(_) => {
+                        SubmitError::ReanchorUnavailable { reservation_id: id }
+                    }
+                });
             }
         }
 
@@ -1224,16 +1238,14 @@ where
             // `SubmitAlreadyPending`, a vanished one is discarded / never-existed.
             // Peek `content_gen` only (a `Copy`, no entry clone); the entry is
             // moved out below iff the consent gate passes.
-            let content_gen = match state.consumer_held.get(&id) {
-                Some(held) => held.content_gen,
-                None => {
-                    return Err(if state.in_flight.contains_key(&id) {
-                        SubmitError::SubmitAlreadyPending { reservation_id: id }
-                    } else {
-                        SubmitError::ReservationNotFound { reservation_id: id }
-                    });
-                }
-            };
+            if let Some(moved) = left_consumer_held(&state, id) {
+                return Err(moved);
+            }
+            let content_gen = state
+                .consumer_held
+                .get(&id)
+                .expect("consumer_held membership established above")
+                .content_gen;
 
             // CT-5d (§4): broadcast only what the consumer authorized. `seen_gen`
             // must match the materialized `content_gen`; a mismatch means a
@@ -1535,4 +1547,20 @@ where
             .lock()
             .expect("submit_daemon_outcome lock poisoned") = Some(outcome);
     }
+}
+
+/// Where `id` went once it left `consumer_held`: in flight (a concurrent
+/// submit flipped it) or gone (discarded, or never issued). `None` while it
+/// is still `consumer_held`. A submit that released the state lock (across
+/// a re-anchor) reads this before it reports anything about the entry, so
+/// it never says a reservation is held that is not.
+fn left_consumer_held(state: &PendingTxState, id: ReservationId) -> Option<SubmitError> {
+    if state.consumer_held.contains_key(&id) {
+        return None;
+    }
+    Some(if state.in_flight.contains_key(&id) {
+        SubmitError::SubmitAlreadyPending { reservation_id: id }
+    } else {
+        SubmitError::ReservationNotFound { reservation_id: id }
+    })
 }
