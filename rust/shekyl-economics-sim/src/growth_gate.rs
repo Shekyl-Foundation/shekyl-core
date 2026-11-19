@@ -603,10 +603,12 @@ mod tests {
     /// The figures the design leans on and ESR-10's P2 reads, held by no test
     /// until Phase 0 (`ECONOMICS_SIM_PHASE0.md` §P0.1): on the baseline,
     /// year 1's `rho` and `theta`, the year `rho` first reaches `theta`, and
-    /// the year blocks grow. Nineteen years of the production fold.
+    /// the year blocks grow. Nineteen years of the production fold, on the
+    /// `steady` control, whose arithmetic these pin; standard traffic's
+    /// crossing is a narration figure (§5.35, STD-4).
     #[test]
     fn the_baseline_year_one_operands_and_the_crossing_year_are_held() {
-        let params = SimParams::default();
+        let params = SimParams::default().on_steady();
         let economic = params.economic();
         let mut config = crate::scenarios::all_scenarios(&params)
             .into_iter()
