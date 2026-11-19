@@ -37,11 +37,8 @@ pub use run::{EXIT_FAILED, EXIT_REFUSED};
 #[must_use]
 pub fn main(args: &[std::ffi::OsString]) -> i32 {
     if let Err(e) = shekyl_process::harden::harden_process() {
-        run::tell(
-            &mut std::io::stderr(),
-            &format!("shekyld: process hardening {e}; not starting"),
-        );
-        return EXIT_FAILED;
+        // Before an argument is read: no log file is named yet.
+        return run::StartEnd::Stderr.fail(format!("process hardening {e}; not starting"));
     }
     shekyl_process::panic_hook::install();
     run::main(args, &shekyl_process::platform::current())

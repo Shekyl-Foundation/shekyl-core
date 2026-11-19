@@ -124,10 +124,14 @@ pub enum PersistenceError {
     #[error("wallet file error: {0}")]
     WalletFile(#[from] shekyl_engine_file::WalletFileError),
 
-    /// The rename landed and the parent-directory fsync did not. The write
-    /// is applied, so the in-memory record stays; a broadcast must not.
-    #[error("wallet write applied but its crash-durability was not confirmed")]
-    DurabilityUnconfirmed,
+    /// The rename landed and its durability was not confirmed, for this
+    /// reason (on Unix the parent-directory fsync failed; on Windows the
+    /// volume is not NTFS, or the confirmation failed otherwise). The write
+    /// is applied, so the in-memory record stays; a broadcast must not. The
+    /// reason's sentence names the fix: on a FAT, exFAT or ReFS volume, the
+    /// file system and a move to an NTFS volume (Rick, 2026-11-18).
+    #[error("the wallet save was applied but not confirmed on disk: {0}")]
+    DurabilityUnconfirmed(shekyl_engine_file::Unconfirmed),
 
     /// Prefs sidecar load/save/HMAC failure.
     #[error("prefs error: {0}")]

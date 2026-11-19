@@ -74,8 +74,9 @@ const FREEBSD_SERVICE_RENDEZVOUS: &str = "/var/run/shekyl";
 const MACOS_SERVICE_RENDEZVOUS: &str = "/Library/Application Support/Shekyl";
 
 /// The fixed rendezvous directory for `os` (`std::env::consts::OS`), or
-/// `None` when that operating system has no fixed directory. Windows is
-/// `None` here: its directory is [`windows_service_rendezvous`].
+/// `None` when that operating system has none. Windows has none: there the
+/// service's record is a registry value ([`ServiceRecordAt::Registry`];
+/// Rick, 2026-11-18).
 fn fixed_service_rendezvous(os: &str) -> Option<&'static str> {
     match os {
         "linux" => Some(LINUX_SERVICE_RENDEZVOUS),
@@ -85,45 +86,114 @@ fn fixed_service_rendezvous(os: &str) -> Option<&'static str> {
     }
 }
 
-/// Windows: `%ProgramData%\shekyl\rendezvous`, the rendezvous directory
-/// inside the service's data home (Rick, 2026-11-14): users read it, the
-/// service account alone writes it, it carries the no-read-up label and
-/// holds rendezvous files only. Unlike the other rows, the daemon creates
-/// it, with its owner, its DACL and its label set in the creating call, and
-/// refuses an existing one that differs in any of the three; that dispatcher
-/// is RT-W14's, still unbuilt, and the path is named now so the row is not
-/// a special case added later. `program_data` is the known-folder root.
-fn windows_service_rendezvous(program_data: &Path) -> PathBuf {
-    program_data.join(SERVICE_DATA_HOME).join(RENDEZVOUS_DIR)
-}
-
-/// `%ProgramData%` on Windows; `None` elsewhere.
-fn program_data() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        shekyl_win_sec::known_folder::program_data()
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
-}
-
-/// The service's rendezvous directory, fixed per platform (`RPC_CHANNEL.md`
-/// §7.1): what the installer or the service manager creates on Unix, and
-/// what the daemon creates on Windows. A platform with no row has no
-/// directory, and a service start there is refused. Windows is the one
-/// derived row, in flight until RT-W14.
+/// The service's rendezvous directory on Linux, FreeBSD and macOS, fixed
+/// per platform (`RPC_CHANNEL.md` §7.1): what the installer or the service
+/// manager creates. `None` on Windows, whose record is a registry value.
 ///
 /// The one definition (Rick, 2026-11-18): the daemon that publishes a
 /// service's record and every client that resolves "this computer" read
-/// the directory here, so no client assembles it and none can leave it out.
+/// it here, so no client assembles it and none can leave it out.
 #[must_use]
 pub fn service_rendezvous() -> Option<PathBuf> {
-    if let Some(directory) = fixed_service_rendezvous(std::env::consts::OS) {
-        return Some(PathBuf::from(directory));
+    fixed_service_rendezvous(std::env::consts::OS).map(PathBuf::from)
+}
+
+/// Where a service's rendezvous record is: a file in the service's
+/// rendezvous directory on Linux, FreeBSD and macOS, and on Windows a value
+/// under `HKLM\SOFTWARE\Shekyl\Rendezvous` (Rick, 2026-11-18): a local
+/// account can hold a world-readable file open without delete sharing and
+/// so block the service's publish, and nothing holds a registry value.
+/// [`Self::read`] is the one reader over both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServiceRecordAt {
+    /// A file.
+    File(PathBuf),
+    /// A value under `HKEY_LOCAL_MACHINE`, in the 64-bit view.
+    #[cfg(windows)]
+    Registry {
+        /// The key, relative to `HKEY_LOCAL_MACHINE`.
+        key: String,
+        /// The value's name: the record's file name elsewhere.
+        value: String,
+    },
+}
+
+impl ServiceRecordAt {
+    /// The file `service_record_path(dir, network_id, instance)`.
+    #[must_use]
+    pub fn file(
+        dir: &Path,
+        network_id: &[u8; crate::NETWORK_ID_LEN],
+        instance: &crate::Instance,
+    ) -> Self {
+        Self::File(service_record_path(dir, network_id, instance))
     }
-    program_data().map(|dir| windows_service_rendezvous(&dir))
+
+    /// The registry value for `network_id` and `instance` under `key`
+    /// (`shekyl_win_sec::registry::RENDEZVOUS_KEY`, or a test's own).
+    #[cfg(windows)]
+    #[must_use]
+    pub fn registry(
+        key: &str,
+        network_id: &[u8; crate::NETWORK_ID_LEN],
+        instance: &crate::Instance,
+    ) -> Self {
+        Self::Registry {
+            key: key.to_owned(),
+            value: service_file_name(&crate::rendezvous_name(network_id, instance)),
+        }
+    }
+
+    /// The record's bytes, or `None` when there is none.
+    ///
+    /// # Errors
+    ///
+    /// The record is there and could not be read (a denied read is not an
+    /// absent node).
+    pub fn read(&self) -> std::io::Result<Option<Vec<u8>>> {
+        match self {
+            Self::File(path) => match std::fs::read(path) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e),
+            },
+            #[cfg(windows)]
+            Self::Registry { key, value } => {
+                shekyl_win_sec::registry::RendezvousKey::new(key).read(value)
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ServiceRecordAt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File(path) => write!(f, "{}", path.display()),
+            #[cfg(windows)]
+            Self::Registry { key, value } => write!(f, r"HKEY_LOCAL_MACHINE\{key}, value {value}"),
+        }
+    }
+}
+
+/// This machine's service record for `network_id` and `instance`: the file
+/// in [`service_rendezvous`], or on Windows the registry value.
+#[must_use]
+pub fn service_record_at(
+    network_id: &[u8; crate::NETWORK_ID_LEN],
+    instance: &crate::Instance,
+) -> Option<ServiceRecordAt> {
+    #[cfg(windows)]
+    {
+        Some(ServiceRecordAt::registry(
+            shekyl_win_sec::registry::RENDEZVOUS_KEY,
+            network_id,
+            instance,
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        service_rendezvous().map(|dir| ServiceRecordAt::file(&dir, network_id, instance))
+    }
 }
 
 /// The rendezvous file's name in its directory: the socket on Unix, the
@@ -476,18 +546,15 @@ mod tests {
 /// ladder would stay green when both copies moved together.
 #[cfg(test)]
 mod service_directories {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
-    use super::{
-        fixed_service_rendezvous, program_data, service_rendezvous, windows_service_rendezvous,
-    };
+    use super::{fixed_service_rendezvous, service_record_at, service_rendezvous, ServiceRecordAt};
+    use crate::Instance;
 
     /// Every platform's directory is the ruled one (`RPC_CHANNEL.md`
-    /// §7.1). Red edit: return another FreeBSD path from
+    /// §7.1), and Windows has none: its record is a registry value (Rick,
+    /// 2026-11-18). Red edit: return another FreeBSD path from
     /// `fixed_service_rendezvous` and this fails on a Linux runner.
-    /// Windows' row, `%ProgramData%\shekyl\rendezvous` (Rick, 2026-11-14),
-    /// is joined here without a Windows host: the dispatcher that creates
-    /// the directory is RT-W14's, still unbuilt, and the path is not dead.
     #[test]
     fn every_platforms_service_rendezvous_directory_is_the_ruled_one() {
         assert_eq!(fixed_service_rendezvous("linux"), Some("/run/shekyl"));
@@ -499,14 +566,51 @@ mod service_directories {
         assert_eq!(fixed_service_rendezvous("windows"), None);
         assert_eq!(fixed_service_rendezvous("openbsd"), None);
         assert_eq!(
-            windows_service_rendezvous(Path::new(r"C:\ProgramData")),
-            PathBuf::from(r"C:\ProgramData")
-                .join("shekyl")
-                .join("rendezvous")
+            service_rendezvous(),
+            fixed_service_rendezvous(std::env::consts::OS).map(PathBuf::from)
         );
-        let expected = fixed_service_rendezvous(std::env::consts::OS)
-            .map(PathBuf::from)
-            .or_else(|| program_data().map(|dir| windows_service_rendezvous(&dir)));
-        assert_eq!(service_rendezvous(), expected);
+    }
+
+    /// This machine's record is the file in the platform's directory on
+    /// Linux, FreeBSD and macOS, and the value under the rendezvous key on
+    /// Windows. Red edit: return the file on Windows, and a reader there
+    /// looks for a record nothing publishes.
+    #[test]
+    fn this_machine_s_record_is_the_file_or_the_registry_value() {
+        let network_id = [7u8; crate::NETWORK_ID_LEN];
+        let at = service_record_at(&network_id, &Instance::Default);
+        #[cfg(windows)]
+        assert_eq!(
+            at,
+            Some(ServiceRecordAt::registry(
+                shekyl_win_sec::registry::RENDEZVOUS_KEY,
+                &network_id,
+                &Instance::Default
+            ))
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            at,
+            service_rendezvous().map(|dir| ServiceRecordAt::file(
+                &dir,
+                &network_id,
+                &Instance::Default
+            ))
+        );
+    }
+
+    /// A record file read through the one reader: its bytes, and `None`
+    /// when absent.
+    #[test]
+    fn a_record_file_is_read_and_an_absent_one_is_none() {
+        let dir = std::env::temp_dir().join(format!("shekyl-record-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let network_id = [1u8; crate::NETWORK_ID_LEN];
+        let at = ServiceRecordAt::file(&dir, &network_id, &Instance::Default);
+        assert_eq!(at.read().unwrap(), None);
+        let path = super::service_record_path(&dir, &network_id, &Instance::Default);
+        std::fs::write(&path, b"record").unwrap();
+        assert_eq!(at.read().unwrap().as_deref(), Some(&b"record"[..]));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
