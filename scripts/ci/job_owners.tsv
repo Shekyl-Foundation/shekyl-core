@@ -139,6 +139,7 @@ scripts/ci/ignored_set_trybuild.sh	nightly:report-red,nightly:trybuild-ignored,r
 scripts/ci/ignored_set_wire.sh	nightly:report-red,nightly:wire-ignored,rust-audit-test:rust-audit-and-test
 scripts/ci/inland_height_u64_grandfather.txt	grep-gates:grep-gates
 scripts/ci/job_owners.tsv	benchmarks:scope,build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates,rust-audit-test:changes
+scripts/ci/merge_ready.py	grep-gates:grep-gates,merge-ready:label-check
 scripts/ci/msvc_static_crt.ps1	build:build-windows-msvc
 scripts/ci/nextest_report.py	docs-gates:check-doc-links,rust-audit-test:rust-audit-and-test
 scripts/ci/p17_remote_dial.ps1	none

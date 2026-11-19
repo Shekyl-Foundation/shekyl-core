@@ -171,6 +171,20 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   cancelled. On a draft it reports as `<name> (draft)`, so a draft never
   satisfies the requirement, and a PR marked ready waits for its own pass
   job (`scripts/ci/workflow_pass.py`).
+- **`merge-ready` is the owner's "done", enforced** (ruled 2026-11-19).
+  Required checks going green is not the end of a PR: other workflows and
+  the lane's fleet runs on the same head can still be going. The owning
+  lane applies the `merge-ready` label when every check on the current
+  head has concluded, not only the required ones, its fleet and local
+  runs for that head are done, and its review threads are resolved; the
+  handoff to the merger is "labelled merge-ready at <sha>". The required
+  status `merge-ready` (`merge-ready.yml`, `scripts/ci/merge_ready.py`)
+  is pending until then. The label going on is refused, and taken off
+  with a comment naming each reason, while a check runs or is red, a
+  review thread is open, or the PR is a draft; a push takes it off. It
+  is a commit status, never a job, so it cannot be skipped into a pass,
+  and the job that posts it is named otherwise, since a ruleset matches a
+  check run and a status by name alike.
 - **A stacked PR retargeted onto `dev` keeps its old base's checks until
   its next push.** Merge `dev` into it before it merges
   (`scripts/ci/check_pr_event_triggers.py` names why no event does this).

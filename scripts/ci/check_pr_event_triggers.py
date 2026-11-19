@@ -58,6 +58,12 @@ What a passing `pull_request` trigger is:
   label starts a re-test). It checks nothing a required status reads, so
   the draft rule above does not bind it: a draft's skipped job is a
   skipped action, not a pass
+* or exactly `[opened, synchronize, reopened, ready_for_review, labeled,
+  unlabeled]`, in a workflow whose expressions read the event's labels
+  (`github.event.label.name` or `github.event.pull_request.labels`): a
+  status kept true to a label (`merge-ready.yml`, ruled 2026-11-19), which
+  must see every event that changes the head, the draft state or the
+  labels. It skips no job, so the draft rule does not bind it
 * no expression in the file that reads `github.event.changes`; that
   object exists only on `edited`, so a reader of it is a leftover of the
   condition this gate retired. An expression is an `if` value at any
@@ -88,6 +94,10 @@ READY_TYPES = TYPES + ["ready_for_review"]
 # A workflow that acts on a label, and what its expressions must read.
 LABEL_TYPES = ["labeled"]
 _LABEL = "github.event.label.name"
+# A status kept true to a label: every event that changes the head, the
+# draft state or the labels.
+LABEL_STATUS_TYPES = READY_TYPES + ["labeled", "unlabeled"]
+_LABELS = ("github.event.label.name", "github.event.pull_request.labels")
 # What an expression reads to skip a draft.
 _DRAFT = "github.event.pull_request.draft"
 
@@ -152,6 +162,19 @@ def _expressions(node: object, under_if: bool = False):
             yield from _expressions(item)
 
 
+def _if_values(node: object):
+    """Every `if` value, at any depth: the conditions that skip something."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "if" and isinstance(value, str):
+                yield value
+            else:
+                yield from _if_values(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _if_values(item)
+
+
 def _concurrency_group(doc: dict) -> object:
     concurrency = doc.get("concurrency")
     return concurrency.get("group") if isinstance(concurrency, dict) else None
@@ -190,7 +213,17 @@ def problems_in(filename: str, doc: object) -> list[str]:
     # words: `None` would read as a key with nothing under it.
     types = pr["types"] if "types" in pr else TYPES
     written = repr(pr["types"]) if "types" in pr else "absent (the default set)"
-    if types == LABEL_TYPES:
+    if types == LABEL_STATUS_TYPES:
+        if not any(any(x in text for x in _LABELS) for text in expressions):
+            problems.append(
+                f"{filename}: `pull_request` types are {LABEL_STATUS_TYPES} and no expression reads the "
+                "event's labels, so the label events run it for nothing"
+            )
+        # Here the draft flag may be handed to the script as an input; only
+        # a condition that reads it skips anything.
+        if any(_DRAFT in text for text in _if_values(doc)):
+            problems.append(f"{filename}: a status kept to a label skips a draft; it must post on every event")
+    elif types == LABEL_TYPES:
         if not any(_LABEL in text for text in expressions):
             problems.append(
                 f"{filename}: `pull_request` types are {LABEL_TYPES} and no expression reads "
@@ -278,6 +311,25 @@ def selftest() -> int:
             False,
         ),
         ("a label action that reads no label", _doc(types=LABEL_TYPES), True),
+        (
+            "a label status reading the labels",
+            _doc(types=LABEL_STATUS_TYPES, job={**_job(), "env": {
+                "HAS": "${{ contains(github.event.pull_request.labels.*.name, 'x') }}"}}),
+            False,
+        ),
+        ("a label status that reads no label", _doc(types=LABEL_STATUS_TYPES), True),
+        (
+            "a label status that hands the draft flag to its script",
+            _doc(types=LABEL_STATUS_TYPES, job={**_job(), "env": {
+                "D": "${{ github.event.pull_request.draft }}", "L": "${{ github.event.label.name }}"}}),
+            False,
+        ),
+        (
+            "a label status that skips drafts",
+            _doc(types=LABEL_STATUS_TYPES, job={**_job(), "if": "!github.event.pull_request.draft",
+                                                "env": {"L": "${{ github.event.label.name }}"}}),
+            True,
+        ),
         (
             "a label action with a branches filter",
             _doc(types=LABEL_TYPES, branches=["dev"], job={**_job(), "if": "github.event.label.name == 'x'"}),

@@ -1,0 +1,76 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The `merge-ready` commit status: the owning lane's "done", enforced
+# (ruled 2026-11-19; scripts/ci/merge_ready.py has the whole contract).
+#
+# The owning lane applies the `merge-ready` label when every check on the
+# current head has concluded (not only the required ones), its fleet and
+# local runs for that head are done, and its review threads are resolved.
+# This workflow keeps the `merge-ready` status, the required check, true to
+# it:
+#   - without the label the status is pending ("waiting for the owner's
+#     merge-ready label"), never red and never skipped;
+#   - a push takes the label off, so a label never vouches for a head it did
+#     not see;
+#   - the label going on is checked against every check run and status on
+#     the head (this one and merge_ready.py's EXCLUDED, by name, aside); a
+#     check still running or red, an open review thread or a draft takes it
+#     off again, with a comment naming each.
+#
+# The job has no `if` and the status, not the job, is the required check:
+# a skipped job counts as a pass to protection (06-branching.mdc), and a
+# head with no status at all is blocked as "expected". `pull_request`, not
+# `pull_request_target`: the latter takes its workflow from the default
+# branch, which is `main`. A fork's run holds no write token and posts
+# nothing, so a fork's pull request stays blocked; this repository has
+# none. Runs per event: seconds (API calls), up to SETTLE_SECONDS more
+# when the labelling itself started a check.
+
+name: ci/merge-ready
+
+on:
+  # Every event that changes the head, the draft state or the labels. No
+  # base filter (scripts/ci/check_pr_event_triggers.py).
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions: {}
+
+# The newest event decides: an older evaluation of the same pull request is
+# cancelled, and the newer one posts.
+concurrency:
+  group: merge-ready-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Not named `merge-ready`: a ruleset's required check matches a check run
+  # and a commit status by name alike, and this job always ends green.
+  label-check:
+    name: merge-ready label check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5  # API calls, and at most SETTLE_SECONDS of waiting
+    permissions:
+      checks: read
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      # The script alone, from the commit under test.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/ci/merge_ready.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event.action }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          LABEL: ${{ github.event.label.name }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'merge-ready') }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 scripts/ci/merge_ready.py run
