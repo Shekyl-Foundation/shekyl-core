@@ -84,6 +84,9 @@ pub const FRESHNESS_DEMO: u32 = 2;
 /// DEMO ONLY (Brief C): a change to this crate that keeps the demo value.
 pub const FRESHNESS_DEMO_NOTE: &str = "the demo value is unchanged";
 
+/// DEMO BASE ONLY (Brief C): burst push 2.
+pub const FRESHNESS_DEMO_BURST: u32 = 2;
+
 pub mod capacity;
 pub mod ceiling;
 pub mod compare;
