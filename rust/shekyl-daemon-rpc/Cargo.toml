@@ -163,6 +163,14 @@ tempfile = "3"
 # Production tokio stays `full` without `test-util`.
 tokio = { version = "1", features = ["full", "test-util"] }
 
+[target.'cfg(windows)'.dev-dependencies]
+# The owner's Windows tests hold a stale record as a scanner does
+# (`FILE_SHARE_READ`).
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+# The service record's tests publish to a scratch registry key
+# (`registry::ScratchKey`, test-utils).
+shekyl-win-sec = { path = "../shekyl-win-sec", features = ["test-utils"] }
+
 [build-dependencies]
 # Consensus-constant generation from config/consensus_constants.json (the
 # JSON authority; same pattern as shekyl-engine-core/build.rs).

@@ -29,6 +29,9 @@ shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 # Each connector's dial profile: the targets, the bound, the retry and
 # cooldown ladders, the window and the wake spacing.
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+# The address file is replaced through the tree's one replace (Rick,
+# 2026-11-18).
+shekyl-os-account = { path = "../shekyl-os-account" }
 # A failed address-file write is logged, not lost.
 tracing = "0.1"
 # The cancel signal of a dial attempt, and `select` so the attempt and the

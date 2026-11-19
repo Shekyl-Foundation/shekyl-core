@@ -162,6 +162,11 @@ impl Drop for EphemeralDataDir {
     }
 }
 
+// CLIPPY: disallowed_methods — a log kept aside and a directory tombstoned.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "moves a data directory's log aside and renames the directory to its tombstone; neither is a file replace"
+)]
 fn retire_at(path: &Path) -> (KeptLog, io::Result<PathBuf>) {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
     else {

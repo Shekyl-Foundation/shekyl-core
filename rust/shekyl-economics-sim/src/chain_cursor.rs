@@ -24,8 +24,8 @@ use shekyl_economics::{
 
 use crate::block_space::{Arrival, BlockSpace, Filled, OwnBodies};
 use crate::engine::{net_supply, SimParams};
-use crate::fee_model::{FeePoint, OrdinaryTx};
-use crate::rung_mix::{FeePriority, PerRung, RungSplit, ADMISSION};
+use crate::fee_model::{FeePoint, OrdinaryTx, MILLI};
+use crate::rung_mix::{FeePriority, PerRung, RungMix, RungSplit, ADMISSION};
 use crate::volume_window::VolumeWindow;
 
 /// The chain state a fold carries from block to block: the volume window,
@@ -63,26 +63,64 @@ pub(crate) struct ChainStep {
     pub(crate) closed_shards: ClosedShardCount,
 }
 
-/// What each block is offered (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.34).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+/// What each block is offered (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.34,
+/// §5.35).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Traffic {
-    /// The scenario's demand, every block.
-    #[default]
+    /// The scenario's demand every block, split across the rungs by the
+    /// mix. The control arm: the edge case and the regression anchor.
     Steady,
-    /// A count drawn at the block's height under the seed, geometric around
-    /// the scenario's demand ([`crate::rng::honest_count`]): Poisson
-    /// arrivals over production's exponential block intervals. What a block
-    /// does not list waits in the pool, as on the chain. A declared arm.
+    /// Standard traffic under a seed: each block's interval is drawn
+    /// exponential around the target spacing ([`crate::rng::block_interval`]),
+    /// and each rung's arrivals over it are Poisson around its share of the
+    /// scenario's demand ([`crate::rng::rung_arrivals`]). Their sum is the
+    /// geometric count of §5.34. What a block does not list waits in the
+    /// pool, as on the chain.
     Variable(u64),
 }
 
+/// The sim's standard traffic: drawn, at the canonical seed (§5.35). Every
+/// [`SimParams`] constructor starts here; `steady` is named where a run
+/// asks for the control.
+pub const STANDARD_TRAFFIC: Traffic = Traffic::Variable(crate::rng::HONEST_SEEDS[0]);
+
 impl Traffic {
-    /// The transactions offered to the block at `height` when the scenario
-    /// asks for `demand`.
-    pub(crate) fn offered(self, demand: u64, height: u64) -> u64 {
+    /// The line a report opens with on standard traffic, naming the draw
+    /// and its seed. `None` on the `steady` control, whose reports print as
+    /// they did before standard traffic (§5.35, STD-2).
+    pub(crate) fn report_line(self) -> Option<String> {
         match self {
-            Self::Steady => demand,
-            Self::Variable(seed) => crate::rng::honest_count(seed, height, demand),
+            Self::Steady => None,
+            Self::Variable(seed) => Some(format!(
+                "Traffic: standard, at seed {seed} (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.35): each block's interval \
+                 drawn exponential around the target spacing, each fee rung's arrivals Poisson over it; the pool \
+                 carries what a block does not list. --control-steady-traffic offers every block its demand."
+            )),
+        }
+    }
+
+    /// The transactions each rung is offered at `height` when the scenario
+    /// asks for `demand` under `mix`. Steady traffic splits the demand
+    /// through `split`, which carries the rungs' remainders from block to
+    /// block; standard traffic draws each rung's arrivals over the block's
+    /// interval, keyed on the seed and the height, and leaves `split` alone.
+    pub(crate) fn arrivals(
+        self,
+        split: &mut RungSplit,
+        mix: RungMix,
+        demand: u64,
+        height: u64,
+    ) -> PerRung<u64> {
+        match self {
+            Self::Steady => split.split(mix, demand),
+            Self::Variable(seed) => {
+                let interval = crate::rng::block_interval(seed, height);
+                PerRung::from_fn(|rung| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let share = demand as f64 * mix.milli(rung) as f64 / MILLI as f64;
+                    crate::rng::rung_arrivals(seed, height, rung, share * interval)
+                })
+            }
         }
     }
 }
@@ -197,9 +235,9 @@ impl ChainCursor {
             }
             _ => mix,
         };
-        let demand = self
-            .split
-            .split(mix, params.traffic.offered(step.demand, step.chain_height));
+        let demand = params
+            .traffic
+            .arrivals(&mut self.split, mix, step.demand, step.chain_height);
         let arrivals: Vec<Arrival> = ADMISSION
             .into_iter()
             .filter(|&rung| demand[rung] > 0)
@@ -357,18 +395,29 @@ mod tests {
         assert!(read > 40);
     }
 
-    /// Steady traffic offers the scenario's demand; variable traffic offers
-    /// the count drawn at the block's height under its seed.
+    /// Steady traffic splits the scenario's demand by the mix; standard
+    /// traffic offers each rung its draw over the block's interval.
     #[test]
-    fn variable_traffic_offers_the_count_drawn_at_the_height() {
-        assert_eq!(Traffic::Steady.offered(50, 9), 50);
+    fn standard_traffic_offers_each_rung_its_draw() {
+        let mix = RungMix::DEFAULTED;
+        let steady = Traffic::Steady.arrivals(&mut RungSplit::default(), mix, 50, 9);
+        assert_eq!(steady.sum(|&n| n), 50);
+        let mut split = RungSplit::default();
         for h in 0..100 {
-            assert_eq!(
-                Traffic::Variable(2).offered(50, h),
-                crate::rng::honest_count(2, h, 50)
-            );
+            let drawn = Traffic::Variable(2).arrivals(&mut split, mix, 50, h);
+            let interval = crate::rng::block_interval(2, h);
+            for rung in FeePriority::ALL {
+                #[allow(clippy::cast_precision_loss)]
+                let mean = 50.0 * mix.milli(rung) as f64 / MILLI as f64 * interval;
+                assert_eq!(drawn[rung], crate::rng::rung_arrivals(2, h, rung, mean));
+            }
         }
-        assert!((0..100).any(|h| Traffic::Variable(2).offered(50, h) != 50));
+        assert!((0..100).any(|h| {
+            Traffic::Variable(2)
+                .arrivals(&mut RungSplit::default(), mix, 50, h)
+                .sum(|&n| n)
+                != 50
+        }));
     }
 
     /// E15-1. One baseline year, every block's ordinary fee on the lattice.
@@ -466,7 +515,8 @@ mod tests {
     /// fold's first block, then that block's listed transactions.
     #[test]
     fn the_operand_is_read_before_the_block_joins_the_window() {
-        let params = SimParams::default();
+        // Steady: the test pins the counts it offers.
+        let params = SimParams::default().on_steady();
         let economic = params.economic();
         let mut chain = ChainCursor::default();
         let first = chain.price(
