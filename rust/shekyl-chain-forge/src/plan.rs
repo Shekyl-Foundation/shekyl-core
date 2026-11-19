@@ -177,6 +177,13 @@ pub enum PlanFault {
     /// Two steps name one event.
     #[error("plan: the event {0:?} is named twice")]
     DuplicateEvent(String),
+    /// A `fill-shards` step that names an event: a fill names its own, one
+    /// `shard-<k>-closed` per shard it closes.
+    #[error("plan: a fill-shards step names its events itself (shard-<k>-closed), so it takes no `event`")]
+    FillNamesItsEvents,
+    /// A step that names an event of the fill's form.
+    #[error("plan: the event {0:?} has the form a fill names its closes with (shard-<k>-closed)")]
+    FillEventName(String),
     /// A plan with nothing to do.
     #[error("plan: no steps")]
     Empty,
@@ -203,6 +210,15 @@ impl Plan {
         if plan.steps.is_empty() {
             return Err(PlanFault::Empty);
         }
+        for step in &plan.steps {
+            match (&step.action, &step.event) {
+                (Action::FillShards { .. }, Some(_)) => return Err(PlanFault::FillNamesItsEvents),
+                (_, Some(name)) if is_close_event(name) => {
+                    return Err(PlanFault::FillEventName(name.clone()))
+                }
+                _ => {}
+            }
+        }
         let mut events = std::collections::BTreeSet::new();
         for name in plan.steps.iter().filter_map(|step| step.event.as_ref()) {
             if !events.insert(name) {
@@ -220,6 +236,22 @@ impl Plan {
     pub fn seed(&self) -> Result<PlanSeed, SeedFault> {
         PlanSeed::from_hex(&self.seed)
     }
+}
+
+/// The event a fill records when shard `shard` closes: the block whose fold
+/// first counted it closed (`CHAIN_FORGE.md` §11.2). A reader takes a
+/// shard's close height from the manifest's event of this name.
+#[must_use]
+pub fn close_event(shard: u64) -> String {
+    format!("shard-{shard}-closed")
+}
+
+/// Whether `name` has a fill's close-event form, `shard-<k>-closed`.
+#[must_use]
+pub fn is_close_event(name: &str) -> bool {
+    name.strip_prefix("shard-")
+        .and_then(|rest| rest.strip_suffix("-closed"))
+        .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
 }
 
 #[cfg(test)]
@@ -320,5 +352,30 @@ start_spread_ms = 50
             Plan::parse(&PLAN.replace("block_seconds = 1", "block_seconds = 0")),
             Err(PlanFault::BlockSeconds)
         ));
+    }
+
+    #[test]
+    fn a_fill_names_its_closes_and_no_step_takes_that_form() {
+        assert!(matches!(
+            Plan::parse(&PLAN.replace(
+                "do = \"fill-shards\"",
+                "event = \"filled\"\ndo = \"fill-shards\""
+            )),
+            Err(PlanFault::FillNamesItsEvents)
+        ));
+        assert!(matches!(
+            Plan::parse(&PLAN.replace("first-join", "shard-3-closed")),
+            Err(PlanFault::FillEventName(name)) if name == "shard-3-closed"
+        ));
+        assert_eq!(close_event(2), "shard-2-closed");
+        assert!(is_close_event("shard-12-closed"));
+        for not in [
+            "shard--closed",
+            "shard-x-closed",
+            "shard-1-open",
+            "shard-1-closed-2",
+        ] {
+            assert!(!is_close_event(not), "{not}");
+        }
     }
 }

@@ -20,7 +20,7 @@
 //! rejects. The same shape as the timing engine's mailbox: admission bounds
 //! how many owners exist, and the queue does not apply a second cap.
 //!
-//! The handshake deadline is one [`OwnerClass::Transport`] owner per
+//! The handshake deadline is one [`OwnerClass::Transport`](shekyl_timing_engine::OwnerClass::Transport) owner per
 //! connection. It is armed at accept, before the read and before the job
 //! is queued, so time spent waiting for a blocking thread counts. The home
 //! awaits that owner's wake. When the job is dequeued it checks whether
@@ -157,7 +157,7 @@ pub struct Config {
     /// Bytes of session plaintext the writer will hold. PWD-T6's
     /// session-established limit plus measurement. Unmeasured until that
     /// derivation is a number. A send that does not fit closes with
-    /// [`CloseKind::SendQueueFull`].
+    /// [`CloseKind::SendQueueFull`](shekyl_transport_layer::CloseKind::SendQueueFull).
     pub send_queue_bytes: usize,
     /// Pause after a transient `accept` error, so the loop does not spin.
     /// Not a protocol deadline.
@@ -215,9 +215,9 @@ where
     /// `None` connects directly.
     ///
     /// The addressing cell is checked first. A name this connector does not
-    /// dial is [`CloseKind::LocalClose`] and opens nothing. A SOCKS refusal
+    /// dial is [`CloseKind::LocalClose`](shekyl_transport_layer::CloseKind::LocalClose) and opens nothing. A SOCKS refusal
     /// is [`CloseCause::proxy_refused`] with the reply byte; a refused
-    /// authentication is [`CloseKind::ProxyUnavailable`].
+    /// authentication is [`CloseKind::ProxyUnavailable`](shekyl_transport_layer::CloseKind::ProxyUnavailable).
     pub fn dial(&self, address: NetworkAddress, proxy: Option<shekyl_socks::Proxy>) {
         let dial = drive::Dial {
             address,

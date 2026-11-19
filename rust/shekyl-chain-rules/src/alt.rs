@@ -13,7 +13,7 @@
 //! Such a chain can answer **header** questions — a parent's hash,
 //! timestamp, cumulative difficulty — and no other. So this tier runs the
 //! [`HeaderRule`](crate::rules::HeaderRule)s of `validate`'s ladder, the
-//! three rows only an alternative has ([`rules::alt`](crate::rules::alt):
+//! three rows only an alternative has ([`rules::alt`]:
 //! CEN-K1b, CEN-D5), and nothing whose operand is chain state —
 //! which set, in which order, is itself a row (CEN-K4, recorded when the
 //! ladder ends). Any
@@ -27,7 +27,7 @@
 //! candidate carries ride to the store unjudged, for promotion to judge.
 //!
 //! The bound is the belt: a view that implements only
-//! [`HeaderView`](crate::HeaderView) — the store's `AltView` — cannot be
+//! [`HeaderView`] — the store's `AltView` — cannot be
 //! handed to a `BlockRule`, and this function's signature cannot name
 //! `ChainView`. Nothing judged here is a [`ChainValid`](crate::ChainValid)
 //! and nothing converts an [`AltValid`] into one.
@@ -107,7 +107,7 @@ pub trait AltChainView<'id>: HeaderView<'id> {
 }
 
 /// A root placed above the recorded tip. Not a fork: the span of recorded
-/// blocks it would pop is not a [`BlockCount`](shekyl_types::BlockCount).
+/// blocks it would pop is not a [`BlockCount`].
 ///
 /// [`Fork::new`] is the only constructor, so this pair cannot be judged.
 /// The store's `AltChain::build` reports the same pair as SI-7 on

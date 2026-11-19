@@ -494,7 +494,7 @@ impl PScanAccrual {
     /// frontier epoch (the frontier epoch is in-progress, not settled), or `None`
     /// before the first epoch closes. This is the finalized epoch the retire
     /// predicate must use (never the in-progress cursor epoch, which would fire
-    /// early), the same finalization discipline as [`finalized_inflow`].
+    /// early), the same finalization discipline as [`finalized_inflow`](crate::engine::pscan::accrual::PScanAccrual::finalized_inflow).
     pub(crate) fn settled_epoch(&self) -> Option<SettlementEpoch> {
         settlement_epoch_at_height(self.synced_height.to_raw())
             .checked_sub(1)

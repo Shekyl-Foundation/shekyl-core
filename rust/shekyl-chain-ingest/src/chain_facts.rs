@@ -17,7 +17,7 @@ use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
 
-/// [`TemplateFacts`]' reply.
+/// [`TemplateFacts`](crate::connector::TemplateFacts)' reply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainFacts {
     /// The height the next block connects at (`tip + 1`; `0` when empty).

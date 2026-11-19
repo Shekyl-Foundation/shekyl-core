@@ -147,7 +147,7 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// no in-Shekyl migration code).
 ///
 /// **6** adds the CT-6 increment-4 frontier snapshot ring. **A ≤5 store is
-/// refused at open and must be re-synced** — [`Self::check_schema_version`]
+/// refused at open and must be re-synced** — [`LeafStore::check_schema_version`]
 /// runs before `init_tables`, so no ≤5 store ever reaches the code that would
 /// create this table. That is C8's `refuse-and-resync`, and it is the whole
 /// upgrade path; there is no one-way migration and none is wanted pre-genesis
@@ -965,7 +965,7 @@ impl LeafStore {
     /// error aborts the whole transaction — no delta partially lands.
     ///
     /// All-empty deltas still advance the tip and freeze clock, exactly
-    /// like the empty [`Self::append_drained`] of CT-1/CT-2.
+    /// like the empty `Self::append_drained` of CT-1/CT-2.
     ///
     /// This write does not touch the snapshot ring. Production ingest, which
     /// captures a frontier at every height, uses
@@ -1452,7 +1452,7 @@ impl LeafStore {
     /// Truncate leaves and metadata at `pos` (ACID reorg).
     ///
     /// Resets [`Self::sync_tip_height`] to `0` (sync invalidated until the next
-    /// [`Self::append_drained`]) and recomputes the segment-freeze cursor.
+    /// `Self::append_drained`) and recomputes the segment-freeze cursor.
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         Self::truncate_internals(&txn, pos, BlockHeight::from_raw(0))?;

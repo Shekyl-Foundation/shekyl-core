@@ -31,7 +31,7 @@ impl Engine<SoloSigner> {
     /// handle.
     ///
     /// On success, the returned wallet is ready for refresh: the file
-    /// envelope, the derived [`AllKeysBlob`], an empty
+    /// envelope, the derived [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob), an empty
     /// [`WalletLedger`], a freshly-rebuilt [`LedgerIndexes`], the
     /// caller-supplied preferences, and the daemon client are all in
     /// place.

@@ -104,7 +104,7 @@ impl M3 {
 }
 
 /// CEN-M4: a transaction's `tx.extra` is at most
-/// [`MAX_TX_EXTRA`](shekyl_wire::transaction::MAX_TX_EXTRA) (24 576 bytes).
+/// [`MAX_TX_EXTRA`] (24 576 bytes).
 /// The wire's `validate` refuses the same bound as the wallet's pre-check;
 /// this is the row the pool answers to. A coinbase never reaches the door
 /// (CEN-H5 at `TxSlot::Lone`), and its extra is bounded by grammar (CEN-I20).

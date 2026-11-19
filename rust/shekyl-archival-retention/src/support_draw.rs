@@ -191,7 +191,7 @@ pub fn support_challenge_nonce(
 ///
 /// The sentinel shard keeps the beacon off every closed shard. Fewer
 /// than [`COUNTED_DRAWS`] issued returns `None`: that epoch is a
-/// non-observation, the same rule [`crate::settle_pair`] uses.
+/// non-observation, the same rule [`crate::settle_pair`](crate::settlement_select::settle_pair) uses.
 #[must_use]
 pub fn support_counted(
     beacon: &BlockHash,

@@ -6,7 +6,7 @@
 //! Tenant isolation type for wallet-dir multi-tenancy.
 //!
 //! Phase 4b: single-tenant process holds at most one open
-//! [`Engine`](shekyl_engine_core::Engine). The Engine is stored behind
+//! [`Engine`]. The Engine is stored behind
 //! `Arc<RwLock<_>>` so long-running work (`refresh` via
 //! [`Engine::start_refresh`]) does not hold the process-level tenant
 //! mutex, and so concurrent read RPCs can share the Engine under a

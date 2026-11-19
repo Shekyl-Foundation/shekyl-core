@@ -52,7 +52,7 @@
 //! Those are different claims, and a sticky flag severs them.
 //!
 //! So the observation height is not a number the caller picks. It is
-//! [`CoherentChainView`], which two mutually-corroborating reads have to
+//! [`CoherentChainView`](crate::engine::daemon::synced_chain_facts::CoherentChainView), which two mutually-corroborating reads have to
 //! agree on, and the ledger accepts observations against nothing else.
 
 use std::collections::{BTreeMap, BTreeSet};

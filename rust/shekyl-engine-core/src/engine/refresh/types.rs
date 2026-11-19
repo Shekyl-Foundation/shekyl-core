@@ -176,7 +176,7 @@ pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
 #[non_exhaustive]
 pub struct RefreshOptions {
     /// Maximum number of times the snapshot-merge loop is re-driven
-    /// after [`RefreshError::ConcurrentMutation`]. Once exhausted, the
+    /// after [`RefreshError::ConcurrentMutation`](crate::engine::error::RefreshError::ConcurrentMutation). Once exhausted, the
     /// last `ConcurrentMutation` is surfaced to the caller.
     ///
     /// Default: `8`. The decision-log entry
@@ -203,7 +203,7 @@ impl Default for RefreshOptions {
 /// merge consumes it; they describe what the producer observed, not
 /// what the merge ingested. The two are equal on the success path
 /// (`apply_scan_result` returns `Ok`); on a malformed result the
-/// merge surfaces [`RefreshError::MalformedScanResult`] before this
+/// merge surfaces [`RefreshError::MalformedScanResult`](crate::engine::error::RefreshError::MalformedScanResult) before this
 /// summary is constructed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -222,7 +222,7 @@ pub struct RefreshSummary {
     /// from the fork point, so the count reflects post-rewind work.
     pub blocks_processed: u64,
 
-    /// Number of [`DetectedTransfer`] entries the producer recovered.
+    /// Number of [`DetectedTransfer`](crate::scan::DetectedTransfer) entries the producer recovered.
     /// These are the per-output recoveries the scanner returned; the
     /// merge ingests every entry into [`shekyl_engine_state::LedgerIndexes`].
     pub transfers_detected: usize,
@@ -240,7 +240,7 @@ pub struct RefreshSummary {
 
     /// Number of merge attempts the snapshot-race retry loop spent.
     /// `1` on the common path (merge succeeds first try); `>1` only
-    /// when at least one [`RefreshError::ConcurrentMutation`] was
+    /// when at least one [`RefreshError::ConcurrentMutation`](crate::engine::error::RefreshError::ConcurrentMutation) was
     /// observed and a fresh snapshot drove a re-attempt. Always `>=1`.
     pub merge_attempts: u32,
 }
@@ -248,7 +248,7 @@ pub struct RefreshSummary {
 /// Detail of a reorg detected during a single [`crate::engine::Engine::refresh`]
 /// call. The producer records at most one reorg per call; subsequent
 /// reorgs landing while the new chain is being scanned are surfaced as
-/// [`RefreshError::ConcurrentMutation`] on the next merge attempt and
+/// [`RefreshError::ConcurrentMutation`](crate::engine::error::RefreshError::ConcurrentMutation) on the next merge attempt and
 /// the retry loop pulls a fresh snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -301,7 +301,7 @@ pub enum RefreshPhase {
     Merging,
 
     /// A merge attempt observed
-    /// [`RefreshError::ConcurrentMutation`]; the loop is pulling a
+    /// [`RefreshError::ConcurrentMutation`](crate::engine::error::RefreshError::ConcurrentMutation); the loop is pulling a
     /// fresh snapshot and re-scanning. `blocks_total` updates on
     /// the retry boundary to reflect the new tip.
     Retrying,
@@ -343,7 +343,7 @@ pub enum RefreshPhase {
 /// - `phase`: see [`RefreshPhase`].
 /// - `pending_incoming_count` / `pending_incoming_atomic_units`: the
 ///   per-attempt "you have incoming" summary (CT-5 §3.2.1 D3 display
-///   surface) — the count and summed amount of [`DetectedTransfer`]
+///   surface) — the count and summed amount of [`DetectedTransfer`](crate::scan::DetectedTransfer)
 ///   entries the producer recovered this attempt. Transient: it
 ///   reflects the in-flight attempt, resets to `0` on
 ///   `RefreshPhase::Retrying`, and is `0` on attempts that detect

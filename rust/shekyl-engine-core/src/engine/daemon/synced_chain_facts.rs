@@ -73,7 +73,7 @@
 //! `daemon_status.height` is the tip's height, an ordinal (IG-Q45); the
 //! wallet keeps the block **count**, one more, the chain's length, computed
 //! at the decode ([`health_from_daemon_status`]). It is the same quantity
-//! as [`EmissionClaimSource::chain_height`]
+//! as [`EmissionClaimSource::chain_height`](crate::engine::emission_source::EmissionClaimSource::chain_height)
 //! (`crate::engine::emission_source`), and it is stored here as a [`ChainCount`] so
 //! the count/height confusion cannot be made by a consumer. Consumers that
 //! want the newest existing block's height take [`SyncedChainFacts::tip`].
