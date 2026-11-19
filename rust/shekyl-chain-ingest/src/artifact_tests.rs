@@ -507,6 +507,7 @@ mod fetch {
                         "section": [],
                         "section_body": [],
                         "draws": 1,
+                        "archival_cumulative": 0,
                     })
                 })
                 .collect(),

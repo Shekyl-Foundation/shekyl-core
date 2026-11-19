@@ -127,8 +127,12 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
     );
 }
 
-/// `block_show`'s reply for `block`: its bytes, `tx` as served, and the
-/// first output's global index.
+/// The cumulative archival length the served fixtures report (RPC 4.8);
+/// any value the fetch must carry through unchanged.
+const SERVED_ARCHIVAL_TOTAL: u64 = 52_100;
+
+/// `block_show`'s reply for `block`: its bytes, `tx` as served, the first
+/// output's global index and [`SERVED_ARCHIVAL_TOTAL`].
 fn served_block(block: &Block, tx: &[OrArchived<BlockTx>], output_index: u64) -> serde_json::Value {
     let header = serde_json::json!({
         "height": block.number().expect("a block with a coinbase"),
@@ -147,6 +151,7 @@ fn served_block(block: &Block, tx: &[OrArchived<BlockTx>], output_index: u64) ->
         "section": [],
         "section_body": [],
         "draws": 1,
+        "archival_cumulative": SERVED_ARCHIVAL_TOTAL,
     })
 }
 
@@ -155,7 +160,7 @@ fn served_block(block: &Block, tx: &[OrArchived<BlockTx>], output_index: u64) ->
 /// bound bodies, and its `output_index` the first global output index.
 ///
 /// The edit that turns this red is the fetch asking for the whole form, or
-/// dropping the reply's `output_index`.
+/// dropping the reply's `output_index` or its `archival_cumulative`.
 #[tokio::test]
 async fn the_fetch_is_one_block_show_under_prune() {
     let block = coinbase_block(3);
@@ -170,6 +175,10 @@ async fn the_fetch_is_one_block_show_under_prune() {
     assert_eq!(scannable.block.number(), Some(3));
     assert!(scannable.transactions.is_empty());
     assert_eq!(scannable.first_output_index, Some(41));
+    assert_eq!(
+        scannable.archival_cumulative,
+        ArchivalLength::from_raw(SERVED_ARCHIVAL_TOTAL)
+    );
 
     let asked = rpc.asked.lock().expect("not poisoned").clone();
     assert_eq!(
@@ -179,6 +188,27 @@ async fn the_fetch_is_one_block_show_under_prune() {
     assert_eq!(
         crate::engine::test_support::requested_params(&asked),
         serde_json::json!({"height": 3, "pow": false, "prune": true})
+    );
+}
+
+/// **A main-chain block without its total is refused** (`WSS-Q16`). RPC
+/// 4.8 reports `archival_cumulative` for every main-chain block; a `null`
+/// is a daemon that does not answer the read it advertises, and the P-scan
+/// has no total to check the block's own lengths against.
+///
+/// The edit that turns this red is the fetch defaulting a missing total.
+#[tokio::test]
+async fn a_main_chain_block_without_its_archival_total_is_refused() {
+    let block = coinbase_block(3);
+    let mut reply = served_block(&block, &[], 41);
+    reply["archival_cumulative"] = serde_json::Value::Null;
+    let rpc = CannedDaemon::new(crate::engine::test_support::result_envelope(&reply));
+    let err = default_fetch_scannable_block(&rpc, 3)
+        .await
+        .expect_err("a block without its total must not be scanned");
+    assert!(
+        matches!(&err, RpcError::InvalidNode(m) if m.contains("no archival_cumulative")),
+        "the missing total must be named: {err}"
     );
 }
 
