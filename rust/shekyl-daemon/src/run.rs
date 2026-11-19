@@ -294,7 +294,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     end = StartEnd::Logger;
     let mut announced =
         announce::announcements(&TABLE, &resolved, &config_file, &config, &walked.warnings);
-    announced.rest.extend(mining_notice(&config));
+    announced.rest.extend(posture_notices(&config));
     announced
         .rest
         .extend(interrupt.line(owning.is_some()).map(str::to_owned));
@@ -372,9 +372,6 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     // it from its first value (`TOR_SUPERVISOR.md` §5). The supervisor
     // starts on it once the node is open.
     let (tor_inbox, tor_feeds) = tor::prepare();
-    if let Some(line) = network::cover_off_warning(&config) {
-        tracing::warn!(target: "global", "{line}");
-    }
     // The node, after the marker (DX-Q6): the store, ingest, the pool,
     // chain sync, and the network built from the plan (§2). The network's
     // ban file entries are applied before its first accept, and its
@@ -752,6 +749,19 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
          `tor = off`) or closed (`p2p-closed-peer`)"
             .to_owned(),
     )
+}
+
+/// What a start announces about the node's posture beyond the posture line:
+/// the mining notice and the cover opt-out's warning. Announcements, not log
+/// events (`INPUT_GRAMMAR.md` IG-14): they reach the log and standard error
+/// whatever the log level. The configuration check repeats them
+/// ([`crate::verify`]).
+#[must_use]
+pub fn posture_notices(config: &DaemonConfig) -> Vec<String> {
+    mining_notice(config)
+        .into_iter()
+        .chain(network::cover_off_warning(config).map(str::to_owned))
+        .collect()
 }
 
 /// The line a start announces about a service's rendezvous record

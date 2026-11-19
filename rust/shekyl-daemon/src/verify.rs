@@ -168,7 +168,7 @@ fn accepted_lines(
     warnings: &[String],
 ) -> (Vec<String>, Vec<String>) {
     let mut announced = announce::announcements(&TABLE, resolved, config_file, config, warnings);
-    announced.rest.extend(crate::run::mining_notice(config));
+    announced.rest.extend(crate::run::posture_notices(config));
     let out = vec![
         format!("shekyld: configuration verified for {}", account::current()),
         format!("shekyld: {}", announced.effective),
@@ -413,11 +413,53 @@ mod tests {
         assert!(!data.exists());
     }
 
+    /// `relay-cover off` is announced in the check as at a start, with the
+    /// other posture lines and so whatever the log level (`CVR-R1`,
+    /// `INPUT_GRAMMAR.md` IG-14); with cover on there is no such line.
+    /// Red edit: log the warning as an event at the start again, or drop
+    /// `cover_off_warning` from `posture_notices`.
+    #[test]
+    fn the_cover_opt_out_is_announced_with_the_posture_lines() {
+        let cover_lines = |cli: &[&str]| -> Vec<String> {
+            let d = tempfile::tempdir().unwrap();
+            let data = d.path().join("data");
+            let log = d.path().join("shekyld.log");
+            let mut full = vec![
+                "--config-verify",
+                "--network",
+                "regtest",
+                "--data-dir",
+                data.to_str().unwrap(),
+                "--log-file",
+                log.to_str().unwrap(),
+            ];
+            full.extend_from_slice(cli);
+            let a = args(&full);
+            let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+            let loaded = after_file(cli, &platform(d.path()), None).unwrap();
+            let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
+            let (_, err) = accepted_lines(
+                &loaded.resolved,
+                &shekyl_daemon_config::ConfigFileFate::DefaultAbsent(d.path().join("shekyld.toml")),
+                &loaded.config,
+                &walked.warnings,
+            );
+            err.into_iter()
+                .filter(|line| line.starts_with("shekyld: relay-cover is off"))
+                .collect()
+        };
+        assert_eq!(cover_lines(&[]), Vec::<String>::new());
+        let off = cover_lines(&["--relay-cover", "off"]);
+        assert_eq!(off.len(), 1, "{off:?}");
+        assert!(off[0].contains("without cover"), "{}", off[0]);
+    }
+
     /// `mine = on` on a node declared `Open` announces, in the check as at
     /// a start, that the miner waits for a view of the network (DC-F41);
     /// the same configuration with both connectors off, or with a closed
     /// peer list, announces nothing of the kind, and nor does `mine = off`.
-    /// Red edit: drop `mining_notice` from either `accepted_lines` or the
+    /// Red edit: drop `mining_notice` from `posture_notices`, or that from
+    /// either `accepted_lines` or the
     /// start, or make it ignore the declaration.
     #[test]
     fn mine_on_with_an_open_declaration_announces_that_the_miner_waits_for_a_view() {
