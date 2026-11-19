@@ -223,7 +223,7 @@ extern "C" {
     /// SHA-256 cache-equivalence precondition: the harness streams
     /// `RANDOMX_CACHE_SIZE` bytes through a `Sha256` hasher and
     /// compares against the Rust subject's cache fingerprint
-    /// computed via [`shekyl_pow_randomx::PreparedCache::cache_block_bytes_for_testing`]
+    /// computed via `shekyl_pow_randomx::PreparedCache::cache_block_bytes_for_testing`
     /// (gated on the `test-internals` feature per R5-D1). The
     /// pointer is owned by the cache; do not free, and do not
     /// retain past the matching [`randomx_release_cache`] call.

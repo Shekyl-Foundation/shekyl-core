@@ -152,7 +152,7 @@ fn survival_quantile(max_support: u64, mass: impl Fn(u64) -> u64, one_in: u64) -
 /// One of the two delay tables, chosen at construction.
 ///
 /// Shared by [`FluffScheduler`], [`EmbargoTimer`], and the flood instruments in
-/// [`crate::conformance`]: a single enum so nothing re-implements dual-`Option`
+/// `conformance`: a single enum so nothing re-implements dual-`Option`
 /// table state.
 #[derive(Debug, Clone)]
 pub(crate) enum DelayTable {
@@ -362,7 +362,7 @@ impl FluffScheduler {
 ///
 /// Shared by *all* the relay delays this crate models: the stem embargo, the
 /// fluff delay ([`FluffScheduler`]), and the flood-return instruments in
-/// [`crate::conformance`]. Pure distribution-family choice; no embargo-specific
+/// `conformance`. Pure distribution-family choice; no embargo-specific
 /// semantics.
 ///
 /// For the embargo it is not a tuning knob but a correctness question: the

@@ -40,7 +40,7 @@
 //! means the journal stopped describing the tables — something wrote
 //! around it — and no pop can be trusted to land on a coherent state:
 //! [`StoreInvariant::UndoLogIncoherent`] with
-//! [`UndoFault::TopIsNotTip`](super::UndoFault::TopIsNotTip), poisoning the
+//! [`UndoFault::TopIsNotTip`], poisoning the
 //! batch, and the writer halts (§3.6.2).
 
 use shekyl_types::BlockHeight;

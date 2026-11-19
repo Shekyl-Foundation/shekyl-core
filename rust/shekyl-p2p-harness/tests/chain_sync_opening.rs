@@ -164,8 +164,25 @@ async fn a_liar_holds_the_opening_until_the_header_deadline_and_no_longer() {
     .await;
     let (count, work, top) = node.chain.tip().expect("a chain");
     let (liar, _seen) = MutePeer::new();
-    node.connect(Box::new(liar), Some(claim(count + 50, work * 4, top)))
+    let id = node
+        .connect(Box::new(liar), Some(claim(count + 50, work * 4, top)))
         .await;
+    // The clock moves only once the opening is armed. The first session's
+    // open arms it, at the hand clock the owner reads then, whether or not
+    // a request is ever sent; an open handled after the move would arm the
+    // deadline past the moved clock, and nothing would move it again. The
+    // owner runs a batch's commands, the arm among them, before it
+    // publishes the view, so the session's row in the view is the armed
+    // opening.
+    assert!(
+        node.wait(LIMIT, |node| node
+            .view()
+            .sessions
+            .iter()
+            .any(|row| row.session == id))
+            .await,
+        "the session's open was never handled"
+    );
     // Long enough for an owner that publishes on the open or the claim to
     // have done so.
     let early = node

@@ -243,8 +243,9 @@ pub fn open_reference(position: usize, bytes: &[u8]) -> Result<BundleRef, Sectio
 /// budget.
 ///
 /// The cap is [`section_budget`] over [`section_d_max`] of these
-/// references. `c` is [`BUNDLE_SECTION_BUDGET_MULTIPLE`]; `seb` and `W₂`
-/// are `rule_set`'s. `D` is the drawable epoch's length, and it counts only
+/// references. `c` is the shipped
+/// [`ArchivalParams::bundle_section_budget_multiple`]; `seb` and `W₂` are
+/// `rule_set`'s. `D` is the drawable epoch's length, and it counts only
 /// when that epoch is the one asked. An empty section is
 /// [`SectionStanding::Admitted`] and is not read. Any other unknown `D` is
 /// [`SectionStanding::Awaiting`] for the whole section. Every reference is

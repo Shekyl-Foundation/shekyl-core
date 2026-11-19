@@ -27,7 +27,7 @@
 //! relay uses, implemented by the node over its mempool; and the node's
 //! sync watch, read at each batch and at each plan.
 //!
-//! [`ConnectionId`]: crate::graph::ConnectionId
+//! [`ConnectionId`]: crate::ConnectionId
 
 mod actor;
 mod carrier;

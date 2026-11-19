@@ -40,7 +40,7 @@
 //! the last boundary, so at that point no table can say whether the row
 //! for the new tip was retired or lost (SPR-4). The cell can. It is
 //! **checked** against the table's first key at `pop` and at every
-//! boundary ([`UndoFault::FloorMismatch`](super::UndoFault::FloorMismatch),
+//! boundary ([`UndoFault::FloorMismatch`],
 //! SI-6), so the redundancy can fail rather than drift (rule 16).
 //!
 //! # The batch is named by the epoch; nothing is searched (§4)
@@ -501,7 +501,7 @@ impl WriteBatch<'_, '_> {
     /// after checking that the journal's first key **is** that floor: the
     /// block at `height` sealed its row before this ran and every row from
     /// the floor up is kept, so a first key elsewhere is a journal with a
-    /// gap (SI-6, [`UndoFault::FloorMismatch`](super::UndoFault::FloorMismatch)).
+    /// gap (SI-6, [`UndoFault::FloorMismatch`]).
     fn retire_undo_rows(&self, height: u64) -> Result<BlockHeight, StoreError> {
         let retention = self.horizons().undo_retention().to_raw();
         let current = self.undo_floor()?.to_raw();

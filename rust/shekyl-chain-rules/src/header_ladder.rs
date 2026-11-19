@@ -26,7 +26,7 @@
 //! cannot name one — [`run_header`](crate::rules::run_header) takes a
 //! [`HeaderRule`](crate::rules::HeaderRule).
 //!
-//! [`derive`] is the shared preparation: the tip, the connecting height,
+//! [`fn@derive`] is the shared preparation: the tip, the connecting height,
 //! the seed (CEN-D3), the newest-11 window (CEN-C3), the target (CEN-D4,
 //! CEN-D6 held by its type) and its check against the target the caller
 //! claimed ([`Stale::Target`] on a mismatch), the cumulative difficulty
@@ -51,7 +51,7 @@ use crate::rules::{self, BlockContext, HeaderContext};
 use crate::verdict::Verdict;
 use crate::view::{HeaderView, Tip};
 
-/// What [`derive`] established: where the block sits and the work through
+/// What [`fn@derive`] established: where the block sits and the work through
 /// it. The caller builds the context the predicates read.
 pub(crate) struct Derived {
     /// The height the view's tip derives for the candidate.
@@ -136,7 +136,7 @@ pub(crate) fn parent_link<'id, P, H: HeaderView<'id>>(
 
 /// CEN-C1, CEN-C2: the clock against the window. CEN-D1, the proof against
 /// the target, is `form`'s: it runs before any body work, against the
-/// claim [`derive`] verifies.
+/// claim [`fn@derive`] verifies.
 pub(crate) fn clock<'id, P, H: HeaderView<'id>>(
     cx: &HeaderContext<'_, P>,
     view: &H,

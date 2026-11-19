@@ -530,7 +530,7 @@ const fn div_ceil(numerator: u64, denominator: u64) -> u64 {
 }
 
 /// Analytic marginal preemption profile — the cross-check anchor for
-/// [`crate::conformance::simulate_preemption_profile`]'s `marginal` field.
+/// `conformance::simulate_preemption_profile`'s `marginal` field.
 ///
 /// `marginal[i]` is the probability, per transaction, that the stem node at
 /// separation `i` from the origin fires its embargo before it observes the

@@ -358,7 +358,7 @@ pub struct DandelionParams {
     /// window therefore carries a diffusion-return term on top of its stem
     /// slack, and the closed form has no place to put it.
     ///
-    /// Measured by [`crate::conformance::simulate_fluff_return`], not assumed.
+    /// Measured by `conformance::simulate_fluff_return`, not assumed.
     /// Like [`Self::time_between_hop_ms`] this is a topology input with a
     /// testnet reopening trigger, and it is set from a high quantile rather
     /// than a mean because over-estimating lengthens the embargo (safe) while

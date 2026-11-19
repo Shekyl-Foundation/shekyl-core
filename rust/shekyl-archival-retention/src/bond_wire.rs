@@ -18,7 +18,7 @@ use shekyl_curve_io::{read_byte, read_bytes, read_varint, write_varint};
 /// — the same consensus discriminant.
 pub const VIN_TYPE_ARCHIVAL_BOND_POST: u8 = 0x03;
 
-/// Exact canonical single [`HybridPublicKey`] encoding length; matches
+/// Exact canonical single [`HybridPublicKey`](shekyl_crypto_pq::signature::HybridPublicKey) encoding length; matches
 /// `config::PQC_HYBRID_SINGLE_KEY_LEN` in `cryptonote_config.h` (not multisig
 /// blob). Stays 1996 even when multisig admits N>1: **pseudonym uniformity**
 /// — all `bond_spend_pk` (P) values are the same shape; a bond commits

@@ -367,8 +367,18 @@ async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
     );
     // The response makes the fork a candidate; the one evidence draw waits
     // for the next event (CS-Q2 step 3). On an idle node that is the
-    // answered request's deadline.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // answered request's deadline. The clock moves only once the owner has
+    // handled the response (its view records the session's rate): a
+    // deadline handled first finds the request still in flight.
+    assert!(
+        node.wait(LIMIT, |node| node
+            .view()
+            .sessions
+            .iter()
+            .any(|row| row.session == id && row.rate.is_some()))
+            .await,
+        "the fork's response was never handled"
+    );
     node.advance(Duration::from_secs(4_096));
     assert!(
         node.wait(LIMIT, Node::alarm).await,

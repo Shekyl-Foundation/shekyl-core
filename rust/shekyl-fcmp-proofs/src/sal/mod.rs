@@ -23,7 +23,7 @@ use crate::{Input, Output};
 #[cfg(all(feature = "std", feature = "multisig"))]
 pub mod multisig;
 
-/// Membership-only spend authority (the `R_O` leg of SAL, no key image).
+// Membership-only spend authority (the `R_O` leg of SAL, no key image).
 pub mod membership_only;
 
 /// Build a fixed-width 64-byte domain-separation tag from a human-readable label.

@@ -721,7 +721,7 @@ impl Relay {
     /// Post-inversion (§20.3) nothing else re-points either: a rebound channel
     /// picks up its new peer at the next send, and a channel the merge leaves
     /// unbound clears at its next due tick — both read from the map itself
-    /// via [`Driver::poll`].
+    /// via [`Driver::poll`](crate::driver::Driver::poll).
     ///
     /// **Not what an epoch boundary does.** See [`Relay::rebuild_stems`]; the two
     /// are separate methods because collapsing them freezes the stem graph, and

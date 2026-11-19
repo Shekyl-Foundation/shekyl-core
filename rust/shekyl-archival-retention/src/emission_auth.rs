@@ -118,7 +118,7 @@ impl ArchivalRewardEmissionVin {
     /// 7. ordered reward vout commit set (per entry:
     ///    `commitment ‖ amount_plain u64-LE ‖ one_time_key` — destination swap)
     /// 8. `tx_signable`, the transaction's one network-bound message (cross-tx
-    ///    replay; [`shekyl_wire::Transaction::tx_signable`], over CEN-J22's
+    ///    replay; `shekyl_wire::Transaction::tx_signable`, over CEN-J22's
     ///    signable prefix hash)
     /// 9. backing canonical wire bytes ([`Self::encode_backing`]: the proof,
     ///    `pseudo_out`, the backing key and the tree depth). CEN-J22 takes the

@@ -930,9 +930,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) (PWD-B3, the ingress table)
   - Target: pre-genesis
 
-- **The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.** `rust-audit-test.yml:310-312` gates `shekyl-tor-control-wallet`/`shekyl-p-serve`/`shekyl-p-host`/`shekyl-operator-alarm` and `build.yml:482` gates `shekyl-win-sec`; everything else is ungated. Fix the gate to cover the workspace with named exclusions (the inverse direction) rather than named inclusions, then clear the relay crate's broken intra-doc links — [`45-rust-lint-checks`](../.cursor/rules/45-rust-lint-checks.mdc)
-  - Target: pre-genesis
-
 - **Give the P2P wire a compact encoding for peer-list messages: portable storage repeats every key name in every entry, so a handshake or timed-sync peer list carries about twice its information.** Rick, 2026-10-19, on #1134: a full 12-entry list compresses to 41–58 % of its size because each entry wraps 6 to 64 bytes of address in the same keys (`adr`, `addr`, `type`, `m_ip`/`addr`/`host`, `m_port`/`port`). The fix is a compact P2P wire encoding, not a compressor: compression left the protocol (`SHEKYL_P2P_PROTOCOL.md` PWD-T7). Measurement: [`zstd_ruzstd_levin_20261020.md`](benchmarks/zstd_ruzstd_levin_20261020.md) §6.
   - Target: pre-genesis
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T7
@@ -1048,9 +1045,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **2d-2 SP-T0 — DQ-T0.4 circuit-isolation measurement has no CI binary source (BLOCKED, not deferred-by-choice).**
-  - Target: pre-genesis
-
-- **Workspace-wide `rustdoc -D warnings` CI lane (BLOCKED on pre-existing cross-crate warnings).**
   - Target: pre-genesis
 
 

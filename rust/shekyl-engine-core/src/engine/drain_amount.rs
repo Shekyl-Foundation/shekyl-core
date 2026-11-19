@@ -21,7 +21,7 @@
 //! from reward values is the F-D2 round-number / random-split UI default
 //! (`shekyl-gui-wallet`), not this stage.
 //!
-//! The amount-stage signature check ([`tests`]) pins that carve: the entry
+//! The amount-stage signature check (`tests`) pins that carve: the entry
 //! point takes `affordable: AtomicUnits`, and this file never names the
 //! per-output vector or the persisted funding record.
 
