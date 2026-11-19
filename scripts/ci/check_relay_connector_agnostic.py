@@ -23,7 +23,9 @@ added later fail — plus a position comparison `.index() ==` and
 Those spellings under `rust/shekyl-relay/src` and
 `rust/shekyl-relay-privacy/src` may appear only in `#[cfg(test)]`
 code: a file declared by `#[cfg(test)] mod name;` or lines inside an
-inline `#[cfg(test)] mod name { ... }`. A hit anywhere else is a branch
+inline `#[cfg(test)] mod name { ... }`. A declared file is found where
+rustc finds it: beside `mod.rs`, `lib.rs` or `main.rs`, and under
+`name/` for any other file `name.rs`. A hit anywhere else is a branch
 on connector identity. Zero hits in test code across both roots means
 this gate's subject is gone.
 """
@@ -191,6 +193,16 @@ def rust_code(text: str) -> str:
     return "".join(out)
 
 
+# The files whose child modules sit beside them. Any other `name.rs` keeps
+# its children under `name/`.
+MODULE_ROOTS = frozenset({"mod", "lib", "main"})
+
+
+def module_dir(path: Path) -> Path:
+    """Where rustc looks for the modules `path` declares."""
+    return path.parent if path.stem in MODULE_ROOTS else path.parent / path.stem
+
+
 def test_files(root: Path) -> set[str]:
     """Files whose whole body is a `#[cfg(test)] mod name;`."""
     found: set[str] = set()
@@ -199,7 +211,7 @@ def test_files(root: Path) -> set[str]:
     for path in root.rglob("*.rs"):
         text = rust_code(path.read_text(encoding="utf-8"))
         for name in DECL.findall(text):
-            parent = path.parent
+            parent = module_dir(path)
             for candidate in (parent / f"{name}.rs", parent / name / "mod.rs"):
                 if candidate.is_file():
                     found.add(candidate.relative_to(root).as_posix())
@@ -419,10 +431,40 @@ def selftest() -> int:
         if judge(production, tests) != 0:
             print("selftest: a comment or a literal was judged production", file=sys.stderr)
             return 1
+        # A file that is not `mod.rs` keeps its test module under its own
+        # directory, and exempts no sibling of the same name.
+        (root / "carrier").mkdir()
+        (root / "carrier" / "schedule_tests.rs").write_text(
+            "fn t() { let _ = ConnectorId::Clearnet; }\n",
+            encoding="utf-8",
+        )
+        (root / "carrier.rs").write_text(
+            "fn prod() {}\n#[cfg(test)]\nmod schedule_tests;\n",
+            encoding="utf-8",
+        )
+        production, tests = scan(root)
+        if judge(production, tests) != 0 or "carrier/schedule_tests.rs:1" not in tests:
+            print(
+                f"selftest: a test module under its parent's directory was refused: {production}",
+                file=sys.stderr,
+            )
+            return 1
+        (root / "schedule_tests.rs").write_text(
+            "fn prod() { let _ = ConnectorId::Tor; }\n",
+            encoding="utf-8",
+        )
+        production, tests = scan(root)
+        if production != ["schedule_tests.rs:1"]:
+            print(
+                f"selftest: a sibling of the declaring file was exempted: {production}",
+                file=sys.stderr,
+            )
+            return 1
     print(
         "relay connector gate selftest: production hit (named and unnamed variant), "
         "test-only, whole-list constants, second root, missing root, empty subject, "
-        "string brace, comment exemption, and literal"
+        "string brace, comment exemption, literal, and a test module under its "
+        "parent's directory"
     )
     return 0
 
