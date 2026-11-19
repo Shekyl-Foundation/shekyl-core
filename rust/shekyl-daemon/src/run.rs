@@ -137,7 +137,7 @@ impl StartEnd {
     }
 }
 
-/// The load step of the sequence: [`load`] in the daemon.
+/// The load step of the sequence: [`fn@load`] in the daemon.
 pub type LoadStep = fn(Cli, &Platform) -> Result<Loaded, Vec<Diagnostic>>;
 
 /// The whole sequence, returning the exit status. `platform` is the

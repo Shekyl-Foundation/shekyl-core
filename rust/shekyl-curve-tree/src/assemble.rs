@@ -131,7 +131,7 @@ pub struct PathParts {
 /// the batch holds that tree once ([`Self::tree`]) and no path carries its
 /// own, so a reader has no agreement between paths to check. Tests build
 /// one from parts only under the TEST_ONLY `test-paths` feature
-/// ([`Self::from_parts_unchecked`]).
+/// (`AssembledPaths::from_parts_unchecked`).
 ///
 /// A batch cannot be written out by hand:
 ///

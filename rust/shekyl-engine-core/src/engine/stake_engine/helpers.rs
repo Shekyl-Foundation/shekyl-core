@@ -41,8 +41,8 @@ pub(crate) struct PreparedInput {
 }
 
 /// One constructed vout batch to `P`'s base address — the shared
-/// output-construction loop of [`AssembleBond`] (two confidential change
-/// vouts) and [`AssembleEmissionClaim`] (loud reward + two change vouts):
+/// output-construction loop of [`AssembleBond`](super::bond::AssembleBond) (two confidential change
+/// vouts) and [`AssembleEmissionClaim`](super::claim::AssembleEmissionClaim) (loud reward + two change vouts):
 /// per output, the transfer path's `build_output`, then the transaction's
 /// `tx_extra` through its `build_tx_extra`. Both
 /// change vouts return to `P`'s base spend key (the pscan
