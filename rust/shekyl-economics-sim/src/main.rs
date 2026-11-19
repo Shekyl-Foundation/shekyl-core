@@ -623,4 +623,41 @@ mod tests {
             );
         }
     }
+
+    /// Every flag `main` reads is the trace's own, `--set` (whose overrides
+    /// `main` refuses outside the sweep modes, before the trace), or one the
+    /// trace refuses. Read from this file's source, so a mode added to
+    /// `main` and not to [`GROWTH_TRACE_CONFLICTS`] fails here. The
+    /// instruments' flags are `eup4`'s and are refused through
+    /// `Instrument::ALL`.
+    #[test]
+    fn every_flag_main_reads_is_refused_beside_the_trace() {
+        let code = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("main's code precedes its tests");
+        let flags: Vec<&str> = code
+            .match_indices("\"--")
+            .filter_map(|(at, _)| {
+                let rest = &code[at + 1..];
+                rest.find('"').map(|end| &rest[..end])
+            })
+            .filter(|flag| {
+                flag[2..]
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            })
+            .collect();
+        assert!(
+            flags.contains(&"--growth-trace") && flags.contains(&"--stage2"),
+            "the scan reads main's flags: {flags:?}"
+        );
+        for flag in flags {
+            assert!(
+                matches!(flag, "--growth-trace" | "--set")
+                    || GROWTH_TRACE_CONFLICTS.contains(&flag),
+                "{flag} is read by main and not refused beside --growth-trace"
+            );
+        }
+    }
 }
