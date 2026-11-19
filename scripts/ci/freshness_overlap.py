@@ -199,17 +199,28 @@ def merged_prs(before, merge):
 MERGE_SUBJECT = re.compile(r"^Merge pull request #(\d+) from ")
 
 
+def is_ancestor(a, b):
+    return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
+
+
+def later(a, b, ancestor=is_ancestor):
+    """The later of two `dev` commits: `b` when `a` is its ancestor."""
+    return b if ancestor(a, b) else a
+
+
 def since_for(current, head, dev):
     """The `dev` the head was last fresh against: carried by a status that
     is not green, the green's own `dev`, else the merge base of the head
-    with `dev`. A status outside the grammar gives UNKNOWN."""
+    with `dev`; never earlier than that merge base, which the head's own
+    run tested. A status outside the grammar gives UNKNOWN."""
+    base = merge_base(head, dev)
     if current is None:
-        return merge_base(head, dev)
+        return base
     if current["kind"] == "green":
-        return resolve(current["dev"])
+        return later(resolve(current["dev"]), base)
     if current["since"] == fs.UNKNOWN:
         return fs.UNKNOWN
-    return resolve(current["since"])
+    return later(resolve(current["since"]), base)
 
 
 def resolve(short_sha):
@@ -243,6 +254,13 @@ def judge_pr(event, number, head, labelled, current, dev, before, ctx, merged_pu
     fails closed."""
     ws = ctx.workspace
     pr = changed_packages(diff_files(dev, head), ctx)
+    if event == "push":
+        # The push reaches the head only past what the head already holds:
+        # a head that merged this `dev`, or part of the push, was tested on
+        # it by its own run.
+        start = later(before, merge_base(head, dev))
+        if start != before:
+            merged_push = changed_packages(diff_files(start, dev), ctx) if start != dev else set()
     this_merge = shared_tests(merged_push, pr, ws.rdeps) if event == "push" else set()
     if event == "push" and not this_merge:
         return None
@@ -464,6 +482,20 @@ def selftest():
         got = decide(event, labelled, kind, this_merge, cumulative)
         if got != want:
             failed.append(f"decide({event}, labelled={labelled}, {kind}): {got} != {want}")
+    # The push's range starts at the later of `before` and what the head
+    # already holds: a head that merged the pushed `dev` gets nothing.
+    chain = ["a", "b", "c"]  # first-parent order on dev
+
+    def anc(x, y):
+        return chain.index(x) <= chain.index(y)
+
+    for label, before, base, want in [
+        ("a head behind the push", "b", "a", "b"),
+        ("a head that merged the pushed dev", "b", "c", "c"),
+        ("a head that merged part of the push", "a", "b", "b"),
+    ]:
+        if later(before, base, anc) != want:
+            failed.append(f"later, {label}: {later(before, base, anc)} != {want}")
     # Fail closed: a merge that cannot be read overlaps every pull request.
     broken = run_merge("not-a-commit", [(7, "x", "y")])
     if not (broken and broken[0]["overlap"] and broken[0]["rust_tests"] == "all"):
