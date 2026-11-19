@@ -97,130 +97,13 @@
 
 name: randomx-v2-differential
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  push:
-    # dev/main only: PR branches are covered by the pull_request event.
-    # An unrestricted push trigger double-runs on PR pushes, and fires
-    # spuriously on merge-from-dev pushes (the push diff is computed
-    # against the previous branch tip, so it matches paths the PR never
-    # touched).
-    branches: [dev, main]
-    paths:
-      - 'rust/shekyl-randomx-differential/**'
-      - 'rust/randomx-v2-sys/**'
-      - 'rust/shekyl-pow-randomx/**'
-      - 'rust/shekyl-hasher/**'
-      - 'rust/shekyl-hash-budget/**'
-      - 'rust/Cargo.toml'
-      - 'rust/Cargo.lock'
-      - 'external/randomx-v2/**'
-      - 'external/CMakeLists.txt'
-      - 'CMakeLists.txt'
-      - 'scripts/ci/check_randomx_crate_invariants.sh'
-      - '.github/actions/install-rust/**'
-      - '.github/actions/build-randomx-v2-ref/**'
-      - '.github/workflows/randomx-v2-differential.yml'
-      - '.github/workflows/randomx-v2-adversarial-ratio.yml'
-  pull_request:
-    # `ready_for_review`: the jobs skip a draft and run when it is marked
-    # ready (ruled 2026-11-16).
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'rust/shekyl-randomx-differential/**'
-      - 'rust/randomx-v2-sys/**'
-      - 'rust/shekyl-pow-randomx/**'
-      - 'rust/shekyl-hasher/**'
-      - 'rust/shekyl-hash-budget/**'
-      - 'rust/Cargo.toml'
-      - 'rust/Cargo.lock'
-      - 'external/randomx-v2/**'
-      - 'external/CMakeLists.txt'
-      - 'CMakeLists.txt'
-      - 'scripts/ci/check_randomx_crate_invariants.sh'
-      - '.github/actions/install-rust/**'
-      - '.github/actions/build-randomx-v2-ref/**'
-      - '.github/workflows/randomx-v2-differential.yml'
-      - '.github/workflows/randomx-v2-adversarial-ratio.yml'
-  schedule:
-    # Daily structural-validate at 05:00 UTC. Staggered from existing
-    # `nightly.yml` (03:00 UTC) + `shekyl-oxide-divergence.yml`
-    # (Mon 04:00 UTC) + `codeql.yml` (Mon 04:30 UTC).
-    - cron: "0 5 * * *"
-    # Weekly full-parity sweep on Monday at 06:00 UTC.
-    - cron: "0 6 * * 1"
   workflow_dispatch:
-    inputs:
-      parity_scope:
-        description: >-
-          Parity-sweep scope for the full-parity job: "daily" runs the
-          19-dataset subset; "full" runs the whole 1024-pin sweep. The
-          manual "full" option exists so a dropped/failed Monday cron can
-          be re-run on demand — without it the full sweep's only trigger
-          is a schedule GitHub may delay or skip.
-        type: choice
-        options:
-          - daily
-          - full
-        default: daily
-      checkout_ref:
-        description: >-
-          Git ref the matrix lanes check out, instead of the matrix
-          branch. Exists so a lane can be REHEARSED on a feature branch
-          before it first runs unattended: the matrix jobs otherwise
-          hardcode `ref: <matrix.branch>`, so dispatching against a
-          feature branch runs that branch's workflow file but checks
-          out main/dev — which do not contain the code under test, so
-          the run reds for a reason unrelated to the wiring. Leave
-          empty for normal operation. No T-A11 exposure: any dispatch
-          is `operator-supplied` by construction and can never be cited
-          as coverage.
-        type: string
-        default: ''
-      rotation_index:
-        description: >-
-          Replay a specific rotating-lane index. Leave empty for a
-          normal run (the scheduled lane derives its own index from
-          the date). A value here is a REPLAY of an already-explored
-          index, and the harness banner labels it `operator-supplied`
-          so a green replay cannot be cited as a green sweep (§4.5
-          T-A11). The corresponding input set is reconstructable by
-          anyone from the integer alone, so the choice is auditable
-          rather than trusted.
-        type: string
-        default: ''
-      runtime_modes:
-        description: >-
-          Also run the runtime-modes job (T5 latency + T7/T8
-          concurrent) on this dispatch. Off by default so a
-          parity-recovery dispatch (parity_scope=full) stays scoped to
-          the parity gate and doesn't spend a runtime-modes runner.
-          Turn on to measure the committed-runner-class T5 number on
-          demand (recorded baseline: 1.817×, 2026-07-04 — see
-          LATENCY_RATIO_BUDGET in mode_latency.rs).
-        type: boolean
-        default: false
 
-# Superseded-run cancellation (house pattern: build.yml).
-# Without a concurrency group, every push to an open PR stacks a full new
-# run behind the old one — with the shared runner pool, repeated pushes
-# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
-# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
-#
-# Schedule and manual-dispatch runs are keyed on `github.run_id` (i.e.
-# never share a group): schedule events fire ONLY on the default branch
-# (`refs/heads/main` — verify with `git ls-remote --symref origin HEAD`),
-# so a scheduled run's `github.ref` is the SAME ref a push-to-main run
-# uses, and a plain ref-keyed group would let a main push land mid-cron
-# and CANCEL the multi-hour parity / mutants run; a second
-# `workflow_dispatch` would likewise cancel a running one. A canceled
-# run never fires the alarm a failed run would; that is the
-# armed-gate-with-no-trigger failure mode reborn as a race.
-# A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
-# one runs and one waits, and a newer push replaces the waiting one, so the
-# run that finishes covers every merge since the last (06-branching.mdc).
 concurrency:
   group: randomx-v2-differential-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || format('{0}-{1}', github.event_name, github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

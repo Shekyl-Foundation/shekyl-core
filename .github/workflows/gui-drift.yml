@@ -25,29 +25,9 @@
 # is where the recipe lives, not which wallet commit is compiled.
 name: ci/gh-actions/gui-drift
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - 'rust/**'
-      - '.github/workflows/gui-drift.yml'
-      - 'scripts/ci/gui_wallet_core_deps.toml'
-      - 'scripts/ci/shipped_graph.py'
-      - 'scripts/ci/check_production_graph.py'
-      - 'scripts/ci/check_p_fetch_dep_cut.py'
-  push:
-    branches: [dev, main]
-    paths:
-      - 'rust/**'
-      - '.github/workflows/gui-drift.yml'
-      - 'scripts/ci/gui_wallet_core_deps.toml'
-      - 'scripts/ci/shipped_graph.py'
-      - 'scripts/ci/check_production_graph.py'
-      - 'scripts/ci/check_p_fetch_dep_cut.py'
-  # The GUI pin's nightly (gui-pin-nightly below). A schedule runs main's
-  # copy of this file, so it starts once this reaches main.
-  schedule:
-    - cron: "15 4 * * *"
+  workflow_dispatch:
 
 # A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
 # one runs and one waits, and a newer push replaces the waiting one, so the

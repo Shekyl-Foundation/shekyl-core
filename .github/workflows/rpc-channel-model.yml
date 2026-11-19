@@ -22,15 +22,8 @@
 
 name: ci/rpc-channel-model
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - "rust/shekyl-rpc-channel/model/**"
-      - "docs/formal/proverif/lib/noise.pvl"
-      - "docs/formal/proverif/lib/broken.pvl"
-      - "docs/formal/proverif/install_proverif.sh"
-      - ".github/workflows/rpc-channel-model.yml"
   workflow_dispatch:
 
 concurrency:

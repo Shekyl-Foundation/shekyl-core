@@ -32,11 +32,9 @@
 
 name: ci/grep-gates
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-  push:
-    branches: [dev, main]
+  workflow_dispatch:
 
 # A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
 # one runs and one waits, and a newer push replaces the waiting one, so the

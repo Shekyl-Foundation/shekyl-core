@@ -32,35 +32,9 @@
 
 name: ci/multisig-feature
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    # Rust build/test inputs only. A single anchored list, aliased into
-    # `push` below, so the two event triggers cannot drift apart (a new
-    # multisig-owning crate added to one but not the other would leave a
-    # silent gap — the failure mode C-1 warns about).
-    paths: &paths
-      - "rust/shekyl-engine-core/**"
-      # The multisig ceremony crate itself (MS-5): the FSM, blob format, and
-      # nonce typestates now live here, not in engine-core. It is a tested
-      # package below (`-p shekyl-multisig`); without this trigger a
-      # crate-only change would not run the lane built to compile it — exactly
-      # the C-1 "armed gate with no trigger" failure this header warns about.
-      - "rust/shekyl-multisig/**"
-      - "rust/shekyl-fcmp/**"
-      - "rust/shekyl-fcmp-proofs/**"
-      # C-1: crates that own a multisig constant consumed by the tested
-      # packages. MAX_MULTISIG_PARTICIPANTS (crypto-pq/src/multisig.rs),
-      # PQC_MAX_*_BLOB / single-key len (wire), MultisigAddressPayload
-      # (address). A change here must rebuild + retest the dependents.
-      - "rust/shekyl-crypto-pq/**"
-      - "rust/shekyl-wire/**"
-      - "rust/shekyl-address/**"
-      - "rust/Cargo.lock"
-      - ".github/workflows/multisig-feature.yml"
-  push:
-    branches: [dev]
-    paths: *paths
+  workflow_dispatch:
 
 # A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
 # one runs and one waits, and a newer push replaces the waiting one, so the

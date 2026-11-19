@@ -10,9 +10,8 @@ name: vendored crypto staleness
 # been un-vendored — relocated to first-party shekyl-* crates / dissolved — and are no
 # longer tracked against upstream.)
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  schedule:
-    - cron: "0 4 * * 1"
   workflow_dispatch:
 
 jobs:

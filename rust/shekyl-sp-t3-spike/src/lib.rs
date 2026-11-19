@@ -78,6 +78,9 @@
 //! ever assembles one. See [`harness`]'s module doc.
 #![deny(unsafe_code)]
 
+/// DEMO BASE ONLY (Brief C): the value the freshness demo's pull requests disagree on.
+pub const FRESHNESS_DEMO: u32 = 1;
+
 pub mod capacity;
 pub mod ceiling;
 pub mod compare;

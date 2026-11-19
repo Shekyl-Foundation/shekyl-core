@@ -53,7 +53,7 @@ name: ci/freshness
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, ci-scratch/brief-c-demo-base]
   # No base filter (scripts/ci/check_pr_event_triggers.py): the overlap
   # job's condition takes a pull request on `dev` only.
   pull_request:
@@ -70,7 +70,7 @@ jobs:
     if: >-
       github.event_name == 'push'
       || (github.event.label.name == 'merge-next'
-          && github.base_ref == 'dev'
+          && (github.base_ref == 'dev' || github.base_ref == 'ci-scratch/brief-c-demo-base')
           && !github.event.pull_request.draft
           && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest

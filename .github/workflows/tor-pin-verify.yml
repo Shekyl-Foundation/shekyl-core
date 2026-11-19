@@ -71,6 +71,7 @@
 
 name: tor-pin-verify
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
   workflow_dispatch:
 

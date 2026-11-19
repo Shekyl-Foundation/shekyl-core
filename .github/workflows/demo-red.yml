@@ -1,0 +1,30 @@
+# DEMO BASE ONLY (Brief C): a push run that fails while demo/red exists,
+# so the dev-red reporter can be watched opening an issue and closing it.
+name: demo-red
+on:
+  push:
+    branches: [ci-scratch/brief-c-demo-base]
+permissions: {}
+jobs:
+  red-on-marker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: fail while demo/red exists
+        run: |
+          if [ -f demo/red ]; then echo "test demo::forced_red ... FAILED"; exit 1; fi
+          echo "test demo::forced_red ... ok"
+  report-dev-red:
+    needs: [red-on-marker]
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

@@ -27,18 +27,8 @@
 
 name: ci/p2p-nnhfs-model
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - "docs/formal/proverif/**"
-      - "rust/shekyl-p2p-transport/src/noise.rs"
-      - "rust/shekyl-p2p-transport/src/prefix.rs"
-      - "rust/shekyl-p2p-transport/src/channel.rs"
-      - "rust/shekyl-noise/src/direction.rs"
-      - "rust/shekyl-noise/src/aead.rs"
-      - "rust/shekyl-noise/src/symmetric.rs"
-      - ".github/workflows/p2p-nnhfs-model.yml"
   workflow_dispatch:
 
 concurrency:

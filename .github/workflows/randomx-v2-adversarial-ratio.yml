@@ -78,26 +78,10 @@
 
 name: randomx-v2-adversarial-ratio
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  schedule:
-    # Weekly T6 adversarial-ratio gate; see the cadence-amendment
-    # citation above.
-    - cron: "0 6 * * 2"
   workflow_dispatch:
-    inputs:
-      samples_per_recipe:
-        description: 'Samples per recipe (default: SAMPLE_BUDGET_PER_RECIPE from adversarial_canonical_outputs.rs)'
-        required: false
-        default: ''
-        type: string
 
-# Schedule and dispatch runs never share a group (github.run_id):
-# a scheduled run's github.ref is the default branch
-# (refs/heads/main — schedules fire only there), a dispatch run's
-# is whatever ref it was launched from, and any shared-ref
-# cancel-in-progress collision would silently swallow a running
-# measurement — a canceled run fires no alarm (house lesson from
-# randomx-v2-differential.yml's concurrency fix on PR #236).
 concurrency:
   group: randomx-v2-adversarial-ratio-${{ github.run_id }}
   cancel-in-progress: false

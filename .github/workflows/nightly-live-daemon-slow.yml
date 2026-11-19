@@ -19,9 +19,8 @@ name: nightly/live-daemon-slow-gates
 # Removing the notification step voids the split; the slow gates then move
 # back to the per-PR ARMED list.
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  schedule:
-    - cron: "30 3 * * *"
   workflow_dispatch:
 
 permissions:

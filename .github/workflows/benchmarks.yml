@@ -58,49 +58,10 @@
 
 name: ci/benchmarks
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    # `ready_for_review`: the capture skips a draft and runs when it is
-    # marked ready (ruled 2026-11-16).
-    types: [opened, synchronize, reopened, ready_for_review]
-    # The whole Rust workspace, not a list of benched crates (BA-Q8, ruled
-    # 2026-10-05). A bench's cost depends on its dependency closure, not on
-    # its own crate: `relay_admission_verify_iai` lives in
-    # `shekyl-verify-cost` and measures code in `shekyl-fcmp`,
-    # `shekyl-fcmp-proofs`, `shekyl-ct-balance`, `shekyl-crypto-pq` and
-    # `shekyl-bulletproofs`. A per-crate
-    # list that omits one of those runs neither the comparison nor the
-    # baseline refresh for a change there, and the next PR that does trigger
-    # the gate is then compared against a baseline that predates the change.
-    # `push` takes this list by anchor: a path that refreshes no baseline is
-    # the same hole from the other side, so the two must not differ.
-    paths: &paths
-      - "rust/**"
-      - "scripts/bench/**"
-      - ".github/workflows/benchmarks.yml"
-      # The capture's scope: the gated rows' path sets, and the classifier
-      # that reads them.
-      - "docs/benchmarks/measurement_ledger.toml"
-      - "scripts/ci/change_scope.py"
-      - "docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active"
-  push:
-    branches: [dev]
-    paths: *paths
   workflow_dispatch:
 
-# Top-level defaults: read-only. Per-job overrides upgrade to write
-# only where strictly necessary (PR comment; bench-baseline push).
-# Superseded-run cancellation for a pull request (house pattern: build.yml).
-# Without a concurrency group, every push to an open PR stacks a full new
-# run behind the old one — with the shared runner pool, repeated pushes
-# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
-# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
-#
-# Only a pull request's run is cancelled; a push to dev is not
-# (`scripts/ci/check_dev_push_runs_finish.py`). update-baseline publishes
-# the baseline and then raises the drift alarm. Cancelling between those
-# two steps leaves the baseline moved and the alarm unrun, and the next
-# run compares against the baseline that already absorbed the move.
 concurrency:
   group: benchmarks-${{ github.ref }}
   cancel-in-progress: "${{ github.event_name == 'pull_request' }}"

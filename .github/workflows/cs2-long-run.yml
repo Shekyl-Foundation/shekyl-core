@@ -22,6 +22,7 @@ name: cs2-long-run
 # device's row in that table is derived from the floor device's
 # light-mode hash rate, not measured.
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
   workflow_dispatch:
 

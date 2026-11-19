@@ -1,34 +1,8 @@
 name: nightly/proptest-exhaustive
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
-    inputs:
-      job:
-        description: "Which job to run."
-        type: choice
-        options:
-          - all
-          - proptest-exhaustive
-          - store-ignored
-          - economics-sim-ignored
-          - staking-sim-ignored
-          - chain-ingest-ignored
-          - hasher-ignored
-          - wire-ignored
-          - trybuild-ignored
-          - bench-full
-          - producer-gate
-        default: all
-      ref:
-        description: "Run over this one ref (a branch or a commit) in place of main and dev. For proving a lane on a branch."
-        required: false
-        default: ""
-      report:
-        description: "Open or thread a tracking issue for a red leg, as a scheduled run does. For proving the reporter."
-        type: boolean
-        default: false
 
 permissions:
   contents: read
