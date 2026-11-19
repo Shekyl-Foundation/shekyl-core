@@ -92,10 +92,11 @@ pub use carrier::{Carrier, CarrierView, NoiseDue};
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
 pub use graph::{
-    address_hidden_from_peer, any_hides_address_from_peer, embargo_fire_wait_secs, link_encrypted,
-    longest_transit, origin_publication_budget_ms, timing_visible, transit_ms, ConnectorId,
-    EmbargoWork, NodeSync, OriginPublication, OriginVerdict, PeerFluff, Relay, RelayCarrier,
-    RelayDispatch, RelayNewError, RelayPlan, StemWork, TxBlob, NEVER_SENT_RETRY_MS,
+    address_hidden_from_peer, any_hides_address_from_peer, embargo_fire_wait_secs,
+    embargo_quiet_wait_secs, link_encrypted, longest_transit, origin_publication_budget_ms,
+    timing_visible, transit_ms, ConnectorId, EmbargoWork, NodeSync, OriginPublication,
+    OriginVerdict, PeerFluff, Relay, RelayCarrier, RelayDispatch, RelayNewError, RelayPlan,
+    StemWork, TxBlob, NEVER_SENT_RETRY_MS,
 };
 pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend, Starts};
 pub use shekyl_relay_privacy::{ConnectionId, SlotIndex};

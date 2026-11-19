@@ -544,12 +544,21 @@ impl ShownPool {
 
 /// How long the embargo walks wait for one embargo fire before calling it
 /// late. The relay owns the derivation
-/// ([`shekyl_relay::embargo_fire_wait_secs`]): the shared timer's 1-in-100
-/// quantile. The fire is a memoryless draw, the same for this node's own
+/// ([`shekyl_relay::embargo_fire_wait_secs`]): the shared timer's 1-in-1000
+/// quantile, so a walk calls a fire that does come late at most once in a
+/// thousand. The fire is a memoryless draw, the same for this node's own
 /// transaction as for a relayed one, so it has no earliest time. The submit
 /// watchdog does not read it: overdue is the daemon's judgment.
 fn embargo_fire_wait() -> Duration {
     Duration::from_secs(u64::from(shekyl_relay::embargo_fire_wait_secs()))
+}
+
+/// How long an embargo walk watches for a fire that must not come
+/// ([`shekyl_relay::embargo_quiet_wait_secs`]): the shared timer's 1-in-10
+/// quantile, always paid in full. A fire wrongly left armed shows inside it
+/// at least 9 times in 10.
+fn embargo_quiet_wait() -> Duration {
+    Duration::from_secs(u64::from(shekyl_relay::embargo_quiet_wait_secs()))
 }
 
 /// One connected block, kept whole for a chain-vector capture: the block

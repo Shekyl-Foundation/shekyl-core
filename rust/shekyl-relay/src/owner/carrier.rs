@@ -71,27 +71,35 @@ pub(super) struct CarrierTask<C: Clock + Clone + Send + Sync + 'static> {
 impl<C: Clock + Clone + Send + Sync + 'static> CarrierTask<C> {
     pub(super) async fn run(mut self) {
         self.arm();
-        loop {
-            // The wake is served before the inbox: a burst of commands must
-            // not delay a due window, or the delay would follow the node's
-            // traffic (`CVR-R6`). A window sent before a pending view or
-            // session change is applied goes to the old binding or fails its
-            // write; both are handled.
-            tokio::select! {
-                biased;
-                wake = self.owner.wait_wake_async() => {
-                    if wake.is_err() {
-                        break;
-                    }
-                    self.on_wake();
-                }
-                cmd = self.inbox.recv() => match cmd {
-                    None | Some(CarrierCmd::Stop) => break,
-                    Some(cmd) => self.on_cmd(cmd),
-                },
-            }
-        }
+        while self.turn().await {}
         if let Err(_engine_closing) = self.owner.deregister() {}
+    }
+
+    /// One turn of the task: a due window, or else one command. `false`
+    /// ends the task.
+    ///
+    /// The wake is served before the inbox: a burst of commands must not
+    /// delay a due window, or the delay would follow the node's traffic
+    /// (`CVR-R6`). A window sent before a pending view or session change is
+    /// applied goes to the old binding or fails its write; both are handled.
+    pub(super) async fn turn(&mut self) -> bool {
+        tokio::select! {
+            biased;
+            wake = self.owner.wait_wake_async() => {
+                if wake.is_err() {
+                    return false;
+                }
+                self.on_wake();
+                true
+            }
+            cmd = self.inbox.recv() => match cmd {
+                None | Some(CarrierCmd::Stop) => false,
+                Some(cmd) => {
+                    self.on_cmd(cmd);
+                    true
+                }
+            },
+        }
     }
 
     fn on_cmd(&mut self, cmd: CarrierCmd) {
@@ -177,7 +185,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> CarrierTask<C> {
         let _gone = self.to_owner.send(Cmd::Carrier(outcomes));
     }
 
-    fn arm(&self) {
+    pub(super) fn arm(&self) {
         if let Err(_engine_closing) = self.owner.clear() {}
         if let Some(deadline) = self.carrier.deadline() {
             if let Err(_engine_closing) = self.owner.arm(tick_of(deadline)) {}

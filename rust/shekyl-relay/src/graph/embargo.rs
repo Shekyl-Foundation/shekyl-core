@@ -52,7 +52,7 @@ use std::sync::OnceLock;
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::params::{origin_retry_one_in, DandelionParams};
-use shekyl_relay_privacy::schedule::{EmbargoTimer, Millis, PROPAGATION_FALSE_FAIL_ONE_IN};
+use shekyl_relay_privacy::schedule::{EmbargoTimer, Millis};
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
 use super::{embargo_timer, NodeSync, Relay, RelayCarrier, RelayPlan, TxBlob};
@@ -92,14 +92,32 @@ pub fn origin_publication_budget_ms() -> Millis {
     })
 }
 
+/// How often a test that waits [`embargo_fire_wait_secs`] for a fire that
+/// does come calls it late, as `1 / one_in`. The fire is a random draw, so a
+/// test's wait is a quantile and has a miss rate; this is it. A longer wait
+/// costs time only when the fire never comes.
+pub const FIRE_WAIT_MISS_ONE_IN: u64 = 1_000;
+
 /// How long a test may wait for one embargo fire over the longest declared
-/// transit before calling it late, in seconds: the shared timer's 1-in-100
-/// survival quantile (`PROPAGATION_FALSE_FAIL_ONE_IN`). The draw is
-/// memoryless, so a fire has no earliest time, only this late bound.
+/// transit before calling it late, in seconds: the shared timer's survival
+/// quantile at [`FIRE_WAIT_MISS_ONE_IN`]. The draw is memoryless, so a fire
+/// has no earliest time, only this late bound.
 #[must_use]
 pub fn embargo_fire_wait_secs() -> u32 {
     let params = DandelionParams::adopted_for_transit_ms(super::longest_transit());
-    EmbargoTimer::shipped(&params).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)
+    EmbargoTimer::shipped(&params).judge_failed_after_secs(FIRE_WAIT_MISS_ONE_IN)
+}
+
+/// How long a test watches for an embargo fire that must **not** come, in
+/// seconds: the shared timer's survival quantile at the confidence a relay
+/// asks whether a stem completed (`origin_retry_one_in`, 1 in 10). A fire
+/// that was wrongly left armed shows inside this wait 9 times in 10; the
+/// wait is always paid in full, which is why it is not the longer
+/// [`embargo_fire_wait_secs`].
+#[must_use]
+pub fn embargo_quiet_wait_secs() -> u32 {
+    let params = DandelionParams::adopted_for_transit_ms(super::longest_transit());
+    EmbargoTimer::shipped(&params).judge_failed_after_secs(origin_retry_one_in())
 }
 
 /// Whether this node's own transaction is still unpublished, judged on

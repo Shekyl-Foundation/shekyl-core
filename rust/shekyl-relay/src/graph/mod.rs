@@ -42,8 +42,8 @@ mod hidden_slot;
 mod origin;
 
 pub use embargo::{
-    embargo_fire_wait_secs, origin_publication_budget_ms, EmbargoWork, OriginPublication, StemWork,
-    NEVER_SENT_RETRY_MS,
+    embargo_fire_wait_secs, embargo_quiet_wait_secs, origin_publication_budget_ms, EmbargoWork,
+    OriginPublication, StemWork, NEVER_SENT_RETRY_MS,
 };
 pub use origin::OriginVerdict;
 

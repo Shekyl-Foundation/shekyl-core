@@ -23,7 +23,7 @@ use super::*;
 /// phase for 600 s and nothing would ever have published it (2026-10-29,
 /// the probe recorded in `DRS_X_STORE_FLIP.md`'s register).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): two live daemons and one embargo fire"]
+#[ignore = "embargo lane (run_live_daemon_gates.sh ARMED_EMBARGO): two live daemons and one embargo fire"]
 async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
     use shekyl_units::AtomicUnits;
 
@@ -83,13 +83,13 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
 /// - when the transaction comes back from a peer other than the one it was
 ///   re-stemmed to, it disarms and shows it;
 /// - disarmed, it does not fluff: no peer hears the transaction as a fluff
-///   from the origin through a second fire's wait, and the next block mines
-///   it.
+///   from the origin through the quiet wait (the timer's 1-in-10 quantile),
+///   and the next block mines it.
 ///
 /// Red under fluff on expiry (the C++ behaviour §14 rejected): the first
 /// fire reaches every peer as a fluff, and the re-stem assertion fails.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): a live daemon, three simulated peers and two embargo-fire waits"]
+#[ignore = "embargo lane (run_live_daemon_gates.sh ARMED_EMBARGO): a live daemon, three simulated peers, one embargo fire and the quiet wait"]
 async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs() {
     use super::super::peer::{Heard, TestPeer};
     use shekyl_units::AtomicUnits;
@@ -278,8 +278,8 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
-    // Disarmed: no second fire, so no fluff, through a second fire's wait.
-    let quiet_until = restem[0].at + embargo_fire_wait() + SLACK;
+    // Disarmed: no second fire, so no fluff, through the quiet wait.
+    let quiet_until = restem[0].at + embargo_quiet_wait() + SLACK;
     while Instant::now() < quiet_until {
         assert!(
             !fluffed(&everyone),

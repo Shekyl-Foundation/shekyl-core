@@ -8,6 +8,15 @@ name: nightly/live-daemon-slow-gates
 # armed gates, not optional smoke — a red here is a consensus regression
 # and blocks release the same as a per-PR red.
 #
+# The GATE_LANE=embargo leg runs the relay embargo's two live walks
+# (ARMED_EMBARGO). Each waits for a real embargo fire, a random draw with a
+# mean of 1,320 s, so the leg has no fixed run time: the build, then two
+# draws and the second walk's quiet wait of 3,770 s, about 110
+# runner-minutes of walks at the mean on each branch (derived 2026-11-18,
+# not yet measured on a runner). It takes those two walks out of the slow leg, where they ran
+# 62 minutes on the fixed interval they replaced. Its timeout is the
+# hosted-runner maximum, so that a long draw is not reported as a red.
+#
 # Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
 # per-PR lane): same container, same apt set, same BUILD_DEFAULT_LINUX, so
 # the shekyld under test here is the same shape the per-PR gates run against.
@@ -47,11 +56,12 @@ jobs:
     # house pattern. workflow_dispatch with ref=dev exercises a newer config
     # before it lands on main.
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: ${{ matrix.lane == 'embargo' && 360 || 240 }}
     strategy:
       fail-fast: false
       matrix:
         branch: [main, dev]
+        lane: [slow, embargo]
     container:
       image: ubuntu:24.04
       env:
@@ -78,12 +88,12 @@ jobs:
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: ${{env.BUILD_DEFAULT_LINUX}}
-      - name: slow live-daemon gates
+      - name: ${{ matrix.lane }} live-daemon gates
         # `shell: bash` for the same reason as build.yml's per-PR step: the
         # container default is dash, which rejects `set -o pipefail`.
         shell: bash
         env:
-          GATE_LANE: slow
+          GATE_LANE: ${{ matrix.lane }}
         run: scripts/ci/run_live_daemon_gates.sh
       - name: notify on red
         # The visibility route that justifies this lane's existence (header
@@ -99,11 +109,11 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const title = `nightly slow live-daemon gates RED (${{ matrix.branch }})`;
+            const title = `nightly ${{ matrix.lane }} live-daemon gates RED (${{ matrix.branch }})`;
             const body = [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               'Branch: ${{ matrix.branch }}',
-              'The GATE_LANE=slow consensus gates (depth-3 FCMP++ spend / emission claim) failed.',
+              'The GATE_LANE=${{ matrix.lane }} gates failed (slow: depth-3 FCMP++ spend and the bonded walks; embargo: the relay embargo walks).',
               'A red here is a consensus regression and blocks release the same as a per-PR red.',
             ].join('\n');
             // Exact-title match over open issues, not text search: the search

@@ -70,8 +70,9 @@ fn originate(z: &mut Relay, sent: &(TxId, TxBlob), rng: &mut SplitMix64) -> Conn
 
 /// The overdue budget is status only: two fires of the shared timer, each
 /// at the 1-in-10 confidence, over the longest transit. Nothing is sent on
-/// it. The wait a test gives one fire is the same timer's 1-in-100 quantile.
-/// Red edit: derive either from a timer of its own.
+/// it. The waits a test gives a fire are the same timer's quantiles: 1 in
+/// 1000 for a fire that must come, 1 in 10 for one that must not.
+/// Red edit: derive any of them from a timer of its own.
 #[test]
 fn the_overdue_budget_is_two_fires_of_the_shared_timer() {
     let params = DandelionParams::adopted_for_transit_ms(longest_transit());
@@ -87,9 +88,9 @@ fn the_overdue_budget_is_two_fires_of_the_shared_timer() {
     assert_eq!(origin_publication_budget_ms(), 7_540_000);
     assert_eq!(
         embargo_fire_wait_secs(),
-        timer
-            .judge_failed_after_secs(shekyl_relay_privacy::schedule::PROPAGATION_FALSE_FAIL_ONE_IN)
+        timer.judge_failed_after_secs(super::embargo::FIRE_WAIT_MISS_ONE_IN)
     );
+    assert_eq!(embargo_quiet_wait_secs(), per_fire);
 }
 
 /// **Once sent, this node's own transaction gets the reaction a relayed one
@@ -98,7 +99,7 @@ fn the_overdue_budget_is_two_fires_of_the_shared_timer() {
 /// must not be able to sort the node's own transactions from the ones it
 /// relays.
 ///
-/// Over many seeds, one zone stems its own transaction and its twin stems a
+/// Over a thousand seeds, one zone stems its own transaction and its twin stems a
 /// relayed one, each recorded and fired with a generator of the same seed.
 /// The first deadline, the reshape, the second deadline and the broadcast
 /// are the same. Red edit: any branch on `source` in `record_stem` or
@@ -153,7 +154,12 @@ fn a_dropped_stem_gets_one_reaction_own_or_relayed() {
             left: z.relay_state_len(),
         }
     };
-    for seed in 0..64 {
+    /// Seeds walked. Enough that the printed means sit within a few
+    /// percent of the timer's (an exponential's mean over n draws has a
+    /// relative error of 1/sqrt(n)).
+    const SEEDS: u64 = 1_024;
+    let (mut to_reshape, mut to_broadcast) = (0_u64, 0_u64);
+    for seed in 0..SEEDS {
         let own = run(seed, true);
         assert_eq!(own, run(seed, false), "seed {seed}");
         assert_eq!(
@@ -161,7 +167,17 @@ fn a_dropped_stem_gets_one_reaction_own_or_relayed() {
             (1, 1, 0),
             "seed {seed}"
         );
+        to_reshape += own.first_fire;
+        to_broadcast += own.second_fire;
     }
+    // The failure path's times, for the record: a stem dropped at its first
+    // hop, on the clearnet connector, before any window wait.
+    println!(
+        "dropped at the first hop, {SEEDS} seeds, own and relayed alike: mean {} s to the \
+         reshape, mean {} s to the broadcast",
+        to_reshape / SEEDS / 1_000,
+        to_broadcast / SEEDS / 1_000
+    );
 }
 
 /// The judgment is a function of an arm time and the clock at the read.
