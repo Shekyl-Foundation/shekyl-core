@@ -4398,6 +4398,7 @@ dependencies = [
 name = "shekyl-economics-sim"
 version = "3.1.0"
 dependencies = [
+ "libm",
  "serde",
  "serde_json",
  "shekyl-archival-retention",

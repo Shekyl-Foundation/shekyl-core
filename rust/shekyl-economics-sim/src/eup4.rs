@@ -997,6 +997,9 @@ pub fn run_scoped(
     instrument: Option<Instrument>,
     scope: Scope,
 ) -> Result<Summary, fmt::Error> {
+    if let Some(traffic) = base.traffic.report_line() {
+        writeln!(out, "{traffic}")?;
+    }
     let runs = |i: Instrument| instrument.is_none_or(|only| only == i);
     let arms = both_arms(base);
     let every = match scope {
@@ -1125,10 +1128,20 @@ mod tests {
         }
     }
 
+    /// The nightly scope on the `steady` control's traffic: the regression
+    /// anchor (§5.35, STD-2).
+    const STEADY_NIGHTLY: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/eup4_narration_steady_nightly.txt"
+    );
+
     fn narration(scope: Scope) -> String {
+        narration_on(&SimParams::default(), scope)
+    }
+
+    fn narration_on(params: &SimParams, scope: Scope) -> String {
         let mut narration = String::new();
-        run_scoped(&mut narration, &SimParams::default(), None, scope)
-            .expect("String sink is infallible");
+        run_scoped(&mut narration, params, None, scope).expect("String sink is infallible");
         narration
     }
 
@@ -1158,7 +1171,20 @@ mod tests {
         );
     }
 
-    /// Regenerate both committed narrations, armed (rule 50). Ignored by
+    /// The nightly scope on the `steady` control against its committed
+    /// copy: the regression anchor (§5.35, STD-2).
+    #[test]
+    #[ignore = "--eup4's nightly scope on steady traffic — nightly economics-sim-ignored; run with --release --ignored; fixture generated and checked on Linux x86-64"]
+    fn eup4_steady_nightly_narration_matches_the_committed_fixture() {
+        committed_fixture::assert_matches(
+            "--eup4 steady nightly narration",
+            STEADY_NIGHTLY,
+            &narration_on(&SimParams::default().on_steady(), Scope::Nightly),
+        );
+    }
+
+    /// Regenerate the committed narrations, the steady control's among
+    /// them, armed (rule 50). Ignored by
     /// default; run with `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD
     /// <rationale>" cargo test --release -p shekyl-economics-sim -- --ignored
     /// regen_eup4_narration_fixtures`, the date naming the
@@ -1176,6 +1202,10 @@ mod tests {
                 Output {
                     path: path(Scope::Nightly),
                     build: || narration(Scope::Nightly),
+                },
+                Output {
+                    path: STEADY_NIGHTLY,
+                    build: || narration_on(&SimParams::default().on_steady(), Scope::Nightly),
                 },
             ],
         );

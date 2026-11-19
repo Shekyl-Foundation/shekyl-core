@@ -5,9 +5,9 @@ restated as the median of variable traffic at the baseline's mean, 35; variable 
 only), median+floor (the median, the stuffer paying the relay floor on its own bodies),
 decoupled (the baseline in place of volume: release, the burn and C read none), rails-only
 (release rails at 1.0; the burn and C still read the sum). Traffic: steady (the schedule's
-demand every block) or variable (a geometric count around it drawn at the block's height:
-Poisson arrivals over exponential block intervals; the pool carries what a block does not
-list), at seed 1. Zone: N 2-in/2-out
+demand every block) or variable (the sim's standard traffic, §5.35: each block's interval drawn
+exponential at its height, and each fee rung's Poisson arrivals over it; the pool carries what a
+block does not list), at seed 1. Zone: N 2-in/2-out
 spends of 19939 B (genesis depth and Standard fee) plus the coinbase reserve (1386 B), beside
 the inherited and re-derived zones; w_ref at 3000 and 12595 B, each fixed across N. Not re-derived:
 TX_WEIGHT_LIMIT (the sim does not read it; it caps one transaction, not a count) and
@@ -19,28 +19,31 @@ before the step), the year-1 Standard fee (SKL, and over the ceiling), a day's b
 the zone at the year-1 relay floor (SKL), the first year blocks carry the design load
 (30 spends, 48 ordinary transactions a block), the declared step's up-edge (M_r over the
 window before it and the trace's last window, and the blocks until that window mean covers 95 % of
-the move), and for a median arm on variable traffic its count over year 1 after the window's first
+the move), year 1's room after the window's first fill (the cap in transactions, least to most:
+the effective median less the coinbase reserve over the Standard ordinary transaction; the share
+of blocks whose own arrivals exceed it; the share leaving a backlog; the median offered and
+carried), and for a median arm on variable traffic its count over year 1 after the window's first
 fill, per seed: the mean, and the share of blocks at 34 and at 35, the derived median.
-  SMA          steady   inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
-  SMA          steady   inherited       300000 B w_ref 12595: rests 1.000 ; fee 1.2233 (2.46x) ; fill a day 4337.9 ; design load y1 ; step M_r 1.000->1.300 in 1235 blocks
-  SMA          steady   N = 90         1795896 B w_ref  3000: rests 1.000 ; fee 0.0462 (0.09x) ; fill a day 1031.9 ; design load y1 ; step M_r 1.000->1.300 in 766 blocks
-  SMA          steady   N = 90         1795896 B w_ref 12595: rests 1.000 ; fee 0.1940 (0.39x) ; fill a day 4331.7 ; design load y1 ; step M_r 1.000->1.300 in 763 blocks
-  SMA          variable inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
-  SMA          variable inherited       300000 B w_ref 12595: rests 1.004 ; fee 0.7677 (1.55x) ; fill a day 2659.2 ; design load y1 ; step M_r 1.004->1.300 in 938 blocks
-  SMA          variable N = 90         1795896 B w_ref  3000: rests 1.004 ; fee 0.0461 (0.09x) ; fill a day 1073.2 ; design load y1 ; step M_r 1.004->1.300 in 750 blocks
-  SMA          variable N = 90         1795896 B w_ref 12595: rests 1.004 ; fee 0.1936 (0.39x) ; fill a day 4510.1 ; design load y1 ; step M_r 1.004->1.300 in 748 blocks
-  median       steady   inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
-  median       steady   inherited       300000 B w_ref 12595: rests 1.000 ; fee 1.2231 (2.46x) ; fill a day 4337.9 ; design load y1 ; step M_r 1.000->1.300 in 1272 blocks
-  median       steady   N = 90         1795896 B w_ref  3000: rests 1.000 ; fee 0.0462 (0.09x) ; fill a day 1031.9 ; design load y1 ; step M_r 1.000->1.300 in 1045 blocks
-  median       steady   N = 90         1795896 B w_ref 12595: rests 1.000 ; fee 0.1940 (0.39x) ; fill a day 4331.7 ; design load y1 ; step M_r 1.000->1.300 in 1045 blocks
-  median       variable inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move ; variable s1 count 22.04 (34: 0.0 %, 35: 0.0 %)
-  median       variable inherited       300000 B w_ref 12595: rests 1.330 ; fee 0.9787 (1.97x) ; fill a day 3306.1 ; design load y1 ; step M_r 1.297->1.300 in 178 blocks ; variable s1 count 64.68 (34: 0.0 %, 35: 0.0 %)
-  median       variable N = 90         1795896 B w_ref  3000: rests 0.808 ; fee 0.0374 (0.08x) ; fill a day 848.2 ; design load y1 ; step M_r 0.812->1.300 in 798 blocks ; variable s1 count 38.77 (34: 2.1 %, 35: 4.2 %)
-  median       variable N = 90         1795896 B w_ref 12595: rests 0.802 ; fee 0.1569 (0.32x) ; fill a day 3566.2 ; design load y1 ; step M_r 0.808->1.300 in 799 blocks ; variable s1 count 38.65 (34: 2.2 %, 35: 4.6 %)
-  median-r     variable inherited       300000 B w_ref  3000: rests 0.629 ; fee 1.1907 (2.40x) ; fill a day 4485.9 ; design load y16 ; step M_r 0.800->0.800 in no move ; variable s1 count 22.04 (34: 0.0 %, 35: 0.0 %)
-  median-r     variable inherited       300000 B w_ref 12595: rests 1.901 ; fee 1.0017 (2.02x) ; fill a day 3335.0 ; design load y1 ; step M_r 1.300->1.300 in no move ; variable s1 count 64.68 (34: 0.0 %, 35: 0.0 %)
-  median-r     variable N = 90         1795896 B w_ref  3000: rests 1.154 ; fee 0.0511 (0.10x) ; fill a day 1207.7 ; design load y1 ; step M_r 1.154->1.300 in 710 blocks ; variable s1 count 38.77 (34: 2.1 %, 35: 4.2 %)
-  median-r     variable N = 90         1795896 B w_ref 12595: rests 1.145 ; fee 0.2140 (0.43x) ; fill a day 5072.6 ; design load y1 ; step M_r 1.145->1.300 in 709 blocks ; variable s1 count 38.65 (34: 2.2 %, 35: 4.6 %)
+  SMA          steady   inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move ; room cap 21-23 txs, arrivals over it 100.0 %, backlog 100.0 %, median offered 50 carried 22
+  SMA          steady   inherited       300000 B w_ref 12595: rests 1.000 ; fee 1.2233 (2.46x) ; fill a day 4337.9 ; design load y1 ; step M_r 1.000->1.300 in 1235 blocks ; room cap 47-63 txs, arrivals over it 0.1 %, backlog 0.1 %, median offered 50 carried 50
+  SMA          steady   N = 90         1795896 B w_ref  3000: rests 1.000 ; fee 0.0462 (0.09x) ; fill a day 1031.9 ; design load y1 ; step M_r 1.000->1.300 in 766 blocks ; room cap 122-131 txs, arrivals over it 0.0 %, backlog 0.0 %, median offered 50 carried 50
+  SMA          steady   N = 90         1795896 B w_ref 12595: rests 1.000 ; fee 0.1940 (0.39x) ; fill a day 4331.7 ; design load y1 ; step M_r 1.000->1.300 in 763 blocks ; room cap 122-131 txs, arrivals over it 0.0 %, backlog 0.0 %, median offered 50 carried 50
+  SMA          variable inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move ; room cap 21-23 txs, arrivals over it 63.3 %, backlog 100.0 %, median offered 35 carried 22
+  SMA          variable inherited       300000 B w_ref 12595: rests 1.012 ; fee 0.7606 (1.53x) ; fill a day 2614.0 ; design load y1 ; step M_r 1.012->1.300 in 981 blocks ; room cap 47-76 txs, arrivals over it 26.8 %, backlog 53.2 %, median offered 35 carried 64
+  SMA          variable N = 90         1795896 B w_ref  3000: rests 1.013 ; fee 0.0463 (0.09x) ; fill a day 1057.7 ; design load y1 ; step M_r 1.013->1.300 in 758 blocks ; room cap 122-131 txs, arrivals over it 8.4 %, backlog 10.9 %, median offered 35 carried 39
+  SMA          variable N = 90         1795896 B w_ref 12595: rests 1.013 ; fee 0.1943 (0.39x) ; fill a day 4440.3 ; design load y1 ; step M_r 1.013->1.300 in 756 blocks ; room cap 122-131 txs, arrivals over it 8.4 %, backlog 10.6 %, median offered 35 carried 39
+  median       steady   inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move ; room cap 21-23 txs, arrivals over it 100.0 %, backlog 100.0 %, median offered 50 carried 22
+  median       steady   inherited       300000 B w_ref 12595: rests 1.000 ; fee 1.2231 (2.46x) ; fill a day 4337.9 ; design load y1 ; step M_r 1.000->1.300 in 1272 blocks ; room cap 47-67 txs, arrivals over it 0.1 %, backlog 0.1 %, median offered 50 carried 50
+  median       steady   N = 90         1795896 B w_ref  3000: rests 1.000 ; fee 0.0462 (0.09x) ; fill a day 1031.9 ; design load y1 ; step M_r 1.000->1.300 in 1045 blocks ; room cap 122-131 txs, arrivals over it 0.0 %, backlog 0.0 %, median offered 50 carried 50
+  median       steady   N = 90         1795896 B w_ref 12595: rests 1.000 ; fee 0.1940 (0.39x) ; fill a day 4331.7 ; design load y1 ; step M_r 1.000->1.300 in 1045 blocks ; room cap 122-131 txs, arrivals over it 0.0 %, backlog 0.0 %, median offered 50 carried 50
+  median       variable inherited       300000 B w_ref  3000: rests 0.440 ; fee 1.1888 (2.40x) ; fill a day 4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move ; room cap 21-23 txs, arrivals over it 63.3 %, backlog 100.0 %, median offered 35 carried 22 ; variable s1 count 22.04 (34: 0.0 %, 35: 0.0 %)
+  median       variable inherited       300000 B w_ref 12595: rests 1.340 ; fee 0.9678 (1.95x) ; fill a day 3305.9 ; design load y1 ; step M_r 1.300->1.300 in no move ; room cap 48-76 txs, arrivals over it 26.8 %, backlog 53.2 %, median offered 35 carried 64 ; variable s1 count 64.92 (34: 0.0 %, 35: 0.0 %)
+  median       variable N = 90         1795896 B w_ref  3000: rests 0.795 ; fee 0.0374 (0.08x) ; fill a day 848.2 ; design load y1 ; step M_r 0.809->1.300 in 805 blocks ; room cap 122-131 txs, arrivals over it 8.4 %, backlog 10.9 %, median offered 35 carried 39 ; variable s1 count 38.85 (34: 1.7 %, 35: 4.3 %)
+  median       variable N = 90         1795896 B w_ref 12595: rests 0.790 ; fee 0.1569 (0.32x) ; fill a day 3566.2 ; design load y1 ; step M_r 0.808->1.300 in 805 blocks ; room cap 122-131 txs, arrivals over it 8.4 %, backlog 10.6 %, median offered 35 carried 39 ; variable s1 count 38.73 (34: 1.8 %, 35: 4.7 %)
+  median-r     variable inherited       300000 B w_ref  3000: rests 0.629 ; fee 1.1907 (2.40x) ; fill a day 4485.9 ; design load y16 ; step M_r 0.800->0.800 in no move ; room cap 21-23 txs, arrivals over it 63.3 %, backlog 100.0 %, median offered 35 carried 22 ; variable s1 count 22.04 (34: 0.0 %, 35: 0.0 %)
+  median-r     variable inherited       300000 B w_ref 12595: rests 1.914 ; fee 0.9886 (1.99x) ; fill a day 3334.8 ; design load y1 ; step M_r 1.300->1.300 in no move ; room cap 47-76 txs, arrivals over it 26.8 %, backlog 53.2 %, median offered 35 carried 64 ; variable s1 count 64.91 (34: 0.0 %, 35: 0.0 %)
+  median-r     variable N = 90         1795896 B w_ref  3000: rests 1.136 ; fee 0.0512 (0.10x) ; fill a day 1207.7 ; design load y1 ; step M_r 1.136->1.300 in 694 blocks ; room cap 122-131 txs, arrivals over it 8.4 %, backlog 10.9 %, median offered 35 carried 39 ; variable s1 count 38.85 (34: 1.7 %, 35: 4.3 %)
+  median-r     variable N = 90         1795896 B w_ref 12595: rests 1.129 ; fee 0.2144 (0.43x) ; fill a day 5071.3 ; design load y1 ; step M_r 1.129->1.300 in 693 blocks ; room cap 122-131 txs, arrivals over it 8.4 %, backlog 10.6 %, median offered 35 carried 39 ; variable s1 count 38.73 (34: 1.8 %, 35: 4.7 %)
 
 THE STUFFER. Per signal, traffic, zone, w_ref and start: a stuffer holding its share (100 = every
 miner) for the whole measured span (2160 blocks from the start of the year); the bodies
@@ -73,12 +76,12 @@ blocks; the bodies are the ordinary 1-in/2-out, the lightest valid shape (CEN-I1
   median         5   51%       0  1.0000  1.0000   1.000  1.0000      0         0.00         -  11.073  1.0139
 == inherited (300000 B) | w_ref 12595 | variable
   signal         y share  bodies    last at rest   ratio    mean    run net gain SKL break-even  burn %       C
-  SMA            5   20%    9073  1.0757  1.0930   1.093  1.0884   2160     22095.03      1483  11.497  1.0959
-  SMA            5   51%   27663  1.2782  1.2685   1.268  1.2260   2160    168629.49      3283  12.535  1.3177
-  median         5   20%    9072  1.3000  1.3000   1.400  1.3000   2160      6439.48       368  16.115  1.3973
-  median         5   51%   27668  1.3000  1.3000   1.492  1.3000   2160     16078.61       302  16.791  1.4087
-  median-r       5   20%    9082  1.3000  1.3000   2.000  1.3000   2160        24.42         1  19.631  1.4585
-  median-r       5   51%   27705  1.3000  1.3000   2.132  1.3000   2160      -371.16        -7  20.455  1.4736
+  SMA            5   20%    9819  1.0562  1.0421   1.042  1.0636   2160     24664.98      1570  11.390  1.0747
+  SMA            5   51%   28856  1.2200  1.2195   1.220  1.2164   2160    188014.19      3530  12.245  1.2535
+  median         5   20%    9818  1.3000  1.3000   1.364  1.3000   2160     22869.80      1209  15.874  1.3933
+  median         5   51%   28858  1.3000  1.3000   1.470  1.3000   2160     58209.34      1040  16.447  1.4029
+  median-r       5   20%    9832  1.3000  1.3000   1.948  1.3000   2160      -349.57       -18  19.351  1.4534
+  median-r       5   51%   29184  1.3000  1.3000   2.100  1.3000   2160      -869.98       -15  20.049  1.4661
 == N = 90 (1795896 B) | w_ref 3000 | steady
   signal         y share  bodies    last at rest   ratio    mean    run net gain SKL break-even  burn %       C
   SMA            5   20%   31104  1.2880  1.2880   1.288  1.2397   2155     74560.01     17328  12.606  1.3289
@@ -87,12 +90,12 @@ blocks; the bodies are the ordinary 1-in/2-out, the lightest valid shape (CEN-I1
   median         5   51%   79272  1.3000  1.3000   2.440  1.2017   1452    159872.76     14468  17.350  1.4182
 == N = 90 (1795896 B) | w_ref 3000 | variable
   signal         y share  bodies    last at rest   ratio    mean    run net gain SKL break-even  burn %       C
-  SMA            5   20%   31231  1.2924  1.2948   1.299  1.2551   2160     73081.00     16645  12.629  1.3337
-  SMA            5   51%   78345  1.3000  1.3000   1.747  1.2834   2160    208697.13     18175  14.663  1.3736
-  median         5   20%   31231  1.1000  1.1134   1.113  1.0645   1745     83427.93     22047   9.664  1.0979
-  median         5   51%   78345  1.3000  1.3000   2.440  1.2548   1994    370828.94     31634  14.400  1.3693
-  median-r       5   20%   31231  1.3000  1.3000   1.591  1.2935   2160     52228.98     11545  15.303  1.3839
-  median-r       5   51%   78345  1.3000  1.3000   3.486  1.2968   2160    135647.46     11054  22.791  1.5182
+  SMA            5   20%   32821  1.2756  1.2512   1.251  1.2397   2160     78950.69     17410  12.545  1.3152
+  SMA            5   51%   80829  1.3000  1.3000   1.702  1.2869   2160    238757.74     20167  14.513  1.3712
+  median         5   20%   32821  1.0800  1.0134   1.013  1.0298   1170     72599.74     19032   9.572  1.0769
+  median         5   51%   80829  1.3000  1.3000   2.440  1.2689   2041    384084.83     31608  14.395  1.3693
+  median-r       5   20%   32821  1.3000  1.3000   1.448  1.2969   2160     61474.68     12954  15.135  1.3812
+  median-r       5   51%   80829  1.3000  1.3000   3.486  1.2989   2160    158080.77     12476  22.750  1.5174
 == N = 90 (1795896 B) | w_ref 12595 | steady
   signal         y share  bodies    last at rest   ratio    mean    run net gain SKL break-even  burn %       C
   SMA            5   20%   31104  1.2880  1.2880   1.288  1.2397   2155     75207.66      4161  12.602  1.3288
@@ -101,9 +104,9 @@ blocks; the bodies are the ordinary 1-in/2-out, the lightest valid shape (CEN-I1
   median         5   51%   79272  1.3000  1.3000   2.440  1.2017   1452    161262.16      3474  17.344  1.4181
 == N = 90 (1795896 B) | w_ref 12595 | variable
   signal         y share  bodies    last at rest   ratio    mean    run net gain SKL break-even  burn %       C
-  SMA            5   20%   31280  1.2928  1.2951   1.300  1.2555   2160     73793.89      3995  12.627  1.3342
-  SMA            5   51%   78455  1.3000  1.3000   1.748  1.2834   2160    210553.76      4360  14.662  1.3736
-  median         5   20%   31280  1.1000  1.1042   1.104  1.0595   1742     82776.20      5226   9.652  1.0978
-  median         5   51%   78455  1.3000  1.3000   2.440  1.2540   1991    374366.84      7597  14.382  1.3691
-  median-r       5   20%   31280  1.3000  1.3000   1.577  1.2932   2160     53394.14      2806  15.254  1.3832
-  median-r       5   51%   78532  1.3000  1.3000   3.486  1.2965   2160    138821.75      2687  22.719  1.5168
+  SMA            5   20%   32874  1.2761  1.2517   1.252  1.2401   2160     79713.65      4178  12.543  1.3157
+  SMA            5   51%   80939  1.3000  1.3000   1.703  1.2870   2160    240801.38      4836  14.513  1.3712
+  median         5   20%   32874  1.0800  1.0117   1.012  1.0282   1158     72825.02      4545   9.560  1.0767
+  median         5   51%   80939  1.3000  1.3000   2.440  1.2686   2041    387622.26      7585  14.377  1.3690
+  median-r       5   20%   32874  1.3000  1.3000   1.445  1.2968   2160     62997.73      3156  15.088  1.3804
+  median-r       5   51%   81024  1.3000  1.3000   3.486  1.2989   2160    162211.22      3040  22.679  1.5160

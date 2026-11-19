@@ -1,3 +1,4 @@
+Traffic: standard, at seed 1 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.35): each block's interval drawn exponential around the target spacing, each fee rung's arrivals Poisson over it; the pool carries what a block does not list. --control-steady-traffic offers every block its demand.
 FEE ARM: CONTROL — flat 0.100 SKL per transaction at every height. A declared divergence: the chain charges no flat fee (ECONOMICS_SIM_PRODUCTION_REBASE.md §4).
 
 Stage-2 archival burden trajectory (§12.1 checkpoint 1)
@@ -12,15 +13,15 @@ Kryder band swept (DQ-2B):
   - 25%/yr (long-run historical $/GB decline)
 
 scenario                years  final_outputs       final_GB    final_n final_burden$/yr@0%
-baseline_steady_state      10      105987270         631.67     210555             6.32
-boom_bust_cycle            10       92544370         551.10     183698             5.51
-sustained_growth           20      211107270        1261.70     420567            12.62
-stuffing_attack             2       21891404         127.64      42545             1.28
-stake_concentration        10      105987270         631.67     210555             6.32
-mass_unstaking              5       53427270         316.65     105549             3.17
-chain_bootstrap             5       39891330         235.52      78506             2.36
-late_chain_tail             5      604034362        3707.60    1235866            37.08
-high_history_low_activity     60      526470776        3217.90    1072633            32.18
+baseline_steady_state      10      105987292         631.67     210555             6.32
+boom_bust_cycle            10       92586196         551.35     183782             5.51
+sustained_growth           20      211107292        1261.70     420567            12.62
+stuffing_attack             2       21891402         127.64      42545             1.28
+stake_concentration        10      105987292         631.67     210555             6.32
+mass_unstaking              5       53427292         316.65     105549             3.17
+chain_bootstrap             5       39888696         235.50      78501             2.36
+late_chain_tail             5      603740608        3705.74    1235247            37.06
+high_history_low_activity     60      526628720        3218.90    1072965            32.19
 
 Reading: `final_n` is the D2 operand at horizon; `final_burden` is the
 whole-corpus annual storage cost under the BINDING 0%/yr Kryder case.
@@ -74,13 +75,13 @@ scenario       y era          M (KB)   room       relay      miner U   (placemen
 baseline_ste   5 constrained     300      6     21.2347      14.5943         Mixed     14.6648     14.6646     14.6478     14.5943     14.6478
 baseline_ste  20 carried         300      6     21.2347      12.4900         Mixed     12.6853     12.6848     12.6368     12.4900     12.6368
 baseline_ste  45 tail            307      0     20.5415      14.2972         Mixed     14.5666     14.5660     14.4997     14.2972     14.4997
-high_history  50 below zone      300     69      0.9417       0.0000      FreeRoom      0.2367      0.2361      0.1775      0.0000      0.1775
+high_history  50 below zone      307    214      0.9417       0.0000      FreeRoom      0.2335      0.2329      0.1751      0.0000      0.1751
   -> Shards a miner stuffs at the U price within a budget: share x budget / blocks per shard.
 Hashrate and time set a rate, not a price; a larger campaign raises the overshoot and the price.
        baseline_ste y5     155 blocks/shard; relay at 6830 atomic/B (outranking honest): 10%/epoch 6, 10%/year 169, 10%/decade 1695, 33%/epoch 21, 33%/year 559, 33%/decade 5595
        baseline_ste y20    155 blocks/shard; relay at 6830 atomic/B (outranking honest): 10%/epoch 6, 10%/year 169, 10%/decade 1695, 33%/epoch 21, 33%/year 559, 33%/decade 5595
        baseline_ste y45     93 blocks/shard; relay at 6544 atomic/B (outranking honest): 10%/epoch 10, 10%/year 282, 10%/decade 2825, 33%/epoch 35, 33%/year 932, 33%/decade 9325
-       high_history y50     47 blocks/shard; relay at 300 atomic/B (the floor): 10%/epoch 21, 10%/year 559, 10%/decade 5591, 33%/epoch 70, 33%/year 1845, 33%/decade 18451
+       high_history y50     15 blocks/shard; relay at 300 atomic/B (the floor): 10%/epoch 66, 10%/year 1752, 10%/decade 17520, 33%/epoch 220, 33%/year 5781, 33%/decade 57816
 
 A1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.
 budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R6 x n x rate.
@@ -90,14 +91,14 @@ Knee band [500000, 2250000, 10000000] closed shards; the shipped middle is 6.75 
 scenario                best-cand        flat-25 ratio @rate      best-cand ratio @rate    R sustained @10%
                                                                                               flat     best
 baseline_steady_stat   90%/500000    382.96  155.01   77.81    384.38  155.58   78.10     466.87   468.60
-boom_bust_cycle        90%/500000    438.62  177.54   89.12    439.59  177.93   89.32     534.73   535.92
+boom_bust_cycle        90%/500000    438.42  177.45   89.08    439.39  177.85   89.28     534.48   535.67
 sustained_growth       90%/500000     41.08   16.63    8.35     42.68   17.28    8.67      50.08    52.03
 stuffing_attack      90%/10000000       inf     inf     inf       inf     inf     inf        inf      inf
 stake_concentration    90%/500000    382.96  155.01   77.81    384.38  155.58   78.10     466.87   468.60
 mass_unstaking         90%/500000   1659.62  671.75  337.21   1660.57  672.13  337.41    2023.28  2024.44
-chain_bootstrap        90%/500000   2231.31  903.15  453.37   2232.26  903.53  453.57    2720.24  2721.40
-late_chain_tail        90%/500000     11.89    4.81    2.42     41.70   16.88    8.47      14.50    50.84
-high_history_low_act   90%/500000      0.29    0.12    0.06      0.97    0.39    0.20       0.35     1.18
+chain_bootstrap        90%/500000   2231.45  903.21  453.40   2232.40  903.59  453.60    2720.41  2721.57
+late_chain_tail        90%/500000     11.88    4.81    2.41     41.68   16.87    8.47      14.48    50.81
+high_history_low_act   90%/500000      0.29    0.12    0.06      0.97    0.39    0.20       0.36     1.18
   -> rate cols each = [0.02, 0.05, 0.1] (10% binding, last). The D2 case is where the
 best candidate clears (>=1.0) at 10% while flat-25 does NOT — escalation
 earning its keep. A4/A5 then drop any winner that fails W9/W10.
@@ -129,14 +130,14 @@ its fee burn has destroyed the circulating supply, so burn_pct -> 0 and the fee
 leg with it) and is read for shape only.
 scenario                final_n  xover    flat@2  best@2    flat@5  best@5   flat@10 best@10   flat-25 ratio @10% at y10/20/30/40/50/60
 baseline_steady_stat    1293851    y31       y43   never       y36     y41       y32     y34   77.81 8.35 1.27 0.27 0.11 0.07
-boom_bust_cycle         1127472    y32       y44    y58*       y37    y40*       y32     y34   89.12 9.50 1.41 0.28 0.09 0.06
+boom_bust_cycle         1127684    y32       y44    y58*       y37    y40*       y32     y34   89.08 9.50 1.41 0.28 0.09 0.06
 sustained_growth        1293851    y31       y43   never       y36     y41       y32     y34   77.81 8.35 1.27 0.27 0.11 0.07
 stuffing_attack         1293851    y31       y43   never       y36     y41       y32     y34   77.81 8.35 1.27 0.27 0.11 0.07
 stake_concentration     1293851    y31       y43   never       y36     y41       y32     y34   77.81 8.35 1.27 0.27 0.11 0.07
 mass_unstaking          1293851    y31       y43   never       y36     y41       y32     y34   77.81 8.35 1.27 0.27 0.11 0.07
-chain_bootstrap         1265364    y31       y43   never       y36     y41       y32     y34   89.28 8.92 1.33 0.28 0.11 0.07
-late_chain_tail        14619980     y3       y59   never       y24   never       y12     y43   1.19 0.59 0.39 0.30 0.24 0.20
-high_history_low_act    1072633    y32       y43     y59       y36     y39       y32     y34   77.81 8.35 1.34 0.28 0.10 0.06
+chain_bootstrap         1265359    y31       y43   never       y36     y41       y32     y34   89.28 8.92 1.33 0.28 0.11 0.07
+late_chain_tail        14618508     y3       y59   never       y24   never       y12     y43   1.19 0.59 0.39 0.30 0.24 0.20
+high_history_low_act    1072965    y32       y43     y59       y36     y39       y32     y34   77.81 8.35 1.34 0.28 0.10 0.06
   -> ORDINARY FEE per transaction, mean over the year (SKL), at y10/20/30/40/50/60.
 The run's fee arm made visible: a year's fees are its traffic times this.
        baseline_steady_stat 0.1000 0.1000 0.1000 0.1000 0.1000 0.1000
@@ -161,27 +162,27 @@ The run's fee arm made visible: a year's fees are its traffic times this.
   -> BLOCK SPACE (ESR-6) at y1/4/8/10/12/15/20/30/40/60: carried/demanded transactions per block, the long-term
 median at year end (KB), and transactions per block dropped unserved (expired, evicted
 or refused, below). Blocks take what the producer's fill rule admits at the effective median.
-       baseline_steady_stat  21.0/50.0   301K 28.9 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   307K 30.0 | 20.0/50.0   307K 30.0
-       boom_bust_cycle       21.0/150.0  301K 128.9 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 20.0/150.0  300K 130.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0
-       sustained_growth      21.0/50.0   301K 28.9 | 20.0/86.0   300K 66.0 | 20.0/179.0  300K 159.0 | 20.0/257.0  300K 237.0 | 20.0/371.0  300K 351.0 | 20.0/641.0  300K 621.0 | 20.0/1597.0  300K 1577.0 | 20.0/9890.0  300K 9870.0 | 20.0/61240.0  307K 61220.0 | 20.0/2347813.0  307K 2347793.0
-       stuffing_attack       21.0/66.4   301K 45.4 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   307K 30.0 | 20.0/50.0   307K 30.0
-       stake_concentration   21.0/50.0   301K 28.9 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   307K 30.0 | 20.0/50.0   307K 30.0
-       mass_unstaking        21.0/50.0   301K 28.9 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   307K 30.0 | 20.0/50.0   307K 30.0
-       chain_bootstrap        5.0/5.0    300K  0.0 | 20.0/50.0   300K 30.0 | 20.0/75.0   300K 55.0 | 20.0/75.0   300K 55.0 | 20.0/75.0   300K 55.0 | 20.0/75.0   300K 55.0 | 20.0/75.0   300K 55.0 | 20.0/75.0   300K 55.0 | 20.0/75.0   307K 55.0 | 20.0/75.0   307K 55.0
-       late_chain_tail      199.2/200.0 2930K  0.8 |300.0/300.0 4586K  0.0 |220.0/220.0 3363K  0.0 |220.0/220.0 3363K  0.0 |220.0/220.0 3363K  0.0 |220.0/220.0 3363K  0.0 |220.0/220.0 3363K  0.0 |220.0/220.0 3363K  0.0 |220.0/220.0 3363K  0.0 |220.0/220.0 3363K  0.0
-       high_history_low_act  21.0/150.0  301K 128.9 | 20.0/150.0  300K 130.0 | 20.0/250.0  300K 230.0 | 20.0/250.0  300K 230.0 | 20.0/250.0  300K 230.0 | 20.0/250.0  300K 230.0 | 20.0/120.0  300K 100.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0
+       baseline_steady_stat  21.0/50.1   301K 29.0 | 20.0/50.2   300K 30.2 | 20.0/50.2   300K 30.2 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.2   307K 30.2 | 20.0/50.1   307K 30.1
+       boom_bust_cycle       21.0/150.3  301K 129.2 | 15.1/15.1   300K  0.0 | 15.1/15.1   300K  0.0 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 20.0/150.1  300K 130.1 | 15.0/15.0   300K  0.0 | 15.0/15.0   300K  0.0 | 15.1/15.1   307K  0.0 | 15.0/15.0   307K  0.0
+       sustained_growth      21.0/50.1   301K 29.0 | 20.0/86.3   300K 66.3 | 20.0/179.9  300K 159.9 | 20.0/257.1  300K 237.1 | 20.0/370.9  300K 350.9 | 20.0/641.5  300K 621.5 | 20.0/1597.8  300K 1577.8 | 20.0/9901.2  300K 9881.2 | 20.0/61410.7  307K 61390.7 | 20.0/2353708.2  307K 2353688.2
+       stuffing_attack       21.0/66.5   301K 45.4 | 20.0/50.2   300K 30.2 | 20.0/50.2   300K 30.2 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.2   307K 30.2 | 20.0/50.1   307K 30.1
+       stake_concentration   21.0/50.1   301K 29.0 | 20.0/50.2   300K 30.2 | 20.0/50.2   300K 30.2 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.2   307K 30.2 | 20.0/50.1   307K 30.1
+       mass_unstaking        21.0/50.1   301K 29.0 | 20.0/50.2   300K 30.2 | 20.0/50.2   300K 30.2 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.0   300K 30.0 | 20.0/50.2   307K 30.2 | 20.0/50.1   307K 30.1
+       chain_bootstrap        5.0/5.0    300K  0.0 | 20.0/50.2   300K 30.2 | 20.0/75.4   300K 55.4 | 20.0/75.0   300K 55.0 | 20.0/75.0   300K 55.0 | 20.0/75.1   300K 55.1 | 20.0/75.0   300K 55.0 | 20.0/75.1   300K 55.1 | 20.0/75.2   307K 55.2 | 20.0/75.2   307K 55.2
+       late_chain_tail      199.1/199.9 3442K  0.8 |299.0/299.0 4983K  0.0 |219.6/219.6 3639K  0.0 |220.6/220.6 3593K  0.0 |219.5/219.5 3516K  0.0 |219.8/219.8 3409K  0.0 |220.5/220.5 3226K  0.0 |220.5/220.5 3027K  0.0 |220.1/220.1 3027K  0.0 |219.5/219.5 2997K  0.0
+       high_history_low_act  21.0/150.3  301K 129.2 | 20.0/150.6  300K 130.6 | 20.0/251.2  300K 231.2 | 20.0/250.1  300K 230.1 | 20.0/249.9  300K 229.9 | 20.0/250.2  300K 230.2 | 20.0/120.1  300K 100.1 | 15.0/15.0   300K  0.0 | 15.1/15.1   307K  0.0 | 15.0/15.0   307K  0.0
   -> POOL (ESR-17) at y1/4/8/10/12/15/20/30/40/60: per block, expired (reference out of CEN-I11's window) /
 evicted (CEN-M10, for a richer arrival or the limit) / refused (no room); waiting after
 the year's last block; age at inclusion in blocks, median/p95 ('-' when nothing was listed).
-       baseline_steady_stat  25.4/  0.0/  3.6   4158 86/93 | 25.1/  0.0/  4.9   4052 86/93 | 25.1/  0.0/  4.9   4055 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 25.1/  0.0/  4.9   4051 86/93 | 25.1/  0.0/  4.9   4055 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 24.3/  0.0/  5.7   3993 85/93 | 24.3/  0.0/  5.7   3993 85/93
-       boom_bust_cycle       25.9/  0.0/103.0   4198 86/93 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 | 25.4/  0.0/104.6   4077 86/93 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0
-       sustained_growth      25.4/  0.0/  3.6   4158 86/93 | 25.4/  0.0/ 40.6   4077 86/93 | 25.4/  0.0/133.6   4077 86/93 | 25.4/  0.0/211.6   4077 86/93 | 25.4/  0.0/325.6   4077 86/93 | 25.4/  0.0/595.6   4077 86/93 | 25.4/  0.0/1551.6   4077 86/93 | 25.4/  0.0/9844.6   4077 86/93 | 24.6/  0.0/61195.4   3998 86/93 | 24.6/  0.0/2347768.4   3998 86/93
-       stuffing_attack       25.4/  0.0/ 20.0   4161 86/93 | 25.1/  0.0/  4.9   4052 86/93 | 25.1/  0.0/  4.9   4051 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 25.1/  0.0/  4.9   4051 86/93 | 25.1/  0.0/  4.9   4051 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 24.3/  0.0/  5.7   3994 85/93 | 24.3/  0.0/  5.7   3994 85/93
-       stake_concentration   25.4/  0.0/  3.6   4158 86/93 | 25.1/  0.0/  4.9   4052 86/93 | 25.1/  0.0/  4.9   4055 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 25.1/  0.0/  4.9   4051 86/93 | 25.1/  0.0/  4.9   4055 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 24.3/  0.0/  5.7   3993 85/93 | 24.3/  0.0/  5.7   3993 85/93
-       mass_unstaking        25.4/  0.0/  3.6   4158 86/93 | 25.1/  0.0/  4.9   4052 86/93 | 25.1/  0.0/  4.9   4055 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 25.1/  0.0/  4.9   4051 86/93 | 25.1/  0.0/  4.9   4055 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 25.1/  0.0/  4.9   4056 86/93 | 24.3/  0.0/  5.7   3993 85/93 | 24.3/  0.0/  5.7   3993 85/93
-       chain_bootstrap        0.0/  0.0/  0.0      0  0/ 0 | 25.1/  0.0/  4.9   4056 86/93 | 25.4/  0.0/ 29.6   4077 86/93 | 25.4/  0.0/ 29.6   4077 86/93 | 25.4/  0.0/ 29.6   4077 86/93 | 25.4/  0.0/ 29.6   4077 86/93 | 25.4/  0.0/ 29.6   4077 86/93 | 25.4/  0.0/ 29.6   4077 86/93 | 24.6/  0.0/ 30.4   3998 86/93 | 24.6/  0.0/ 30.4   3998 86/93
-       late_chain_tail        0.3/  0.0/  0.4      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0
-       high_history_low_act  25.9/  0.0/103.0   4198 86/93 | 25.4/  0.0/104.6   4077 86/93 | 25.4/  0.0/204.6   4077 86/93 | 25.4/  0.0/204.6   4077 86/93 | 25.4/  0.0/204.6   4077 86/93 | 25.4/  0.0/204.6   4077 86/93 | 25.4/  0.0/ 74.6   4077 86/93 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0 |  0.0/  0.0/  0.0      0  0/ 0
+       baseline_steady_stat  23.5/  0.0/  5.5   3707 85/93 | 23.4/  0.0/  6.8   4038 85/93 | 23.5/  0.0/  6.8   3958 86/93 | 23.4/  0.0/  6.6   3745 86/93 | 23.4/  0.0/  6.6   4059 86/93 | 23.4/  0.0/  6.7   3842 85/93 | 23.4/  0.0/  6.6   3880 85/93 | 23.4/  0.0/  6.6   3920 86/93 | 22.8/  0.0/  7.3   3978 85/93 | 22.8/  0.0/  7.3   3642 85/93
+       boom_bust_cycle       25.8/  0.0/103.4   4172 86/93 |  0.0/  0.0/  0.0     61  0/ 6 |  0.0/  0.0/  0.0      0  0/ 6 |  0.0/  0.0/  0.0      0  0/ 6 |  0.0/  0.0/  0.0     34  0/ 6 | 25.3/  0.0/104.8   4000 86/93 |  0.0/  0.0/  0.0     37  0/ 6 |  0.0/  0.0/  0.0      0  0/ 6 |  0.0/  0.0/  0.0      0  0/ 6 |  0.0/  0.0/  0.0      0  0/ 6
+       sustained_growth      23.5/  0.0/  5.5   3707 85/93 | 25.1/  0.0/ 41.2   4045 86/93 | 25.3/  0.0/134.5   4054 86/93 | 25.4/  0.0/211.7   4077 86/93 | 25.4/  0.0/325.5   4075 86/93 | 25.4/  0.0/596.1   4068 86/93 | 25.4/  0.0/1552.3   4077 86/93 | 25.4/  0.0/9855.8   4077 86/93 | 24.6/  0.0/61366.1   3998 86/93 | 24.6/  0.0/2353663.5   3998 86/93
+       stuffing_attack       23.7/  0.0/ 21.7   3707 85/93 | 23.4/  0.0/  6.8   4038 85/93 | 23.5/  0.0/  6.8   3958 86/93 | 23.4/  0.0/  6.6   3745 86/93 | 23.4/  0.0/  6.6   4059 86/93 | 23.4/  0.0/  6.7   3842 85/93 | 23.4/  0.0/  6.6   3880 85/93 | 23.4/  0.0/  6.6   3920 86/93 | 22.8/  0.0/  7.3   3978 85/93 | 22.8/  0.0/  7.3   3642 85/93
+       stake_concentration   23.5/  0.0/  5.5   3707 85/93 | 23.4/  0.0/  6.8   4038 85/93 | 23.5/  0.0/  6.8   3958 86/93 | 23.4/  0.0/  6.6   3745 86/93 | 23.4/  0.0/  6.6   4059 86/93 | 23.4/  0.0/  6.7   3842 85/93 | 23.4/  0.0/  6.6   3880 85/93 | 23.4/  0.0/  6.6   3920 86/93 | 22.8/  0.0/  7.3   3978 85/93 | 22.8/  0.0/  7.3   3642 85/93
+       mass_unstaking        23.5/  0.0/  5.5   3707 85/93 | 23.4/  0.0/  6.8   4038 85/93 | 23.5/  0.0/  6.8   3958 86/93 | 23.4/  0.0/  6.6   3745 86/93 | 23.4/  0.0/  6.6   4059 86/93 | 23.4/  0.0/  6.7   3842 85/93 | 23.4/  0.0/  6.6   3880 85/93 | 23.4/  0.0/  6.6   3920 86/93 | 22.8/  0.0/  7.3   3978 85/93 | 22.8/  0.0/  7.3   3642 85/93
+       chain_bootstrap        0.0/  0.0/  0.0      0  0/ 0 | 23.4/  0.0/  6.8   4038 85/93 | 25.0/  0.0/ 30.4   3956 86/93 | 25.0/  0.0/ 30.1   3901 86/93 | 25.0/  0.0/ 30.0   4054 86/93 | 25.0/  0.0/ 30.1   3967 86/93 | 25.0/  0.0/ 30.1   4077 86/93 | 25.0/  0.0/ 30.1   4077 86/93 | 24.2/  0.0/ 31.1   3954 86/93 | 24.2/  0.0/ 31.0   3826 86/93
+       late_chain_tail        0.4/  0.0/  0.5      0  0/ 4 |  0.0/  0.0/  0.0      0  0/ 3 |  0.0/  0.0/  0.0      0  0/ 3 |  0.0/  0.0/  0.0      0  0/ 3 |  0.0/  0.0/  0.0      0  0/ 3 |  0.0/  0.0/  0.0      0  0/ 2 |  0.0/  0.0/  0.0      0  0/ 2 |  0.0/  0.0/  0.0      0  0/ 2 |  0.0/  0.0/  0.0      0  0/ 2 |  0.0/  0.0/  0.0      0  0/ 2
+       high_history_low_act  25.8/  0.0/103.4   4172 86/93 | 25.3/  0.0/105.3   4063 86/93 | 25.4/  0.0/205.8   4060 86/93 | 25.4/  0.0/204.7   4077 86/93 | 25.4/  0.0/204.6   4072 86/93 | 25.4/  0.0/204.8   4023 86/93 | 25.3/  0.0/ 74.8   4077 86/93 |  0.0/  0.0/  0.0      0  0/ 6 |  0.0/  0.0/  0.0      0  0/ 6 |  0.0/  0.0/  0.0      0  0/ 6
   -> FEE HORIZON (closed form, constant traffic V): the fee leg clears a corpus no
 deeper than H = fee x base x share x W / (bond x R x rate x bytes/tx) traffic-years.
 fee 0.100 SKL/tx, W 3000000 B, bond 0.75 SKL x R6, 12627 archival B/tx (1in/2out,
@@ -209,18 +210,18 @@ the fee-era PoW security budget; that trade needs its own wargame, not a paramet
 'tail floor p%' = staker leg floored at p% of ALL block emission, non-decaying (at the
 tail: p% of 157680 SKL/yr). 'decay' re-pins shekyl_staker_emission_decay.
 
-  high_history_low_activity (n = 1072633 at 60 y; best band cand. 90%/500000)
+  high_history_low_activity (n = 1072965 at 60 y; best band cand. 90%/500000)
   lever                          @2%     @5%    @10%       R@10%   onset
-  shipped: burn x flat 25%      0.29    0.12    0.06        0.35     y32
+  shipped: burn x flat 25%      0.29    0.12    0.06        0.36     y32
   burn x best band cand.        0.97    0.39    0.20        1.18     y34
-  burn x 100%                   1.07    0.43    0.22        1.31     y34
+  burn x 100%                   1.07    0.44    0.22        1.31     y34
   ALL fees x 25%                1.03    0.42    0.21        1.26     y34
-  ALL fees x 100% (PoW)         4.03    1.63    0.82        4.92     y50
-  flat + tail floor 15%        16.88    6.83    3.43       20.58   never
-  flat + tail floor 50%        55.66   22.53   11.31       67.85   never
-  flat + WHOLE tail (100%)    111.05   44.95   22.56      135.39   never
-  flat + decay 0.95/yr          1.04    0.42    0.21        1.27     y46
-  flat + NO decay              16.88    6.83    3.43       20.58   never
+  ALL fees x 100% (PoW)         4.04    1.64    0.82        4.93     y51
+  flat + tail floor 15%        16.87    6.83    3.43       20.57   never
+  flat + tail floor 50%        55.64   22.52   11.31       67.83   never
+  flat + WHOLE tail (100%)    111.02   44.94   22.56      135.35   never
+  flat + decay 0.95/yr          1.05    0.42    0.21        1.27     y46
+  flat + NO decay              16.87    6.83    3.43       20.57   never
 
   baseline_steady_state (n = 1293851 at 60 y; best band cand. 90%/500000)
   lever                          @2%     @5%    @10%       R@10%   onset
@@ -370,7 +371,7 @@ Margin = reward - (bond opp cost @ 10% + storage), SKL/epoch, at baseline_steady
     256       50      5120      0.00595      0.00594      1.678091      0.733516        ok
     256     3000        85      0.00000      0.00005      0.027859      0.733516     UNDER
    4096        2   2048000      0.23810      0.23743    671.236486     11.736256        ok
-   4096        6    682663      0.47429      0.47486    223.744294     11.736256        ok
+   4096        6    682663      0.47429      0.47486    223.744293     11.736256        ok
    4096       50     81920      0.01905      0.01899     26.849459     11.736256        ok
    4096     3000      1363      0.00000      0.00016      0.446726     11.736256     UNDER
   -> Scarce-holder (r<=50) aggregate share: PRE-D1 1.0000 -> POST-D1 0.9998
@@ -430,13 +431,13 @@ Flat-25 has no share lever ⇒ 0. Attacker-favouring: min opp-rate 0.02, storage
 omitted, age-0. PASS iff realistic-end (hHold=4) ROI < 1 everywhere.
 scenario                flat-25    best@hHold4  best@hHold512     worst (n/Δn/H)
 baseline_steady_stat     0.0000         0.2461         0.4859      84548/100000/10
-boom_bust_cycle          0.0000         0.2725         0.5327      94423/100000/10
+boom_bust_cycle          0.0000         0.2724         0.5324      94461/100000/10
 sustained_growth         0.0000         0.2461         0.4859      84548/100000/10
 stuffing_attack          0.0000         0.0000         0.0000          0/    0/ 0
 stake_concentration      0.0000         0.2461         0.4859      84548/100000/10
 mass_unstaking           0.0000         0.2461         0.4859      84548/100000/10
-chain_bootstrap          0.0000         0.3484         0.6585      36504/100000/10
-late_chain_tail          0.0000         1.7469         8.6915     992518/100000/10
+chain_bootstrap          0.0000         0.3484         0.6586      36499/100000/10
+late_chain_tail          0.0000         1.7418         8.6641     992107/100000/10
 high_history_low_act     0.0000         0.2461         0.4859      84548/100000/10
   -> W9 gate (realistic hHold=4 end): FAIL — rule-21 per-output fee-floor reopen (§11.3), NOT a D2 redesign (§8). Flat-25 = 0 (no share lever): the
 premium is purely the escalation's. A steeper share (higher asymptote /
@@ -453,12 +454,12 @@ would drive ROI to 1 in THIS regime; 'ROI(resp)' = ROI once honest replicas answ
 (r:1→6 after 2y lag; first-order, NOT gating).
 scenario              Δpool/yr SKL   capt%  prem     revenue      fees    bond   fee×→1 ROI(resp)
 baseline_steady_stat        4880.3  54.21%   1.0     26456.3   92522.4 15000.00      0.1      0.08
-boom_bust_cycle             5693.6  51.46%   1.0     29298.7   92522.4 15000.00      0.2      0.09
+boom_bust_cycle             5692.3  51.45%   1.0     29286.1   92522.4 15000.00      0.2      0.09
 sustained_growth            4880.3  54.21%   1.0     26456.3   92522.4 15000.00      0.1      0.08
 stake_concentration         4880.3  54.21%   1.0     26456.3   92522.4 15000.00      0.1      0.08
 mass_unstaking              4880.3  54.21%   1.0     26456.3   92522.4 15000.00      0.1      0.08
-chain_bootstrap             5111.6  73.28%   1.0     37456.5   92522.4 15000.00      0.2      0.12
-late_chain_tail           204984.8   9.16%   1.0    187792.3   92497.7 15000.00      1.9      0.58
+chain_bootstrap             5111.7  73.28%   1.0     37458.3   92522.4 15000.00      0.2      0.12
+late_chain_tail           204305.3   9.16%   1.0    187240.3   92497.7 15000.00      1.9      0.58
 high_history_low_act        4880.3  54.21%   1.0     26456.3   92522.4 15000.00      0.1      0.08
   -> Read: prem≈1.0 at the realistic end ⇒ NO concentration premium — the attack is
 pure fee-flow-volume leverage (cheap stuffing unlocks a large Δpool; the attacker
