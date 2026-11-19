@@ -1265,16 +1265,29 @@ immutable):
   `WSS-Q4`'s deadline — *"the next epoch's open, which may be one block
   away"* — the window is the whole freeze epoch; re-keyed in
   [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5, Round 2, 2026-11-19.)
+  An already-joined `CompleteTree` is drawn on a shard from the first block
+  of the epoch in which the shard is final at the open
+  ([`ARCHIVAL_SUPPORT_DRAW.md`](ARCHIVAL_SUPPORT_DRAW.md)). When that open
+  is the freeze epoch's, the fill runs after finality in the close epoch,
+  while the daemon still holds the bytes (§6.5.9 there).
 - **One `JoinMarket` per batch of closed shards.** An archiver on the
-  `Market` leg bonds the shards that closed in an epoch as one post at the
-  end of their freeze epoch (or earlier, once pulled); **`holdings` are
-  frozen at post** — there is no in-place update, that mechanism is
-  rejected — and the next epoch's closed shards are the next post.
-  **Named consequence, not implied:** an archiver's bond count grows by one
-  per epoch for the life of its tenure, and capital per bond, the
+  `Market` leg bonds the shards that closed in an epoch as one post, once
+  every shard in the batch is admissible
+  ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5.2, corrected
+  2026-11-19 against `first_admissible_compact_join`). A batch whose shards
+  were all final by the second-to-last block of a close epoch `E ≥ 1` can
+  connect from the first block of their freeze epoch. A batch that includes
+  a shard closed in epoch 0, or a shard final later than that, waits until
+  the first block of `close_epoch + 2` — the discard block, one block after
+  the pricing pass. It does not post at the last block of the freeze epoch.
+  **`holdings` are frozen at post** — there is no in-place update, that
+  mechanism is rejected — and the next epoch's closed shards are the next
+  post. **Named consequence, not implied:** an archiver's bond count grows
+  by one per epoch for the life of its tenure, and capital per bond, the
   settlement writer's per-bond work and the `Release` tail per batch scale
-  with it. This ruling fixes the lifecycle; pricing it is the reward leg's
-  and `ARCHIVAL_BOND_CONSTRUCTION.md`'s.
+  with it. This ruling fixes the lifecycle; the admissible height is §6.5.2
+  of the wallet doc; pricing the bond count is the reward leg's and
+  `ARCHIVAL_BOND_CONSTRUCTION.md`'s.
 - **A new persona per batch.** Each `JoinMarket` carries its own
   `bond_spend_pk` and serving `endpoint` (`EU-D3`); the persona is the
   bond's, so a batch is a persona and personas are not linked across
