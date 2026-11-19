@@ -366,7 +366,13 @@ pub fn write_custody_files(
     }
 
     // (4) Atomic publish.
-    match std::fs::rename(&staging, &abs_out) {
+    // CLIPPY: disallowed_methods — a directory moved onto a name that must not exist.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "moves the staging directory onto out_dir, a name that must not exist; not a file replace (Rick, 2026-11-18)"
+    )]
+    let published = std::fs::rename(&staging, &abs_out);
+    match published {
         Ok(()) => Ok(abs_out.join(skeleton_filename(net))),
         Err(e) if is_cross_device(&e) => {
             // Different mount points: copy full tree, never wipe staging

@@ -159,7 +159,7 @@ pub struct LocalTarget {
     /// The owner's rendezvous; `None` when the account has no root for one.
     path: Option<PathBuf>,
     /// The service's record for the same network and instance.
-    service_record: Option<PathBuf>,
+    service_record: Option<shekyl_rpc_rendezvous::ServiceRecordAt>,
 }
 
 /// The stream the owner's leg is.
@@ -172,10 +172,10 @@ pub type LocalStream = shekyl_win_sec::VerifiedPipe;
 
 impl LocalTarget {
     /// "This computer" for `network`: the default instance in this
-    /// account's rendezvous directory, and the service's record in the
-    /// service's fixed rendezvous directory
-    /// (`shekyl_rpc_rendezvous::service_rendezvous`), consulted only when
-    /// no node of this account is there.
+    /// account's rendezvous directory, and the service's record
+    /// (`shekyl_rpc_rendezvous::service_record_at`: the file in the
+    /// service's fixed rendezvous directory, or on Windows the registry
+    /// value), consulted only when no node of this account is there.
     ///
     /// The one way a client names "this computer" (Rick, 2026-11-18): the
     /// network is all it gives. The directories are this account's and
@@ -183,12 +183,9 @@ impl LocalTarget {
     /// leave the service's out.
     #[must_use]
     pub fn this_computer(network: Network) -> Self {
-        Self::at(
-            network,
-            &Instance::Default,
-            None,
-            shekyl_rpc_rendezvous::service_rendezvous().as_deref(),
-        )
+        let service_record =
+            shekyl_rpc_rendezvous::service_record_at(&network.network_id(), &Instance::Default);
+        Self::at(network, &Instance::Default, None, service_record)
     }
 
     /// **A test's override.** `instance` of `network` in the directory
@@ -207,19 +204,21 @@ impl LocalTarget {
         dir: Option<&Path>,
         service_rendezvous: Option<&Path>,
     ) -> Self {
-        Self::at(network, instance, dir, service_rendezvous)
+        let service_record = service_rendezvous.map(|dir| {
+            shekyl_rpc_rendezvous::ServiceRecordAt::file(dir, &network.network_id(), instance)
+        });
+        Self::at(network, instance, dir, service_record)
     }
 
     /// `instance` of `network`, in `dir` when given, otherwise in this
-    /// account's rendezvous directory; and the service's record for the
-    /// same network and instance in `service_rendezvous`, when given. An
-    /// account with no root is [`LocalFault::NoPlace`] at the dial, unless
-    /// a service is there.
+    /// account's rendezvous directory; and the service's record at
+    /// `service_record`, when given. An account with no root is
+    /// [`LocalFault::NoPlace`] at the dial, unless a service is there.
     fn at(
         network: Network,
         instance: &Instance,
         dir: Option<&Path>,
-        service_rendezvous: Option<&Path>,
+        service_record: Option<shekyl_rpc_rendezvous::ServiceRecordAt>,
     ) -> Self {
         let node = match instance {
             Instance::Default => network.name().to_owned(),
@@ -235,8 +234,7 @@ impl LocalTarget {
         Self {
             node,
             path: dir.map(|dir| dir.join(shekyl_rpc_rendezvous::file_name(&name))),
-            service_record: service_rendezvous
-                .map(|dir| shekyl_rpc_rendezvous::service_record_path(dir, &network_id, instance)),
+            service_record,
         }
     }
 
@@ -274,24 +272,22 @@ impl LocalTarget {
     /// has no root). The record is read and nothing it names is dialled.
     fn nothing_here(&self, no_place: bool) -> LocalFault {
         if let Some(record) = &self.service_record {
-            match std::fs::read(record) {
-                Ok(bytes) => {
+            match record.read() {
+                Ok(Some(bytes)) => {
                     return match ServiceRecord::parse(&bytes) {
                         Some(found) => LocalFault::Service {
                             node: self.node.clone(),
                             view: found.view,
                         },
                         None => LocalFault::Unreachable(format!(
-                            "{} is not a service's rendezvous record this build reads",
-                            record.display()
+                            "{record} is not a service's rendezvous record this build reads"
                         )),
                     };
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(None) => {}
                 Err(e) => {
                     return LocalFault::Unreachable(format!(
-                        "the service's record {} cannot be read: {e}",
-                        record.display()
+                        "the service's record {record} cannot be read: {e}"
                     ))
                 }
             }
@@ -804,30 +800,28 @@ pub fn rpc_error(fault: LocalFault) -> RpcError {
 mod tests {
     use super::*;
 
-    /// **"This computer" names the service's directory itself** (Rick,
+    /// **"This computer" names the service's record itself** (Rick,
     /// 2026-11-18). A client gives its network and nothing else, and the
-    /// target it gets looks for the service's record in the platform's
-    /// service rendezvous directory, under this network's name for the
-    /// default instance. Pure: nothing is dialled and no host is needed.
+    /// target it gets looks for the service's record where this platform
+    /// keeps it (the file, or on Windows the registry value), under this
+    /// network's name for the default instance. Pure: nothing is dialled and no host is needed.
     /// Red edit: have `this_computer` pass `None` for the service
     /// directory; every client then stops seeing a service, silently.
     #[test]
     fn this_computer_names_the_service_s_directory_itself() {
         let target = LocalTarget::this_computer(Network::Regtest);
-        let expected = shekyl_rpc_rendezvous::service_rendezvous().map(|dir| {
-            shekyl_rpc_rendezvous::service_record_path(
-                &dir,
-                &Network::Regtest.network_id(),
-                &Instance::Default,
-            )
-        });
+        let expected = shekyl_rpc_rendezvous::service_record_at(
+            &Network::Regtest.network_id(),
+            &Instance::Default,
+        );
         assert_eq!(target.service_record, expected);
-        // Every platform with a row has a directory, so this is not a
-        // comparison of two absences there.
+        // Every platform with a row, and Windows' registry value, is a
+        // place, so this is not a comparison of two absences there.
         if cfg!(any(
             target_os = "linux",
             target_os = "freebsd",
-            target_os = "macos"
+            target_os = "macos",
+            windows
         )) {
             assert!(target.service_record.is_some());
         }

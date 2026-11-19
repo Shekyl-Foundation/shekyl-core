@@ -33,8 +33,8 @@
 //! # Save model
 //!
 //! [`save_prefs`] writes the TOML body and HMAC file as a pair. Both
-//! writes go through [`atomic_write`] (tmp → fsync → rename →
-//! fsync(parent)). If the first rename succeeds and the second
+//! writes go through [`atomic_write`] (the tree's one replace: staged
+//! file → fsync → rename → fsync(parent)). If the first rename succeeds and the second
 //! fails, the next open sees a body-without-matching-HMAC, which the
 //! loader treats as tamper, quarantines, and falls back to defaults —
 //! the same path as any other corrupt pair.
@@ -52,13 +52,13 @@
 //! clobbered.
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use tempfile::Builder;
+use shekyl_os_account::private_file::{self, Access};
 
 use crate::errors::{Bucket3Field, PrefsError};
 use crate::hmac_key::PrefsHmacKey;
@@ -424,6 +424,11 @@ fn quarantine_if_present(toml_path: &Path, hmac_path: &Path) -> io::Result<Vec<P
             continue;
         }
         let target = pick_quarantine_target(src, ts)?;
+        // CLIPPY: disallowed_methods — a tampered file moved aside, not a replace.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "moves a tampered file aside to a quarantine name chosen not to exist; not a file replace"
+        )]
         fs::rename(src, &target)?;
         out.push(target);
     }
@@ -458,70 +463,27 @@ fn pick_quarantine_target(src: &Path, ts: u64) -> io::Result<PathBuf> {
     ))
 }
 
-/// Atomic file replace: sibling tempfile → fsync → rename →
-/// fsync(parent). Mirrors `shekyl_engine_file::atomic::atomic_write_file`
-/// but scoped to the prefs crate's error type and without the
-/// WalletFileError coupling. A future refactor may consolidate the
-/// two under a shared `shekyl-atomic-io` crate.
+/// Atomic file replace through the tree's one replace (Rick, 2026-11-18):
+/// [`private_file::replace`] stages `<name>.new` beside `target`, syncs
+/// it, renames it over `target` (on Windows through the handle rename,
+/// which waits for a reader that holds either file), and syncs the
+/// directory. A write of the bytes the file already holds is skipped.
+///
+/// [`Access::Private`] keeps the protection the tempfile gave the prefs
+/// files: mode `0600` on Unix, the directory's inherited ACL on Windows.
+/// A directory sync that fails after the rename
+/// ([`CommitError::Unsynced`](shekyl_os_account::private_file::CommitError::Unsynced))
+/// is [`PrefsError::Io`] carrying the sync's own error, as the parent
+/// fsync's failure was before.
 fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), PrefsError> {
-    let parent = target.parent().ok_or_else(|| {
-        PrefsError::Io(io::Error::new(
+    if target.parent().is_none() {
+        return Err(PrefsError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("atomic_write target has no parent dir: {target:?}"),
-        ))
-    })?;
-
-    let name = target
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("prefs.tmp");
-    let mut tmp = Builder::new()
-        .prefix(name)
-        .suffix(".tmp")
-        .rand_bytes(8)
-        .tempfile_in(parent)
-        .map_err(PrefsError::Io)?;
-
-    {
-        let file = tmp.as_file_mut();
-        file.write_all(bytes).map_err(PrefsError::Io)?;
-        file.sync_all().map_err(PrefsError::Io)?;
+        )));
     }
-
-    // `persist` rather than the `keep` + `rename` that `shekyl-engine-file`'s
-    // atomic writer needs: nothing holds a byte-range lock on the prefs file,
-    // so `MoveFileExW` alone is not refused here, and `persist` clears
-    // `FILE_ATTRIBUTE_TEMPORARY` itself. The distinction is the lock, not the
-    // platform.
-    //
-    // The error is carried through unchanged. It used to be re-wrapped as
-    // `io::Error::other(e.to_string())`, which discards `raw_os_error()` — and
-    // an OS code is exactly what made the Windows rotation failure diagnosable
-    // (`ERROR_ACCESS_DENIED` reads as "Access is denied", which names no
-    // mechanism). Dropping `e` still unlinks the staged file: `PersistError`
-    // owns the `NamedTempFile` and its guard runs here.
-    tmp.persist(target).map_err(|e| PrefsError::Io(e.error))?;
-
-    fsync_parent_dir(parent)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn fsync_parent_dir(parent: &Path) -> Result<(), PrefsError> {
-    let dir = fs::File::open(parent).map_err(PrefsError::Io)?;
-    rustix::fs::fsync(&dir)
-        .map_err(|e| PrefsError::Io(io::Error::from_raw_os_error(e.raw_os_error())))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the Unix arm's signature: callers handle both platforms the same way"
-)]
-fn fsync_parent_dir(_parent: &Path) -> Result<(), PrefsError> {
-    // Windows has no directory-fsync; `File::sync_all` on the file
-    // is sufficient per the platform's durability model.
+    private_file::replace(target, bytes, Access::Private)
+        .map_err(|error| PrefsError::Io(error.into()))?;
     Ok(())
 }
 
@@ -572,6 +534,25 @@ mod tests {
         match outcome {
             LoadOutcome::Loaded(loaded) => assert_eq!(loaded, prefs),
             other => panic!("expected Loaded, got {other:?}"),
+        }
+    }
+
+    /// A save leaves the pair owner-only, as the tempfile it replaced did,
+    /// and no staged file beside it. Red edit: write through
+    /// `Access::Default`, and the files take the umask's mode.
+    #[test]
+    fn a_save_is_owner_only_and_leaves_no_staged_file() {
+        let d = tempdir().unwrap();
+        let base = base_in(d.path());
+        save_prefs(&base, &fixture_key(), &WalletPrefs::default()).unwrap();
+        for path in [prefs_toml_path_from(&base), prefs_hmac_path_from(&base)] {
+            assert!(!private_file::staged_path(&path).exists());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "{}", path.display());
+            }
         }
     }
 
