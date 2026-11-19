@@ -101,6 +101,7 @@ use super::drain_orchestrator::{
     DrainError, DrainIntent, DrainMoved, DrainOrchestrationError, TerminalExitObserved,
 };
 use super::emission_source::EmissionSourceError;
+use super::error::PersistenceError;
 use super::fee_policy::FeeEstimatorError;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
@@ -264,6 +265,11 @@ pub enum UnstakeError {
         /// The daemon's verdict rendering.
         detail: String,
     },
+    /// The exit's seal was saved, but the save was not confirmed on disk,
+    /// so nothing was sent; the seal was removed and the lane is open again
+    /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
+    #[error("the exit was not sent: {0}")]
+    SealNotSaved(#[source] PersistenceError),
     /// The exit's bytes went out and its fate is the chain's: no verdict, a
     /// retryable one, or a daemon's terminal verdict, which never ends a
     /// submitted record (BD-Q3 Rule 2). The sealed record HOLDS — funds-safe,
@@ -405,6 +411,11 @@ pub enum CollectUnstakedError {
         /// The transport failure's rendering.
         detail: String,
     },
+    /// The sweep pass's seal was saved, but the save was not confirmed on disk,
+    /// so nothing was sent; the seal was removed and the lane is open again
+    /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
+    #[error("the sweep was not sent: {0}")]
+    SealNotSaved(#[source] PersistenceError),
     /// A non-transient engine fault. Fail closed; not retryable by waiting.
     #[error("engine state ({context}): {detail}")]
     Engine {
@@ -1018,8 +1029,11 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
             }
         }
         ReleaseRequestError::State { context, detail } => UnstakeError::Engine { context, detail },
-        ReleaseRequestError::Submit(submit) => match &submit {
-            BroadcastSubmitError::PersonaMismatch { .. } => {
+        ReleaseRequestError::Submit(submit) => match submit {
+            // The seam removed the unconfirmed seal; nothing was sent, and
+            // the answer is the save's own code (Rick, 2026-11-19).
+            BroadcastSubmitError::SealUnconfirmed(error) => UnstakeError::SealNotSaved(error),
+            submit @ BroadcastSubmitError::PersonaMismatch { .. } => {
                 // The one class the seam's release predicate names
                 // (`released_on_first_send_failure`): the seal is already
                 // released, nothing propagated. A terminal verdict is not
@@ -1028,7 +1042,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
                     detail: submit.to_string(),
                 }
             }
-            _ => UnstakeError::ExitFateUnknown {
+            submit @ BroadcastSubmitError::Submit(_) => UnstakeError::ExitFateUnknown {
                 detail: submit.to_string(),
             },
         },
@@ -1078,6 +1092,9 @@ fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
         }
         DrainRequestError::State { context, detail } => {
             CollectUnstakedError::Engine { context, detail }
+        }
+        DrainRequestError::Submit(BroadcastSubmitError::SealUnconfirmed(error)) => {
+            CollectUnstakedError::SealNotSaved(error)
         }
         DrainRequestError::Submit(e) => CollectUnstakedError::Submit {
             detail: e.to_string(),

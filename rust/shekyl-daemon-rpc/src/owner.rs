@@ -159,7 +159,9 @@ mod windows {
         /// - `config.socket-dir.unusable`: a directory fails its check or a
         ///   create failed;
         /// - `config.replace.held-open`: another program held the record, or
-        ///   a leftover staged one, open past the wait.
+        ///   a leftover staged one, open past the wait;
+        /// - `config.replace.read-only`: the record's read-only attribute
+        ///   refused the replace.
         pub fn bind(plan: &OwnerSocketPlan, network: &str) -> Result<Self, Diagnostic> {
             let unusable = |found: String| {
                 Diagnostic::new(Code::SocketDirUnusable, Source::Machine)

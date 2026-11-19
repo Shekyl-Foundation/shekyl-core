@@ -376,6 +376,12 @@ pub enum FirstStakeError {
     /// The durable staker record could not be written.
     #[error("persisting the bond record failed: {0}")]
     Persist(String),
+    /// The bond post's seal was saved, but the save was not confirmed on
+    /// disk, so nothing was sent; the seal was removed and a `stake`
+    /// re-invoke resumes (Rick, 2026-11-19). The cause is the save's, and
+    /// names its fix.
+    #[error("the bond post was not sent: {0}")]
+    SealNotSaved(#[source] super::error::PersistenceError),
     /// The actor/assembly path failed. If this surfaced after the durable
     /// point it is the W2 window — re-invoke `stake` to resume.
     #[error("stake engine failed: {0}")]
@@ -660,8 +666,9 @@ where
             reference_height,
             terminal: None,
         };
-        let admission = store
-            .mutate(|block| {
+        let persona = sealed.persona;
+        let (admission, durability) = store
+            .mutate_reporting(|block| {
                 // Seal-time reservation re-check under the write lock — the
                 // drain seam's guard, which this path was missing. The
                 // `reserved` snapshot read before assembly is stale: a
@@ -693,6 +700,15 @@ where
             SealAdmission::InputRaced | SealAdmission::Stale => {
                 return Err(BondAssemblyError::InputRaced.into())
             }
+        }
+        // A seal whose save was not confirmed is removed, so the dispatch
+        // driver never sends bytes whose record a power loss could take, and
+        // the stake answers with the save's own code (Rick, 2026-11-19).
+        if let Err(error) = super::dispatch_durability::require_confirmed(durability) {
+            store
+                .restore_unsent("bond post", |block| block.remove_post(&persona).is_some())
+                .await;
+            return Err(BondAssemblyError::SealNotSaved(error).into());
         }
 
         Ok(assembled)
@@ -995,7 +1011,12 @@ where
         let assembled =
             Self::assemble_bond_post(self_arc.clone(), handle, ticket, holdings, fee, &witness)
                 .await
-                .map_err(|e| FirstStakeError::Engine(engine_failure_detail(&e)))?;
+                .map_err(|e| match e {
+                    StakeEngineError::Assembly(BondAssemblyError::SealNotSaved(error)) => {
+                        FirstStakeError::SealNotSaved(error)
+                    }
+                    e => FirstStakeError::Engine(engine_failure_detail(&e)),
+                })?;
 
         Ok(FirstStakeOutcome {
             p_slot: slot.to_raw(),

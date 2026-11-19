@@ -1015,7 +1015,7 @@ impl WalletFile {
     /// * [`WalletFileError::Prefs`] — serialization failure (shouldn't
     ///   happen for `WalletPrefs`'s built-in schema), HMAC-length bug,
     ///   or Bucket-3 field slipped through an earlier parser.
-    /// * [`WalletFileError::Io`] / [`WalletFileError::AtomicWriteRename`]
+    /// * [`WalletFileError::Io`] / [`WalletFileError::SaveStep`]
     ///   — filesystem failures are currently surfaced via the
     ///   prefs crate's own `PrefsError::Io`; callers should treat
     ///   both variants as "try again later / check disk".

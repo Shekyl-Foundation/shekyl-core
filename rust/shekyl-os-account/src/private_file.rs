@@ -1381,6 +1381,29 @@ mod crash_tests {
         );
     }
 
+    /// A replace's failure names the step that failed (Rick, 2026-11-19:
+    /// the wallet's `data.step`): a staged file that cannot be created is
+    /// the write, a rename that is refused the rename. The create fails in
+    /// a directory that does not exist, which holds for root too. Red edit:
+    /// tag the create's failure `Step::Rename`, and the first assertion
+    /// fails.
+    #[test]
+    fn a_failed_replace_names_its_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing").join("record");
+        let failed = StagedWrite::<Replace>::create(&missing, b"new", Access::Private);
+        assert!(
+            matches!(
+                failed,
+                Err(CommitError::Io {
+                    step: Step::Write,
+                    ..
+                })
+            ),
+            "{failed:?}"
+        );
+    }
+
     /// A replace left by a crash is removed by the next start's write and
     /// never becomes the live file; a commit that fails removes its own.
     /// Red edit: make `Replace::REMOVED_ON_FAILURE` false, and a failed

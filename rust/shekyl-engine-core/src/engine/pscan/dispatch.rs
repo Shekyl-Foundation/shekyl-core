@@ -170,6 +170,30 @@ impl<S: PendingSealStore> PendingPostStore<S> {
         };
         Ok((out, durability))
     }
+
+    /// Remove a seal whose save was not confirmed, so its lane reopens: an
+    /// unconfirmed seal sends nothing, and the caller answers with the
+    /// seal's own save code (Rick, 2026-11-19). `remove` takes the seal out
+    /// of the block and says whether it was there.
+    ///
+    /// A removal that fails is logged, never the answer: the seal's save
+    /// code names the cause, and the seal then stays on disk until its end
+    /// date. A removal whose own save is unconfirmed can bring the seal back
+    /// after a power loss (`docs/FOLLOWUPS.md`, the staking recovery row).
+    pub(crate) async fn restore_unsent(
+        &self,
+        kind: &'static str,
+        remove: impl FnOnce(&mut PendingPostBlock) -> bool,
+    ) {
+        if let Err(error) = self.mutate(|block| (remove(block), ())).await {
+            tracing::error!(
+                kind,
+                %error,
+                "an unconfirmed seal sent nothing, but removing it failed; it stays until \
+                 its end date"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

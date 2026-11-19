@@ -95,9 +95,9 @@ use shekyl_engine_state::pending_post_block::{
     PendingPostState, PendingRelease, RecordKind, SealAdmission,
 };
 
-use super::pscan::dispatch::terminal_cause;
+use super::pscan::dispatch::{terminal_cause, PendingPostStore, PendingSealStore};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, PCanonicalId};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -307,8 +307,8 @@ impl ReleaseRequestError {
 /// pins that the release call sits behind exactly this predicate.
 fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
     // Nothing left the wallet: a persona mismatch, or a seal whose
-    // durability was not confirmed. The just-taken seal is
-    // released so the lane can be retried.
+    // durability was not confirmed (Rick, 2026-11-19). The just-taken seal
+    // is released so the lane can be retried.
     matches!(
         e,
         BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealUnconfirmed(_)
@@ -633,6 +633,10 @@ where
         //   the wallet and no daemon gave a verdict, so the seal this call
         //   just took is released (`remove_release`: byte-prune +
         //   reservation release + generation bump in one seal).
+        // - `SealUnconfirmed`: the seal's save was not confirmed, so nothing
+        //   was sent; the seal is removed the same way (`restore_unsent`)
+        //   and the exit answers with the save's own code (Rick,
+        //   2026-11-19).
         // - A definite `RejectedTerminal` is recorded on the record, which
         //   stays sealed with its reservation. "Never admitted, never
         //   relayed" holds only for an honest daemon: a lying one keeps valid
@@ -654,28 +658,53 @@ where
                 submit,
             }),
             Err(e) => {
-                if released_on_first_send_failure(&e) {
-                    store
-                        .mutate(|block| {
-                            let removed = block.remove_release(&persona);
-                            (removed.is_some(), ())
-                        })
-                        .await
-                        .map_err(|e| ReleaseRequestError::state("pre-transport release", e))?;
-                } else if let Some(cause) = terminal_cause(&e) {
-                    store
-                        .mutate(|block| {
-                            let recorded =
-                                block.record_terminal(RecordKind::Release, &persona, cause);
-                            (recorded, ())
-                        })
-                        .await
-                        .map_err(|e| ReleaseRequestError::state("terminal verdict", e))?;
-                }
+                dispose_failed_send(&store, &persona, &e).await?;
                 Err(e.into())
             }
         }
     }
+}
+
+/// What a failed first send of `persona`'s exit leaves in `store` (the
+/// failure disposition in [`Engine::submit_release`]): an unconfirmed seal
+/// and a pairing refusal sent nothing, so the seal is removed and the lane
+/// reopens; a terminal verdict is recorded on the held record; anything
+/// else leaves the record as it is. Extracted so the disposition can be
+/// driven against an in-memory store.
+///
+/// # Errors
+///
+/// The pairing refusal's removal or the terminal verdict's record could
+/// not be saved. An unconfirmed seal's removal never is the error: the
+/// seal's own save code is the answer, and a removal that fails is logged
+/// ([`PendingPostStore::restore_unsent`]; Rick, 2026-11-19).
+pub(super) async fn dispose_failed_send<S: PendingSealStore>(
+    store: &PendingPostStore<S>,
+    persona: &PCanonicalId,
+    e: &BroadcastSubmitError,
+) -> Result<(), ReleaseRequestError> {
+    if let BroadcastSubmitError::SealUnconfirmed(_) = e {
+        store
+            .restore_unsent("release", |block| block.remove_release(persona).is_some())
+            .await;
+    } else if released_on_first_send_failure(e) {
+        store
+            .mutate(|block| {
+                let removed = block.remove_release(persona);
+                (removed.is_some(), ())
+            })
+            .await
+            .map_err(|e| ReleaseRequestError::state("pre-transport release", e))?;
+    } else if let Some(cause) = terminal_cause(e) {
+        store
+            .mutate(|block| {
+                let recorded = block.record_terminal(RecordKind::Release, persona, cause);
+                (recorded, ())
+            })
+            .await
+            .map_err(|e| ReleaseRequestError::state("terminal verdict", e))?;
+    }
+    Ok(())
 }
 
 /// Admit a bond record to the exit path, or say why it may not be read.
@@ -738,6 +767,16 @@ mod tests {
             submitter_persona: PCanonicalId::from_bytes([2; 32]),
         };
         assert!(released_on_first_send_failure(&mismatch));
+
+        let unconfirmed = BroadcastSubmitError::SealUnconfirmed(
+            super::super::error::PersistenceError::DurabilityUnconfirmed(
+                shekyl_engine_file::Unconfirmed::ClassicRename,
+            ),
+        );
+        assert!(
+            released_on_first_send_failure(&unconfirmed),
+            "an unconfirmed seal sent nothing: the lane reopens (Rick, 2026-11-19)"
+        );
 
         let retryable = BroadcastSubmitError::Submit(SubmitterError::RejectedRetryable {
             cause: RetryableRejectCause::StaleRoot,

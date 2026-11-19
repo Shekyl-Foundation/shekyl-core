@@ -869,95 +869,130 @@ pub enum WalletRpcError {
         /// The input's position in the transaction.
         input: usize,
     },
-    /// `-29120`: the send's record (with its signed bytes and tx secret)
-    /// could not be saved because `target` is not writable for this
-    /// account, so the wallet sent nothing (A19). The reservation is kept:
-    /// fix the cause and submit it again, or discard it. Each other cause
-    /// of an unsaved send is its own code, `-29128` to `-29134` (Rick,
-    /// 2026-11-18 and 2026-11-19).
-    #[error("the send was not saved, so it was not sent — {}", target.advice())]
+    /// `-29120`: the record of a send or a staking transaction (its signed
+    /// bytes, and a send's tx secret) could not be saved because `target`
+    /// is not writable for this account, so the wallet sent nothing (A19).
+    /// A send's reservation is kept: fix the cause and submit it again, or
+    /// discard it; a staking seal was removed, so the call is retried. Each
+    /// other cause of an unsaved record is its own code, `-29128` to
+    /// `-29134` (Rick, 2026-11-18 and 2026-11-19).
+    #[error(
+        "{} was not saved, so it was not sent — {} and {}",
+        of.subject(),
+        target.advice(),
+        of.retry()
+    )]
     SaveNotWritable {
         /// What could not be written: the folder, the file or the drive.
         target: SaveTarget,
+        /// What the save was of.
+        of: SaveOf,
     },
-    /// `-29128`: the send's record was saved on a volume whose file system
-    /// Windows cannot confirm keeps a save through a power cut (anything
-    /// but NTFS: FAT32, exFAT, ReFS), so the wallet sent nothing. The
-    /// reservation is kept (Rick, 2026-11-18).
+    /// `-29128`: the record was saved on a volume whose file system Windows
+    /// cannot confirm keeps a save through a power cut (anything but NTFS:
+    /// FAT32, exFAT, ReFS), so the wallet sent nothing (Rick, 2026-11-18).
     #[error(
-        "the send was not sent — the wallet is on a {file_system} volume, where Windows cannot \
-         confirm that a save survives a power cut; move the wallet to an NTFS volume and \
-         submit again, or discard the send"
+        "{} was not sent — the wallet is on a {file_system} volume, where Windows cannot \
+         confirm that a save survives a power cut; move the wallet to an NTFS volume and {}",
+        of.subject(),
+        of.retry()
     )]
     SaveDurabilityUnconfirmed {
         /// The volume's file system, as Windows names it.
         file_system: String,
+        /// What the save was of.
+        of: SaveOf,
     },
     /// `-29129`: the disk holding the wallet is full (or this account's
-    /// quota on it is), so the send's record was not saved and the wallet
-    /// sent nothing. The reservation is kept.
+    /// quota on it is), so the record was not saved and the wallet sent
+    /// nothing.
     #[error(
-        "the send was not saved, so it was not sent — the disk holding the wallet is full; \
-         free disk space and submit again, or discard the send"
+        "{} was not saved, so it was not sent — the disk holding the wallet is full; free \
+         disk space and {}",
+        of.subject(),
+        of.retry()
     )]
-    SaveDiskFull,
+    SaveDiskFull {
+        /// What the save was of.
+        of: SaveOf,
+    },
     /// `-29130`: another program held the wallet's file (or the save's
-    /// staged copy of it) open past the save's wait, so the send's record
-    /// was not saved and the wallet sent nothing. The reservation is kept.
-    /// A read-only file is `-29120` with `target: file`: the save reads the
-    /// attribute to tell the two apart (Rick, 2026-11-19). The wording
-    /// follows the daemon's `config.replace.held-open`.
+    /// staged copy of it) open past the save's wait, so the record was not
+    /// saved and the wallet sent nothing. A read-only file is `-29120` with
+    /// `target: file`: the save reads the attribute to tell the two apart
+    /// (Rick, 2026-11-19). The wording follows the daemon's
+    /// `config.replace.held-open`.
     #[error(
-        "the send was not saved, so it was not sent — another program, most likely an \
-         antivirus scanner or a search indexer, held the wallet's file open; exclude the \
-         wallet's folder from scanning and submit again, or discard the send"
+        "{} was not saved, so it was not sent — another program, most likely an antivirus \
+         scanner or a search indexer, held the wallet's file open; exclude the wallet's \
+         folder from scanning and {}",
+        of.subject(),
+        of.retry()
     )]
-    SaveFileHeld,
+    SaveFileHeld {
+        /// What the save was of.
+        of: SaveOf,
+    },
     /// `-29131`: the disk reported an error at `step` of saving or
-    /// confirming the send's record, so the wallet sent nothing. The
-    /// reservation is kept. `error` is the system's words for it, never a
-    /// path.
+    /// confirming the record, so the wallet sent nothing. `error` is the
+    /// system's words for it, never a path.
     #[error(
-        "the send was not sent — the disk holding the wallet reported an error while {} \
-         ({error}); check the disk and submit again, or discard the send",
-        step.words()
+        "{} was not sent — the disk holding the wallet reported an error while {} \
+         ({error}); check the disk and {}",
+        of.subject(),
+        step.words(),
+        of.retry()
     )]
     SaveIoFailed {
         /// The step the disk failed.
         step: SaveStep,
         /// The system's description of the error, without a path.
         error: String,
+        /// What the save was of.
+        of: SaveOf,
     },
     /// `-29132`: the wallet is on a local NTFS drive that refused the
     /// rename Windows confirms survives a power cut, and the classic rename
-    /// saved it, so the wallet sent nothing. The reservation is kept.
-    /// Windows builds observed to give it: none observed (Rick,
-    /// 2026-11-19).
+    /// saved it, so the wallet sent nothing. Windows builds observed to give
+    /// it: none observed (Rick, 2026-11-19).
     #[error(
-        "the send was not sent — the wallet's NTFS drive refused the kind of save Windows \
-         can confirm survives a power cut; move the wallet to another local NTFS drive and \
-         submit again, or discard the send"
+        "{} was not sent — the wallet's NTFS drive refused the kind of save Windows can \
+         confirm survives a power cut; move the wallet to another local NTFS drive and {}",
+        of.subject(),
+        of.retry()
     )]
-    SaveRenameUnconfirmed,
-    /// `-29133`: the wallet could not prepare the send's record to save
-    /// (its state failed a check, or could not be encoded or sealed): a
-    /// fault in the wallet, not the disk, so the wallet sent nothing. The
-    /// reservation is kept; the wallet's log has the detail.
+    SaveRenameUnconfirmed {
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29133`: the wallet could not prepare the record to save (its state
+    /// failed a check, or could not be encoded or sealed): a fault in the
+    /// wallet, not the disk, so the wallet sent nothing. The wallet's log
+    /// has the detail.
     #[error(
-        "the send was not sent — the wallet could not prepare its record to save (a fault \
-         in the wallet, not the disk); report it, and discard the send"
+        "{} was not sent — the wallet could not prepare its record to save (a fault in the \
+         wallet, not the disk); {}",
+        of.subject(),
+        of.fault_remedy()
     )]
-    SaveInternalFault,
+    SaveInternalFault {
+        /// What the save was of.
+        of: SaveOf,
+    },
     /// `-29134`: the wallet is on a network drive, where no save is
     /// confirmed to survive a power cut whatever file system the drive
-    /// reports (a Samba share reports NTFS), so the wallet sent nothing.
-    /// The reservation is kept (Rick, 2026-11-19).
+    /// reports (a Samba share reports NTFS), so the wallet sent nothing
+    /// (Rick, 2026-11-19).
     #[error(
-        "the send was not sent — the wallet is on a network drive, where no save is \
-         confirmed to survive a power cut; move the wallet to a local drive and submit \
-         again, or discard the send"
+        "{} was not sent — the wallet is on a network drive, where no save is confirmed to \
+         survive a power cut; move the wallet to a local drive and {}",
+        of.subject(),
+        of.retry()
     )]
-    SaveOnNetworkDrive,
+    SaveOnNetworkDrive {
+        /// What the save was of.
+        of: SaveOf,
+    },
     /// `-29121`: `tx_resend` named a transaction that is not a held send:
     /// it confirmed, was released, or was never this wallet's.
     #[error("no held send with this id — tx_alarm lists the held sends")]
@@ -1459,12 +1494,12 @@ impl WalletRpcError {
             Self::InputUnspendable { .. } => WalletRpcErrorCode::InputUnspendable,
             Self::SaveNotWritable { .. } => WalletRpcErrorCode::SaveNotWritable,
             Self::SaveDurabilityUnconfirmed { .. } => WalletRpcErrorCode::SaveDurabilityUnconfirmed,
-            Self::SaveDiskFull => WalletRpcErrorCode::SaveDiskFull,
-            Self::SaveFileHeld => WalletRpcErrorCode::SaveFileHeld,
+            Self::SaveDiskFull { .. } => WalletRpcErrorCode::SaveDiskFull,
+            Self::SaveFileHeld { .. } => WalletRpcErrorCode::SaveFileHeld,
             Self::SaveIoFailed { .. } => WalletRpcErrorCode::SaveIoFailed,
-            Self::SaveRenameUnconfirmed => WalletRpcErrorCode::SaveRenameUnconfirmed,
-            Self::SaveInternalFault => WalletRpcErrorCode::SaveInternalFault,
-            Self::SaveOnNetworkDrive => WalletRpcErrorCode::SaveOnNetworkDrive,
+            Self::SaveRenameUnconfirmed { .. } => WalletRpcErrorCode::SaveRenameUnconfirmed,
+            Self::SaveInternalFault { .. } => WalletRpcErrorCode::SaveInternalFault,
+            Self::SaveOnNetworkDrive { .. } => WalletRpcErrorCode::SaveOnNetworkDrive,
             Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
             Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
             Self::ReservationNotFound => WalletRpcErrorCode::ReservationNotFound,
@@ -1614,11 +1649,11 @@ impl WalletRpcError {
                 Some(json!({ "wait_blocks": wait_blocks }))
             }
             Self::SignerFailed { fault } => Some(json!({ "fault": fault })),
-            Self::SaveDurabilityUnconfirmed { file_system } => {
+            Self::SaveDurabilityUnconfirmed { file_system, .. } => {
                 Some(json!({ "file_system": file_system }))
             }
-            Self::SaveNotWritable { target } => Some(json!({ "target": target.as_str() })),
-            Self::SaveIoFailed { step, error } => {
+            Self::SaveNotWritable { target, .. } => Some(json!({ "target": target.as_str() })),
+            Self::SaveIoFailed { step, error, .. } => {
                 Some(json!({ "step": step.as_str(), "error": error }))
             }
             Self::TooManyInputs { count, limit } | Self::TooManyOutputs { count, limit } => {
@@ -2295,7 +2330,9 @@ impl From<PersistenceError> for WalletRpcError {
             // confirmed. Nothing was sent. The submit path reports this as
             // `DispatchNotSaved`; this arm is the same answer, by cause, if
             // the error reaches the boundary on its own.
-            err @ PersistenceError::DurabilityUnconfirmed(_) => from_unsaved_send(&err),
+            err @ PersistenceError::DurabilityUnconfirmed(_) => {
+                from_unsaved_send(&err, SaveOf::Send)
+            }
         }
     }
 }
@@ -2324,20 +2361,16 @@ impl SaveTarget {
         }
     }
 
-    /// The cause and the remedy, for the message.
+    /// The cause and the remedy, for the message; the retry follows.
     const fn advice(self) -> &'static str {
         match self {
             Self::Folder => {
-                "the wallet's folder is not writable; make it writable for this account and \
-                 submit again, or discard the send"
+                "the wallet's folder is not writable; make it writable for this account"
             }
-            Self::File => {
-                "the wallet's file is read-only; clear its read-only attribute and submit again, \
-                 or discard the send"
-            }
+            Self::File => "the wallet's file is read-only; clear its read-only attribute",
             Self::Volume => {
                 "the drive holding the wallet is read-only; make it writable, or move the wallet \
-                 to a writable drive, and submit again, or discard the send"
+                 to a writable drive,"
             }
         }
     }
@@ -2377,11 +2410,51 @@ impl SaveStep {
     /// The step, as the message names it.
     const fn words(self) -> &'static str {
         match self {
-            Self::Write => "writing the send's record",
+            Self::Write => "writing the record",
             Self::Rename => "putting the record in place of the wallet's file",
             Self::FolderSync => "syncing the wallet's folder",
             Self::Flush => "flushing the wallet's file to the disk",
             Self::VolumeQuery => "asking the wallet's drive what it is",
+        }
+    }
+}
+
+/// What an unsaved record was of: the subject and the remedy's last words
+/// differ, the code and its `data` do not (Rick, 2026-11-19: a staking
+/// seal answers through the send's mapping, by cause).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveOf {
+    /// A send (`submit_pending_tx`, `tx_resend`): its reservation is kept,
+    /// so it is submitted again or discarded.
+    Send,
+    /// A staking transaction (`stake`, `unstake`, `drain`,
+    /// `collect_unstaked`): its seal was removed and its lane reopened, so
+    /// the call is retried.
+    Staking,
+}
+
+impl SaveOf {
+    /// What was not sent, as the message names it.
+    const fn subject(self) -> &'static str {
+        match self {
+            Self::Send => "the send",
+            Self::Staking => "the staking transaction",
+        }
+    }
+
+    /// The remedy's last words, once the cause is fixed.
+    const fn retry(self) -> &'static str {
+        match self {
+            Self::Send => "submit again, or discard the send",
+            Self::Staking => "try again",
+        }
+    }
+
+    /// The remedy for a fault in the wallet.
+    const fn fault_remedy(self) -> &'static str {
+        match self {
+            Self::Send => "report it, and discard the send",
+            Self::Staking => "report it",
         }
     }
 }
@@ -2397,8 +2470,9 @@ impl From<shekyl_engine_file::Step> for SaveStep {
     }
 }
 
-/// A send whose record was not saved, or not confirmed on disk (A19):
-/// nothing was sent and the reservation is kept. Every cause is its own
+/// A record that was not saved, or not confirmed on disk, so nothing was
+/// sent (A19): a send's, whose reservation is kept, or a staking seal's,
+/// which was removed so its lane reopens ([`SaveOf`]). Every cause is its own
 /// code and advice (Rick, 2026-11-18 and 2026-11-19): a folder, file or
 /// drive this account cannot write (`-29120`, `data.target`), a full disk
 /// (`-29129`), another program holding the file (`-29130`), the disk's
@@ -2407,17 +2481,18 @@ impl From<shekyl_engine_file::Step> for SaveStep {
 /// refused the confirmed rename (`-29132`), and a fault in the wallet
 /// before the disk was touched (`-29133`). The whole error, paths and all,
 /// goes to the wallet's log only.
-fn from_unsaved_send(err: &PersistenceError) -> WalletRpcError {
+pub fn from_unsaved_send(err: &PersistenceError, of: SaveOf) -> WalletRpcError {
     use shekyl_engine_file::Unconfirmed as U;
     use WalletFileError as F;
-    tracing::error!(error = %err, "the send could not be saved; nothing was sent");
+    tracing::error!(error = %err, ?of, "the record could not be saved; nothing was sent");
     match err {
         PersistenceError::WalletFile(file) => match file {
-            F::SaveStep { step, source, .. } => from_save_io((*step).into(), source),
+            F::SaveStep { step, source, .. } => from_save_io((*step).into(), source, of),
             F::ReadOnly { .. } => WalletRpcError::SaveNotWritable {
                 target: SaveTarget::File,
+                of,
             },
-            F::HeldOpen(_) => WalletRpcError::SaveFileHeld,
+            F::HeldOpen(_) => WalletRpcError::SaveFileHeld { of },
             // Before any file is touched the ledger's own check, its
             // encoding, the frame or the seal failed; a target with no
             // parent directory is the caller's; and a state save never
@@ -2436,47 +2511,51 @@ fn from_unsaved_send(err: &PersistenceError) -> WalletRpcError {
             | F::UnknownCapability(_)
             | F::SaveAsCrossFilesystem { .. }
             | F::SaveAsTargetExists { .. }
-            | F::Prefs(_) => WalletRpcError::SaveInternalFault,
+            | F::Prefs(_) => WalletRpcError::SaveInternalFault { of },
         },
         PersistenceError::DurabilityUnconfirmed(why) => match why {
-            U::Remote(_) => WalletRpcError::SaveOnNetworkDrive,
+            U::Remote(_) => WalletRpcError::SaveOnNetworkDrive { of },
             U::FileSystem(name) => WalletRpcError::SaveDurabilityUnconfirmed {
                 file_system: name.clone(),
+                of,
             },
-            U::ClassicRename => WalletRpcError::SaveRenameUnconfirmed,
-            U::DirectoryNotSynced(error) => from_save_io(SaveStep::FolderSync, error),
-            U::Flush(error) => from_save_io(SaveStep::Flush, error),
-            U::VolumeUnread(error) => from_save_io(SaveStep::VolumeQuery, error),
+            U::ClassicRename => WalletRpcError::SaveRenameUnconfirmed { of },
+            U::DirectoryNotSynced(error) => from_save_io(SaveStep::FolderSync, error, of),
+            U::Flush(error) => from_save_io(SaveStep::Flush, error, of),
+            U::VolumeUnread(error) => from_save_io(SaveStep::VolumeQuery, error, of),
             // A wallet save stages a fresh file through its creating handle
             // every time and never resumes one a previous process left, so
             // it never reports this; if it did, that would be a fault.
-            U::Reopened => WalletRpcError::SaveInternalFault,
+            U::Reopened => WalletRpcError::SaveInternalFault { of },
         },
-        // A send's save never writes the preferences.
-        PersistenceError::Prefs(_) => WalletRpcError::SaveInternalFault,
+        // A send's or a seal's save never writes the preferences.
+        PersistenceError::Prefs(_) => WalletRpcError::SaveInternalFault { of },
     }
 }
 
-/// The disk's error at `step` of a send's save, by what the user does
+/// The disk's error at `step` of a save of `of`, by what the user does
 /// about it: a denial is the folder (the staged file is created and renamed
 /// in it; a read-only file is its own variant upstream), a read-only or
 /// write-protected drive the volume, a full disk or quota the space, and
 /// anything else the step, named.
-fn from_save_io(step: SaveStep, error: &std::io::Error) -> WalletRpcError {
+fn from_save_io(step: SaveStep, error: &std::io::Error, of: SaveOf) -> WalletRpcError {
     use std::io::ErrorKind as K;
     match error.kind() {
         K::PermissionDenied => WalletRpcError::SaveNotWritable {
             target: SaveTarget::Folder,
+            of,
         },
         K::ReadOnlyFilesystem => WalletRpcError::SaveNotWritable {
             target: SaveTarget::Volume,
+            of,
         },
-        K::StorageFull | K::QuotaExceeded => WalletRpcError::SaveDiskFull,
+        K::StorageFull | K::QuotaExceeded => WalletRpcError::SaveDiskFull { of },
         // `io::ErrorKind` is foreign and `#[non_exhaustive]`: every other
         // kind is the disk failing the step, named in `step` and `error`.
         _ => WalletRpcError::SaveIoFailed {
             step,
             error: system_words(error),
+            of,
         },
     }
 }
@@ -2630,6 +2709,11 @@ impl From<DrainToPrincipalError> for WalletRpcError {
                 tracing::warn!(detail = %detail, "drain dispatch failed at the choke point");
                 Self::SubmitAmbiguous
             }
+            // The seal's save was not confirmed: nothing was sent and the
+            // seal was removed. The save's cause answers (Rick, 2026-11-19).
+            DrainToPrincipalError::SealNotSaved(error) => {
+                from_unsaved_send(&error, SaveOf::Staking)
+            }
         }
     }
 }
@@ -2680,6 +2764,10 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 bound,
             },
             E::ExitRefusedAndReleased { detail } => Self::UnstakeRefusedReleased { detail },
+            // The seal's save was not confirmed: nothing was sent and the
+            // seal was removed, so the lane is open. The save's cause
+            // answers, never -29522 (Rick, 2026-11-19).
+            E::SealNotSaved(error) => from_unsaved_send(&error, SaveOf::Staking),
             E::ExitFateUnknown { detail } => {
                 tracing::warn!(detail = %detail, "unstake dispatch fate unknown; seal held");
                 Self::UnstakeFateUnknown { detail }
@@ -2730,6 +2818,9 @@ impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
                 tracing::warn!(detail = %detail, "collect_unstaked dispatch failed at the choke point");
                 Self::SubmitAmbiguous
             }
+            // The seal's save was not confirmed: nothing was sent and the
+            // seal was removed. The save's cause answers (Rick, 2026-11-19).
+            E::SealNotSaved(error) => from_unsaved_send(&error, SaveOf::Staking),
             E::Engine { context, detail } => internal_detail(context, detail),
         }
     }
@@ -2757,7 +2848,9 @@ impl From<SubmitError> for WalletRpcError {
             SubmitError::SubmitAlreadyPending { .. } => Self::SubmitAlreadyPending,
             SubmitError::ReanchorUnavailable { .. } => Self::ReanchorUnavailable,
             SubmitError::ReselectionRequired { .. } => Self::ReselectionRequired,
-            SubmitError::DispatchNotSaved { source, .. } => from_unsaved_send(&source),
+            SubmitError::DispatchNotSaved { source, .. } => {
+                from_unsaved_send(&source, SaveOf::Send)
+            }
             // `SubmitError` is `#[non_exhaustive]` (Phase 0a); every variant is
             // named above, so inside one workspace build this is unreachable.
             other => internal_detail("submit variant unmapped at the RPC boundary", other),
@@ -4173,6 +4266,42 @@ mod tests {
         }
     }
 
+    /// A staking seal whose save was not confirmed answers with the save's
+    /// own code, by cause, from every staking call that seals (Rick,
+    /// 2026-11-19): never `-29522` or `-29107`, whose "sent, held" and
+    /// "may have propagated" are false when nothing was sent. The words are
+    /// a staking transaction's: the seal was removed, so the remedy ends in
+    /// a retry, never "discard the send". Red edit: map `SealNotSaved` to
+    /// the old arms, or pass `SaveOf::Send`, and the code or the words
+    /// differ.
+    #[test]
+    fn an_unconfirmed_staking_seal_answers_its_save_code() {
+        use shekyl_engine_core::{CollectUnstakedError, DrainToPrincipalError, UnstakeError};
+        use shekyl_engine_file::Unconfirmed;
+        let unconfirmed =
+            || PersistenceError::DurabilityUnconfirmed(Unconfirmed::FileSystem("FAT32".to_owned()));
+        let answers = [
+            WalletRpcError::from(UnstakeError::SealNotSaved(unconfirmed())),
+            WalletRpcError::from(DrainToPrincipalError::SealNotSaved(unconfirmed())),
+            WalletRpcError::from(CollectUnstakedError::SealNotSaved(unconfirmed())),
+        ];
+        for err in answers {
+            assert_eq!(err.code().as_i32(), -29128, "{err:?}");
+            assert_eq!(err.data(), Some(json!({ "file_system": "FAT32" })));
+            let message = err.message();
+            assert!(
+                message.starts_with("the staking transaction was not sent")
+                    && message.ends_with("move the wallet to an NTFS volume and try again")
+                    && !message.contains("discard"),
+                "{message}"
+            );
+        }
+        let network = WalletRpcError::from(UnstakeError::SealNotSaved(
+            PersistenceError::DurabilityUnconfirmed(Unconfirmed::Remote("NTFS".to_owned())),
+        ));
+        assert_eq!(network.code().as_i32(), -29134, "{network:?}");
+    }
+
     /// Every cause of an unsaved send has its own code, `data` and advice,
     /// and none of them leaks a path (Rick, 2026-11-18: the audit of
     /// `-29120`; 2026-11-19: its target, the step, the network drive). A
@@ -4257,7 +4386,7 @@ mod tests {
                 at(Step::Write, eio()),
                 C::SaveIoFailed,
                 failed("write", &eio_words),
-                "while writing the send's record",
+                "while writing the record",
             ),
             (
                 at(Step::FolderSync, eio()),
@@ -4702,7 +4831,7 @@ mod tests {
         let contract = include_str!("../../../docs/api/wallet_rpc.yaml");
         // The entry wraps across the YAML's description column: one space
         // between words, so a phrase reads whole.
-        let entry = between(contract, "-29119 SIGNER_FAILED", "-29120 SEND_NOT_SAVED")
+        let entry = between(contract, "-29119 SIGNER_FAILED", "-29120 SAVE_NOT_WRITABLE")
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");

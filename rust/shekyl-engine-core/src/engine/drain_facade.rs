@@ -195,6 +195,11 @@ pub enum DrainToPrincipalError {
         /// The transport failure's rendering.
         detail: String,
     },
+    /// The drain's seal was saved, but the save was not confirmed on disk,
+    /// so nothing was sent; the seal was removed and the lane is open again
+    /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
+    #[error("the drain was not sent: {0}")]
+    SealNotSaved(#[source] super::error::PersistenceError),
 }
 
 impl From<DrainRequestError> for DrainToPrincipalError {
@@ -249,6 +254,9 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                     detail: e.to_string(),
                 },
             },
+            DrainRequestError::Submit(
+                super::transaction_submitter::BroadcastSubmitError::SealUnconfirmed(error),
+            ) => Self::SealNotSaved(error),
             DrainRequestError::Submit(e) => Self::Submit {
                 detail: e.to_string(),
             },

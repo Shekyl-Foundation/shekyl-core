@@ -269,6 +269,12 @@ pub(crate) enum BondAssemblyError {
     )]
     InputRaced,
 
+    /// The post's seal was saved, but the save was not confirmed on disk,
+    /// so the seal was removed: nothing will be sent, and the stake is
+    /// retried once the save's cause is fixed (Rick, 2026-11-19).
+    #[error("the bond post was not sealed: {0}")]
+    SealNotSaved(#[source] super::error::PersistenceError),
+
     /// The curve-tree / ledger anchoring procedure could not produce a
     /// submittable [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)
     /// (tree too far behind, ingest missing, ledger hash missing, chain too

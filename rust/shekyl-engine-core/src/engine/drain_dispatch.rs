@@ -464,6 +464,14 @@ where
                 durability,
             ))
             .await;
+        // An unconfirmed seal sent nothing: it is removed so the lane
+        // reopens, and the drain answers with the save's own code (Rick,
+        // 2026-11-19).
+        if let Err(BroadcastSubmitError::SealUnconfirmed(_)) = &sent {
+            store
+                .restore_unsent("drain", |block| block.remove_drain(&persona).is_some())
+                .await;
+        }
         if let Some(cause) = sent.as_ref().err().and_then(terminal_cause) {
             store
                 .mutate(|block| {
