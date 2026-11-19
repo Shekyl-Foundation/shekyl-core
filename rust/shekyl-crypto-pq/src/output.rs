@@ -656,8 +656,9 @@ fn decap_ml_kem_and_combine(
 /// What one ML-KEM decapsulation said about the view tag.
 ///
 /// A tag miss is not a decapsulation failure: the ciphertext opened, and it
-/// is not this key's. The shared secret is wiped before [`NotForThisKey`]
-/// (FA-6: the miss is the common path, so an early return must not leave it).
+/// is not this key's. The shared secret is wiped before
+/// [`NotForThisKey`](Self::NotForThisKey) (FA-6: the miss is the common
+/// path, so an early return must not leave it).
 pub(crate) enum Prefilter {
     Matched(Zeroizing<[u8; 32]>),
     NotForThisKey,
