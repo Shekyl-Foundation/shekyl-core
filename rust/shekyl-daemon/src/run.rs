@@ -123,7 +123,9 @@ impl StartEnd {
     ) -> i32 {
         match fault {
             shekyl_daemon_rpc::run::StartFault::HeldOpen(held) => {
-                self.refuse(&[shekyl_daemon_rpc::run::held_open_refusal(&held, data_dir)])
+                self.refuse(&[shekyl_daemon_config::replace::held_open_refusal(
+                    &held, data_dir,
+                )])
             }
             shekyl_daemon_rpc::run::StartFault::Refused(why) => {
                 self.fail(format!("{context}: {why}"))
@@ -522,7 +524,14 @@ fn supervise(
     }
     notify_driver.abort();
     let status = finish(pool, supervisor, rpc, preserve_status, node);
-    refused.unwrap_or(status)
+    exit_status(refused, status)
+}
+
+/// The run's exit: a start refusal's status when the RPC refused at its
+/// start (2 for a held file or a bad rendezvous key, 1 for a failure),
+/// whatever the teardown that followed reports; otherwise the teardown's.
+fn exit_status(refused: Option<i32>, teardown: i32) -> i32 {
+    refused.unwrap_or(teardown)
 }
 
 /// The teardown: chain sync is asked to stop, the RPC drains, the node is

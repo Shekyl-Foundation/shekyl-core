@@ -931,6 +931,30 @@ fn holds_access(path: &Path, access: Access) -> bool {
     }
 }
 
+/// The bytes of `live` when it is a regular file, read through a handle
+/// that never blocks and is checked before a byte is read: on Unix the
+/// open is non-blocking and does not follow a link, so a FIFO with no
+/// writer, a device or a link at the destination is "not unchanged" at
+/// once, and the staged rename replaces that entry as it would any other
+/// (Copilot, #1439: a FIFO at a rebaseline output hung the comparison).
+fn read_regular(live: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let mut file = opts.open(live).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut held = Vec::new();
+    file.read_to_end(&mut held).ok()?;
+    Some(held)
+}
+
 /// Replace the file at `live` with `bytes`, as `access` gives: the one
 /// replace path (Rick, 2026-11-18). A live file that already holds exactly
 /// these bytes and passes its reader's access check is left alone: no
@@ -955,7 +979,7 @@ fn holds_access(path: &Path, access: Access) -> bool {
 /// [`CommitError::Unsynced`] when an unchanged file's directory could not
 /// be synced.
 pub fn replace(live: &Path, bytes: &[u8], access: Access) -> Result<Replaced, CommitError> {
-    let unchanged = std::fs::read(live).is_ok_and(|held| held == bytes);
+    let unchanged = read_regular(live).is_some_and(|held| held == bytes);
     if unchanged && holds_access(live, access) {
         sync_dir(parent(live)).map_err(|error| CommitError::Unsynced(live.to_path_buf(), error))?;
         return Ok(Replaced::Unchanged);
@@ -1077,6 +1101,39 @@ mod tests {
             Replaced::Written(_)
         ));
         assert_eq!(std::fs::read(&live).unwrap(), b"changed");
+    }
+
+    /// A FIFO with no writer at the destination is replaced by a regular
+    /// file at once: the unchanged-write comparison opens non-blocking and
+    /// reads only a regular file. Red edit: compare through a plain
+    /// `std::fs::read`, and the replace blocks on the FIFO until this
+    /// test's deadline (Copilot, #1439, a FIFO at a rebaseline output).
+    #[test]
+    fn a_fifo_at_the_destination_is_replaced_without_blocking() {
+        use std::os::unix::fs::FileTypeExt;
+        const WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("trace.bin");
+        let live_c = std::ffi::CString::new(live.to_str().unwrap()).unwrap();
+        #[allow(unsafe_code, reason = "mkfifo has no safe wrapper in std")]
+        // SAFETY: `live_c` is a NUL-terminated path; mkfifo only reads it.
+        let made = unsafe { libc::mkfifo(live_c.as_ptr(), 0o600) };
+        assert_eq!(made, 0, "the FIFO");
+        let (done, finished) = std::sync::mpsc::channel();
+        let target = live.clone();
+        std::thread::spawn(move || {
+            drop(done.send(replace(&target, b"trace", Access::Default)));
+        });
+        let replaced = finished
+            .recv_timeout(WITHIN)
+            .expect("the replace hung on the FIFO")
+            .expect("the replace");
+        assert!(matches!(replaced, Replaced::Written(_)), "{replaced:?}");
+        assert!(!std::fs::symlink_metadata(&live)
+            .unwrap()
+            .file_type()
+            .is_fifo());
+        assert_eq!(std::fs::read(&live).unwrap(), b"trace");
     }
 
     /// A file whose bytes match but whose mode was loosened is replaced,

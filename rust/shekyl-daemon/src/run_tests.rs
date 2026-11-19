@@ -395,3 +395,16 @@ fn a_late_start_fault_keeps_its_refusal_status() {
         EXIT_FAILED
     );
 }
+
+/// The run's exit is the start refusal's status over the teardown's: a
+/// refusal at the RPC's start (2) is not overwritten by the failed run's
+/// teardown (1), and with no refusal the teardown decides. Red edit:
+/// return the teardown's status, and a held record exits 1 (Copilot,
+/// #1439).
+#[test]
+fn a_start_refusal_s_status_survives_the_teardown() {
+    assert_eq!(exit_status(Some(EXIT_REFUSED), EXIT_FAILED), EXIT_REFUSED);
+    assert_eq!(exit_status(Some(EXIT_FAILED), 0), EXIT_FAILED);
+    assert_eq!(exit_status(None, EXIT_FAILED), EXIT_FAILED);
+    assert_eq!(exit_status(None, 0), 0);
+}

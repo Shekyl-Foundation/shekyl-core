@@ -110,8 +110,10 @@ pub fn read(
 /// [`read`], so the decision is written once.
 ///
 /// # Errors
-/// [`read`]'s refusals, and `config.data-dir.unusable` when the marker
-/// cannot be written.
+/// [`read`]'s refusals; `config.replace.held-open` when another program
+/// held the marker's staged file or the marker past the replace's wait;
+/// and `config.data-dir.unusable` when the marker cannot be written
+/// otherwise.
 pub fn check_or_write(
     lock: &Lock,
     network: Network,
@@ -122,14 +124,20 @@ pub fn check_or_write(
         MarkerRead::Matched => Ok(MarkerOutcome::Matched),
         MarkerRead::Absent => {
             let path = data_dir.join(MARKER_FILE);
-            write(&path, network, network_id).map_err(|e| {
-                Diagnostic::new(Code::DataDirUnusable, Source::Machine)
+            write(&path, network, network_id).map_err(|e| match e {
+                // A scanner holding the marker's leftover staged file (or
+                // the marker) past the wait: its own refusal, naming the
+                // file and the directory to exclude from scanning.
+                private_file::CommitError::HeldOpen(held) => {
+                    crate::replace::held_open_refusal(&held, data_dir)
+                }
+                other => Diagnostic::new(Code::DataDirUnusable, Source::Machine)
                     .option("data-dir")
                     .param("path", data_dir.display().to_string())
                     .param(
                         "error",
-                        format!("the network marker could not be written: {e}"),
-                    )
+                        format!("the network marker could not be written: {other}"),
+                    ),
             })?;
             Ok(MarkerOutcome::Written)
         }
@@ -162,7 +170,11 @@ pub fn parse(text: &str) -> Option<(Network, NetworkId)> {
 /// The one replace (Rick, 2026-11-18): a staged file, synced, renamed over
 /// `path`, and the directory synced. The marker keeps what a plain create
 /// gives it ([`Access::Default`]).
-fn write(path: &Path, network: Network, network_id: NetworkId) -> std::io::Result<()> {
+fn write(
+    path: &Path,
+    network: Network,
+    network_id: NetworkId,
+) -> Result<(), private_file::CommitError> {
     private_file::replace(
         path,
         render(network, network_id).as_bytes(),
@@ -294,5 +306,37 @@ mod tests {
         let e = check_or_write(&lock, Network::Mainnet, ID_A).unwrap_err();
         assert_eq!(e.code, Code::MarkerUnreadable);
         assert_eq!(parse("network = \"mainnet\"\nnetwork-id = \"zz\"\n"), None);
+    }
+
+    /// On Windows a scanner holding the marker's leftover staged file past
+    /// the replace's wait refuses the start with `config.replace.held-open`,
+    /// naming the staged file and the data directory to exclude from
+    /// scanning, never the generic `config.data-dir.unusable`. Red edit:
+    /// map every write failure to `DataDirUnusable` (Copilot, #1439).
+    #[cfg(windows)]
+    #[test]
+    fn a_held_leftover_marker_is_the_held_open_refusal() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let (_dir, lock) = locked();
+        let staged = private_file::staged_path(&lock.data_dir().join(MARKER_FILE));
+        std::fs::write(&staged, b"a crashed write").unwrap();
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&staged)
+            .unwrap();
+        let refused = check_or_write(&lock, Network::Testnet, ID_A).unwrap_err();
+        drop(reader);
+        assert_eq!(refused.code, Code::ReplaceHeldOpen, "{}", refused.render());
+        let text = refused.render();
+        assert!(text.contains(&staged.display().to_string()), "{text}");
+        assert!(
+            text.contains(&format!(
+                "exclude {} from scanning",
+                lock.data_dir().display()
+            )),
+            "{text}"
+        );
     }
 }
