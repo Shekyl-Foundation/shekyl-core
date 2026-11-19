@@ -42,7 +42,9 @@ use shekyl_chain_rules::{
     BlockDrawsFloor, Fault, RuleSet, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, KeyImage, TxHash};
+use shekyl_types::{
+    ArchivalLength, BlockCount, BlockHash, BlockHeight, ChainCount, KeyImage, TxHash,
+};
 use shekyl_wire::Block;
 
 use crate::chain_facts::{
@@ -292,6 +294,17 @@ fn reward_of(block: &Block) -> Result<u64, FactsFault> {
         .iter()
         .try_fold(0u64, |sum, out| sum.checked_add(out.amount))
         .ok_or(FactsFault::Inconsistent)
+}
+
+/// The recorded cumulative archival length through `height` (`SHT-Q2`).
+fn archival_cumulative_at(
+    snap: &ReadSnapshot<'_>,
+    height: BlockHeight,
+) -> Result<ArchivalLength, FactsFault> {
+    match snap.block_info(height).map_err(store_fault)? {
+        AtHeight::Recorded(info) => Ok(info.cumulative_archival_len),
+        AtHeight::AboveTip => Err(FactsFault::Inconsistent),
+    }
 }
 
 /// A recorded cumulative difficulty at `height`.
@@ -604,10 +617,13 @@ impl ChainFacts for StoreFacts {
             .collect();
         // An alternative block has no draws row: the count rule writes it
         // when a block connects.
-        let draws = if header.orphan_status {
-            None
+        let (draws, archival_cumulative) = if header.orphan_status {
+            (None, None)
         } else {
-            held_draws(&snap, tip, header.height, self.rules.as_ref())?
+            (
+                held_draws(&snap, tip, header.height, self.rules.as_ref())?,
+                Some(archival_cumulative_at(&snap, header.height)?),
+            )
         };
         let block = Some(BlockFacts {
             tx_hashes: block.transaction_hashes.clone(),
@@ -619,6 +635,7 @@ impl ChainFacts for StoreFacts {
                 .unwrap_or_default(),
             bundle_bodies,
             draws,
+            archival_cumulative,
         });
         Ok(BlockAt {
             block,

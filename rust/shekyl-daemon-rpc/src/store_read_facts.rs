@@ -49,7 +49,10 @@ use shekyl_types::{
 };
 use shekyl_wire::{carries_archival_good, Ct, Transaction};
 
-use super::{connecting, count_at, derivation_fault, held_draws, store_fault, tip_of, StoreFacts};
+use super::{
+    archival_cumulative_at, connecting, count_at, derivation_fault, held_draws, store_fault,
+    tip_of, StoreFacts,
+};
 use crate::chain_facts::FactsFault;
 use crate::info_facts::{PoolScope, PoolState};
 use crate::read_facts::{
@@ -432,6 +435,7 @@ impl ChainReadFacts for StoreFacts {
                     .unwrap_or_default(),
                 bundle_bodies,
                 draws: held_draws(&snap, tip, height, self.rules.as_ref())?,
+                archival_cumulative: archival_cumulative_at(&snap, height)?,
             });
         }
         Ok(BlocksAt {

@@ -866,7 +866,7 @@ Each shape's fields today, and their names under this Part. The names the types 
 
 `get_block_header_by_hash`'s slot (`hash`, `block_header`) goes: a list reply is in selector order, and a slot that does not hold the item is `{"missing": null}` (IG-Q53, IG-Q73).
 
-**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the skeleton when `prune` is set — the pruned form with `prunable_hash`, `pqc_auth_hash` and `archival_size` beside it, IG-Q55 as SB-Q2 amends it); a transaction whose body this node discarded at the archival horizon answers its slot as `archived`, `{id, shard}`, instead of a body (`archived` → `archived`, the slot state; `DRS_SB_BELOW_HORIZON.md` SB-Q2); the first output's global index → `output_index` (RW-Q5); the block's bundle section → `section`, a list of bytes in section order, and the bodies this node holds for it → `section_body`, a list of bytes in no set order (4.3, IG-Q102; both empty for a block that admits no bundle); the draws the count rule issued at the block, `count(h)` → `draws`, a count, `null` where this node holds no row (4.5, IG-Q107). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
+**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the skeleton when `prune` is set — the pruned form with `prunable_hash`, `pqc_auth_hash` and `archival_size` beside it, IG-Q55 as SB-Q2 amends it); a transaction whose body this node discarded at the archival horizon answers its slot as `archived`, `{id, shard}`, instead of a body (`archived` → `archived`, the slot state; `DRS_SB_BELOW_HORIZON.md` SB-Q2); the first output's global index → `output_index` (RW-Q5); the block's bundle section → `section`, a list of bytes in section order, and the bodies this node holds for it → `section_body`, a list of bytes in no set order (4.3, IG-Q102; both empty for a block that admits no bundle); the draws the count rule issued at the block, `count(h)` → `draws`, a count, `null` where this node holds no row (4.5, IG-Q107); the chain's cumulative archival length through the block → `archival_cumulative`, a size, `null` for an alternative block (4.8, IG-Q112). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
 
 **Chain height** (`chain_height`): `height` (`/get_height`'s and `get_block_count`'s count) → `height`, the tip's ordinal (IG-Q45); `hash` → `hash`, the tip's; `writer`, the chain store's writer, `{"live": null}` or `{"halted": {"height": h, "invariant": n}}` (IG-Q92).
 
@@ -988,7 +988,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | nonce | block, header, template | the header's nonce; under `template`, with `offset`, where its bytes sit | |
 | orphan | block, header | not on the main chain | |
 | reward | block, mine, header, template | the block's reward, an amount | |
-| cumulative | difficulty | summed over the chain to this block | |
+| cumulative | difficulty, archival | summed over the chain to this block; under `archival`, the archival length in bytes (IG-Q112) | |
 | longterm | weight | the long-term weight | |
 | median | weight, size | the median | |
 | total | fee, weight, burn, bond | a sum | |
@@ -1717,3 +1717,11 @@ CEILING.", `RPC_CHANNEL.md` §4.5), and ends naming a revocation.
 **The tunnel's grant row is `rpc-grant`** (Rick, 2026-11-16): the grants
 the tunnel's sessions ask for. `request` keeps its one meaning; `grant`
 gains the parent `rpc`.
+
+---
+
+## 33. Part L — a block's cumulative archival length
+
+**RULED 2026-11-18 (Rick), for the body-store fill (`WALLET_SIDE_STORE.md` `WSS-Q16`).**
+
+**IG-Q112 — a block's cumulative archival length on the wire — RULED 2026-11-18 (Rick).** A wallet that fills a persona's body store places shard `k`'s transactions by the chain's cumulative archival length (`SHT-Q2`: shard `k` holds the transactions whose running total before them falls in `[k·W, (k+1)·W)`), and no read carried it. Each transaction's archival length is already on the block read under `prune`, bound by its txid; the running total is the one number the wallet cannot bind. *Ruled:* `block_show` and `block_list` carry each block's `archival_cumulative`, a size: the running total through the block, the coinbase included, read from the node's `block_info` row; `null` for an alternative block. It rides the block read every wallet makes while syncing, so no shard-specific query tells a daemon which shards a wallet means to bond. The wallet checks each block's increment against the txid-bound lengths the same read carries, so only the base at its restore height is taken on trust. `cumulative` gains the parent `archival`. 4.8.

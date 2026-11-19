@@ -22,8 +22,8 @@ use shekyl_archival_retention::ShardCoverageIn;
 use shekyl_chain_rules::EmissionEpochFacts;
 use shekyl_types::archival::HoldingsKind;
 use shekyl_types::{
-    BlockHash, BlockHeight, ChainCount, CurveTreeRoot, KeyImage, PCanonicalId, PowHash,
-    SettlementEpoch, ShardId, TxHash,
+    ArchivalLength, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, KeyImage, PCanonicalId,
+    PowHash, SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -210,6 +210,10 @@ pub struct BlockRead {
     /// `count(h)`, while this node holds the row (as
     /// [`crate::chain_facts::BlockFacts::draws`]).
     pub draws: Option<u32>,
+    /// The chain's cumulative archival length through this block
+    /// (as [`crate::chain_facts::BlockFacts::archival_cumulative`]); a
+    /// main-chain block always has one.
+    pub archival_cumulative: ArchivalLength,
 }
 
 /// What [`ChainReadFacts::blocks_by_height`] read: the blocks up to the

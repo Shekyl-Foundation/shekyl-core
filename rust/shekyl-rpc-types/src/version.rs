@@ -97,7 +97,15 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// `grant`, and under the five methods 4.6 added. Grant keywords are a
 /// closed set, so a 4.7 daemon refuses a ceiling or a configuration that
 /// names `enrol`, and a 4.6 reader refuses a reply that lists `enroll`.
-pub const CORE_RPC_VERSION_MINOR: u32 = 7;
+///
+/// 4.8: a block carries `archival_cumulative`, the chain's cumulative
+/// archival length through it (`WALLET_SIDE_STORE.md` `WSS-Q16`, IG-Q112;
+/// Rick, 2026-11-18): the offset a wallet needs to place a shard's
+/// transactions, read on the block read every wallet already makes, so no
+/// shard-specific query names the shards it means to bond. `null` for an
+/// alternative block. A 4.7 reader refuses a 4.8 block after the version
+/// read reports the daemon newer.
+pub const CORE_RPC_VERSION_MINOR: u32 = 8;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
