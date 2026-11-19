@@ -90,6 +90,29 @@ def write_pcap(path, packets, linktype=cw.DLT_RAW):
             fh.write(frame)
 
 
+def write_pcap_exact(path, packets, nanosecond, linktype=cw.DLT_RAW):
+    """packets: list of ((sec, sub), frame_bytes), `sub` in the file's own
+    unit: nanoseconds for a nanosecond pcap, microseconds otherwise."""
+    magic = cw.PCAP_MAGIC_NS_LE if nanosecond else cw.PCAP_MAGIC_LE
+    with open(path, "wb") as fh:
+        fh.write(struct.pack("<IHHIIII", magic, 2, 4, 0, 0, 65535, linktype))
+        for (sec, sub), frame in packets:
+            fh.write(struct.pack("<IIII", sec, sub, len(frame), len(frame)))
+            fh.write(frame)
+
+
+def one_segment_windows(stamps):
+    """One whole window per stamp on one flow, each in a single packet, so a
+    window completes at exactly its packet's stamp."""
+    out = []
+    seq = 1
+    for stamp in stamps:
+        blob = framed_window()
+        out.append((stamp, ipv4_tcp("127.0.0.1", 40000, "127.0.0.1", 9050, seq, blob)))
+        seq += len(blob)
+    return out
+
+
 def segmented(src, sport, dst, dport, seq0, blob, ts0, mss=1400, dt=0.001):
     """Split blob across TCP segments so reassembly is actually exercised."""
     out = []
@@ -203,6 +226,30 @@ class CountWindows(unittest.TestCase):
         )
         s, _ = self._run(pkts)
         self.assertEqual(s["interval_buckets"].get("below_tick"), 1)
+
+    def _buckets_exact(self, stamps, nanosecond):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.pcap")
+            write_pcap_exact(path, one_segment_windows(stamps), nanosecond)
+            flows = cw.count_windows(cw.read_pcap_packets(path))
+            return cw.summarise(flows)["interval_buckets"]
+
+    def test_a_gap_of_exactly_one_tick_is_not_a_burst(self):
+        # At this Unix second a float of seconds resolves about 240 ns:
+        # stamps exactly 10 ms apart subtract to 9.99999 ms as floats.
+        sec = 1_795_122_301
+        for nanosecond, unit_per_ms in ((False, 1_000), (True, 1_000_000)):
+            tick = cw.CADENCE_TICK_MS * unit_per_ms
+            at = self._buckets_exact([(sec, 0), (sec, tick)], nanosecond)
+            self.assertEqual(at, {"at_or_above_tick": 1}, nanosecond)
+            # Across a second boundary too.
+            wrap = unit_per_ms * 1_000 - tick // 2
+            over = self._buckets_exact(
+                [(sec, wrap), (sec + 1, tick // 2)], nanosecond
+            )
+            self.assertEqual(over, {"at_or_above_tick": 1}, nanosecond)
+            under = self._buckets_exact([(sec, 0), (sec, tick - 1)], nanosecond)
+            self.assertEqual(under, {"below_tick": 1}, nanosecond)
 
     def test_interval_summary_is_per_flow_not_merged(self):
         # Two channels, each with 5 s gaps. Interleaved, the merged series

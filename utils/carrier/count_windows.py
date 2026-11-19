@@ -49,6 +49,14 @@ WINDOW_BODY = WINDOW_BYTES - HEADER_SIZE
 # (one for memoryless, zero for a metronome), not from a band.
 MEAN_CADENCE_MS = 5_000
 CADENCE_TICK_MS = 10
+# Timestamps are whole nanoseconds from the capture to the comparison with
+# the tick. A float of Unix seconds resolves about 240 ns, so two stamps
+# exactly one tick apart subtract to a hair under it and would be counted
+# as a burst. Milliseconds as floats are for reporting only.
+NS_PER_SEC = 1_000_000_000
+NS_PER_USEC = 1_000
+NS_PER_MS = 1_000_000
+CADENCE_TICK_NS = CADENCE_TICK_MS * NS_PER_MS
 NODE_BUDGET_BPS = 8_192  # PER_NODE_BUDGET_BYTES_PER_SEC, two channels
 
 MAX_BODY = 100_000_000  # LEVIN_DEFAULT_MAX_PACKET_SIZE; larger is a false sig
@@ -83,7 +91,7 @@ def _u32(b, off, be):
 
 
 def read_pcap_packets(path):
-    """Yield (ts_sec_float, linktype, frame_bytes). Refuses truncated snap."""
+    """Yield (ts_ns, linktype, frame_bytes). Refuses truncated snap."""
     with open(path, "rb") as fh:
         hdr = fh.read(24)
         if len(hdr) < 24:
@@ -114,11 +122,8 @@ def read_pcap_packets(path):
                     "snaplen truncated a packet (%d < %d); recapture with -s 0"
                     % (incl, orig)
                 )
-            if ns:
-                ts = ts_sec + ts_sub / 1e9
-            else:
-                ts = ts_sec + ts_sub / 1e6
-            yield ts, linktype, frame
+            sub_ns = ts_sub if ns else ts_sub * NS_PER_USEC
+            yield ts_sec * NS_PER_SEC + sub_ns, linktype, frame
 
 
 def _l3_from_frame(linktype, frame):
@@ -272,15 +277,13 @@ def count_windows(packets, proxy_port=9050, window_bytes=WINDOW_BYTES):
     return flows
 
 
-def intervals_ms(timestamps):
-    out = []
-    for a, b in zip(timestamps, timestamps[1:]):
-        out.append((b - a) * 1000.0)
-    return out
+def intervals_ns(timestamps):
+    """Gaps between successive window completions, in whole nanoseconds."""
+    return [b - a for a, b in zip(timestamps, timestamps[1:])]
 
 
-def classify_interval(ms):
-    if ms < CADENCE_TICK_MS:
+def classify_interval(ns):
+    if ns < CADENCE_TICK_NS:
         return "below_tick"
     return "at_or_above_tick"
 
@@ -296,8 +299,9 @@ def mean_and_cv(intervals):
 
 def _flow_interval_stats(timestamps):
     """Per-channel gaps. The law is on one channel, not the merge."""
-    iv = intervals_ms(timestamps)
-    buckets = collections.Counter(classify_interval(m) for m in iv)
+    gaps = intervals_ns(timestamps)
+    buckets = collections.Counter(classify_interval(gap) for gap in gaps)
+    iv = [gap / NS_PER_MS for gap in gaps]
     hist = collections.Counter()
     for m in iv:
         hist[int(m // 250) * 250] += 1
@@ -328,7 +332,7 @@ def summarise(flows):
         all_ts.extend(ts)
     all_ts.sort()
     n = len(all_ts)
-    duration_s = (all_ts[-1] - all_ts[0]) if n >= 2 else 0.0
+    duration_s = (all_ts[-1] - all_ts[0]) / NS_PER_SEC if n >= 2 else 0.0
     # Budget unit is the framed window, not m_cb. Charging the body would
     # under-read the §3.1c pin (20 480 × 4 ÷ 5 s) by HEADER_SIZE/window.
     payload_bytes = n * WINDOW_BYTES
