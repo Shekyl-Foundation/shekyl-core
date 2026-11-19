@@ -219,20 +219,19 @@ impl ReplArgs {
     }
 
     /// The wallet-file directory: `--wallet-dir` as given, else the
-    /// per-network default `~/.shekyl/wallets/<network>/` (CU-1) — so a
-    /// testnet wallet file can never collide with a mainnet one, the
-    /// Electrum isolation shape. Only consulted for a self-hosted session
-    /// (`--rpc-url` stores wallets server-side).
+    /// per-network default `wallets/<network>/` in this account's
+    /// per-account root (CU-1; rule 83 IG-13: `~/.shekyl`, or
+    /// `%LOCALAPPDATA%\Shekyl` on Windows, read from the account interface,
+    /// never `HOME`) — so a testnet wallet file can never collide with a
+    /// mainnet one, the Electrum isolation shape. Only consulted for a
+    /// self-hosted session (`--rpc-url` stores wallets server-side).
     fn resolved_wallet_dir(&self) -> Result<std::path::PathBuf, String> {
         if let Some(dir) = &self.wallet_dir {
             return Ok(std::path::PathBuf::from(dir));
         }
-        let home = dirs::home_dir()
-            .ok_or("cannot determine the home directory; pass --wallet-dir explicitly")?;
-        Ok(home
-            .join(".shekyl")
-            .join("wallets")
-            .join(self.network_name()))
+        let root = shekyl_os_account::per_account_root()
+            .ok_or("this account has no home folder; pass --wallet-dir explicitly")?;
+        Ok(shekyl_os_account::wallet_dir_in(&root).join(self.network_name()))
     }
 }
 
@@ -511,10 +510,11 @@ fn build_session(
         )?),
         Endpoints::SelfHosted { network, daemon } => {
             let wallet_dir = cli.resolved_wallet_dir()?;
-            // The per-network default is created on demand; an explicit
+            // The per-network default is created on demand, with the
+            // per-account root made as the daemon makes it; an explicit
             // --wallet-dir is also created rather than failing on a path the
             // operator clearly intends to use.
-            std::fs::create_dir_all(&wallet_dir)
+            shekyl_os_account::make_account_dir(&wallet_dir)
                 .map_err(|e| format!("cannot create wallet dir {}: {e}", wallet_dir.display()))?;
             Ok(rpc_client::RpcSession::host_in_process(
                 wallet_dir,
@@ -885,26 +885,25 @@ mod tests {
         assert!(matches!(cli.command, Some(Commands::Create(_))));
     }
 
-    /// The default wallet dir is per-network (`~/.shekyl/wallets/<network>/`,
-    /// CU-1) so wallets on different networks never share a directory; an
-    /// explicit `--wallet-dir` is taken as given.
+    /// The default wallet dir is per-network (`wallets/<network>/`, CU-1)
+    /// in the per-account root (rule 83 IG-13), pinned as the rule states
+    /// it, so wallets on different networks never share a directory; an
+    /// explicit `--wallet-dir` is taken as given. Red edit: the old
+    /// `dirs::home_dir()` plus `.shekyl` fails on Windows, and under a moved
+    /// `HOME`.
     #[test]
     fn the_default_wallet_dir_is_per_network() {
         let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
+        let home = shekyl_os_account::account_home().expect("the test account has a home");
+        let wallets = home
+            .join(if cfg!(windows) { "Shekyl" } else { ".shekyl" })
+            .join("wallets");
         let dir = args(&["shekyl-cli", "--testnet"])
             .resolved_wallet_dir()
             .unwrap();
-        assert!(
-            dir.ends_with(".shekyl/wallets/testnet"),
-            "got {}",
-            dir.display()
-        );
+        assert_eq!(dir, wallets.join("testnet"));
         let mainnet = args(&["shekyl-cli"]).resolved_wallet_dir().unwrap();
-        assert!(
-            mainnet.ends_with(".shekyl/wallets/mainnet"),
-            "got {}",
-            mainnet.display()
-        );
+        assert_eq!(mainnet, wallets.join("mainnet"));
         assert_eq!(
             args(&["shekyl-cli", "--engine-dir", "/tmp/wallets"])
                 .resolved_wallet_dir()

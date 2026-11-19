@@ -24,7 +24,8 @@
 //!   ([`PER_ACCOUNT_ROOT_NAME`]), where every per-account default path sits
 //!   (rule 83 IG-13). The one owner of that name: the daemon's
 //!   configuration, the rendezvous and the wallets read it here.
-//!   [`ensure_per_account_root`] makes it as the daemon does, and
+//!   [`ensure_per_account_root`] makes it as the daemon does,
+//!   [`make_account_dir`] makes a directory in it that way, and
 //!   [`wallet_dir_in`] names the wallet directory in it.
 //! - [`peer_uid`] (Unix): the account of the process at the other end of a
 //!   connected Unix socket (`SO_PEERCRED` on Linux, `getpeereid`
@@ -142,6 +143,21 @@ pub fn ensure_per_account_root(root: &Path) -> std::io::Result<()> {
     {
         std::fs::create_dir_all(root)
     }
+}
+
+/// Makes the directory `dir` and any missing parents (`mkdir -p`). When
+/// `dir` is in this account's per-account root, the root is made first by
+/// [`ensure_per_account_root`], so a wallet binary that runs before the
+/// daemon makes the root the daemon would. Every wallet binary makes its
+/// default directories through here.
+///
+/// # Errors
+/// The root or the directory could not be made.
+pub fn make_account_dir(dir: &Path) -> std::io::Result<()> {
+    if let Some(root) = per_account_root().filter(|root| dir.starts_with(root)) {
+        ensure_per_account_root(&root)?;
+    }
+    std::fs::create_dir_all(dir)
 }
 
 /// The calling account's home from the operating system's account interface
@@ -360,6 +376,17 @@ mod per_account_root_tests {
         ensure_per_account_root(&root).expect("the root is made");
         assert!(root.is_dir(), "{}", root.display());
         ensure_per_account_root(&root).expect("an existing root is left as it is");
+    }
+
+    /// A directory outside this account's root is made as asked, parents
+    /// included, and making it again is no error.
+    #[test]
+    fn a_directory_outside_the_root_is_made_as_asked() {
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let dir = base.path().join("a").join("b");
+        make_account_dir(&dir).expect("made");
+        assert!(dir.is_dir(), "{}", dir.display());
+        make_account_dir(&dir).expect("made again");
     }
 
     /// The root this account resolves is its home's, on every platform the

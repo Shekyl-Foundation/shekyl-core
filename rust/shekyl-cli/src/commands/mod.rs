@@ -802,13 +802,17 @@ pub(crate) fn confirm_money(
 // Shared helpers used by submodule command handlers
 // ---------------------------------------------------------------------------
 
+/// The shell's history file's name in the per-account root.
+const HISTORY_FILE: &str = "shekyl-cli-history.txt";
+
+/// The shell's history file: [`HISTORY_FILE`] in this account's per-account
+/// root (rule 83 IG-13), never `XDG_DATA_HOME` or `%APPDATA%`, with the
+/// root made as the daemon makes it. `None` when the account has no home:
+/// the shell keeps no history.
 fn history_path() -> Option<String> {
-    dirs::data_local_dir().map(|mut p| {
-        p.push("shekyl-cli");
-        drop(std::fs::create_dir_all(&p));
-        p.push("history.txt");
-        p.to_string_lossy().into_owned()
-    })
+    let root = shekyl_os_account::per_account_root()?;
+    drop(shekyl_os_account::make_account_dir(&root));
+    Some(root.join(HISTORY_FILE).to_string_lossy().into_owned())
 }
 
 pub(crate) fn require_open(rpc: &RpcSession) -> Result<(), crate::outcome::CommandFailed> {
