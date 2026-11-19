@@ -10,7 +10,10 @@
     - the stop reasons;
     - the penalty against the fees that paid it;
     - the pool;
-    - the median count carried.
+    - the median count carried;
+    - the reward minted and the penalty's share of it;
+    - every listed fee per block;
+    - the Standard body's weight and fee.
 
     Its narration is pinned on demand.
   - **A correction.** The reading-pass finding no longer says the daemon runs Monero's pre-v5 fill: the node's template admits through the same `Fill`.

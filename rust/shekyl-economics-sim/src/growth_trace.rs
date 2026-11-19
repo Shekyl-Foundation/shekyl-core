@@ -95,6 +95,12 @@ struct Period {
     /// Each block's past-free fees less its penalty, summed.
     surplus: u128,
     fees: u128,
+    /// The paid (penalised) reward each block minted, summed.
+    emitted: u128,
+    /// The Standard rung's ordinary body at each block, its weight and its
+    /// fee, summed.
+    body_weight_sum: u128,
+    body_fee_sum: u128,
     waiting_sum: u128,
     /// Expired, evicted and refused.
     dropped: u64,
@@ -119,6 +125,9 @@ impl Period {
             penalty: 0,
             surplus: 0,
             fees: 0,
+            emitted: 0,
+            body_weight_sum: 0,
+            body_fee_sum: 0,
             waiting_sum: 0,
             dropped: 0,
             carried: BTreeMap::new(),
@@ -145,6 +154,9 @@ impl Period {
         self.penalty += u128::from(filled.past_free.penalty_atomic);
         self.surplus += u128::from(filled.past_free.surplus_atomic());
         self.fees += u128::from(filled.fees_atomic());
+        self.emitted += u128::from(priced.paid_reward());
+        self.body_weight_sum += u128::from(priced.tx.weight);
+        self.body_fee_sum += u128::from(priced.tx.fee_atomic);
         self.waiting_sum += u128::from(filled.waiting);
         self.dropped += filled
             .rungs
@@ -235,14 +247,16 @@ pub(crate) fn run(out: &mut impl Write, base: &SimParams) -> fmt::Result {
          the penalty it adds; limit: the block's limit); the bodies listed past the penalty-free weight per\n\
          block; per year, the penalty those bodies cost, their fees, and the surplus (fees less penalty),\n\
          in SKL, and the penalty as a share of every listed fee; the pool's waiting count per block and its\n\
-         drops (expired, evicted, refused) per block; the median count carried."
+         drops (expired, evicted, refused) per block; the median count carried; the reward the blocks\n\
+         minted per year (SKL) and the penalty as a share of it; every listed fee per block (SKL); the\n\
+         Standard rung's ordinary body, its mean weight (KB) and its mean fee (SKL)."
     )?;
     for (run, periods) in runs.iter().zip(&folded) {
         writeln!(out)?;
         writeln!(out, "== {} zone | {} traffic", run.zone, run.traffic)?;
         writeln!(
             out,
-            "  {:<8} {:>7} {:>7} {:>5} {:>6} {:>21} {:>6} {:>10} {:>10} {:>10} {:>7} {:>8} {:>7} {:>5}",
+            "  {:<8} {:>7} {:>7} {:>5} {:>6} {:>21} {:>6} {:>10} {:>10} {:>10} {:>7} {:>8} {:>7} {:>5} {:>12} {:>8} {:>9} {:>7} {:>8}",
             "period",
             "LTEM",
             "eff",
@@ -256,7 +270,12 @@ pub(crate) fn run(out: &mut impl Write, base: &SimParams) -> fmt::Result {
             "pen/fee",
             "waiting",
             "drop/b",
-            "carr"
+            "carr",
+            "emit SKL/y",
+            "pen/emit",
+            "fee/b SKL",
+            "body KB",
+            "body fee"
         )?;
         let blocks_per_year = run.params.blocks_per_year();
         for period in periods {
@@ -280,9 +299,16 @@ fn row(out: &mut impl Write, period: &Period, blocks_per_year: u64) -> fmt::Resu
     } else {
         100.0 * period.penalty as f64 / period.fees as f64
     };
+    let penalty_of_emitted = if period.emitted == 0 {
+        0.0
+    } else {
+        100.0 * period.penalty as f64 / period.emitted as f64
+    };
+    let body_weight = u64::try_from(period.body_weight_sum / u128::from(blocks))
+        .expect("a mean of u64 weights fits u64");
     writeln!(
         out,
-        "  {:<8} {:>7.0} {:>7.0} {:>5.1} {:>6.1} {:>6.1}/{:>6.1}/{:>6.1} {:>6.2} {:>10.2} {:>10.2} {:>10.2} {:>6.3}% {:>8.1} {:>7.2} {:>5}",
+        "  {:<8} {:>7.0} {:>7.0} {:>5.1} {:>6.1} {:>6.1}/{:>6.1}/{:>6.1} {:>6.2} {:>10.2} {:>10.2} {:>10.2} {:>6.3}% {:>8.1} {:>7.2} {:>5} {:>12.0} {:>7.4}% {:>9.3} {:>7.2} {:>8.4}",
         period.key.label(),
         kilobytes(period.ltem),
         kilobytes(effective),
@@ -299,6 +325,11 @@ fn row(out: &mut impl Write, period: &Period, blocks_per_year: u64) -> fmt::Resu
         per_block(period.waiting_sum),
         per_block(u128::from(period.dropped)),
         lower_median(&period.carried, period.blocks),
+        per_year(period.emitted),
+        penalty_of_emitted,
+        skl(period.fees) / blocks as f64,
+        kilobytes(body_weight),
+        skl(period.body_fee_sum) / blocks as f64,
     )
 }
 
