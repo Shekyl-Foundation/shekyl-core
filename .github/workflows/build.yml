@@ -575,10 +575,21 @@ jobs:
         working-directory: rust
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport -p shekyl-os-account --no-fail-fast *> daemon-crates.out
+          # One pipe for both streams. Cargo's "Running" lines go to stderr
+          # and each test binary's lines to stdout; through `*>` PowerShell
+          # reads them from two pipes and writes whichever arrives first, so
+          # a binary's "Running" line could land inside the previous binary's
+          # output and the floors below read the wrong block (#1419, run
+          # 44236954460: daemon-rpc read as 2 with 209 passed). cmd's `2>&1`
+          # gives both one handle, so the file is in the order written.
+          # `--color never`: PowerShell's redirect stripped cargo's colour
+          # codes, a raw handle keeps them, and "Running" followed by an
+          # escape is not the "Running " the floors below look for.
+          cmd /c "cargo test --locked --color never -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport -p shekyl-os-account --no-fail-fast > daemon-crates.out 2>&1"
           $rc = $LASTEXITCODE
           # shekyl-win-sec's library alone: its probes are the step below.
-          cargo test --locked -p shekyl-win-sec --lib *>> daemon-crates.out
+          # Appended the same way, so its "Running" line is in order too.
+          cmd /c "cargo test --locked --color never -p shekyl-win-sec --lib >> daemon-crates.out 2>&1"
           $rc_winsec = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
