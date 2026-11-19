@@ -7,9 +7,13 @@
 //! its parent to be the posture that row belongs to.
 //!
 //! The rule is a table, not a copied loop: each child names the parent
-//! posture that refuses it, and the sentence the refusal prints.
+//! posture that refuses it, and the sentence the refusal prints. A value
+//! the operator set bears a confirmation or a request
+//! (`shekyl_options::Bearing`). A confirmation asks for nothing and
+//! restates the parent, so it is accepted. A request asks for something
+//! the parent forbids.
 
-use shekyl_options::{Code, Diagnostic, PeerEndpoint};
+use shekyl_options::{Bearing, Code, Diagnostic, PeerEndpoint};
 
 use super::read::{Read, Reader};
 use super::{Clearnet, Onion, Socks, SocksCredential, Tor};
@@ -129,9 +133,16 @@ const CHILDREN: &[Child] = &[
     },
 ];
 
+/// Refuse each child row that asks for something under `parent`.
+///
+/// A confirmation asks for nothing (`none`, `off`, an empty list or map, a
+/// switch that is off) and restates the parent, so `clearnet off` with
+/// `clearnet-listen none` is one statement made twice. A request, such as
+/// an endpoint, is still refused. The same bearing applies under every
+/// parent in [`CHILDREN`].
 fn refuse_children(r: &mut Reader<'_>, parent: Parent) {
-    for child in CHILDREN {
-        if child.parent == parent && r.given(child.option) {
+    for child in CHILDREN.iter().filter(|child| child.parent == parent) {
+        if r.bearing(child.option) == Some(Bearing::Request) {
             r.conflict(child.option, child.because);
         }
     }

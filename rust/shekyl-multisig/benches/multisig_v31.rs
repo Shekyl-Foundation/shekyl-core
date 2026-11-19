@@ -4,9 +4,12 @@
 //! Performance benchmarks for V3.1 multisig protocol operations.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
 
 fn bench_intent_hash(c: &mut Criterion) {
-    use shekyl_multisig::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
+    use shekyl_multisig::intent::{
+        IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
+    };
 
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
@@ -19,12 +22,14 @@ fn bench_intent_hash(c: &mut Criterion) {
         reference_block_height: 999900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
-            address: vec![0x01; 4],
+            payee: IntentPayee::Group {
+                address: vec![0x01; 4],
+            },
             amount: shekyl_units::AtomicUnits::from_raw(1_000_000_000),
         }],
         fee: shekyl_units::AtomicUnits::from_raw(1_000_000),
         input_global_indices: vec![12345],
-        kem_randomness_seed: [0xDD; 32],
+        kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
         chain_state_fingerprint: [0xEE; 32],
     };
 
@@ -34,7 +39,9 @@ fn bench_intent_hash(c: &mut Criterion) {
 }
 
 fn bench_intent_serialization(c: &mut Criterion) {
-    use shekyl_multisig::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
+    use shekyl_multisig::intent::{
+        IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
+    };
 
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
@@ -47,12 +54,14 @@ fn bench_intent_serialization(c: &mut Criterion) {
         reference_block_height: 999900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
-            address: vec![0x01; 4],
+            payee: IntentPayee::Group {
+                address: vec![0x01; 4],
+            },
             amount: shekyl_units::AtomicUnits::from_raw(1_000_000_000),
         }],
         fee: shekyl_units::AtomicUnits::from_raw(1_000_000),
         input_global_indices: vec![12345],
-        kem_randomness_seed: [0xDD; 32],
+        kem_randomness_seed: IntentSeed::new(&[0xDD; 32]),
         chain_state_fingerprint: [0xEE; 32],
     };
 

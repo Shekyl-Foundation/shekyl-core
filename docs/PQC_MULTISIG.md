@@ -762,7 +762,7 @@ open and one leaf commitment.
 
 ```
 SpendIntent {
-    version:                  u8 (= 2)
+    version:                  u8 (= 3)
     intent_id:                [u8; 32]   // random per intent
 
     // Group binding — the address fingerprint (§5.3)
@@ -780,8 +780,8 @@ SpendIntent {
 
     // Content
     recipients: [
-        { address: bytes, amount: u64 }
-    ]   // sorted
+        { kind: u8, address: bytes, label: [u8; 8] (single-signer only), amount: u64 }
+    ]   // sorted; recipient i is output π(i) (R-24, §9.5)
     fee:                      u64
     input_global_indices:     [u64]
 
@@ -800,7 +800,7 @@ Its `sender_index` must equal `proposer_index`.
 
 ### 9.2 Invariants (verified before any signer signs; honest-signer invariant I1)
 
-1. `version == 2`
+1. `version == 3`
 2. `address_fingerprint` matches the verifier's group (§5.3)
 3. `2 ≤ m ≤ n` (R-11); `proposer_index < n_total`
 4. `signers` holds exactly `m` indices, strictly ascending, each `< n`,
@@ -820,12 +820,17 @@ Its `sender_index` must equal `proposer_index`.
 8. `reference_block_hash` matches the chain's block at
    `reference_block_height` per the verifier's local view
 9. All `input_global_indices` are owned by the group, unspent, and in the
-   tree at the reference height; `1 ≤ count ≤ MAX_INPUTS`
-10. Recipients are sorted; no duplicate (address, amount) tuples; at most
-    `MAX_RECIPIENTS`
+   tree at the reference height; `1 ≤ count ≤ MAX_INPUTS`; none is listed
+   twice
+10. Recipients are sorted; none is repeated; at most `MAX_RECIPIENTS`;
+    each payable on the group's network (a single-signer address decodes
+    there in its full form, a group's payload names it;
+    `SHEKYL_MULTISIG_WIRE_FORMAT.md` §2.3)
 11. `sum(recipient.amount) + fee == sum(input.amount)` per local view
-12. `kem_randomness_seed` is unique within the group's history of
-    `seen_intents` (replay/linkability prevention)
+12. `kem_randomness_seed` is unique within the group's history: its
+    fingerprint is not in the member's replay set, which holds each seen
+    seed's fingerprint and never a seed (§9.5; replay/linkability
+    prevention)
 13. `chain_state_fingerprint` matches the verifier's local fingerprint
     (see §9.3); mismatch → do not sign; trigger sync
 
@@ -885,10 +890,45 @@ table is what the ceremony and the builder both read:
 | The transaction key: it seeds every output's KEM encapsulation, and so every output key and every output commitment mask, under the solo labels (`shekyl-output-kem-v1`, `shekyl-output-mask`, …) | `shekyl/multisig-intent-tx-key-v1` | — |
 | Each input's pseudo-out blind `a_j`, but the last, which balances the commitments as solo does | `shekyl/multisig-intent-pseudo-out-blind-v1` | input position |
 | Each input's rerandomization (`RerandomizedOutput`'s blinds) | `shekyl/multisig-intent-rerandomize-v1` | input position |
+| The seed's replay fingerprint (§9.2 item 12) | `shekyl/multisig-intent-seed-fingerprint-v1` | — |
 
-The three labels are RESERVED: no code derives under them yet. The
-derivation lands with the multisig builder (slice 4a), and each label is
-registered in `CRYPTO_DOMAIN_REGISTRY.tsv` with the code that uses it.
+Each value is an HKDF-SHA-512 expansion with no salt and the seed as the
+input key material (`shekyl_crypto_pq::multisig_intent::IntentSeed`):
+
+- the transaction key `r`: `expand(label, 64)`, reduced wide modulo
+  `ℓ`; its public key `r·G` is the `tx_extra` key;
+- input `j`'s pseudo-out blind, for every input but the last:
+  `expand(label ‖ u64_le(j), 64)`, reduced wide; the last input's blind
+  is the sum of the outputs' masks less every other blind. Both come out
+  of `shekyl-ct-balance`'s `PseudoOutBlinds::from_intent`, the one place
+  every spend's blinds are balanced (a solo spend's free blinds come from
+  the OS, `PseudoOutBlinds::random`), so a set of blinds balances by
+  construction;
+- input `j`'s rerandomization seed: `expand(label ‖ u64_le(j), 32)`;
+- the seed's fingerprint: `expand(label, 32)`, one-way, so the replay set
+  that holds it opens nothing the seed does.
+
+The seed is a type, `IntentSeed`: wiped on drop, printed as nothing,
+cloned only as its intent is, and with no accessor for its bytes (it
+writes them into the intent's canonical encoding, which travels sealed).
+Every derivation above is a method on it, and the vectors
+(`docs/test_vectors/MULTISIG_INTENT_DERIVE_V1.json`) are written and
+checked by an independent oracle (`scripts/kat/multisig_intent_derive_oracle.py`).
+
+`j` is the input's position in the intent's `input_global_indices`, not
+in the transaction, so a member derives every value before it knows the
+key images that order the transaction's inputs. Recipient `i` is the
+output at position `π(i)`, the order the transaction key derives
+(`TxKey::output_order`, under `shekyl/tx-output-order-v1`; R-24), which
+is the order every wallet-built transaction takes. The key comes from the
+intent, so every member derives the same `π`; the recipients stay sorted,
+so the intent's encoding stays canonical, and `π` decides where each
+lands. The range proof's and the membership proof's own blinds are not
+derived: the proposer draws them, and every member verifies the proofs
+instead of rebuilding them. The labels are registered in
+`CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 2), and
+`shekyl_multisig::ceremony::DerivedSpend::derive` is the one place a
+spend is derived.
 
 ### 9.6 The session clock (R-13)
 
@@ -916,7 +956,8 @@ Given verified `SpendIntent`, every member runs:
    refuse (§2.7); do not proceed.
 2. **Output derivation** (§7.1). For each recipient (including change
    output, if any), derive the output key, the KEM ciphertexts and the
-   leaf commitment.
+   leaf commitment at the position `π(i)` the transaction key derives
+   (§9.5, R-24), which is also the output's derivation index.
 3. **Transaction prefix construction.** Inputs reference each input's
    key image, which every member computes alone (§15.4a); outputs are
    derived per step 2; `tx_extra` carries each multisig output's `0x0D`
@@ -1062,7 +1103,8 @@ cannot be reached with an unchecked value.
 | The intent is valid for this member | `ValidatedIntent`, made only by I1 and I2 against the member's ledger; `SigningContext` takes it |
 | A per-output key matches its committed hash | `CommittedMemberKey`; a key blob is assembled only from checked keys |
 | The preprocess set is exactly the other signers | `PreprocessSet`; signing takes one, never a map |
-| A held nonce is used once, after the durable persist | `HeldNonce` (not `Clone`, wiped on drop) is moved out of the store; `ConsumedNonce` exists only after `NonceCounterSink` returns `Ok`; signing consumes it |
+| A held nonce is used once | `HeldNonce` (not `Clone`, wiped on drop) lives in the in-memory `HeldNonceStore`, which only the ceremony puts into and takes from; `ConsumedNonce` exists only from a take; signing consumes it |
+| A held nonce never leaves the process (R-20) | No encoding of `HeldNonce` or `HeldSession` exists; a test asserts neither implements a serialization trait the workspace uses |
 | A held nonce is used only with the parameters it was made for | `HeldSession` owns its parameters and keys; `resume(self)` uses them, and no function pairs a seed with parameters given separately |
 | The responder never holds a nonce | `Responder::respond` takes no nonce store; it preprocesses and signs inside one call |
 | A file is refused out of phase | per-role typestates (`Proposer<Collecting>`, `<SharesPending>`, `<AwaitingSignatures>`; `Holder<Committed>`), each with only its legal transitions |
@@ -1071,25 +1113,31 @@ cannot be reached with an unchecked value.
 `compile_fail` doctests pin the transitions that must not exist
 (`ceremony::nonce`, `ceremony::roles`, `ceremony::proofs`).
 
-What types cannot do: a disk restored from a backup can hand a consumed
-`HeldNonce` back. The store's contract covers it: held nonces are
-excluded from backups, a restore cancels every open ceremony, and `take`
-deletes durably before it returns (the wallet's store, slice 4a).
+Why a held nonce never reaches a disk (R-20): a nonce on disk comes back
+on any restore, together with every record of what it already signed,
+and no type or on-disk counter can detect a rollback of its own disk. A
+responder that withholds its post-quantum signature, so the inputs stay
+unspent, and then sends a different responder file would draw a second
+share under the same nonce; a few such replays solve for the holder's
+`y_group` share, and the group's hybrid security falls to the
+post-quantum leg alone. So a held nonce lives only in memory, from
+commit to share, and a restore cancels every open ceremony by
+construction: no copy of a wallet contains one.
 
 ### 11.4 Nonces
 
 - **The proposer and holders hold.** Round 1's state for one input is a
   `HeldSession`: the cached preprocess together with the
   `SalSigningParams` and keys it was made under. A member's sessions for
-  one intent are one `HeldNonce`, put into the `HeldNonceStore` the
-  caller injects (the wallet keeps it in the same protected container as
-  the member's `y_group` share), keyed by intent hash. The ceremony keeps
-  no copy.
-- **Used once.** To sign, the ceremony takes the nonce out of the store,
-  then durably records its use (`NonceCounterSink`, the member's
-  monotonic nonce counter), and only then holds a `ConsumedNonce`. One
-  persist covers every input of the intent. If the persist fails, the
-  nonce is dropped and the ceremony is forfeit: a new intent is needed.
+  one intent are one `HeldNonce`, put into the member's `HeldNonceStore`,
+  keyed by intent hash. The store is an in-memory map the engine owns,
+  one per open wallet; the ceremony keeps no copy, and nothing else can
+  put a nonce in or take one out.
+- **In memory only (R-20).** Closing the wallet between a member's commit
+  and its share drops (wipes) its nonce, and its part of the ceremony is
+  forfeit: a new intent completes the spend, and no funds are at stake.
+- **Used once.** To sign, the ceremony takes the nonce out of the store;
+  only a taken nonce is a `ConsumedNonce`, and signing consumes it.
 - **Bound to its parameters.** `modular_frost`'s `from_cache` cannot fail
   and ignores its parameters: the nonces are a hash of the 32-byte seed
   and the member's share, and every SAL commitment is on `T`. The public
@@ -1109,49 +1157,89 @@ deletes durably before it returns (the wallet's store, slice 4a).
 
 ### 11.5 What a member brings
 
-- **`SigningContext`**, built by the caller from the validated intent
-  and the member's own ledger: the network id; per input the spent
-  output (`O`, `C`, `x`, `y_kem`, `z`), its pseudo-out blind and
-  rerandomization seed (§9.5), its key image, its committed form and the
-  member's own `0x0D` ciphertexts; what the member's construction adds
-  to the intent (the outputs, their `tx_extra` fields and the committed
-  base); the reference root and layer count; and the member file, from
-  which the member's threshold keys load. What the intent fixes is not
-  carried twice: the fee and the reference block are read from the
-  intent, and the inputs are the member's own key images, put in the
-  transaction's order. So the transaction every member hashes and signs
-  is built in one place, and an unsigned spend that disagrees with its
-  intent cannot be written down. The constructor checks that the member
-  signs the intent, that there is one input per intent input and no key
-  image twice, that each committed form is for this group, that a spend
-  proves under the layer count, and that the member's keys open every
-  input.
-- **`ProposerInputs`**, A only: each output's opening, a commitment
-  with its amount and mask that wipes on drop (for the range proof), and
-  each input's path to the reference root, named by the input's key
-  image (for the membership proof). The ceremony never reads a mask
-  itself: the opening is the crypto crate's type (rule 36).
-- **`HeldNonceStore`**, **`NonceCounterSink`** and **`LiveCeremonies`**:
-  the durable writes the ceremony needs but does not own.
+- **`GroupOutputRecord`**: the member's ledger record of each output
+  the group holds, named by its global index. It holds public values and
+  ciphertexts only, as the solo ledger does: `O`, `C`, the output's index
+  in its transaction, its `0x06` ciphertext, its key image, its leaf
+  point, its committed form and the member's own `0x0D` ciphertexts. No
+  path and no secret (R-26). The ledger is read through `GroupOutputs`, a
+  lookup by global index that returns the record, or nothing for an
+  output it does not hold.
+- **`SpendPaths`**: the membership paths of the intent's inputs, matched
+  to the intent once (R-26). The member's own curve tree assembles them
+  as one sealed batch (`AssembledPaths`, built only by
+  `CurveTreeClient::assemble_paths` inside the tree's actor, and holding
+  the reference block it was assembled against, the tree's depth there,
+  and each input's path, public material sealed by the checked assembler,
+  R-25). Every path in a batch is to one tree by construction. The only
+  constructor, `SpendPaths::new`, takes the validated intent and the
+  batch, and refuses by name a batch assembled against another block than
+  the intent's reference block, one missing an intent's input, and one
+  holding an input the intent does not spend, or one input twice. The
+  intent comes from another member and the paths from this member's own
+  tree, so that comparison cannot be removed by a type; this is the one
+  place it is made.
+- **`DerivedSpend`**, made only by `DerivedSpend::derive` from a
+  `SpendPaths` (which carries the validated intent), the member's ledger
+  and the group's key from the member file (`MultisigGroupKey`: the group
+  KEM secret and `b`) (R-7, §9.5). It looks each of the intent's inputs up
+  itself and re-derives the input's secrets (`x = ho + b`,
+  `y_kem`, `z`, the leaf blind) from the record's `0x06` ciphertext in
+  `shekyl-crypto-pq` (`recover_group_spend`, the scanner's own steps). It
+  then checks the record's key image and leaf point against what they
+  derive; that the input's commitment on the chain opens to the
+  re-derived `z` at the amount the member's ledger states for that input,
+  the amount the balance and the chain-state fingerprint were checked
+  against (R-27, before any nonce exists); and that the path's leaf chunk
+  holds the output. The batch's tree (root and layer count) is the
+  spend's. It takes the intent only from the `SpendPaths` it consumes, so
+  no spend can be paired with another intent or another intent's paths.
+  Recipient `i` is output `π(i)`, the order the intent's transaction key
+  derives (R-24), built to its resolved payee by the builder every spend
+  uses, under that key; that gives the outputs, their `tx_extra` and the
+  committed base, and each output's mask as a scalar (`OutputMask`) and
+  so its opening (a commitment that wipes on drop, for the range proof).
+  Input `j` of the intent takes the `j`-th pseudo-out blind
+  (`PseudoOutBlinds::from_intent`: derived, the last balancing the outputs'
+  masks) and rerandomization seed. The inputs are then put in the
+  transaction's order. The derivation
+  refuses, each by name, an input the ledger lacks, an input whose secrets
+  do not derive, a record whose key image or leaf point is not the one its
+  secrets derive, a commitment that does not open at the stated amount, a
+  path that does not hold its output, and two inputs with one key image.
+  It has no reference-block or tree refusal of its own: those are
+  `SpendPaths`'s and the batch's. A ledger that states a different number of
+  amounts than the intent has inputs is refused when the intent is
+  validated. `InputContext` and `UnsignedSpend` have private fields and no
+  other constructor: a member cannot sign a blind, a seed or an output
+  the intent does not determine.
+- **`SigningContext`**, built from the `DerivedSpend` and the member
+  file alone (the member's threshold keys load from the file), and from
+  nothing written down by hand: its fields are private. What the intent fixes is not carried twice: the
+  fee and the reference block are read from the intent, and the inputs
+  are the member's own key images. So the transaction every member
+  hashes and signs is built in one place, and an unsigned spend that
+  disagrees with its intent cannot be written down. The constructor
+  checks that the member signs the intent, that each committed form is
+  for this group, that a spend proves under the layer count, and that
+  the member's keys open every input.
+- **No proposer-only input.** The proposer proves from its own context:
+  each input's leaf chunk is the record's path joined to the leaf point
+  and blind its secrets derive, made at the proof and wiped after it. The
+  ceremony combines no mask itself: the openings are the crypto crate's
+  type (rule 36).
+- **`HeldNonceStore`**, the member's held nonces in memory (§11.4), and
+  **`LiveCeremonies`**, its durable input reservations (§9.2 item 6).
 
-The unsigned spend's derivation from the intent, and the size of a
-scheme-2 fee, are the multisig builder's (slice 4a).
 
-### 11.6 Rate limiting (by signing pubkey, not index)
+### 11.6 Rate limiting — DEFERRED (R-19)
 
-To prevent intent-spam DoS:
-
-- Each proposer's **hybrid signing public key** (not proposer_index) may
-  have at most 1 live intent per group at a time (§13.1)
-- Rate limit is group-wide configurable at setup (default: 1 live
-  intent per signing pubkey; maximum 1 new proposal per 5 minutes per
-  signing pubkey)
-- Keying off signing pubkey prevents a malicious member with multiple
-  proposer_index slots from multi-indexing their way around the limit
-- New proposals from the same signing pubkey violating the limit are
-  refused
-
-This bounds verification work to ≤ N concurrent intents.
+A proposal limit is DEFERRED (rule 23): `docs/FOLLOWUPS.md` "Multisig: a
+rate limit on proposals". Under file transport (R-9) a proposal costs a
+member work only when a human imports it, a file's size is capped, and a
+member's inputs are reserved by one live intent at a time
+(`LiveCeremonies`, §9.2 item 6); a per-time limit would be a wall-clock
+rule, which §9.6 forbids.
 
 ---
 
@@ -1256,27 +1344,22 @@ it until the transaction is released or the reference block ages out
 - its reservation of the intent's inputs (`LiveCeremonies`, §9.2 item 6);
 - as proposer or holder, between the rounds, its `HeldNonce` (§11.4).
 
-Every member keeps its monotonic nonce counter, and a responder's
-wallet keeps the hashes of the intents it approved (no secret), so its
-second visit is a check, not a decision. Nothing else is durable: the
-ceremony's own state is its typestates (§11.3), rebuilt after a restart
-from the member's context, its store, and the files it sent and
-received:
+The reservation is durable, and a responder's wallet keeps the hashes
+of the intents it approved (no secret), so its second visit is a check,
+not a decision. A held nonce is not durable (R-20, §11.4): the
+ceremony's own state is its typestates (§11.3), in the open wallet, and
+a restart forfeits a proposer's or holder's part until its nonce is
+used:
 
-- the proposer is rebuilt from the last file it sent: from its
-  `Proposal` before step 7 (`Proposer::resume`), replaying the files it
-  received; from its `FinalTx` after (`Proposer::resume_after_finish`),
-  re-checking and re-signing that transaction as a cosigner would and
-  replaying the hybrid signatures it received. A crash inside step 7,
-  after the nonce is consumed and before the `FinalTx` is written,
-  forfeits the ceremony, as every consumed nonce does;
-- a holder is rebuilt as committed (`Holder::committed`) and signs from
-  its held nonce;
+- a proposer or holder that closes its wallet before its share is made
+  has no nonce to sign from; a new intent completes the spend;
+- a proposer that has finished holds no nonce, and is rebuilt from its
+  `FinalTx` (`Proposer::resume_after_finish`), re-checking and
+  re-signing that transaction as a cosigner would and replaying the
+  hybrid signatures it received;
 - the second round is stateless (`Cosigner`).
 
-A held nonce is used once: a holder that crashes after signing finds no
-nonce to sign from again, and a member whose counter write fails has
-already given its nonce up and cannot retry.
+A held nonce is used once: signing takes it out of the store.
 
 ### 13.2 Disagreement resolution
 
@@ -1613,22 +1696,30 @@ rust/shekyl-multisig/src/
 ├── lib.rs                 — crate root + re-exports
 ├── ceremony/              — the signing ceremony (§11)
 │   ├── mod.rs             — Role, CeremonyError
-│   ├── context.rs         — SigningContext, InputContext, UnsignedSpend,
-│   │                        ProposerInputs, InputPath (§11.5)
+│   ├── context.rs         — SigningContext (§11.5)
+│   ├── derivation/        — GroupOutputRecord, GroupOutputs, DerivedSpend,
+│   │   │                    InputContext, UnsignedSpend (§9.5, §11.5)
+│   │   ├── mod.rs
+│   │   └── tests.rs
 │   ├── files.rs           — the bodies, Authenticated<B>, import (§11.1,
 │   │                        wire format §3.1)
-│   ├── nonce.rs           — HeldNonce, HeldNonceStore, NonceCounterSink,
-│   │                        ConsumedNonce, LiveCeremonies (§11.4)
+│   ├── nonce.rs           — HeldNonce, HeldNonceStore, ConsumedNonce,
+│   │                        LiveCeremonies (§11.4)
 │   ├── proofs.rs          — CommittedMemberKey, the verified proofs,
 │   │                        SignableTransaction (§11.3)
-│   └── roles/             — the shared steps (mod.rs) and one module per
-│       │                    role (§11.1)
-│       ├── proposer.rs    — Proposer<Collecting | SharesPending |
-│       │                    AwaitingSignatures>, both resumes (§13.1)
-│       ├── holder.rs      — Holder<Committed>
-│       ├── responder.rs   — Responder, ResponderInput
-│       └── cosigner.rs    — Cosigner
-├── intent.rs              — SpendIntent v2, canonical serialization (§9)
+│   ├── roles/             — the shared steps (mod.rs) and one module per
+│   │   │                    role (§11.1)
+│   │   ├── proposer.rs    — Proposer<Collecting | SharesPending |
+│   │   │                    AwaitingSignatures>, both resumes (§13.1)
+│   │   ├── holder.rs      — Holder<Committed>
+│   │   ├── responder.rs   — Responder, ResponderInput
+│   │   └── cosigner.rs    — Cosigner
+│   └── spend_paths.rs     — SpendPaths, SpendPathsError (§11.5)
+├── intent/                — SpendIntent v3, canonical serialization (§9)
+│   ├── mod.rs
+│   ├── payee.rs           — IntentPayee: who the intent pays, by recipient
+│   │                        index (wire format §2.3)
+│   └── tests.rs
 ├── envelope.rs            — the ceremony file: seal as a member, trial-decrypt
 │                            import, the plaintext codec (§12.1)
 ├── messages.rs            — the message-type discriminants (§12.2)
@@ -1804,15 +1895,25 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
 - A bad share (named by its signer)
 - A per-output key that does not match its hash (refused in round 1)
 - A replayed file, and a file of another intent
-- A holder signing twice from one held nonce (impossible)
+- A holder signing twice from one held nonce (impossible: signing takes
+  it out of the store)
 - A second intent on a live input (refused)
-- The durable nonce-counter write failing, at a holder and at the
-  proposer (no share; the nonce is gone; a retry finds nothing)
-- Every member restarting between files, and the proposer restarting
-  after step 7, straight after it and after one hybrid signature (the
-  spend completes); the proposer resumes only from its own `FinalTx`
-- Inputs supplied in any order (the context puts them in the
-  transaction's order)
+- A holder whose wallet closes between its commit and its share (its
+  part is forfeit; a new intent completes the spend), and a proposer
+  finishing from a store that does not hold its nonce (refused by name)
+- The proposer restarting after step 7, straight after it and after one
+  hybrid signature (the spend completes); it resumes only from its own
+  `FinalTx`
+- A ledger that lacks an input, one that holds an input but cannot
+  assemble its path to the reference block, a record whose key image or
+  leaf point is not the one its secrets derive, a record holding another
+  output's ciphertext or another coin's commitment, inputs whose stated
+  amounts are swapped (they balance and match the chain-state
+  fingerprint), paths to two trees or one that does not hold its output,
+  and one output recorded at two global indices (each refused by the
+  derivation, by name); a ledger holding more than the
+  intent spends, and records handed over in any order (the derivation
+  looks up what it spends and puts it in the transaction's order)
 
 Every ceremony test checks the released transaction from the wire:
 the wire's structural rules, the intent's fee and reference block, every
@@ -1908,7 +2009,7 @@ least two independent implementations before being locked.
      recipient list, fixed parameters
    - Output: canonical serialized SpendIntent, intent_hash,
      chain_state_fingerprint. The intent half is pinned:
-     `docs/test_vectors/MULTISIG_INTENT_V2.json`, checked by
+     `docs/test_vectors/MULTISIG_INTENT_V3.json`, checked by
      `scripts/kat/multisig_intent_oracle.py`
 
 4. **Full-construction vector**

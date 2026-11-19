@@ -128,7 +128,7 @@ pub(crate) mod support {
         let output = OutputInfo {
             dest_key: out_constructed.output_key,
             amount: AtomicUnits::from_raw(payment),
-            commitment_mask: out_constructed.z,
+            commitment_mask: out_constructed.commitment_mask(),
             enc_amount: out_constructed.enc_amount_wire(),
             enc_label: out_constructed.enc_label_wire(),
         };

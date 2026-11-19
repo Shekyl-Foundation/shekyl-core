@@ -395,7 +395,8 @@ as global output index" above).
 
 **Where membership paths come from:** the wallet assembles them locally
 from its block-derived leaf stream
-(`shekyl_curve_tree::CurveTreeClient::assemble_path`), resolving its own
+(`shekyl_curve_tree::CurveTreeClient::assemble_paths`, one sealed batch per
+transaction), resolving its own
 output by global index through the drain order and checking the
 reconstructed root against the reference block's `curve_tree_root`. The
 daemon serves no per-output path. A future light-wallet consumer needs a

@@ -8,8 +8,8 @@
 //!
 //! Reuses the CT-2 Tier-A oracle (`tests/fixtures/ct2_tier_a.json`). For a
 //! drained coinbase output it builds the path via
-//! [`CurveTreeClient::assemble_path`]. The reference root is the fixture's
-//! header root. `assemble_path` folds the path's own branches onto that root
+//! [`CurveTreeClient::assemble_paths`]. The reference root is the fixture's
+//! header root. `assemble_paths` folds the path's own branches onto that root
 //! before returning ([`shekyl_curve_tree::PathRootFault`]), so a path that
 //! comes back has already hashed to the header. This file does not carry a
 //! second copy of that fold.
@@ -162,7 +162,7 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
 /// Assemble `target`'s path at `reference` and pin the layout the fold does
 /// not cover.
 ///
-/// `assemble_path` has already folded the branches onto `reference`'s header
+/// `assemble_paths` has already folded the branches onto `reference`'s header
 /// root, so a returned path committed to that root.
 /// Register `inputs` with the client, as the curve-tree actor does before it
 /// assembles a batch. Assembly reads captures only — there is no rebuild —
@@ -177,22 +177,33 @@ fn register(client: &mut CurveTreeClient, inputs: &[AssembleInput]) {
 }
 
 fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &ReferenceBlock) {
-    let path = client
-        .assemble_path(target, reference)
+    let batch = client
+        .assemble_paths(std::slice::from_ref(target), reference)
         .expect("assemble path for a drained coinbase output");
+    let tree = batch.tree();
+
+    // The batch holds the reference it was assembled against, and the one
+    // path beside the input it was asked for.
+    assert_eq!(batch.reference(), reference);
+    assert_eq!(batch.len(), 1, "one input yields one path");
+    let (input, path) = batch.paths().next().expect("one path");
+    assert_eq!(
+        input, target,
+        "the path sits beside the input it was asked for"
+    );
 
     // C3 invariant.
     assert_eq!(
-        path.c1_layers.len() + path.c2_layers.len() + 1,
-        usize::from(path.tree.tree_depth),
+        path.c1_layers().len() + path.c2_layers().len() + 1,
+        usize::from(tree.tree_depth),
         "C3: c1 + c2 + 1 (leaf) == tree_depth",
     );
-    assert!(path.tree.tree_depth >= 2, "non-empty tree is depth >= 2");
+    assert!(tree.tree_depth >= 2, "non-empty tree is depth >= 2");
 
     // The fold compared the branches to `tree_root`. This checks that value
     // is the header root the reference carried, not some other root the
     // fold was willing to accept.
-    assert_eq!(path.tree.tree_root, reference.curve_tree_root);
+    assert_eq!(tree.tree_root, reference.curve_tree_root);
 
     // The caller-supplied block hash is threaded verbatim into the tree
     // context for the eventual `CtSig.referenceBlock` (the CT-4 anchor
@@ -200,13 +211,13 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
     // `ReferenceBlock` (set below) makes this catch both a dropped/zeroed value
     // and a silent swap with the root.
     assert_eq!(
-        path.tree.reference_block, reference.block_hash,
-        "assembled path must echo the caller-supplied ReferenceBlock::block_hash",
+        tree.reference_block, reference.block_hash,
+        "the batch must echo the caller-supplied ReferenceBlock::block_hash",
     );
 
     // The resolved output is actually present in the returned leaf chunk.
     assert!(
-        path.leaf_chunk
+        path.leaf_chunk()
             .iter()
             .any(|cl| cl.output_key == target.output_key && cl.commitment == target.commitment),
         "the target output must be in its own leaf chunk",
@@ -265,7 +276,7 @@ fn assemble_path_rejects_undrained_output() {
     // the capture path.
     let undrained = coinbase_input(&blocks, tip.height);
     register(&mut client, &[undrained]);
-    match client.assemble_path(&undrained, &reference) {
+    match client.assemble_paths(&[undrained], &reference) {
         Err(shekyl_curve_tree::ClientError::OutputNotDrained { gindex, output_key }) => {
             assert_eq!(gindex, undrained.gindex);
             assert_eq!(output_key, undrained.output_key);
@@ -288,7 +299,7 @@ fn assemble_path_rejects_root_mismatch() {
         curve_tree_root: CurveTreeRoot::from_bytes([0xFFu8; 32]),
         block_hash: BlockHash::NULL,
     };
-    match client.assemble_path(&founder, &bad) {
+    match client.assemble_paths(&[founder], &bad) {
         Err(shekyl_curve_tree::ClientError::RootMismatch { height, .. }) => {
             assert_eq!(height, BlockHeight::from_raw(tip.height));
         }
@@ -320,7 +331,7 @@ fn assemble_path_rejects_identity_mismatch() {
     tampered.output_key = OneTimePubkey::from_bytes([0x99u8; 32]);
     assert_ne!(tampered.output_key, real_key, "tamper must change the key");
 
-    match client.assemble_path(&tampered, &reference) {
+    match client.assemble_paths(&[tampered], &reference) {
         Err(shekyl_curve_tree::ClientError::IdentityMismatch {
             gindex,
             expected_output_key,

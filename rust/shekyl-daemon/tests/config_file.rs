@@ -201,7 +201,10 @@ fn a_named_file_is_read_and_a_writable_file_or_directory_is_refused() {
     write_private(&file, "log-level = \"debug\"\n");
 
     let loaded = load_naming(dir, &file).expect("a private file is accepted");
-    assert_eq!(loaded.file_read.as_deref(), Some(file.as_path()));
+    assert_eq!(
+        loaded.config_file,
+        shekyl_daemon_config::ConfigFileFate::Read(file.clone())
+    );
     assert_eq!(
         loaded.config.logging.level, "debug",
         "the file's value is read"
@@ -239,7 +242,7 @@ fn a_named_file_is_read_and_a_writable_file_or_directory_is_refused() {
 ///
 /// Red edits: `load_default_file_unread` skips a named file too (the level
 /// stays the default). The other direction, reading the default file, shows
-/// only on a host that has one: there `file_read` is set.
+/// only on a host that has one: there the fate is `Read`.
 #[test]
 fn the_default_file_unread_load_still_reads_a_named_file() {
     let place = private_place();
@@ -267,16 +270,51 @@ fn the_default_file_unread_load_still_reads_a_named_file() {
         &platform,
     )
     .expect("a private file is accepted");
-    assert_eq!(named.file_read.as_deref(), Some(file.as_path()));
+    assert_eq!(
+        named.config_file,
+        shekyl_daemon_config::ConfigFileFate::Read(file.clone())
+    );
     assert_eq!(named.config.logging.level, "debug");
 
     let unnamed = load_default_file_unread(cli(&["--network", "regtest"]), &platform)
         .expect("no file is a configuration");
-    assert_eq!(unnamed.file_read, None);
     assert_eq!(
-        unnamed.config_path,
-        Path::new("/etc/shekyl/shekyld-regtest.toml"),
+        unnamed.config_file,
+        shekyl_daemon_config::ConfigFileFate::DefaultAbsent(
+            "/etc/shekyl/shekyld-regtest.toml".into()
+        ),
         "the path announced is the default's"
     );
     assert_ne!(unnamed.config.logging.level, "debug");
+}
+
+/// **`config-file none` is the fate the production loader reports**
+/// (Rick, 2026-11-18). A program that starts its own daemon asks for the
+/// command line and the defaults alone, so its node means the same on every
+/// machine, whatever another install keeps in the shared file. `load` (the
+/// production loader, which reads the default file) is given `none`: the
+/// fate is `None` and no file is read. That `None` reaches no opener at
+/// all, a default file present or not, is the unit test
+/// `load::tests::config_file_none_reaches_no_opener`, which does not touch
+/// the host's `/etc`. Red edit: in `choose_file`, make `Value::Word("none")`
+/// the default choice (the fate is then `DefaultAbsent`).
+#[test]
+fn config_file_none_reads_no_file() {
+    let place = private_place();
+    let platform = Platform {
+        home: Some(place.path().to_path_buf()),
+        service_parent: None,
+        session_dir: None,
+        service_rendezvous: None,
+    };
+    let args: Vec<OsString> = ["--network", "regtest", "--config-file", "none"]
+        .iter()
+        .map(OsString::from)
+        .collect();
+    let loaded = load(read_cli(&TABLE, args).expect("the command line"), &platform)
+        .expect("no file is a configuration");
+    assert_eq!(
+        loaded.config_file,
+        shekyl_daemon_config::ConfigFileFate::None
+    );
 }

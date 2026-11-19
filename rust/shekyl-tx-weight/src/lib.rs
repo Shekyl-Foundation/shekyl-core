@@ -8,8 +8,13 @@
 //! [`predict_weight`] mirrors `shekyl_wire::Transaction::write` byte-for-byte
 //! (and adds the same Bp+ clawback), so it equals the post-build
 //! `Transaction::weight()` **without constructing a transaction** — pinned by
-//! [`predict_weight_matches_wire_weight`](crate::tests) (the single-source
+//! the `predict_weight_matches_wire_weight` test (the single-source
 //! guarantee). The `fcmp_proof_size` term reads the measured 2a-3 KAT table.
+//! [`predict_spend_weight`] is the same field model for any spend's
+//! [`SpendShape`]: its [`Signer`] (a single signer, or a multisig group
+//! whose inputs each carry the group's key blob and `m`-signature
+//! container, scheme 2) and the groups it pays, each output paying a group
+//! carrying its `0x0D` entry.
 //!
 //! **Two parity tests, different jobs.** The one named above builds a wire
 //! `Transaction` *by hand* at five shapes, so it pins the field model against a
@@ -33,8 +38,11 @@
 #![deny(unsafe_code)]
 
 use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
+use shekyl_crypto_pq::multisig::{
+    MultisigKeyBlob, MultisigSigContainer, MAX_MULTISIG_PARTICIPANTS, MIN_MULTISIG_THRESHOLD,
+};
 use shekyl_curve_io::varint_len;
-use shekyl_wire::tx_extra::PQC_LEAF_ENTRY_LEN;
+use shekyl_wire::tx_extra::{MultisigEntry, PQC_LEAF_ENTRY_LEN};
 // Consensus proof-system limits from their UPSTREAM home (constraint 1 — never
 // via shekyl-tx-builder's re-export, which would invert the arrow). `MAX_TREE_DEPTH`
 // and `MAX_OUTPUTS` are re-exported (`pub use`) so consumers that price real tx
@@ -80,6 +88,68 @@ macro_rules! bounded_count {
 
 bounded_count!(InputCount, MAX_INPUTS, "input");
 bounded_count!(OutputCount, MAX_OUTPUTS, "output");
+
+// ── Multisig groups ─────────────────────────────────────────────────────────
+
+/// An `m`-of-`n` multisig group's size, bounded as a group address bounds
+/// it: `MIN_MULTISIG_THRESHOLD ≤ m ≤ n ≤ MAX_MULTISIG_PARTICIPANTS`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct GroupSize {
+    n: u8,
+    m: u8,
+}
+
+impl GroupSize {
+    /// The size of an `m`-of-`n` group, or `None` if no group has it.
+    #[must_use]
+    pub const fn new(n: u8, m: u8) -> Option<Self> {
+        if MIN_MULTISIG_THRESHOLD <= m && m <= n && n <= MAX_MULTISIG_PARTICIPANTS {
+            Some(Self { n, m })
+        } else {
+            None
+        }
+    }
+
+    /// The member count `n`.
+    #[must_use]
+    pub const fn n(self) -> u8 {
+        self.n
+    }
+
+    /// The threshold `m`.
+    #[must_use]
+    pub const fn m(self) -> u8 {
+        self.m
+    }
+}
+
+/// Who authorizes a spend's inputs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Signer {
+    /// One wallet: each input carries a single hybrid key and signature.
+    Solo,
+    /// A multisig group (scheme 2): each input's key blob names the group's
+    /// `n` members and carries `m` signers' keys, and its container `m`
+    /// signatures.
+    Group(GroupSize),
+}
+
+/// The shape of a spend: its counts, its signer, and the size of every
+/// group it pays, a group's change included, in output order.
+#[derive(Clone, Copy, Debug)]
+pub struct SpendShape<'a> {
+    /// The inputs, every one the signer's.
+    pub n_in: InputCount,
+    /// The outputs, those paying a group among them.
+    pub n_out: OutputCount,
+    /// The on-chain tree depth the spend proves under.
+    pub tree_depth: u8,
+    /// Who signs the inputs.
+    pub signer: Signer,
+    /// The groups the spend pays, one per output paying a group: each such
+    /// output carries a `0x0D` entry with one ciphertext per member.
+    pub group_payees: &'a [GroupSize],
+}
 
 // ── Wire-exact component sizes ──────────────────────────────────────────────
 // Each constant is one field of `shekyl_wire::Transaction::write`; `predict_weight`
@@ -229,15 +299,44 @@ fn extra_leaf_hashes_field_weight(n_out: usize) -> usize {
     1 + varint_len(blob as u64) + blob
 }
 
-/// One per-input `PqcAuth`: auth_version + scheme_id + flags(u16) +
-/// varint(pk_len) ‖ pk + varint(sig_len) ‖ sig.
+/// One per-input `PqcAuth` carrying a `key_len`-byte key blob and a
+/// `sig_len`-byte signature blob: auth_version + scheme_id + flags(u16) +
+/// varint(key_len) ‖ key + varint(sig_len) ‖ sig.
+fn pqc_auth_weight_of(key_len: usize, sig_len: usize) -> usize {
+    1 + 1 + 2 + varint_len(key_len as u64) + key_len + varint_len(sig_len as u64) + sig_len
+}
+
+/// One per-input `PqcAuth` of a single signer: a solo hybrid key and
+/// signature.
 fn pqc_auth_weight() -> usize {
-    1 + 1
-        + 2
-        + varint_len(PQC_HYBRID_SINGLE_KEY_LEN as u64)
-        + PQC_HYBRID_SINGLE_KEY_LEN
-        + varint_len(PQC_HYBRID_SINGLE_SIG_LEN as u64)
-        + PQC_HYBRID_SINGLE_SIG_LEN
+    pqc_auth_weight_of(PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN)
+}
+
+/// One per-input `PqcAuth` of `signer`: a solo hybrid key and signature,
+/// or an `m`-of-`n` group's key blob and `m`-signature container (scheme
+/// 2), at their canonical lengths.
+fn signer_pqc_auth_weight(signer: Signer) -> usize {
+    match signer {
+        Signer::Solo => pqc_auth_weight(),
+        Signer::Group(group) => pqc_auth_weight_of(
+            MultisigKeyBlob::expected_len(group.n, group.m),
+            MultisigSigContainer::expected_sig_len(group.m),
+        ),
+    }
+}
+
+/// `ExtraField::PqcMultisig` (`0x0D`): tag + varint(len) + one entry per
+/// output paying a group, each sized by that group's member count. Absent
+/// (zero bytes) when the spend pays no group.
+fn extra_multisig_field_weight(group_payees: &[GroupSize]) -> usize {
+    if group_payees.is_empty() {
+        return 0;
+    }
+    let blob: usize = group_payees
+        .iter()
+        .map(|payee| MultisigEntry::wire_len(payee.n))
+        .sum();
+    1 + varint_len(blob as u64) + blob
 }
 
 /// Padded output count the Bp+ aggregates over — next power of two, ≥ 1.
@@ -268,6 +367,45 @@ fn bp_plus_clawback_weight(n_out: OutputCount) -> usize {
 /// `Transaction::weight()` for the tx the builder will produce from these counts.
 #[must_use]
 pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee: u64) -> usize {
+    spend_weight(n_in, n_out, tree_depth, fee, pqc_auth_weight(), 0)
+}
+
+/// [`predict_weight`] for any [`SpendShape`]: each input's auth is its
+/// signer's (a solo key and signature, or a group's key blob and
+/// `m`-signature container), and each output paying a group carries its
+/// `0x0D` entry. A solo shape paying no group is [`predict_weight`]. It
+/// equals the signed spend's `Transaction::weight()`, pinned against real
+/// 2-of-3 and 3-of-5 group spends in `shekyl-multisig`'s ceremony gate.
+/// Consensus weight is that serialized size; this is the wallet's estimate
+/// of it before signing.
+///
+/// `None` when the shape pays more groups than it has outputs.
+#[must_use]
+pub fn predict_spend_weight(shape: &SpendShape<'_>, fee: u64) -> Option<usize> {
+    if shape.group_payees.len() > shape.n_out.get() {
+        return None;
+    }
+    Some(spend_weight(
+        shape.n_in,
+        shape.n_out,
+        shape.tree_depth,
+        fee,
+        signer_pqc_auth_weight(shape.signer),
+        extra_multisig_field_weight(shape.group_payees),
+    ))
+}
+
+/// The one field model: a spend of `n_in` inputs each authorized by
+/// `auth_weight` bytes, and `n_out` outputs whose `tx_extra` adds
+/// `multisig_extra` bytes of `0x0D` entries.
+fn spend_weight(
+    n_in: InputCount,
+    n_out: OutputCount,
+    tree_depth: u8,
+    fee: u64,
+    auth_weight: usize,
+    multisig_extra: usize,
+) -> usize {
     // `n_in`/`n_out` are type-bounded (`1..=MAX_INPUTS` / `1..=MAX_OUTPUTS`), so every
     // per-count product and the field sum stay far below `usize` overflow — plain
     // arithmetic, no saturation. Each entry below is one field of
@@ -279,7 +417,8 @@ pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee:
     let n_out = n_out.get();
     let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT
         + extra_kem_field_weight(n_out)
-        + extra_leaf_hashes_field_weight(n_out);
+        + extra_leaf_hashes_field_weight(n_out)
+        + multisig_extra;
     [
         varint_len(TX_VERSION),            // version
         varint_len(0u64),                  // unlock_time
@@ -293,7 +432,7 @@ pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee:
         varint_len(fee),     // fee
         REFERENCE_BLOCK_LEN, // reference_block
         n_out * CT_BASE_PER_OUTPUT_WEIGHT, // ct base (per output)
-        n_in * pqc_auth_weight(), // per-input PQC auth
+        n_in * auth_weight,  // per-input PQC auth
         varint_len(1u64),    // prunable nbp
         bp,                  // bulletproof+
         varint_len(u64::from(tree_depth)), // tree_depth
@@ -407,7 +546,7 @@ pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, tree_depth: u8
 /// from these counts, as one `(size, weight)` pair.
 ///
 /// The two differ by exactly the Bp+ verification clawback
-/// ([`bp_plus_clawback_weight`], zero for `n_padded <= 2`): `weight` is what the
+/// (`bp_plus_clawback_weight`, zero for `n_padded <= 2`): `weight` is what the
 /// fee model charges ([`predict_weight`], equal to `Transaction::weight()`),
 /// `size` is the wire bytes (`Transaction::write`'s length). Derived by
 /// subtraction from the one predictor rather than re-summing the field model, so
@@ -658,6 +797,80 @@ mod tests {
                 "predict_archival_len ≠ wire archival_len for n_in={n_in} n_out={n_out} depth={depth}"
             );
         }
+    }
+
+    /// A group's size is what an address admits: `2 ≤ m ≤ n ≤ 5`.
+    #[test]
+    fn a_group_size_is_one_an_address_admits() {
+        assert!(GroupSize::new(2, 2).is_some());
+        assert!(GroupSize::new(5, 3).is_some());
+        assert!(GroupSize::new(5, 5).is_some());
+        assert!(GroupSize::new(1, 1).is_none());
+        assert!(GroupSize::new(3, 1).is_none());
+        assert!(GroupSize::new(3, 4).is_none());
+        assert!(GroupSize::new(6, 2).is_none());
+    }
+
+    /// A spend outweighs the solo spend paying no group by exactly its
+    /// signer's auths and its `0x0D` entries, each at the crypto and wire
+    /// crates' own lengths: a solo spend paying a 3-of-5 group carries that
+    /// group's entry and solo auths, a group spend the group's auths too.
+    /// A solo shape paying no group is `predict_weight`; a shape paying
+    /// more groups than it has outputs has no weight.
+    #[test]
+    fn a_spend_weighs_its_signers_auths_and_its_payees_entries() {
+        let three_of_five = GroupSize::new(5, 3).unwrap();
+        let other_group = GroupSize::new(3, 2).unwrap();
+        let (n_in, n_out, layers, fee) = (InputCount::clamped(2), OutputCount::clamped(3), 7, 900);
+        let solo = predict_weight(n_in, n_out, layers, fee);
+        let weigh = |signer: Signer, group_payees: &[GroupSize]| {
+            predict_spend_weight(
+                &SpendShape {
+                    n_in,
+                    n_out,
+                    tree_depth: layers,
+                    signer,
+                    group_payees,
+                },
+                fee,
+            )
+        };
+        // The `0x0D` field for `payees`, and the byte the `tx_extra`
+        // length prefix may grow by with it.
+        let extra_base = EXTRA_PUBKEY_FIELD_WEIGHT
+            + extra_kem_field_weight(n_out.get())
+            + extra_leaf_hashes_field_weight(n_out.get());
+        let entries_weight = |payees: &[GroupSize]| {
+            let entries: usize = payees.iter().map(|g| MultisigEntry::wire_len(g.n())).sum();
+            let field = 1 + varint_len(entries as u64) + entries;
+            field + varint_len((extra_base + field) as u64) - varint_len(extra_base as u64)
+        };
+        let group_auth = pqc_auth_weight_of(
+            MultisigKeyBlob::expected_len(three_of_five.n(), three_of_five.m()),
+            MultisigSigContainer::expected_sig_len(three_of_five.m()),
+        );
+        let group_auths = n_in.get() * (group_auth - pqc_auth_weight());
+
+        assert_eq!(weigh(Signer::Solo, &[]), Some(solo));
+        assert_eq!(
+            weigh(Signer::Solo, &[three_of_five]),
+            Some(solo + entries_weight(&[three_of_five]))
+        );
+        assert_eq!(
+            weigh(Signer::Group(three_of_five), &[three_of_five, other_group]),
+            Some(solo + group_auths + entries_weight(&[three_of_five, other_group]))
+        );
+        assert_eq!(
+            weigh(Signer::Group(three_of_five), &[]),
+            Some(solo + group_auths)
+        );
+        assert_eq!(
+            weigh(
+                Signer::Solo,
+                &[other_group; MAX_OUTPUTS + 1][..=n_out.get()]
+            ),
+            None
+        );
     }
 }
 
