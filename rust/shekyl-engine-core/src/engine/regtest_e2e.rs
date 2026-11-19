@@ -2713,7 +2713,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
 
     // Re-mining is mining it again: the block must carry the spend, and
     // the pool, which the tip follower reconciles after the chain's commit,
-    // must drop it within the bound (seen 2026-11-16 on vm03 under load:
+    // must drop it within the bound (seen 2026-11-16 on a loaded build VM:
     // the block carried the spend and the pool still held it a second
     // later).
     let height_remined = assert_tx_confirmed(&daemon, accepted).await;

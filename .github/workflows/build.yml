@@ -588,7 +588,8 @@ jobs:
           cmd /c "cargo test --locked --color never -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport -p shekyl-os-account --no-fail-fast > daemon-crates.out 2>&1"
           $rc = $LASTEXITCODE
           # shekyl-win-sec's library alone: its probes are the step below.
-          cargo test --locked -p shekyl-win-sec --lib *>> daemon-crates.out
+          # Appended the same way, so its "Running" line is in order too.
+          cmd /c "cargo test --locked --color never -p shekyl-win-sec --lib >> daemon-crates.out 2>&1"
           $rc_winsec = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
