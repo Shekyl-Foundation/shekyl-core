@@ -29,10 +29,16 @@ define fetch_file_inner
     rm -rf $$($(1)_download_dir) )
 endef
 
+# A source already in SOURCES_PATH is used as it is; its hash is checked
+# again before it is extracted. Otherwise it is fetched from the
+# Foundation's sources mirror (MIRROR_DOWNLOAD_PATH, under the package's
+# file name) and, when the mirror does not answer, does not hold it, or
+# serves bytes that fail the pinned hash, from the package's own download
+# path. Both fetches check the hash before the file is kept.
 define fetch_file
     ( test -f $$($(1)_source_dir)/$(4) || \
-    ( $(call fetch_file_inner,$(1),$(2),$(3),$(4),$(5)) || \
-      $(call fetch_file_inner,$(1),$(FALLBACK_DOWNLOAD_PATH),$(4),$(4),$(5))))
+    ( $(call fetch_file_inner,$(1),$(MIRROR_DOWNLOAD_PATH),$(4),$(4),$(5)) || \
+      $(call fetch_file_inner,$(1),$(2),$(3),$(4),$(5)) ) )
 endef
 
 define int_get_build_recipe_hash
