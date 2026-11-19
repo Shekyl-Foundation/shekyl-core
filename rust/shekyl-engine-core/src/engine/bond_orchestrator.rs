@@ -668,28 +668,31 @@ where
         };
         let persona = sealed.persona;
         let (admission, durability) = store
-            .mutate_reporting(|block| {
-                // Seal-time reservation re-check under the write lock — the
-                // drain seam's guard, which this path was missing. The
-                // `reserved` snapshot read before assembly is stale: a
-                // same-persona claim or drain assembled concurrently may have
-                // reserved one of these funding inputs since, and persona
-                // dedup alone does not see a cross-kind gindex collision.
-                //
-                // It matters beyond the doomed record it avoids.
-                // `PendingPostBlock::remove_settled` retires a claim or drain
-                // when the inputs it reserved leave the live funding set, and
-                // reads that absence as proof THAT record's transaction
-                // confirmed. The inference holds only while one record can
-                // reserve a given gindex: if a post and a drain share an input,
-                // the post confirming spends it and retires the drain too —
-                // reopening a lane whose transaction never landed. This post is
-                // not itself retired that way (its evidence is the pscan's own
-                // bond-post match), but it can falsify someone else's, so the
-                // guard belongs here as much as on the paths it protects.
-                let admission = block.seal_post(sealed, snapshot_generation);
-                (admission == SealAdmission::Admit, admission)
-            })
+            .seal_reporting(
+                |block| {
+                    // Seal-time reservation re-check under the write lock — the
+                    // drain seam's guard, which this path was missing. The
+                    // `reserved` snapshot read before assembly is stale: a
+                    // same-persona claim or drain assembled concurrently may have
+                    // reserved one of these funding inputs since, and persona
+                    // dedup alone does not see a cross-kind gindex collision.
+                    //
+                    // It matters beyond the doomed record it avoids.
+                    // `PendingPostBlock::remove_settled` retires a claim or drain
+                    // when the inputs it reserved leave the live funding set, and
+                    // reads that absence as proof THAT record's transaction
+                    // confirmed. The inference holds only while one record can
+                    // reserve a given gindex: if a post and a drain share an input,
+                    // the post confirming spends it and retires the drain too —
+                    // reopening a lane whose transaction never landed. This post is
+                    // not itself retired that way (its evidence is the pscan's own
+                    // bond-post match), but it can falsify someone else's, so the
+                    // guard belongs here as much as on the paths it protects.
+                    let admission = block.seal_post(sealed, snapshot_generation);
+                    (admission == SealAdmission::Admit, admission)
+                },
+                move |block| block.remove_post(&persona).is_some(),
+            )
             .await
             .map_err(|e| BondAssemblyError::build("pending-post seal", e))?;
         match admission {
@@ -701,15 +704,12 @@ where
                 return Err(BondAssemblyError::InputRaced.into())
             }
         }
-        // A seal whose save was not confirmed is removed, so the dispatch
-        // driver never sends bytes whose record a power loss could take, and
-        // the stake answers with the save's own code (Rick, 2026-11-19).
-        if let Err(error) = super::dispatch_durability::require_confirmed(durability) {
-            store
-                .restore_unsent("bond post", |block| block.remove_post(&persona).is_some())
-                .await;
-            return Err(BondAssemblyError::SealNotSaved(error).into());
-        }
+        // A seal whose save was not confirmed was removed under the seal's
+        // own guard (`seal_reporting`), so the dispatch driver never selects
+        // bytes whose record a power loss could take; the stake answers with
+        // the save's own code (Rick, 2026-11-19).
+        super::dispatch_durability::require_confirmed(durability)
+            .map_err(BondAssemblyError::SealNotSaved)?;
 
         Ok(assembled)
     }

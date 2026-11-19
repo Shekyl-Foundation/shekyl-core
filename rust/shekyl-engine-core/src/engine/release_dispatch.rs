@@ -95,9 +95,9 @@ use shekyl_engine_state::pending_post_block::{
     PendingPostState, PendingRelease, RecordKind, SealAdmission,
 };
 
-use super::pscan::dispatch::{terminal_cause, PendingPostStore, PendingSealStore};
+use super::pscan::dispatch::terminal_cause;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
-use shekyl_types::{BlockHeight, PCanonicalId};
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -307,8 +307,9 @@ impl ReleaseRequestError {
 /// pins that the release call sits behind exactly this predicate.
 fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
     // Nothing left the wallet: a persona mismatch, or a seal whose
-    // durability was not confirmed (Rick, 2026-11-19). The just-taken seal
-    // is released so the lane can be retried.
+    // durability was not confirmed, which `seal_reporting` has already
+    // removed (Rick, 2026-11-19). The just-taken seal is released so the
+    // lane can be retried.
     matches!(
         e,
         BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealUnconfirmed(_)
@@ -603,13 +604,16 @@ where
             terminal: None,
         };
         let (admission, durability) = store
-            .mutate_reporting(move |block| {
-                // One locked decision, shared with the bond-post/claim/drain
-                // seams: persona dedup first (remedy: wait), then cross-kind
-                // gindex overlap (remedy: retry), then the generation guard.
-                let admission = block.seal_release(sealed, dispatch_tip, snapshot_generation);
-                (admission == SealAdmission::Admit, admission)
-            })
+            .seal_reporting(
+                move |block| {
+                    // One locked decision, shared with the bond-post/claim/drain
+                    // seams: persona dedup first (remedy: wait), then cross-kind
+                    // gindex overlap (remedy: retry), then the generation guard.
+                    let admission = block.seal_release(sealed, dispatch_tip, snapshot_generation);
+                    (admission == SealAdmission::Admit, admission)
+                },
+                move |block| block.remove_release(&persona).is_some(),
+            )
             .await
             .map_err(|e| ReleaseRequestError::state("pending-release seal", e))?;
         match admission {
@@ -634,9 +638,9 @@ where
         //   just took is released (`remove_release`: byte-prune +
         //   reservation release + generation bump in one seal).
         // - `SealUnconfirmed`: the seal's save was not confirmed, so nothing
-        //   was sent; the seal is removed the same way (`restore_unsent`)
-        //   and the exit answers with the save's own code (Rick,
-        //   2026-11-19).
+        //   was sent; `seal_reporting` removed the seal under its own guard,
+        //   so the removal here finds nothing, and the exit answers with the
+        //   save's own code (Rick, 2026-11-19).
         // - A definite `RejectedTerminal` is recorded on the record, which
         //   stays sealed with its reservation. "Never admitted, never
         //   relayed" holds only for an honest daemon: a lying one keeps valid
@@ -658,53 +662,28 @@ where
                 submit,
             }),
             Err(e) => {
-                dispose_failed_send(&store, &persona, &e).await?;
+                if released_on_first_send_failure(&e) {
+                    store
+                        .mutate(|block| {
+                            let removed = block.remove_release(&persona);
+                            (removed.is_some(), ())
+                        })
+                        .await
+                        .map_err(|e| ReleaseRequestError::state("pre-transport release", e))?;
+                } else if let Some(cause) = terminal_cause(&e) {
+                    store
+                        .mutate(|block| {
+                            let recorded =
+                                block.record_terminal(RecordKind::Release, &persona, cause);
+                            (recorded, ())
+                        })
+                        .await
+                        .map_err(|e| ReleaseRequestError::state("terminal verdict", e))?;
+                }
                 Err(e.into())
             }
         }
     }
-}
-
-/// What a failed first send of `persona`'s exit leaves in `store` (the
-/// failure disposition in [`Engine::submit_release`]): an unconfirmed seal
-/// and a pairing refusal sent nothing, so the seal is removed and the lane
-/// reopens; a terminal verdict is recorded on the held record; anything
-/// else leaves the record as it is. Extracted so the disposition can be
-/// driven against an in-memory store.
-///
-/// # Errors
-///
-/// The pairing refusal's removal or the terminal verdict's record could
-/// not be saved. An unconfirmed seal's removal never is the error: the
-/// seal's own save code is the answer, and a removal that fails is logged
-/// ([`PendingPostStore::restore_unsent`]; Rick, 2026-11-19).
-pub(super) async fn dispose_failed_send<S: PendingSealStore>(
-    store: &PendingPostStore<S>,
-    persona: &PCanonicalId,
-    e: &BroadcastSubmitError,
-) -> Result<(), ReleaseRequestError> {
-    if let BroadcastSubmitError::SealUnconfirmed(_) = e {
-        store
-            .restore_unsent("release", |block| block.remove_release(persona).is_some())
-            .await;
-    } else if released_on_first_send_failure(e) {
-        store
-            .mutate(|block| {
-                let removed = block.remove_release(persona);
-                (removed.is_some(), ())
-            })
-            .await
-            .map_err(|e| ReleaseRequestError::state("pre-transport release", e))?;
-    } else if let Some(cause) = terminal_cause(e) {
-        store
-            .mutate(|block| {
-                let recorded = block.record_terminal(RecordKind::Release, persona, cause);
-                (recorded, ())
-            })
-            .await
-            .map_err(|e| ReleaseRequestError::state("terminal verdict", e))?;
-    }
-    Ok(())
 }
 
 /// Admit a bond record to the exit path, or say why it may not be read.
@@ -892,7 +871,13 @@ mod tests {
         let guard_at = code
             .find(guard)
             .expect("the release must be gated on the tested predicate, not inlined");
-        let release_at = code.find(release_call).expect("checked non-empty above");
+        // The seal's own unseal (`seal_reporting`) also calls it, before the
+        // send; the release this pin is about is the first one after the
+        // predicate.
+        let release_at = guard_at
+            + code[guard_at..]
+                .find(release_call)
+                .expect("the predicate's branch releases the sealed record");
         let record_at = code.find(record_call).expect("checked non-empty above");
         assert!(
             guard_at < release_at && release_at < record_at,

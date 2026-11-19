@@ -1190,12 +1190,11 @@ components:
                                           which also sent nothing and keeps
                                           the reservation. stake, unstake,
                                           drain and collect_unstaked answer
-                                          -29128, -29131, -29132 or -29134
-                                          by cause when their seal was saved
-                                          but not confirmed: nothing was
-                                          sent and the seal was removed, so
-                                          the call is retried (Rick,
-                                          2026-11-18 and 2026-11-19)
+                                          these codes by cause when their
+                                          seal was saved but not confirmed:
+                                          nothing was sent and the seal was
+                                          removed, so the call is retried
+                                          (Rick, 2026-11-18 and 2026-11-19)
           -29121 TX_NOT_HELD              tx_resend: no held send has this
                                           id — it confirmed, was released,
                                           or was never this wallet's
@@ -3726,8 +3725,8 @@ components:
         -29522 means it is HELD funds-safe until it lands or its end date
         passes (do not re-fire; staking_info names the height) — see the
         code table. A seal saved but not confirmed on disk sent nothing:
-        it was removed, and the save's own code answers (-29128, -29131,
-        -29132, -29134), after which a retry exits the same bond.
+        it was removed, and the save's own code answers by cause (-29120,
+        -29128..-29134), after which a retry exits the same bond.
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"

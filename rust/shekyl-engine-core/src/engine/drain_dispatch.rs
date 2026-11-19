@@ -413,26 +413,29 @@ where
             terminal: None,
         };
         let (admission, durability) = store
-            .mutate_reporting(move |block| {
-                // Seal-time reservation re-check under the write lock. The
-                // `reserved` snapshot read before proof assembly is stale: a
-                // same-persona bond post or emission claim assembled
-                // concurrently may have reserved one of these swept inputs
-                // since, and persona dedup alone does not see a cross-kind
-                // gindex collision. Refusing atomically here beats persisting a
-                // doomed record whose double-spend the daemon rejects while the
-                // sealed reservation bricks the persona's one-live-drain lane.
-                //
-                // Persona dedup runs FIRST, inside `seal_drain`. This seam
-                // checked overlap first and the claim and bond-post seams
-                // copied that order: two same-persona drains select the same
-                // inputs, so the second tripped the overlap arm and was told to
-                // RETRY when the truth was `DrainPending` — wait for the live
-                // record. The remedies are opposites, so the misclassification
-                // sent a caller into a loop it could not win.
-                let admission = block.seal_drain(sealed, dispatch_tip, snapshot_generation);
-                (admission == SealAdmission::Admit, admission)
-            })
+            .seal_reporting(
+                move |block| {
+                    // Seal-time reservation re-check under the write lock. The
+                    // `reserved` snapshot read before proof assembly is stale: a
+                    // same-persona bond post or emission claim assembled
+                    // concurrently may have reserved one of these swept inputs
+                    // since, and persona dedup alone does not see a cross-kind
+                    // gindex collision. Refusing atomically here beats persisting a
+                    // doomed record whose double-spend the daemon rejects while the
+                    // sealed reservation bricks the persona's one-live-drain lane.
+                    //
+                    // Persona dedup runs FIRST, inside `seal_drain`. This seam
+                    // checked overlap first and the claim and bond-post seams
+                    // copied that order: two same-persona drains select the same
+                    // inputs, so the second tripped the overlap arm and was told to
+                    // RETRY when the truth was `DrainPending` — wait for the live
+                    // record. The remedies are opposites, so the misclassification
+                    // sent a caller into a loop it could not win.
+                    let admission = block.seal_drain(sealed, dispatch_tip, snapshot_generation);
+                    (admission == SealAdmission::Admit, admission)
+                },
+                move |block| block.remove_drain(&persona).is_some(),
+            )
             .await
             .map_err(|e| DrainRequestError::state("pending-drain seal", e))?;
         match admission {
@@ -464,14 +467,6 @@ where
                 durability,
             ))
             .await;
-        // An unconfirmed seal sent nothing: it is removed so the lane
-        // reopens, and the drain answers with the save's own code (Rick,
-        // 2026-11-19).
-        if let Err(BroadcastSubmitError::SealUnconfirmed(_)) = &sent {
-            store
-                .restore_unsent("drain", |block| block.remove_drain(&persona).is_some())
-                .await;
-        }
         if let Some(cause) = sent.as_ref().err().and_then(terminal_cause) {
             store
                 .mutate(|block| {

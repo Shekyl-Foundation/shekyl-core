@@ -29,6 +29,7 @@ use shekyl_types::{BlockCount, ChainCount, PSlot, TxHash};
 use super::*;
 use crate::engine::transaction_submitter::BroadcastKind;
 use shekyl_engine_state::pending_post_block::OutcomeKind;
+use shekyl_engine_state::PendingPostBlock;
 
 /// One scripted submit verdict (the `BondBroadcast` return shape).
 type Verdict = Result<SubmitSuccess, BroadcastSubmitError>;

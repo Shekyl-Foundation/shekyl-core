@@ -384,34 +384,37 @@ where
             terminal: None,
         };
         let (attempt, durability) = store
-            .mutate_reporting(move |block| {
-                // §3 "user work always wins", the authoritative half: this
-                // closure runs under the pending write lock, which totally
-                // orders it against every foreground registration and every
-                // foreground snapshot read. A user-initiated staking
-                // operation begun before this instant forces the claim to
-                // yield here; one begun after reads the sealed claim's
-                // reservations and selects around them. Either way the user
-                // never sees `InputRaced` caused by a background claim.
-                if pending_gate.foreground_in_flight() {
-                    return (false, ClaimSealAttempt::YieldToForeground);
-                }
-                // One locked decision, shared with the bond-post and drain
-                // seams: persona dedup first (remedy: wait), then cross-kind
-                // gindex overlap (remedy: retry). Order matters because two
-                // same-persona assemblies select the same inputs and would
-                // otherwise be told to retry a race they cannot win. The
-                // overlap half is also `remove_settled`'s sole-spender premise.
-                //
-                // Deciding and inserting are one call so this seam cannot
-                // re-derive the outcome from a push bool whose refusal arm the
-                // decision above has already ruled out.
-                let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
-                (
-                    admission == SealAdmission::Admit,
-                    ClaimSealAttempt::Decided(admission),
-                )
-            })
+            .seal_reporting(
+                move |block| {
+                    // §3 "user work always wins", the authoritative half: this
+                    // closure runs under the pending write lock, which totally
+                    // orders it against every foreground registration and every
+                    // foreground snapshot read. A user-initiated staking
+                    // operation begun before this instant forces the claim to
+                    // yield here; one begun after reads the sealed claim's
+                    // reservations and selects around them. Either way the user
+                    // never sees `InputRaced` caused by a background claim.
+                    if pending_gate.foreground_in_flight() {
+                        return (false, ClaimSealAttempt::YieldToForeground);
+                    }
+                    // One locked decision, shared with the bond-post and drain
+                    // seams: persona dedup first (remedy: wait), then cross-kind
+                    // gindex overlap (remedy: retry). Order matters because two
+                    // same-persona assemblies select the same inputs and would
+                    // otherwise be told to retry a race they cannot win. The
+                    // overlap half is also `remove_settled`'s sole-spender premise.
+                    //
+                    // Deciding and inserting are one call so this seam cannot
+                    // re-derive the outcome from a push bool whose refusal arm the
+                    // decision above has already ruled out.
+                    let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
+                    (
+                        admission == SealAdmission::Admit,
+                        ClaimSealAttempt::Decided(admission),
+                    )
+                },
+                move |block| block.remove_claim(&persona).is_some(),
+            )
             .await
             .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
         match attempt {
@@ -448,14 +451,6 @@ where
                 durability,
             ))
             .await;
-        // An unconfirmed seal sent nothing: it is removed so the lane
-        // reopens, and the claim answers with the save's own code (Rick,
-        // 2026-11-19).
-        if let Err(BroadcastSubmitError::SealUnconfirmed(_)) = &sent {
-            store
-                .restore_unsent("claim", |block| block.remove_claim(&persona).is_some())
-                .await;
-        }
         if let Some(cause) = sent.as_ref().err().and_then(terminal_cause) {
             store
                 .mutate(|block| {

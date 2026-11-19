@@ -588,113 +588,186 @@ fn a_sealed_exit_is_excluded_so_the_next_live_bond_can_exit() {
     );
 }
 
-/// An in-memory pending store: the block is the store, and every save is
-/// confirmed. The seal under test carries its unconfirmed save in the
-/// error the seam hands back, not in this store.
-#[derive(Default)]
-struct MemPending(std::sync::Mutex<Option<PendingPostBlock>>);
+/// An in-memory pending store: the block is the store. Its first save
+/// reports the durability `first` names, every later one is confirmed: a
+/// seal on a volume Windows cannot confirm, then its removal.
+struct MemPending {
+    block: std::sync::Mutex<Option<PendingPostBlock>>,
+    first: std::sync::Mutex<Option<shekyl_engine_file::Durability>>,
+}
+
+impl MemPending {
+    fn first_save(first: shekyl_engine_file::Durability) -> StdArc<Self> {
+        StdArc::new(Self {
+            block: std::sync::Mutex::new(None),
+            first: std::sync::Mutex::new(Some(first)),
+        })
+    }
+}
 
 impl crate::engine::pscan::dispatch::PendingSealStore for StdArc<MemPending> {
     type Error = std::convert::Infallible;
 
     async fn load(&self) -> Result<Option<PendingPostBlock>, Self::Error> {
-        Ok(self.0.lock().expect("mem pending").clone())
+        Ok(self.block.lock().expect("mem pending").clone())
     }
 
     async fn save(
         &self,
         block: &PendingPostBlock,
     ) -> Result<shekyl_engine_file::Durability, Self::Error> {
-        *self.0.lock().expect("mem pending") = Some(block.clone());
-        Ok(shekyl_engine_file::Durability::Confirmed)
+        *self.block.lock().expect("mem pending") = Some(block.clone());
+        Ok(self
+            .first
+            .lock()
+            .expect("mem pending")
+            .take()
+            .unwrap_or(shekyl_engine_file::Durability::Confirmed))
     }
+}
+
+/// Seal persona 1's exit through `store` as the seam does
+/// (`seal_reporting`, its removal the unseal), and the save's durability.
+async fn seal_exit(
+    store: &crate::engine::pscan::dispatch::PendingPostStore<StdArc<MemPending>>,
+) -> shekyl_engine_file::Durability {
+    let (admission, durability) = store
+        .seal_reporting(
+            |block| {
+                let g = block.generation();
+                let admission = block.seal_release(
+                    PendingRelease {
+                        persona: persona(1),
+                        tx_bytes: vec![0xEE; 4],
+                        funding_gindexes: Vec::new(),
+                        state: PendingPostState::Pending,
+                        reference_height: BlockHeight::from_raw(1_000_000),
+                        terminal: None,
+                    },
+                    ChainCount::from_raw(5_000),
+                    g,
+                );
+                (admission == SealAdmission::Admit, admission)
+            },
+            |block| block.remove_release(&persona(1)).is_some(),
+        )
+        .await
+        .expect("an in-memory seal");
+    assert_eq!(admission, SealAdmission::Admit);
+    durability
+}
+
+/// What `unstake` resolves for persona 1's live bond against `store`'s
+/// block.
+async fn retry_target(
+    store: &crate::engine::pscan::dispatch::PendingPostStore<StdArc<MemPending>>,
+) -> UnstakeTarget {
+    let block = store.read(Clone::clone).await.expect("an in-memory read");
+    let bonded = pscan(
+        vec![bond_match(1, JOIN)],
+        BTreeMap::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    resolve_unstake_target(&evidence(Some(bonded), Some(block), &[(1, 1)])).expect("resolvable")
 }
 
 /// An exit whose seal was saved but not confirmed on disk sent nothing
 /// (Rick, 2026-11-19): it answers with the save's own cause, never
-/// `-29522`'s "sent, seal held"; the seam removes the seal, so no pending
-/// record is left; and a retry resolves the same bond as its target again,
-/// never "an exit is in progress". The test first asserts its own subject,
-/// the sealed exit closing the lane. Red edits: drop the `SealUnconfirmed`
-/// arm from `flatten_unstake_error`, and the answer is `ExitFateUnknown`;
-/// drop the restore from `dispose_failed_send`, and the seal stays and the
-/// retry resolves `ExitInProgress`.
+/// `-29522`'s "sent, seal held"; the seal is removed under the seal's own
+/// guard, so no pending record is left and no other writer ever saw it;
+/// and a retry resolves the same bond as its target again, never "an exit
+/// is in progress". The test first asserts its own subject: a confirmed
+/// seal closes the lane. Red edits: drop the `SealUnconfirmed` arm from
+/// `flatten_unstake_error`, and the answer is `ExitFateUnknown`; drop the
+/// unseal from `seal_reporting`, and the seal stays and the retry resolves
+/// `ExitInProgress`.
 #[tokio::test]
 async fn an_unconfirmed_exit_seal_answers_its_save_code_and_reopens_the_lane() {
+    use crate::engine::dispatch_durability::require_confirmed;
     use crate::engine::error::PersistenceError;
     use crate::engine::pending_post_gate::PendingPostGate;
     use crate::engine::pscan::dispatch::PendingPostStore;
     use crate::engine::transaction_submitter::BroadcastSubmitError;
-    use shekyl_engine_file::Unconfirmed;
+    use shekyl_engine_file::{Durability, Unconfirmed};
 
-    let unconfirmed = || {
-        BroadcastSubmitError::SealUnconfirmed(PersistenceError::DurabilityUnconfirmed(
-            Unconfirmed::FileSystem("FAT32".to_owned()),
-        ))
-    };
+    let confirmed = PendingPostStore::new(
+        MemPending::first_save(Durability::Confirmed),
+        PendingPostGate::new(),
+    );
+    assert!(matches!(seal_exit(&confirmed).await, Durability::Confirmed));
+    assert_eq!(
+        retry_target(&confirmed).await,
+        UnstakeTarget::ExitInProgress,
+        "the test's own subject: a sealed exit closes the lane"
+    );
+
+    let fat = || Unconfirmed::FileSystem("FAT32".to_owned());
+    let unconfirmed = PendingPostStore::new(
+        MemPending::first_save(Durability::Unconfirmed(fat())),
+        PendingPostGate::new(),
+    );
+    let durability = seal_exit(&unconfirmed).await;
+    // What the seam's `submit_bound` hands back for that durability.
+    let refused = BroadcastSubmitError::SealUnconfirmed(
+        require_confirmed(durability).expect_err("an unconfirmed seal is refused before any send"),
+    );
     assert!(
         matches!(
-            flatten_unstake_error(ReleaseRequestError::Submit(unconfirmed())),
+            flatten_unstake_error(ReleaseRequestError::Submit(refused)),
             UnstakeError::SealNotSaved(PersistenceError::DurabilityUnconfirmed(
                 Unconfirmed::FileSystem(ref name)
             )) if name == "FAT32"
         ),
         "the save's cause is the answer"
     );
-
-    let store = PendingPostStore::new(StdArc::new(MemPending::default()), PendingPostGate::new());
-    let admitted = store
-        .mutate(|block| {
-            let g = block.generation();
-            let admission = block.seal_release(
-                PendingRelease {
-                    persona: persona(1),
-                    tx_bytes: vec![0xEE; 4],
-                    funding_gindexes: Vec::new(),
-                    state: PendingPostState::Pending,
-                    reference_height: BlockHeight::from_raw(1_000_000),
-                    terminal: None,
-                },
-                ChainCount::from_raw(5_000),
-                g,
-            );
-            (admission == SealAdmission::Admit, admission)
-        })
+    let left = unconfirmed
+        .read(Clone::clone)
         .await
-        .expect("an in-memory seal");
-    assert_eq!(admitted, SealAdmission::Admit);
-    let bonded = || {
-        pscan(
-            vec![bond_match(1, JOIN)],
-            BTreeMap::new(),
-            Vec::new(),
-            Vec::new(),
-        )
-    };
-    let sealed = store.read(Clone::clone).await.expect("an in-memory read");
+        .expect("an in-memory read");
     assert_eq!(
-        resolve_unstake_target(&evidence(Some(bonded()), Some(sealed), &[(1, 1)]))
-            .expect("resolvable"),
-        UnstakeTarget::ExitInProgress,
-        "the test's own subject: a sealed exit closes the lane"
-    );
-
-    crate::engine::release_dispatch::dispose_failed_send(&store, &persona(1), &unconfirmed())
-        .await
-        .expect("an unconfirmed seal's removal is never the error");
-
-    let after = store.read(Clone::clone).await.expect("an in-memory read");
-    assert_eq!(
-        after.sealed_records().count(),
+        left.sealed_records().count(),
         0,
         "no pending record is left"
     );
     assert_eq!(
-        resolve_unstake_target(&evidence(Some(bonded()), Some(after), &[(1, 1)]))
-            .expect("resolvable"),
+        retry_target(&unconfirmed).await,
         UnstakeTarget::Post(PSlot::from_raw(1)),
         "a retry exits the same bond, never an exit in progress"
     );
+}
+
+/// Every seal a broadcast follows (the bond post, the claim, the drain, the
+/// exit) is taken through `seal_reporting`, which removes an unconfirmed
+/// seal under its own guard (Rick, 2026-11-19), never through
+/// `mutate_reporting`, which would leave it for the dispatch driver to
+/// select. Comment lines are dropped, and each file's test module.
+#[test]
+fn every_broadcast_seal_is_taken_through_seal_reporting() {
+    let seams = [
+        ("bond_orchestrator.rs", include_str!("bond_orchestrator.rs")),
+        ("claim_dispatch.rs", include_str!("claim_dispatch.rs")),
+        ("drain_dispatch.rs", include_str!("drain_dispatch.rs")),
+        ("release_dispatch.rs", include_str!("release_dispatch.rs")),
+    ];
+    for (name, text) in seams {
+        let (production, _) = text
+            .split_once("\n#[cfg(test)]\n")
+            .unwrap_or_else(|| panic!("{name} carries its test-module marker"));
+        let code: String = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains(".seal_reporting("),
+            "{name} seals through seal_reporting"
+        );
+        assert!(
+            !code.contains(".mutate_reporting("),
+            "{name} takes no seal through mutate_reporting"
+        );
+    }
 }
 
 /// Collect resolution honours a skip set: a slot the caller proved
