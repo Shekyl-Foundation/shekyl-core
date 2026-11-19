@@ -7,8 +7,9 @@
 
 use kameo::message::{Context, Message};
 
+use crate::engine::holdings_fill::FilledHoldings;
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
-use shekyl_archival_retention::{HoldingsDescriptor, PassTranscript};
+use shekyl_archival_retention::PassTranscript;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_tor_control_wallet::service::OnionIdentity;
 
@@ -335,7 +336,7 @@ pub(crate) struct PlanBondPost {
     pub ticket: crate::engine::stake_persist::PersistedBondTicket,
     /// Holdings to compute `bond_floor` from. Passed to
     /// [`build_join_market_vin`] inside the actor.
-    pub holdings: HoldingsDescriptor,
+    pub holdings: FilledHoldings,
 }
 
 /// Reply of [`PlanBondPost`]: the constructed bond vin **and** the block-timed
@@ -402,8 +403,12 @@ impl Message<PlanBondPost> for StakeEngine {
         //    constructed `JoinMarketVin` (paired with its placement offset)
         //    crosses the actor boundary.
         let endpoint = keys.onion_keypair().public_key();
-        let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings, endpoint)
-            .map_err(StakeEngineError::BondBuild)?;
+        let vin = build_join_market_vin(
+            keys.bond_post_keys(),
+            msg.holdings.descriptor().clone(),
+            endpoint,
+        )
+        .map_err(StakeEngineError::BondBuild)?;
         Ok(BondPostPlacement {
             vin,
             bond_post_offset_blocks,

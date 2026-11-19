@@ -474,6 +474,31 @@ wallet_rpc_error_codes! {
     /// bounded caller and opens one such fetch at a time (`bound.shard`).
     /// Transient; retry shortly.
     ShardViewBusy = -29537 => "SHARD_VIEW_BUSY",
+    /// Stake: the persona scan has not yet verified the chain up to the
+    /// finality horizon, so the shards a `CompleteTree` bond owes are not
+    /// known yet (`WSS-Q15`). Nothing was written; retry once the scan has
+    /// caught up.
+    StakeScanBehind = -29538 => "STAKE_SCAN_BEHIND",
+    /// Stake: the wallet's node has discarded the bodies of a shard the bond
+    /// owes, and a node does not yet read below its horizon, so the bond
+    /// cannot be posted until it does (`WSS-Q15`). Nothing was written.
+    StakeShardDiscarded = -29539 => "STAKE_SHARD_DISCARDED",
+    /// Stake: the node's reply for a shard the bond owes does not match the
+    /// chain the persona scan verified. Nothing was written; the node needs
+    /// attention.
+    StakeDaemonMismatch = -29540 => "STAKE_DAEMON_MISMATCH",
+    /// Stake: the persona body store is filled from the wallet's own node on
+    /// loopback, and this server's daemon address is not loopback.
+    StakeLocalNodeRequired = -29541 => "STAKE_LOCAL_NODE_REQUIRED",
+    /// Stake: the persona body store could not write a shard the bond owes.
+    /// Nothing was posted; check the disk.
+    StakeBodyStoreFailed = -29542 => "STAKE_BODY_STORE_FAILED",
+    /// Stake: the node reports that it is still synchronizing, so finality
+    /// cannot be judged yet. Retry once it has caught up.
+    StakeDaemonSyncing = -29543 => "STAKE_DAEMON_SYNCING",
+    /// Stake: the node could not be read while filling the persona body
+    /// store. Nothing was posted; check the node and retry.
+    StakeDaemonUnreachable = -29544 => "STAKE_DAEMON_UNREACHABLE",
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -1366,6 +1391,77 @@ pub enum WalletRpcError {
         detail: String,
     },
 
+    /// `stake` (`-29538`): the persona scan has verified the chain to
+    /// `scanned` and must reach `needed`, the finality horizon at the
+    /// node's tip, before the shards a `CompleteTree` bond owes are known
+    /// (`WALLET_SIDE_STORE.md` `WSS-Q15`). The scan runs on its own; nothing
+    /// was written.
+    #[error(
+        "the staking scan has checked the chain up to block {scanned} and needs to reach block          {needed} before this bond's shards are known; nothing was written — try again once it          has caught up"
+    )]
+    StakeScanBehind {
+        /// The scan's frontier: the first height it has not verified.
+        scanned: u64,
+        /// The frontier the fill needs.
+        needed: u64,
+    },
+    /// `stake` (`-29539`): the node has already discarded the bodies of
+    /// `shard`, which this bond owes, and a node does not yet read below its
+    /// horizon, so the persona body store cannot be filled with it and the
+    /// bond cannot be posted. This is also what a `CompleteTree` server
+    /// joining after the first epochs meets. Nothing was written.
+    #[error(
+        "your node has already discarded shard {shard}, which this bond must hold, and a node          cannot yet read shards below its horizon — this bond cannot be posted until it can.          Nothing was written"
+    )]
+    StakeShardDiscarded {
+        /// The discarded shard.
+        shard: u64,
+    },
+    /// `stake` (`-29540`): the node's reply for `shard` does not match the
+    /// chain the persona scan verified (a block off that chain, totals or
+    /// bodies that do not add up). Bonding against it would be slashed, so
+    /// nothing was written.
+    #[error(
+        "your node's reply for shard {shard} does not match the chain this wallet verified, so          nothing was written — check the node: {detail}"
+    )]
+    StakeDaemonMismatch {
+        /// The shard being filled.
+        shard: u64,
+        /// What disagreed.
+        detail: String,
+    },
+    /// `stake` (`-29541`): the persona body store is filled from the
+    /// wallet's own node over loopback; this server's daemon address is not
+    /// loopback.
+    #[error(
+        "staking needs this wallet's own node: the shards a bond holds are read from it over          loopback — point the wallet server's daemon address at a local node"
+    )]
+    StakeLocalNodeRequired {
+        /// The transport constructor's own refusal.
+        detail: String,
+    },
+    /// `stake` (`-29542`): the persona body store could not write `shard`.
+    #[error("the staking body store could not write shard {shard}, so nothing was posted — check the disk: {detail}")]
+    StakeBodyStoreFailed {
+        /// The shard being written.
+        shard: u64,
+        /// The store's reason.
+        detail: String,
+    },
+    /// `stake` (`-29543`): the node is still synchronizing, so which shards
+    /// are final cannot be judged yet.
+    #[error(
+        "your node is still synchronizing; nothing was written — try again once it has caught up"
+    )]
+    StakeDaemonSyncing,
+    /// `stake` (`-29544`): the node could not be read while filling the
+    /// persona body store.
+    #[error("your node could not be read while filling the staking body store, so nothing was posted — check the node and retry")]
+    StakeDaemonUnreachable {
+        /// The transport's reason.
+        detail: String,
+    },
+
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
     /// the method's honest negative *answer* (SM-R-6), carried as its own
@@ -1515,6 +1611,13 @@ impl WalletRpcError {
             Self::ShardUnavailable { .. } => WalletRpcErrorCode::ShardUnavailable,
             Self::ShardViewNotOffered { .. } => WalletRpcErrorCode::ShardViewNotOffered,
             Self::ShardViewBusy { .. } => WalletRpcErrorCode::ShardViewBusy,
+            Self::StakeScanBehind { .. } => WalletRpcErrorCode::StakeScanBehind,
+            Self::StakeShardDiscarded { .. } => WalletRpcErrorCode::StakeShardDiscarded,
+            Self::StakeDaemonMismatch { .. } => WalletRpcErrorCode::StakeDaemonMismatch,
+            Self::StakeLocalNodeRequired { .. } => WalletRpcErrorCode::StakeLocalNodeRequired,
+            Self::StakeBodyStoreFailed { .. } => WalletRpcErrorCode::StakeBodyStoreFailed,
+            Self::StakeDaemonSyncing => WalletRpcErrorCode::StakeDaemonSyncing,
+            Self::StakeDaemonUnreachable { .. } => WalletRpcErrorCode::StakeDaemonUnreachable,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -1547,7 +1650,17 @@ impl WalletRpcError {
             | Self::UnstakeLocalNodeRequired { detail }
             | Self::ShardStillOpen { detail }
             | Self::ShardUnavailable { detail }
-            | Self::ShardViewBusy { detail } => Some(json!({ "detail": detail })),
+            | Self::ShardViewBusy { detail }
+            | Self::StakeLocalNodeRequired { detail }
+            | Self::StakeDaemonUnreachable { detail } => Some(json!({ "detail": detail })),
+            Self::StakeScanBehind { scanned, needed } => {
+                Some(json!({ "scanned": scanned, "needed": needed }))
+            }
+            Self::StakeShardDiscarded { shard } => Some(json!({ "shard": shard })),
+            Self::StakeDaemonMismatch { shard, detail }
+            | Self::StakeBodyStoreFailed { shard, detail } => {
+                Some(json!({ "shard": shard, "detail": detail }))
+            }
             Self::ShardViewNotOffered { cause, detail } => {
                 Some(json!({ "cause": cause.as_str(), "detail": detail }))
             }

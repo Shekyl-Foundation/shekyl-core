@@ -833,7 +833,11 @@ async fn plan_bond_post_slot_mismatch_is_rejected() {
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
     let err = handle
-        .plan_bond_post(h0, ticket_for_slot_1, holdings)
+        .plan_bond_post(
+            h0,
+            ticket_for_slot_1,
+            crate::engine::holdings_fill::FilledHoldings::for_test(holdings),
+        )
         .await
         .expect_err("slot mismatch must fail");
 
@@ -902,7 +906,11 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
     let post = handle
-        .plan_bond_post(h0, ticket, holdings)
+        .plan_bond_post(
+            h0,
+            ticket,
+            crate::engine::holdings_fill::FilledHoldings::for_test(holdings),
+        )
         .await
         .expect("plan_bond_post succeeds for a held, matching slot");
 

@@ -815,7 +815,7 @@ pub(crate) async fn stake(
     // elect tag is applied at spawn from the intent, so that is a change to
     // the intent's shape (`open_full_with_first_stake_intent`) and the spawn
     // gate — a different validation surface, tracked in `FOLLOWUPS.md`.
-    let (shared, name, has_scan) = {
+    let (shared, name, has_scan, daemon) = {
         let state = tenants.lock().await;
         let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
         let name = state
@@ -823,7 +823,7 @@ pub(crate) async fn stake(
             .open_name()
             .ok_or(WalletRpcError::WalletNotOpen)?
             .to_owned();
-        (shared, name, state.tenant.has_pscan())
+        (shared, name, state.tenant.has_pscan(), state.daemon.clone())
     };
     let (needs_intent_open, slot) = {
         let g = shared.read().await;
@@ -862,7 +862,9 @@ pub(crate) async fn stake(
     // The posture the caller named, gated above. `Market` (the default, and
     // every pre-parameter caller) still surfaces `NoShardsAvailable` until
     // the assignment round builds the arm it needs.
-    let outcome = StakeFacade::first_stake(shared, slot, posture)
+    // The fill reads the bond's shards from the wallet's own node, the
+    // tenant's daemon target (`WSS-Q4`).
+    let outcome = StakeFacade::first_stake(shared, &daemon, slot, posture)
         .await
         .map_err(|e| {
             use shekyl_engine_core::FirstStakeError as E;
@@ -926,6 +928,10 @@ pub(crate) async fn stake(
                 // remedy is "fund and retry", which would send an operator to
                 // top up a wallet that is funded fine (rule 82).
                 E::NoShardsAvailable => WalletRpcError::StakeNoShardsAvailable,
+                // Fill first (WSS-Q4, WSS-Q15): each refusal names its own
+                // remedy, so each has its own code (rule 82). All are
+                // W1-clean: the fill runs before the durable point.
+                E::Fill(fill) => stake_fill_error(fill),
             }
         })?;
 
@@ -935,6 +941,41 @@ pub(crate) async fn stake(
         "resumed": outcome.resumed,
         "state": "pending_dispatch",
     }))
+}
+
+/// The contract code for a refused fill: each refusal its own remedy.
+fn stake_fill_error(fill: shekyl_engine_core::CompleteTreeFillError) -> WalletRpcError {
+    use shekyl_engine_core::{CompleteTreeFillError as C, FillFailure as F};
+    match fill {
+        C::ScanBehind { scanned, needed } => WalletRpcError::StakeScanBehind {
+            scanned: scanned.to_raw(),
+            needed: needed.to_raw(),
+        },
+        C::Fill(F::LocalNodeRequired { detail }) => {
+            WalletRpcError::StakeLocalNodeRequired { detail }
+        }
+        C::Fill(F::DaemonSyncing) => WalletRpcError::StakeDaemonSyncing,
+        C::Fill(F::DaemonUnreachable { detail }) => {
+            WalletRpcError::StakeDaemonUnreachable { detail }
+        }
+        C::Fill(F::Discarded { shard }) => WalletRpcError::StakeShardDiscarded {
+            shard: shard.to_raw(),
+        },
+        C::Fill(F::DaemonMismatch { shard, detail }) => WalletRpcError::StakeDaemonMismatch {
+            shard: shard.to_raw(),
+            detail,
+        },
+        C::Fill(F::StoreFailed { shard, detail }) => WalletRpcError::StakeBodyStoreFailed {
+            shard: shard.to_raw(),
+            detail,
+        },
+        // A staker's scan state loaded when the wallet opened (it does not
+        // open without it), so failing to read it now is a fault of this
+        // process, not a state the operator can act on.
+        C::Fill(F::ScanStateUnreadable { detail }) => WalletRpcError::InternalError(format!(
+            "stake: the persona scan state could not be read for the fill ({detail})"
+        )),
+    }
 }
 
 /// The SA-R1-a credentialed reopen: close the open tenant (the full

@@ -393,9 +393,14 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
     .expect("plain open")
     .into_wallet();
     let arc = std::sync::Arc::new(RwLock::new(plain));
-    let err = Engine::first_stake(arc.clone(), 0, StakePosture::SupportCompleteTree)
-        .await
-        .expect_err("no stake engine must refuse");
+    let err = Engine::first_stake(
+        arc.clone(),
+        &crate::engine::test_support::dummy_node(),
+        0,
+        StakePosture::SupportCompleteTree,
+    )
+    .await
+    .expect_err("no stake engine must refuse");
     assert!(matches!(err, FirstStakeError::NoStakeEngine), "got {err:?}");
     {
         let g = arc.read().await;
@@ -424,9 +429,14 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
     .expect("intent open")
     .into_wallet();
     let arc = std::sync::Arc::new(RwLock::new(intent));
-    let err = Engine::first_stake(arc.clone(), 0, StakePosture::SupportCompleteTree)
-        .await
-        .expect_err("unreachable daemon must refuse pre-persist");
+    let err = Engine::first_stake(
+        arc.clone(),
+        &crate::engine::test_support::dummy_node(),
+        0,
+        StakePosture::SupportCompleteTree,
+    )
+    .await
+    .expect_err("unreachable daemon must refuse pre-persist");
     assert!(
         matches!(err, FirstStakeError::FeeEstimate(_)),
         "got {err:?}"

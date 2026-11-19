@@ -54,8 +54,8 @@
 use shekyl_engine_state::pscan_cursor::{ArchivalFold, BlockStep};
 use shekyl_scanner::ScannableBlock;
 use shekyl_types::{shard_of, ArchivalLength, BlockHash, BlockHeight, ShardId, ShardRowsDigest};
-use shekyl_wire::carries_archival_good;
 use shekyl_wire::shard_frame::{rows_digest_step, rows_of_parts};
+use shekyl_wire::{carries_archival_good, TxidParts};
 
 /// A height range `[low, high)` `P` AFFIRMATIVELY, EXHAUSTIVELY verified on the
 /// chain it was served (recompute-and-chain continuity + per-body tx-hash).
@@ -279,35 +279,38 @@ struct ArchivalStep {
     open_rows: ShardRowsDigest,
 }
 
-/// Fold one block into the archival partition (`SHT-Q2`), transaction by
-/// transaction in the chain's order: the coinbase (no archival good), then
-/// each listed transaction. A transaction belongs to the shard of the total
-/// before it and is in its domain iff it carries archival good
-/// (`carries_archival_good`, the same predicate the daemon's shard reads use).
-/// Its rows extend that shard's digest; when the total after it reaches a
-/// shard's end, the shard closes with its digest and the next one opens empty.
-/// `None` on overflow.
+/// The shard a placed transaction belongs to, if it is in the archival
+/// partition's domain (`SHT-Q1`, `SHT-Q2`): the shard of the total before it,
+/// for a transaction that carries archival good. The daemon's shard reads use
+/// the same predicate (`shekyl-chain-store` `shard_reads.rs`); this is the
+/// wallet's one copy, shared by the scan's fold and the body fill's walk.
+pub(crate) fn domain_shard(cum_before: ArchivalLength, parts: &TxidParts) -> Option<ShardId> {
+    carries_archival_good(parts.pqc_auth_hash, parts.prunable_hash).then(|| shard_of(cum_before))
+}
+
+/// Fold one block into the archival partition, transaction by transaction in
+/// the chain's order ([`ScannableBlock::archival_placements`]: the coinbase,
+/// which carries no archival good, then each listed transaction). An in-domain
+/// transaction's rows extend its shard's digest ([`domain_shard`]); when the
+/// total after a transaction reaches a shard's end, the shard closes with its
+/// digest and the next one opens empty. `None` on overflow.
 fn archival_step(fold: &ArchivalFold, sb: &ScannableBlock) -> Option<ArchivalStep> {
-    let mut total = fold
-        .total()
-        .checked_add(sb.block.miner_transaction.txid_parts().archival_len)?;
     let mut open = fold.closed_count();
     let mut open_rows = fold.open_rows();
     let mut closed = Vec::new();
-    for tx in &sb.transactions {
-        let parts = tx.parts();
-        if carries_archival_good(parts.pqc_auth_hash, parts.prunable_hash) {
-            open_rows = rows_digest_step(ShardId::from_raw(open), open_rows, rows_of_parts(&parts));
+    for (cum_before, parts) in sb.archival_placements(fold.total())? {
+        if let Some(shard) = domain_shard(cum_before, &parts) {
+            open_rows = rows_digest_step(shard, open_rows, rows_of_parts(&parts));
         }
-        total = total.checked_add(parts.archival_len)?;
-        while shard_of(total).to_raw() > open {
+        let after = cum_before.checked_add(parts.archival_len)?;
+        while shard_of(after).to_raw() > open {
             closed.push(open_rows);
             open_rows = ShardRowsDigest::EMPTY;
             open = open.checked_add(1)?;
         }
     }
     Some(ArchivalStep {
-        total,
+        total: fold.total().checked_add(sb.archival_increment()?)?,
         closed,
         open_rows,
     })

@@ -726,6 +726,12 @@ fn config_base() -> Result<PathBuf, Vec<PathBuf>> {
 }
 
 impl RegtestDaemon {
+    /// This daemon as the wallet's daemon target: its RPC listener on
+    /// loopback, the address the persona's loopback transport accepts.
+    fn target(&self) -> shekyl_rpc_transport::DaemonTarget {
+        shekyl_rpc_transport::DaemonTarget::address(format!("http://127.0.0.1:{}", self.rpc_port))
+    }
+
     /// Resolve the daemon binary from `SHEKYLD_BIN`. Panics with a clear message
     /// if unset — these tests are `#[ignore]`d and only run when explicitly
     /// invoked, so requiring the env var is the contract, not a surprise.
@@ -4318,6 +4324,7 @@ async fn stake_persona_and_submit_bond(
     use super::bond_assembly::{BondAssemblyError, PBoundBytes, SpentRecordsDurablyPruned};
     use super::bond_orchestrator::p_lane_weight_ceiling_bytes;
     use super::bond_orchestrator::FirstStakeError;
+    use super::holdings_fill::{CompleteTreeFillError, MarketFillError};
     use super::pscan::start::pending_post_store_for_engine;
     use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
@@ -4426,6 +4433,7 @@ async fn stake_persona_and_submit_bond(
                 // here.
                 match super::Engine::first_stake(
                     arc.clone(),
+                    &daemon.target(),
                     slot_raw,
                     super::StakePosture::SupportCompleteTree,
                 )
@@ -4434,6 +4442,19 @@ async fn stake_persona_and_submit_bond(
                     Ok(o) => {
                         outcome = Some(o);
                         break;
+                    }
+                    // Fill first (WSS-Q4): the bond owes every final shard, and
+                    // which shards are final is the persona scan's to know.
+                    // Run it to the horizon the fill named, then retry.
+                    Err(FirstStakeError::Fill(CompleteTreeFillError::ScanBehind {
+                        needed,
+                        ..
+                    })) => {
+                        eprintln!("persona scan behind the finality horizon {needed}; scanning");
+                        pscan_until(&arc, &pscan_seal, "the finality horizon", |s| {
+                            s.synced_height() >= needed
+                        })
+                        .await;
                     }
                     Err(FirstStakeError::Funding(detail)) => {
                         eprintln!("first-stake funding not ready ({detail}); mining more");
@@ -4473,6 +4494,28 @@ async fn stake_persona_and_submit_bond(
             let fee = AtomicUnits::from_raw(bond_fee);
             let mut sealed = false;
             for _ in 0..MAX_MINE_BATCHES {
+                // Fill first (WSS-Q4): the persona body store holds every
+                // named shard before anything durable is written, and the
+                // assembly takes only what a completed fill returns. A scan
+                // that has not reached a named shard's close runs on.
+                let filled = match super::Engine::fill_market(
+                    arc.clone(),
+                    &daemon.target(),
+                    holdings.clone(),
+                )
+                .await
+                {
+                    Ok(filled) => filled,
+                    Err(MarketFillError::ScanBehind { shard }) => {
+                        eprintln!("persona scan has not reached shard {shard}'s close; scanning");
+                        pscan_until(&arc, &pscan_seal, "the named shard's close", |s| {
+                            s.cursor().archival().close(shard).is_some()
+                        })
+                        .await;
+                        continue;
+                    }
+                    Err(e) => daemon.panic_with_log("fill the market bond's shards", e),
+                };
                 let (handle, ticket) = {
                     let g = arc.read().await;
                     let stake = g.stake_handle().expect("staker wallet has a stake engine");
@@ -4484,7 +4527,7 @@ async fn stake_persona_and_submit_bond(
                     arc.clone(),
                     handle,
                     ticket,
-                    holdings.clone(),
+                    filled,
                     fee,
                     &SpentRecordsDurablyPruned::for_test(),
                 )
@@ -4889,16 +4932,10 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // The persona serves its shard on its onion, through the same pinned
     // Tor, from the bond on: its endpoint is the bond record's.
     fixture.arc.write().await.prefs_mut().device.tor_binary_path = tor.display().to_string();
-    let serving = super::Engine::start_serving_if_staker(
-        fixture.arc.clone(),
-        &shekyl_rpc_transport::DaemonTarget::address(format!(
-            "http://127.0.0.1:{}",
-            daemon.rpc_port
-        )),
-    )
-    .await
-    .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
-    .expect("a staker with a confirmed bond starts a serving host");
+    let serving = super::Engine::start_serving_if_staker(fixture.arc.clone(), &daemon.target())
+        .await
+        .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
+        .expect("a staker with a confirmed bond starts a serving host");
     let serving_up = Instant::now() + TOR_READY;
     while serving.posture().is_none() {
         assert!(
@@ -5141,15 +5178,9 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .economy
             .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
     };
-    let claim_rpc = LocalNodeRpc::new(
-        &shekyl_rpc_transport::DaemonTarget::address(format!(
-            "http://127.0.0.1:{}",
-            daemon.rpc_port
-        )),
-        Duration::from_secs(10),
-    )
-    .await
-    .expect("loopback claim transport");
+    let claim_rpc = LocalNodeRpc::new(&daemon.target(), Duration::from_secs(10))
+        .await
+        .expect("loopback claim transport");
     let pruning_landed = SpentRecordsDurablyPruned::for_test();
     let mut receipt = None;
     let mut tip_before_claim = 0;
@@ -5941,15 +5972,9 @@ async fn e2e_release_accepted_and_connected() {
     // transport — the SAME fetch the seam rides. The positive balance here
     // is what makes the post-connect zero an observed *transition* rather
     // than a state that could have held all along.
-    let release_rpc = LocalNodeRpc::new(
-        &shekyl_rpc_transport::DaemonTarget::address(format!(
-            "http://127.0.0.1:{}",
-            daemon.rpc_port
-        )),
-        Duration::from_secs(10),
-    )
-    .await
-    .expect("loopback exit transport");
+    let release_rpc = LocalNodeRpc::new(&daemon.target(), Duration::from_secs(10))
+        .await
+        .expect("loopback exit transport");
     let before = fetch_claim_source_for(&release_rpc, fixture.persona_id)
         .await
         .expect("pre-submit record fetch");
@@ -6162,10 +6187,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
         Some(wallet),
     )
     .await;
-    let daemon_address = shekyl_rpc_transport::DaemonTarget::address(format!(
-        "http://127.0.0.1:{}",
-        daemon.rpc_port
-    ));
+    let daemon_address = daemon.target();
 
     // Pre-read: the positive balance that makes the post-connect zero a
     // transition (the PR-B walk's discipline).

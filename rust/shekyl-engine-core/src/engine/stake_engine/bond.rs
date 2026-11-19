@@ -7,9 +7,9 @@
 
 use kameo::message::{Context, Message};
 
+use crate::engine::holdings_fill::FilledHoldings;
 use shekyl_archival_bond_builder::build_join_market_vin;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
-use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_tx_builder::TreeContext;
 use shekyl_types::SigningPayloadHash;
@@ -56,7 +56,7 @@ pub(crate) struct AssembleBond {
     /// before assembly (typed contract #1). Must match `handle.p_slot()`.
     pub ticket: crate::engine::stake_persist::PersistedBondTicket,
     /// Holdings to bond; `bond_floor(holdings)` is recomputed inside.
-    pub holdings: HoldingsDescriptor,
+    pub holdings: FilledHoldings,
     /// The selected funding inputs (§3.2) with their assembled membership
     /// paths — public identity + public tree data only.
     pub funding: Vec<FundingInputContext>,
@@ -115,8 +115,12 @@ impl Message<AssembleBond> for StakeEngine {
         // construction plus a runtime A-1 equality check; deleting the on-vin
         // signature deleted the circularity, and the duplicate with it.)
         let endpoint = keys.onion_keypair().public_key();
-        let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone(), endpoint)
-            .map_err(StakeEngineError::BondBuild)?;
+        let built = build_join_market_vin(
+            keys.bond_post_keys(),
+            msg.holdings.descriptor().clone(),
+            endpoint,
+        )
+        .map_err(StakeEngineError::BondBuild)?;
         let hybrid_pk_bytes = built.vin().hybrid_public_key.clone();
         let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
         let credit_term = built.credit_term();

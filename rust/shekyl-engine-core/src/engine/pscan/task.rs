@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
-use shekyl_archival_retention::{BondPostKind, ARCHIVAL_REORG_DEPTH_BLOCKS};
+use shekyl_archival_retention::{effective_archival_reorg_depth_blocks, BondPostKind};
 use shekyl_engine_state::pscan_state::PScanState;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch};
 use tokio_util::sync::CancellationToken;
@@ -63,8 +63,12 @@ const DEFAULT_PSCAN_BATCH_BLOCKS: u64 = 128;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PScanConfig {
     /// Blocks below `tip` the scan stays behind — the finality horizon. Production
-    /// is `ARCHIVAL_REORG_DEPTH_BLOCKS` (the consensus const); a smaller value is a
-    /// weaker finality guarantee and must only be used in tests.
+    /// is the process's effective reorg cap
+    /// (`effective_archival_reorg_depth_blocks`: the genesis pin
+    /// `ARCHIVAL_REORG_DEPTH_BLOCKS`, or a regtest harness's armed lever), the
+    /// same cap consensus finalizes by, so every shard close the scan records
+    /// is final by consensus's rule. A smaller value is a weaker finality
+    /// guarantee and must only be used in tests.
     pub reorg_depth: BlockCount,
     /// Blocks per bounded scan-step. Must be `1..=MAX_SCAN_STEP_BLOCKS`.
     pub batch_blocks: u64,
@@ -74,7 +78,7 @@ impl PScanConfig {
     /// The production config: the consensus finality depth + the default batch.
     pub(crate) fn production() -> Self {
         Self {
-            reorg_depth: BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS),
+            reorg_depth: BlockCount::from_raw(effective_archival_reorg_depth_blocks()),
             batch_blocks: DEFAULT_PSCAN_BATCH_BLOCKS,
         }
     }
@@ -199,7 +203,7 @@ pub(crate) enum PScanTaskError {
     /// stored verified frontier, or a body did not match its committed hash.
     ///
     /// **This is unlike every other arm: it is fatal to the *task*, not just the
-    /// sweep.** The scan stays below `ARCHIVAL_REORG_DEPTH_BLOCKS`, so **given an
+    /// sweep.** The scan stays below the reorg cap (`reorg_depth`), so **given an
     /// honest tip** the verified frontier sits beneath the reorg horizon and an
     /// ordinary reorg cannot reach it — a mismatch is then a **beyond-finality
     /// anomaly**. That finality-depth is *conditional*: the horizon is `tip −
@@ -658,7 +662,7 @@ pub(crate) async fn run_pscan_task<B, S, Sched, D>(
             match &e {
                 // The served chain diverged from our *own sealed* verified frontier.
                 // Given an honest tip this is a beyond-finality anomaly (the frontier is
-                // below `ARCHIVAL_REORG_DEPTH_BLOCKS` of the *real* tip, so an ordinary
+                // below the reorg cap of the *real* tip, so an ordinary
                 // reorg can't reach it); under an over-claiming source it may instead be
                 // an ordinary reorg the too-high horizon let the frontier advance into
                 // — tip-honesty is posture/2d-2 (see `PScanTaskError::Exhaustiveness`).

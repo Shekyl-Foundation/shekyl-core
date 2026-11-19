@@ -1091,6 +1091,13 @@ use shekyl_engine_file::SafetyOverrides;
 use shekyl_types::PSlot;
 use tempfile::TempDir;
 
+/// The daemon target [`dummy_daemon`] names, for an entry that takes the
+/// wallet's daemon target (`first_stake`'s fill): paths under test refuse
+/// before anything reads it.
+pub(crate) fn dummy_node() -> shekyl_rpc_transport::DaemonTarget {
+    shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1")
+}
+
 /// A `DaemonClient` that never connects: paths under test short-circuit
 /// before any network I/O, and constructing the client attempts none.
 pub(crate) fn dummy_daemon() -> DaemonClient {

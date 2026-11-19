@@ -23,19 +23,19 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::MultisigSignerV2;
 pub use engine::{
     AcknowledgeOutcomeError, Capability, CapabilityInput, ChangePasswordError, CollectOutcome,
-    CollectUnstakedError, Credentials, CurveTreeIngestFault, DaemonClient, DaemonExpectation,
-    DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome, DrainToPrincipalError, Engine,
-    EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote, FirstStakeError,
-    FirstStakeOutcome, InFlightRecord, InFlightState, InputCount, IoError, KeyError, LocalRefresh,
-    MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle,
-    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
-    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
-    RefreshReorgEvent, RefreshSummary, ReportedOutcome, ReservationId, ScannableBlock, SendError,
-    SignerFault, SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput,
-    StakingLedgerSnapshot, StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome,
-    SubmitReceipt, SuppressedClass, TracingDiagnosticSink, TxDestination, TxHash, TxRecipient,
-    TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
-    DAEMON_METHODS,
+    CollectUnstakedError, CompleteTreeFillError, Credentials, CurveTreeIngestFault, DaemonClient,
+    DaemonExpectation, DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome,
+    DrainToPrincipalError, Engine, EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote,
+    FillFailure, FirstStakeError, FirstStakeOutcome, InFlightRecord, InFlightState, InputCount,
+    IoError, KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError,
+    OpenedEngine, OutputCount, PScanHandle, PScanStartError, PendingTx, PendingTxError,
+    PersistenceError, ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle,
+    RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
+    ReportedOutcome, ReservationId, ScannableBlock, SendError, SignerFault, SoloSigner,
+    StakeInError, StakePosture, StakedBalance, StakedOutput, StakingLedgerSnapshot,
+    StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SubmitReceipt, SuppressedClass,
+    TracingDiagnosticSink, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
+    TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial, DAEMON_METHODS,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The signing pass's fault, bounded, that [`SendError::Sign`] carries, and

@@ -280,6 +280,7 @@ pub(crate) mod drain_read;
 /// lineage tag and the persisted funding record.
 pub(crate) mod drain_select;
 pub mod held_sends;
+pub(crate) mod holdings_fill;
 /// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
 /// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
 /// never falls back to a remote/third-party node). §2b build invariant 3.
@@ -493,6 +494,7 @@ pub use submit::SubmitReceipt;
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
 pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome, StakePosture};
+pub use holdings_fill::{CompleteTreeFillError, FillFailure};
 // F-D2 aggregate drain-balance read error: two-armed (transient "syncing" vs.
 // non-transient state fault), re-exported flat so the wallet/GUI can match on
 // the arm across the command boundary without reaching into the `pub(crate)`

@@ -219,16 +219,13 @@ impl Message<EraseShards> for BodyStoreActor {
     }
 }
 
-/// Write a shard's frame. No production caller yet: fill (`WSS-Q4`) is not
-/// built; tests fill through this so they reach the store the way the
-/// serving path does.
-#[cfg(test)]
+/// Write a shard's frame (`WSS-Q4`): the fill's one write. The store writes
+/// it in one redb transaction, so a shard is held whole or not at all.
 pub(crate) struct PutShard {
     pub shard_id: ShardId,
     pub frame: Vec<u8>,
 }
 
-#[cfg(test)]
 impl Message<PutShard> for BodyStoreActor {
     type Reply = Result<(), StoreError>;
 
@@ -238,6 +235,23 @@ impl Message<PutShard> for BodyStoreActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.store().put_shard(msg.shard_id, &msg.frame)
+    }
+}
+
+/// Whether the store holds a shard's row (`WSS-Q17`'s held check).
+pub(crate) struct HoldsShard {
+    pub shard_id: ShardId,
+}
+
+impl Message<HoldsShard> for BodyStoreActor {
+    type Reply = Result<bool, StoreError>;
+
+    async fn handle(
+        &mut self,
+        msg: HoldsShard,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.store().holds(msg.shard_id)
     }
 }
 
@@ -283,6 +297,30 @@ impl BodyStoreHandle {
             .map_err(|e| format!("persona body store erase failed: {e:?}"))
     }
 
+    /// Write `frame` as `shard_id`'s body (`WSS-Q4`), whole or not at all.
+    ///
+    /// # Errors
+    ///
+    /// A store fault, or an owner that has stopped, as a diagnostic.
+    pub(crate) async fn put(&self, shard_id: ShardId, frame: Vec<u8>) -> Result<(), String> {
+        self.actor
+            .ask(PutShard { shard_id, frame })
+            .await
+            .map_err(|e| format!("persona body store write failed: {e:?}"))
+    }
+
+    /// Whether the store holds `shard_id`'s row.
+    ///
+    /// # Errors
+    ///
+    /// A store fault, or an owner that has stopped, as a diagnostic.
+    pub(crate) async fn holds(&self, shard_id: ShardId) -> Result<bool, String> {
+        self.actor
+            .ask(HoldsShard { shard_id })
+            .await
+            .map_err(|e| format!("persona body store read failed: {e:?}"))
+    }
+
     /// The non-owning form, for a weak stake-engine handle.
     pub(crate) fn downgrade(&self) -> WeakBodyStoreHandle {
         WeakBodyStoreHandle {
@@ -313,13 +351,7 @@ impl BodyStoreHandle {
     /// Fill a shard, as a test would before serving it.
     #[cfg(test)]
     pub(crate) async fn put_for_test(&self, shard_id: ShardId, frame: &[u8]) {
-        self.actor
-            .ask(PutShard {
-                shard_id,
-                frame: frame.to_vec(),
-            })
-            .await
-            .expect("put shard");
+        self.put(shard_id, frame.to_vec()).await.expect("put shard");
     }
 
     /// Open a shard the way the serving path does, awaited rather than
