@@ -257,6 +257,10 @@ def selftest() -> int:
         got = len(judge(runs, sts, threads, draft))
         if got != want:
             problems.append(f"judge, {label}: {got} reason(s), want {want}")
+    # A check named in EXCLUDED is not judged, even queued forever.
+    for name in EXCLUDED:
+        if judge(ok + [going(name, "queued")], [], 0, False):
+            problems.append(f"judge: {name!r} is in EXCLUDED and still refused the label")
     # Waiting: only a check the labelling may have started settles; one
     # running from before the label refuses it at once.
     t = "2026-11-19T22:10:24Z"
