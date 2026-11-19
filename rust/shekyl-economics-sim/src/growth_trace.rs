@@ -19,11 +19,11 @@ use std::fmt::{self, Write};
 
 use crate::block_space::FillStop;
 use crate::engine::SimParams;
-use crate::esr10::{arms, Arm};
+use crate::esr10::{arms, scenario_named, Arm};
 use crate::eup4::skl;
 use crate::honest_step::lower_median;
 use crate::rung_mix::RungTraffic;
-use crate::scenarios::{all_scenarios, BASELINE_STEADY_STATE};
+use crate::scenarios::BASELINE_STEADY_STATE;
 use crate::stage2::{a1_year_aggs_probed, kilobytes, BlockSeen, FoldProbe};
 
 /// The fold's horizon: two decades past the inherited baseline's crossing
@@ -212,11 +212,7 @@ fn runs(base: &SimParams) -> Vec<Run> {
 
 /// The baseline scenario, to [`TRACE_YEARS`].
 fn fold(params: &SimParams) -> Vec<Period> {
-    let mut config = all_scenarios(params).remove(0);
-    assert_eq!(
-        config.name, BASELINE_STEADY_STATE,
-        "the baseline is listed first"
-    );
+    let mut config = scenario_named(params, BASELINE_STEADY_STATE);
     config.sim_years = TRACE_YEARS;
     let mut probe = GrowthProbe {
         blocks_per_year: params.blocks_per_year(),
