@@ -93,8 +93,9 @@
 //! # No request logging, at any level
 //!
 //! Not the path, not the peer, not the timing. The only observables are
-//! six aggregate monotone counters with no per-request structure:
+//! seven aggregate monotone counters with no per-request structure:
 //! [`ServeCounterReader::served_count`], [`ServeCounterReader::refused_count`],
+//! [`ServeCounterReader::not_held_count`],
 //! [`ServeCounterReader::lookup_failure_count`],
 //! [`ServeCounterReader::sign_failure_count`],
 //! [`ServeCounterReader::late_sign_failure_count`],
@@ -395,6 +396,12 @@ impl PServeEndpoint {
         self.counters.refused_count()
     }
 
+    /// See [`ServeCounterReader::not_held_count`].
+    #[must_use]
+    pub fn not_held_count(&self) -> u64 {
+        self.counters.not_held_count()
+    }
+
     /// See [`ServeCounterReader::lookup_failure_count`].
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
@@ -674,7 +681,10 @@ async fn resolve(
     .await;
     match looked_up {
         Ok(Lookup::OutOfGate) => Resolved::Invalid,
-        Ok(Lookup::NotHeld) => Resolved::NotHeld,
+        Ok(Lookup::NotHeld) => {
+            counters.record_not_held();
+            Resolved::NotHeld
+        }
         Ok(Lookup::Held(body)) => Resolved::Held(Held {
             body,
             shard_id,
