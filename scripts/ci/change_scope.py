@@ -104,7 +104,10 @@ dependency, not by topic:
 The ownership table is the truth for `scripts/ci/**` and `.github/**`
 outside the workflow files, which own the jobs they define; the selftest
 holds the table to the tree (every tracked path claimed, no missing path or
-job, a job whose steps name a script is among its owners).
+job, a job whose steps name a script is among its owners). Outside those
+two directories a row whose path ends in `/` claims a whole directory
+(`contrib/depends/`, the depends jobs' tree): a file under it is the named
+jobs' and no crate's, unless a crate reads it.
 
 Usage:
   change_scope.py --base <sha> --head <sha>   # writes docs_only=…, rust_job=…,
@@ -150,6 +153,9 @@ WORKFLOW_DIR = ".github/workflows/"
 # The paths the ownership table claims. A workflow file owns its own jobs;
 # any other file under the workflows directory is a plain owned path.
 OWNED_DIRS = ("scripts/ci/", ".github/")
+# The directories the table claims by one row each (`<dir>/`), outside
+# OWNED_DIRS; the selftest holds the list to the table.
+CLAIMED_DIRS = ("contrib/depends/",)
 
 
 def is_workflow(path):
@@ -494,6 +500,13 @@ def read_owners(path=JOB_OWNERS):
     return owners
 
 
+def dir_claim(path, owners):
+    """The directory row (`<dir>/`) that claims `path`, the deepest one,
+    else None. Inside OWNED_DIRS every path has a row of its own."""
+    rows = [d for d in owners if d.endswith("/") and path.startswith(d)]
+    return max(rows, key=len) if rows and not path.startswith(OWNED_DIRS) else None
+
+
 def workflow_jobs(path):
     """The job ids a workflow file defines."""
     jobs, in_jobs = [], False
@@ -593,6 +606,13 @@ def rust_scope(files, inputs, trees, workspace, owners, workflows):
                 reasons.append(f"{f}: a file the Rust job runs")
             else:
                 reasons.append(f"{f}: owned by {', '.join(sorted(owners[f])) or 'no job'}")
+        elif (d := dir_claim(f, owners)) is not None:
+            claimed = True
+            if RUST_JOB in owners[d]:
+                job_run = True
+                reasons.append(f"{f}: under {d}, a directory the Rust job runs")
+            else:
+                reasons.append(f"{f}: under {d}, owned by {', '.join(sorted(owners[d])) or 'no job'}")
         readers = sorted(inputs.readers(f))
         for r in readers:
             if not place_reader(f, r):
@@ -972,7 +992,27 @@ def rust_selftest(inputs, trees):
     if missing:
         print(f"WRONG: {len(missing)} tracked path(s) have no row in {JOB_OWNERS}: {missing[:5]}")
         bad += 1
-    stale = [p for p in owners if p not in tracked]
+    dirs = sorted(p for p in owners if p.endswith("/"))
+    if tuple(dirs) != CLAIMED_DIRS:
+        print(f"WRONG: the directory rows of {JOB_OWNERS} are {dirs}, not CLAIMED_DIRS {list(CLAIMED_DIRS)}")
+        bad += 1
+    for d in dirs:
+        if d.startswith(OWNED_DIRS) or not any(t.startswith(d) for t in tree):
+            print(f"WRONG: directory row {d} is inside {OWNED_DIRS} or holds no tracked file")
+            bad += 1
+        else:
+            for path in sorted(t for t in tree if t.startswith(d)):
+                job, tests, reasons = rust_scope([path], inputs, trees, workspace, owners, workflows)
+                if tests == "all":
+                    print(f"WRONG: {path}, under directory row {d}, falls back to all: {reasons[-1]}")
+                    bad += 1
+                    break
+    if "contrib/depends/" in dirs:
+        job, tests, reasons = rust_scope(["contrib/depends/packages/boost.mk"], inputs, trees, workspace, owners, workflows)
+        if (job, tests) != ("skip", "none"):
+            print(f"WRONG: a depends package gave {job} {rust_tests_value(tests)}: {reasons}")
+            bad += 1
+    stale = [p for p in owners if p not in tracked and p not in dirs]
     if stale:
         print(f"WRONG: {len(stale)} row(s) in {JOB_OWNERS} name a path that is not tracked (or is a workflow file): {stale[:5]}")
         bad += 1

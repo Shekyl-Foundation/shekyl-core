@@ -4,7 +4,10 @@
 # scripts/ci/change_scope.py reads this to decide what a change must run, and
 # its --selftest holds the file to the tree: every tracked path has a row, no
 # row names a missing path or job, and a job whose steps name a script by
-# path is among that script's owners. Sorted by path.
+# path is among that script's owners. Sorted by path. Outside those two
+# directories, a row whose path ends in `/` claims a whole directory for
+# its jobs (change_scope.py's CLAIMED_DIRS): `contrib/depends/` is the
+# depends jobs' tree, not every crate's.
 .github/CODEOWNERS	none
 .github/FUNDING.yml	none
 .github/actions/build-randomx-v2-ref/action.yml	randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet
@@ -14,6 +17,7 @@
 .github/codeql/config.yml	codeql:analyze-rust
 .github/pull_request_template.md	none
 .github/workflows/release-tagged.yml.disabled	none
+contrib/depends/	depends:build-cross,depends:legs
 scripts/ci/_census.py	docs-gates:check-doc-links
 scripts/ci/_gfm_table.py	docs-gates:check-doc-links
 scripts/ci/change_scope.py	benchmarks:scope,build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,freshness:overlap,fuzz-harness:scope,grep-gates:grep-gates,rust-audit-test:changes
