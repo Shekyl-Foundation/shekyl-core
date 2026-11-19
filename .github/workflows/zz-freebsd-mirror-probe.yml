@@ -1,0 +1,32 @@
+# Scratch probe (not for merge): does a GitHub-hosted runner reach the
+# FreeBSD 14.4 base.txz on the official host and three community mirrors,
+# and do the bytes match depends' pinned SHA-256? Rick, 2026-11-19.
+name: scratch/freebsd-mirror-probe
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/zz-freebsd-mirror-probe.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: fetch and hash
+        run: |
+          pinned=769f60a6eea2938ad6b7943cfbcc17dfaf7d1f7ba59a32b869a00349302df853
+          for m in download.freebsd.org ftp11.FreeBSD.org ftp5.FreeBSD.org ftp2.uk.FreeBSD.org; do
+            for s in https http; do
+              case $m in download.freebsd.org) p=releases/amd64/14.4-RELEASE/base.txz ;; *) p=pub/FreeBSD/releases/amd64/14.4-RELEASE/base.txz ;; esac
+              t0=$(date +%s)
+              if curl -sSfL --connect-timeout 10 --max-time 300 -o fb.txz "$s://$m/$p" 2>err.txt; then
+                h=$(sha256sum fb.txz | cut -c1-64); n=$(stat -c %s fb.txz)
+                [ "$h" = "$pinned" ] && v=match || v=MISMATCH
+                echo "PROBE $m $s OK bytes=$n secs=$(( $(date +%s) - t0 )) sha256 $v"
+              else
+                echo "PROBE $m $s FAIL secs=$(( $(date +%s) - t0 )) $(head -c 120 err.txt)"
+              fi
+              rm -f fb.txz err.txt
+            done
+          done
