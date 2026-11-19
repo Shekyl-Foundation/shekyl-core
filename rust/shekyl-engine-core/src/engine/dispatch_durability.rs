@@ -29,8 +29,8 @@
 //!   ledger (`save_state` → `atomic_write_file`) under one write guard.
 //!   The minted bytes are the bytes the row stored. Only
 //!   [`Durability::Confirmed`] mints. A save that fails before the rename
-//!   undoes the record under the same guard. A rename whose parent-directory
-//!   fsync did not confirm leaves the applied record and mints nothing.
+//!   undoes the record under the same guard. A rename whose durability was
+//!   not confirmed leaves the applied record and mints nothing.
 //! - [`DurableTxBytes::from_fresh_seal`] — a claim, drain, release or bond
 //!   post whose pending-store save just returned [`Durability::Confirmed`].
 //! - [`DurableTxBytes::from_loaded_seal`] — a resend of bytes
@@ -124,8 +124,9 @@ pub(crate) trait LedgerCommit: Sync {
     /// Write `ledger` (`save_state`: tmp → fsync → rename → fsync parent).
     ///
     /// `Err` means the rename did not land: nothing new is on disk.
-    /// [`Durability::Unconfirmed`] means the rename landed and the parent
-    /// fsync missed: the write is applied, and the caller must not undo it.
+    /// [`Durability::Unconfirmed`] means the rename landed and its
+    /// durability was not confirmed (the parent fsync missed, or on Windows
+    /// the volume is not NTFS): the write is applied, and the caller must not undo it.
     /// Only [`Durability::Confirmed`] authorizes a broadcast.
     fn commit(&self, ledger: &WalletLedger) -> Result<Durability, PersistenceError>;
 }
@@ -219,16 +220,16 @@ pub(crate) fn restore_unless_saved(
 pub(crate) fn require_confirmed(durability: Durability) -> Result<(), PersistenceError> {
     match durability {
         Durability::Confirmed => Ok(()),
-        Durability::Unconfirmed => Err(PersistenceError::DurabilityUnconfirmed),
+        Durability::Unconfirmed(why) => Err(PersistenceError::DurabilityUnconfirmed(why)),
     }
 }
 
 /// An applied write is enough: nothing will be broadcast on this save.
 ///
 /// Exhaustive so a third [`Durability`] variant has to choose a policy.
-pub(crate) fn accept_applied(durability: Durability) {
+pub(crate) fn accept_applied(durability: &Durability) {
     match durability {
-        Durability::Confirmed | Durability::Unconfirmed => {}
+        Durability::Confirmed | Durability::Unconfirmed(_) => {}
     }
 }
 
@@ -268,7 +269,7 @@ pub(crate) enum VerdictEdit {
 /// What [`commit_verdict`] did with a [`VerdictEdit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppliedVerdict {
-    /// The parent-directory fsync confirmed the edit.
+    /// The save confirmed the edit durable.
     pub saved: bool,
     /// The already-in-chain claim sits at or behind the synced height,
     /// so the caller enqueues a targeted rescan after releasing this guard.
@@ -289,8 +290,9 @@ pub(crate) fn commit_verdict<C: LedgerCommit + ?Sized>(
 ) -> AppliedVerdict {
     let saved = match commit_keeping(wallet, commit, |wallet| apply_verdict(wallet, edit)) {
         Ok(Durability::Confirmed) => true,
-        Ok(Durability::Unconfirmed) => {
+        Ok(Durability::Unconfirmed(why)) => {
             tracing::warn!(
+                %why,
                 "submit: the verdict stands, but saving it was not confirmed; \
                  the next save writes it"
             );
@@ -343,10 +345,9 @@ fn apply_verdict(wallet: &mut WalletLedger, edit: VerdictEdit) {
 pub(crate) enum ReleasePersistence {
     /// No row held a lock. Nothing was written.
     Unchanged,
-    /// The release is on disk and the parent-directory fsync confirmed it.
+    /// The release is on disk and the save confirmed it durable.
     Confirmed,
-    /// The release was applied and the parent-directory fsync did not
-    /// confirm it. The in-memory rows match that applied write.
+    /// The release was applied and its durability was not confirmed. The in-memory rows match that applied write.
     Unconfirmed,
     /// The save failed before the rename. The rows were restored.
     NotSaved,
@@ -403,8 +404,9 @@ pub(crate) fn commit_release<C: LedgerCommit + ?Sized>(
         }
     }) {
         Ok(Durability::Confirmed) => ReleasePersistence::Confirmed,
-        Ok(Durability::Unconfirmed) => {
+        Ok(Durability::Unconfirmed(why)) => {
             tracing::warn!(
+                %why,
                 "watchdog: the release of a send that will not confirm was applied \
                  but not confirmed; the next confirmed save writes it"
             );
@@ -451,7 +453,7 @@ pub(crate) struct DispatchRecord {
 ///
 /// A save that fails before the rename undoes the record under the same
 /// guard ([`WalletLedger::undo_unsaved_dispatch`]). A rename whose
-/// parent-directory fsync did not confirm leaves the applied record: the
+/// durability was not confirmed leaves the applied record: the
 /// write is already on disk, and undoing it in memory would diverge from
 /// that disk. Either outcome mints nothing, so the bytes cannot leave.
 pub(crate) fn commit_dispatch<C: LedgerCommit + ?Sized>(
@@ -510,7 +512,11 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             match self.answer {
                 CommitAnswer::Confirmed => Ok(Durability::Confirmed),
-                CommitAnswer::Unconfirmed => Ok(Durability::Unconfirmed),
+                CommitAnswer::Unconfirmed => Ok(Durability::Unconfirmed(
+                    shekyl_engine_file::Unconfirmed::DirectoryNotSynced(std::io::Error::other(
+                        "test: the directory sync failed",
+                    )),
+                )),
                 CommitAnswer::Fail => Err(PersistenceError::WalletFile(
                     shekyl_engine_file::WalletFileError::Io(std::io::Error::other(
                         "test: save refused",
@@ -546,6 +552,23 @@ mod tests {
         assert!(wallet.tx_meta.tx_keys.contains_key(&[1; 32]));
     }
 
+    /// A save whose volume is not NTFS refuses the broadcast, and the
+    /// refusal names the volume's file system and tells the user to move
+    /// the wallet to an NTFS volume (Rick, 2026-11-18). Red edit: map the
+    /// reason to a unit refusal, and the message names neither.
+    #[test]
+    fn a_refusal_for_the_file_system_names_it_and_the_fix() {
+        let refused = require_confirmed(Durability::Unconfirmed(
+            shekyl_engine_file::Unconfirmed::FileSystem("FAT32".to_owned()),
+        ))
+        .expect_err("an unconfirmed save authorizes no broadcast");
+        let message = refused.to_string();
+        assert!(
+            message.contains("FAT32") && message.contains("move the wallet to an NTFS volume"),
+            "{message}"
+        );
+    }
+
     #[test]
     fn a_failed_save_mints_nothing_and_undoes_the_record() {
         let mut wallet = WalletLedger::empty();
@@ -570,7 +593,7 @@ mod tests {
         let result = commit_dispatch(&mut wallet, &commit, dispatch_record([3; 32], vec![4, 5]));
         assert!(matches!(
             result,
-            Err(PersistenceError::DurabilityUnconfirmed)
+            Err(PersistenceError::DurabilityUnconfirmed(_))
         ));
         assert_eq!(wallet.send_journal.tx_bytes(&[3; 32]), Some(&[4u8, 5][..]));
         assert!(wallet.tx_meta.tx_keys.contains_key(&[3; 32]));

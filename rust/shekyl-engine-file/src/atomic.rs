@@ -3,7 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Atomic file-write helper: `tmp → fsync → rename → fsync(parent)`.
+//! Atomic file-write helper: `staged → fsync → rename → fsync(parent)`,
+//! through the tree's one file replace.
 //!
 //! The wallet envelope doesn't care about torn writes; the orchestrator
 //! does. Every on-disk mutation of `.wallet.keys` or `.wallet` must
@@ -12,106 +13,88 @@
 //! centralizes the pattern so the orchestrator has one, and only one,
 //! code path that can create or replace a wallet artifact.
 //!
-//! # The six steps
+//! # The steps
 //!
-//! 1. **Create a sibling temp file** with a random suffix, opened
-//!    `O_CREAT | O_EXCL | O_WRONLY`, mode `0o600`. "Sibling" (same
+//! The file is replaced through [`StagedWrite`] from `shekyl-os-account`,
+//! the one place the tree replaces a file (Rick, 2026-11-18). It is a
+//! [`Replace`]: nothing names the staged file, so a failed commit removes
+//! it and the next write of the same target removes one a crash left.
+//!
+//! 1. **Create the staged file** `<target name>.new` beside the target
+//!    ([`staged_path`]), `O_CREAT | O_EXCL`, mode `0o600` on Unix and the
+//!    directory's inherited ACL on Windows ([`Access::Private`]). On
+//!    Windows it is created write-through and that one handle writes,
+//!    renames and flushes it (`shekyl_win_sec::replace::Staged`). A
+//!    leftover from a crashed write is removed first. "Beside" (same
 //!    parent directory) matters: POSIX `rename(2)` is only guaranteed
-//!    atomic within a filesystem, and in practice within a mount. We
-//!    use [`tempfile::Builder`] to get the exclusive-open guarantees
-//!    and random suffix for free.
-//! 2. **Write all bytes** into the temp file. A short write is treated
-//!    as an error; we never leave a partial temp behind.
-//! 3. **`fsync(fd)`** on the temp file to push the bytes to durable
-//!    media *before* the rename. This is the step that earns "atomic
-//!    durability": after it returns, a crash between rename and the
-//!    parent fsync will still land the complete new contents under the
-//!    target name on reboot (subject to the usual caveats about
-//!    filesystem journaling modes).
-//! 4. **`rename(tmp, target)`**. Atomic on POSIX within a filesystem.
-//!    The staged file is first `TempPath::keep`-ed so the drop guard
-//!    doesn't try to unlink the just-renamed file — and, on Windows,
-//!    because `keep` is what clears `FILE_ATTRIBUTE_TEMPORARY` (see
-//!    *Why not `persist`* below).
-//! 5. **`fsync(parent_dir)`**. Without this, the rename is not
-//!    guaranteed durable across a crash on ext4/xfs/btrfs even though
-//!    the file data is; the dirent entry pointing `target` at the new
-//!    inode may still be buffered in the dcache. This step runs *after*
-//!    the rename has committed, so its failure does not un-apply the
-//!    write — it is reported as [`Durability::Unconfirmed`], not an error.
-//! 6. **Return** [`Durability`]. A step-5 failure returns
-//!    `Ok(Durability::Unconfirmed)` — applied, durability unconfirmed.
+//!    atomic within a filesystem, and in practice within a mount.
+//! 2. **Write all bytes** into it and **`fsync`** it, then sync its
+//!    directory, *before* the rename. This is the step that earns
+//!    "atomic durability": a crash between the rename and the parent
+//!    fsync still lands the complete new contents under the target name on
+//!    reboot (subject to the usual caveats about filesystem journaling
+//!    modes).
+//! 3. **The hook** ([`atomic_write_file_with`]) runs on the complete,
+//!    synced staged file: password rotation locks it here.
+//! 4. **Rename** the staged file over the target. On Unix this is
+//!    `rename(2)`. On Windows it is `shekyl_win_sec::replace`: a rename
+//!    through the staged file's handle with `FileRenameInfoEx`, replace-if-
+//!    exists and POSIX semantics, so a target another handle holds open or
+//!    under a byte-range lock (the keys file during password rotation) is
+//!    superseded rather than refused; a reader that holds the target
+//!    without delete sharing (a scanner) is waited for up to
+//!    `REPLACE_WAIT`, and one that tries to open the staged file without
+//!    delete sharing fails its own open; FAT32 and exFAT take the classic
+//!    rename, where replacing a held target fails.
+//! 5. **Confirm the rename.** On Unix, `fsync(parent_dir)`. Without this,
+//!    the rename is not guaranteed durable across a crash on ext4/xfs/btrfs
+//!    even though the file data is; the dirent entry pointing `target` at
+//!    the new inode may still be buffered in the dcache. On Windows there
+//!    is no directory to sync: the rename was a request on the
+//!    write-through handle, which NTFS documents flushing with it, and the
+//!    handle is flushed once more after it. This step runs *after* the
+//!    rename has committed, so its failure does not un-apply the write — it
+//!    is reported as [`Durability::Unconfirmed`] with its reason
+//!    ([`Unconfirmed`]), not an error. On Windows every file system but
+//!    NTFS is unconfirmed: a wallet there saves, and refuses to broadcast
+//!    (Rick, 2026-11-18).
 //!
-//!    On any failure between steps 1 and 4, **the guarantee is that the
-//!    target is byte-unchanged**, returned as `Err`. Removing the staged
-//!    file is *best-effort* and deliberately not part of that guarantee:
-//!    before the `keep` it is `tempfile`'s drop guard, which ignores unlink
-//!    errors, and after the `keep` disarms that guard it is this module's
-//!    own `remove_file`, which logs and continues. Either can leave a
-//!    `.<random>.shekyl-tmp` sibling behind. That is clutter, never a
-//!    wallet artifact — no caller reads a staged path — and it is
-//!    reported rather than silent, but a caller must not depend on its
-//!    absence. Saying "the staged file is removed" would promise something
-//!    neither owner delivers.
+//! On any failure before the rename lands, **the guarantee is that the
+//! target is byte-unchanged**, returned as `Err`. Removing the staged file
+//! is *best-effort* and deliberately not part of that guarantee: a failed
+//! rename's own removal and a failed hook's removal can each fail, and a
+//! `<name>.new` left behind is clutter, never a wallet artifact — no
+//! reader opens a staged path, and the next write of that target removes
+//! it — but a caller must not depend on its absence.
+//!
+//! Every write stages and renames: the target is never read first to skip
+//! an unchanged write. A sealed file is an offline guessing target, and a
+//! read of it for comparison would hold its bytes in an unwiped buffer on
+//! every save; and [`Durability::Confirmed`] must mean this write's
+//! directory sync succeeded, which a skipped write never ran.
 //!
 //! # Why not `persist`
 //!
-//! Step 4 is `TempPath::keep` + [`std::fs::rename`], not
-//! `NamedTempFile::persist`. On Unix the two are equivalent. On Windows
-//! they differ twice, and both differences are load-bearing:
-//!
-//! 1. **`persist` cannot replace a file under a byte-range lock.** It
-//!    calls `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` and nothing else.
-//!    `std::fs::rename` calls the same thing *and*, on
-//!    `ERROR_ACCESS_DENIED` specifically, retries via
-//!    `SetFileInformationByHandle(FileRenameInfoEx)` with
-//!    `FILE_RENAME_FLAG_POSIX_SEMANTICS`, which supersedes the open
-//!    target instead of deleting it. Password rotation replaces
-//!    `.wallet.keys` while the wallet handle still holds `LockFileEx` on
-//!    byte 0 of it, so `persist` returned `ERROR_ACCESS_DENIED` (os
-//!    error 5) and **every password rotation on Windows failed**. The
-//!    `FileRenameInfoEx` path needs NTFS: on exFAT or a share that does
-//!    not support POSIX-semantics rename, rotation with a live lock
-//!    still fails, and that is a known limitation rather than a
-//!    regression.
-//! 2. **`keep` is where `FILE_ATTRIBUTE_TEMPORARY` is cleared.**
-//!    `Builder::tempfile_in` stages with that attribute, which asks the
-//!    cache manager to avoid writing the data back to mass storage while
-//!    cache is available — the usual case being a temp file that is
-//!    deleted soon after its handle closes. `rename` does **not** clear
-//!    it, so without the `keep` the attribute rides onto the target and a
-//!    permanent wallet artifact is left permanently marked temporary.
-//!
-//!    **It does not undo step 3.** `sync_all` is `FlushFileBuffers` on
-//!    Windows, which flushes unconditionally; a caching hint does not
-//!    override an explicit flush, and this write's durability is not at
-//!    risk either way. What the attribute misdescribes is the file's whole
-//!    subsequent life: it is false metadata on an artifact that is not
-//!    temporary, and it is a standing hint to the cache manager for any
-//!    later writer that does not flush explicitly. `tempfile` refuses to
-//!    persist a file still carrying it for the same reason, in `persist`'s
-//!    own first step, and `keep` performs exactly that call
-//!    (`SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`) — so keeping it is
-//!    also what makes this path behaviour-preserving against the `persist`
-//!    it replaced. Observed end state is byte-identical to `persist`'s
-//!    (attrs `0x20`, the same as any ordinary write).
-//!
-//! Neither difference is observable on Unix, where `imp::keep` is a
-//! no-op and `rename(2)` never cared about locks — which is why this
-//! path survived to ship.
+//! `NamedTempFile::persist` (and the tree-wide ban on it, `rust/clippy.toml`)
+//! is `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` alone on Windows, which is
+//! refused with `ERROR_ACCESS_DENIED` over a target under a byte-range lock:
+//! password rotation replaces `.wallet.keys` while the wallet handle holds
+//! `LockFileEx` on byte 0 of it, so through `persist` **every password
+//! rotation on Windows failed**. The handle rename in step 4 supersedes the
+//! locked target. A tempfile also stages with `FILE_ATTRIBUTE_TEMPORARY`,
+//! which a rename carries onto the target; the staged file here is a plain
+//! create and never carries it.
 //!
 //! # Platform notes
 //!
-//! - On POSIX we `fsync(2)` both the file and the parent directory FD
-//!   (the latter opened via `std::fs::File::open` and synced with
-//!   `sync_all`). On Windows there is no directory-fsync;
-//!   [`std::fs::File::sync_all`] on the file is sufficient per Windows'
-//!   durability model. The parent fsync is therefore a no-op on
-//!   Windows (implemented as a `#[cfg]`-gated helper).
+//! - On POSIX the file and the parent directory are both `fsync`ed. On
+//!   Windows there is no directory-fsync; what confirms the rename there is
+//!   the write-through creating handle on NTFS, with `FlushFileBuffers`
+//!   after the rename as a second layer Microsoft does not document for
+//!   renames (`shekyl_win_sec::replace`'s module docs).
 //! - `rename(2)` across mount points returns `EXDEV`, which we surface
-//!   unchanged as an `io::Error`. Callers who want atomic installation
-//!   across a mount boundary must copy-then-write within the target
-//!   mount.
+//!   unchanged as an `io::Error`. It cannot arise here: the staged file is
+//!   beside the target.
 //!
 //! # What this module does *not* do
 //!
@@ -127,67 +110,176 @@
 //!   invariant (see [`crate::error::WalletFileError::KeysFileWriteOnceViolation`])
 //!   unrelated to whether the write itself is atomic.
 
-use std::fs::File;
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
+
+use shekyl_os_account::private_file::{
+    self, staged_path, Access, CommitError, Replace, Sharing, StagedWrite,
+};
 
 use crate::error::WalletFileError;
 
 /// Whether an [`atomic_write_file`] that **applied** its write also confirmed
 /// the write's crash-durability.
 ///
-/// The write's *data* is always fsynced before the rename, so `Unconfirmed`
-/// means only that the post-rename parent-directory fsync — which hardens the
-/// rename itself against an immediate crash — failed. The bytes are on disk
-/// and the rename is visible; only a crash in the narrow window before the
-/// filesystem journals the directory entry could revert the rename (the same
-/// window any program that does not fsync the parent dir already lives with).
+/// The write's *data* is always flushed before the rename, so `Unconfirmed`
+/// means only that the rename itself is not confirmed against an immediate
+/// crash: on Unix the post-rename parent-directory fsync failed; on Windows
+/// the volume is not NTFS, or the confirmation failed otherwise
+/// ([`Unconfirmed`]). The bytes are on disk and the rename is visible.
 ///
 /// The dispatch mint branches on it: only [`Durability::Confirmed`] authorizes
 /// a broadcast (`commit_dispatch`). It is deliberately not an error: the write
 /// is applied, so surfacing it as `Err` would force every caller to unwind an
 /// already-committed write. A caller that does not broadcast treats either
 /// variant as success.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Durability {
-    /// The write is applied and the parent-directory fsync succeeded.
+    /// The write is applied and its rename confirmed durable: the
+    /// parent-directory fsync on Unix; on Windows an NTFS volume, the POSIX
+    /// rename through the write-through handle, and the flush after it.
     Confirmed,
-    /// The write is applied, but the post-rename parent-directory fsync
-    /// failed — durability across an immediate crash is unconfirmed.
-    Unconfirmed,
+    /// The write is applied, but its durability across an immediate crash
+    /// is unconfirmed, for this reason.
+    Unconfirmed(Unconfirmed),
 }
 
-/// Write `bytes` to `target` using the six-step atomic dance described
-/// in the module docs. Mode is `0o600` on Unix; inherit-default on
-/// Windows.
+/// Why a wallet write that was applied is not confirmed durable. Its
+/// `Display` is the user's sentence: what happened, and the fix.
 ///
-/// Returns [`Durability`] once the write is **applied** (the `rename(2)` has
-/// landed): `Confirmed` when the parent-directory fsync also succeeded,
-/// `Unconfirmed` when it did not. A failure *before* the rename leaves the
+/// Each cause is its own variant, so the wallet RPC answers each with its
+/// own code and advice (Rick, 2026-11-18): a volume Windows does not
+/// confirm is a move to NTFS, a disk that failed a step is an I/O error.
+#[derive(Debug)]
+pub enum Unconfirmed {
+    /// The parent directory's sync after the rename failed (Unix).
+    DirectoryNotSynced(io::Error),
+    /// The wallet's volume has this file system, on which Windows does not
+    /// confirm a save survives a power loss: anything but NTFS (`FAT32`,
+    /// `exFAT`, `ReFS`, ...).
+    FileSystem(String),
+    /// The volume is NTFS, but it refused the rename Windows confirms and
+    /// the classic rename replaced the file.
+    ClassicRename,
+    /// The flush after the rename failed (Windows).
+    Flush(io::Error),
+    /// The volume's file system could not be read (Windows).
+    FileSystemUnread(io::Error),
+    /// A file a previous process left was renamed through a handle that
+    /// does not write through (Windows). A wallet write stages a fresh file
+    /// through its creating handle every time, so it never reports this;
+    /// the variant keeps the replace's answer whole.
+    Reopened,
+}
+
+impl Unconfirmed {
+    /// The wallet volume's file system, when that is the reason.
+    #[must_use]
+    pub fn file_system(&self) -> Option<&str> {
+        match self {
+            Self::FileSystem(name) => Some(name),
+            Self::DirectoryNotSynced(_)
+            | Self::ClassicRename
+            | Self::Flush(_)
+            | Self::FileSystemUnread(_)
+            | Self::Reopened => None,
+        }
+    }
+
+    /// The disk's error, when a step after the rename failed with one.
+    #[must_use]
+    pub fn io_error(&self) -> Option<&io::Error> {
+        match self {
+            Self::DirectoryNotSynced(error)
+            | Self::Flush(error)
+            | Self::FileSystemUnread(error) => Some(error),
+            Self::FileSystem(_) | Self::ClassicRename | Self::Reopened => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Unconfirmed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DirectoryNotSynced(error) => write!(
+                f,
+                "the wallet was saved, but its folder could not be synced to disk ({error}), \
+                 so the save may not survive a power cut"
+            ),
+            Self::FileSystem(name) => write!(
+                f,
+                "the wallet is on a {name} volume, where Windows cannot confirm that a save \
+                 survives a power cut; move the wallet to an NTFS volume"
+            ),
+            Self::ClassicRename => f.write_str(
+                "the wallet was saved, but its drive refused the rename Windows can confirm, \
+                 so the save may not survive a power cut; move the wallet to a local NTFS drive",
+            ),
+            Self::Flush(error) => write!(
+                f,
+                "the wallet was saved, but flushing it to disk failed ({error}), so the save \
+                 may not survive a power cut"
+            ),
+            Self::FileSystemUnread(error) => write!(
+                f,
+                "the wallet was saved, but its drive's file system could not be read ({error}), \
+                 so the save is not confirmed"
+            ),
+            Self::Reopened => f.write_str(
+                "the wallet was saved through a file left by an earlier start, which Windows \
+                 does not confirm survives a power cut",
+            ),
+        }
+    }
+}
+
+impl From<private_file::Durability> for Durability {
+    fn from(durability: private_file::Durability) -> Self {
+        use private_file::Unconfirmed as Why;
+        match durability {
+            private_file::Durability::Durable => Self::Confirmed,
+            private_file::Durability::Unconfirmed(why) => Self::Unconfirmed(match why {
+                Why::FileSystem(name) => Unconfirmed::FileSystem(name),
+                Why::ClassicRename => Unconfirmed::ClassicRename,
+                Why::Flush(error) => Unconfirmed::Flush(error),
+                Why::FileSystemUnread(error) => Unconfirmed::FileSystemUnread(error),
+                Why::Reopened => Unconfirmed::Reopened,
+            }),
+        }
+    }
+}
+
+/// Write `bytes` to `target` through the steps in the module docs. Mode is
+/// `0o600` on Unix; the directory's inherited ACL on Windows.
+///
+/// Returns [`Durability`] once the write is **applied** (the rename has
+/// landed): `Confirmed` when the rename is confirmed durable,
+/// `Unconfirmed` with its reason when it is not. A failure *before* the rename leaves the
 /// target untouched and returns `Err`.
 ///
 /// # Errors
 ///
 /// - [`WalletFileError::Io`] for a filesystem failure while **producing**
-///   the staged file: create, write, or fsync of the temp.
-/// - [`WalletFileError::AtomicWriteFinalizeStaged`] for a failure to
-///   finalize the staged file for the swap (the `FILE_ATTRIBUTE_TEMPORARY`
-///   clear; Unix-unreachable). No `rename(2)` was attempted.
+///   the staged file: removing a leftover, create, write, or fsync.
+/// - [`WalletFileError::HeldOpen`] when another program held a file the
+///   Windows replace needs (a leftover staged file, or the target) past
+///   its wait: a scanner or an indexer, whose remedy is not the disk's.
 /// - [`WalletFileError::AtomicWriteRename`] specifically for failures
-///   of the `rename(2)` step. The dedicated variants exist so callers
-///   can distinguish "couldn't write the bytes" from "wrote the bytes
-///   but couldn't swap them in" — the latter means the target is
-///   untouched, which is sometimes recoverable.
+///   of the rename step otherwise. The dedicated
+///   variant exists so callers can distinguish "couldn't write the bytes"
+///   from "wrote the bytes but couldn't swap them in" — the latter means
+///   the target is untouched, which is sometimes recoverable.
 ///
 /// Every error path leaves the target **byte-unchanged**; a post-rename
 /// failure is reported as `Ok(Durability::Unconfirmed)`, never as `Err`.
 /// Removal of the staged file is best-effort on every path (see the
-/// module docs, step 6) and is not part of the contract.
+/// module docs) and is not part of the contract.
 pub(crate) fn atomic_write_file(
     target: &Path,
     bytes: &[u8],
 ) -> Result<Durability, WalletFileError> {
-    atomic_write_file_with(target, bytes, |_| Ok(())).map(|((), durability)| durability)
+    write_through_staged(target, bytes, Sharing::Read, |_| Ok(()))
+        .map(|((), durability)| durability)
 }
 
 /// [`atomic_write_file`] with a hook that runs after the staged file is
@@ -199,140 +291,110 @@ pub(crate) fn atomic_write_file(
 /// The one caller is password rotation, which locks the staged file here
 /// so the keys-file lock follows the inode the path is about to name.
 ///
+/// The staged file is created with [`Sharing::ReadWrite`]: the lock is
+/// taken through a second handle the hook opens for reading and writing,
+/// which the creating handle's default, read sharing, refuses on Windows.
+/// [`atomic_write_file`], which has no hook, keeps the default.
+///
 /// # Errors
 ///
-/// Exactly [`atomic_write_file`]'s. A finalize or rename failure drops the
-/// hook's value along with the error; the target is untouched in both cases.
+/// Exactly [`atomic_write_file`]'s, and the hook's own. A hook or rename
+/// failure removes the staged file (best-effort) and leaves the target
+/// untouched; a rename failure drops the hook's value with the error.
 pub(crate) fn atomic_write_file_with<T>(
     target: &Path,
     bytes: &[u8],
     before_persist: impl FnOnce(&Path) -> Result<T, WalletFileError>,
 ) -> Result<(T, Durability), WalletFileError> {
-    let parent = target.parent().ok_or_else(|| {
-        WalletFileError::Io(io::Error::new(
+    write_through_staged(target, bytes, Sharing::ReadWrite, before_persist)
+}
+
+/// The steps in the module docs, the staged file shared as `sharing` says.
+fn write_through_staged<T>(
+    target: &Path,
+    bytes: &[u8],
+    sharing: Sharing,
+    before_persist: impl FnOnce(&Path) -> Result<T, WalletFileError>,
+) -> Result<(T, Durability), WalletFileError> {
+    if target.parent().is_none() {
+        return Err(WalletFileError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
                 "atomic_write_file: target {} has no parent directory",
                 target.display()
             ),
-        ))
-    })?;
-    // tempfile in the parent dir → same filesystem → rename(2) atomic.
-    // Random suffix → two processes writing concurrently don't collide.
-    let tmp = tempfile::Builder::new()
-        .prefix(".")
-        .suffix(".shekyl-tmp")
-        .rand_bytes(12)
-        .tempfile_in(parent)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(tmp.path(), perms)?;
+        )));
     }
-
-    {
-        let file_ref = tmp.as_file();
-        let mut w: &File = file_ref;
-        w.write_all(bytes)?;
-        w.flush()?;
-        file_ref.sync_all()?;
-    }
+    let staged = StagedWrite::<Replace>::create_with(target, bytes, Access::Private, sharing)
+        .map_err(staging_error)?;
 
     // The staged file is complete and durable; the caller may now attach
-    // whatever must travel with it into place (the keys-file lock). If this
-    // fails, `tempfile` unlinks the staged file and the target is untouched.
-    let staged = before_persist(tmp.path())?;
-
-    // Persist into place. This is deliberately NOT `NamedTempFile::persist`,
-    // and the difference is load-bearing on Windows — see the module docs,
-    // *Why not `persist`*.
-    //
-    // `keep()` is the attribute clear (`SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`
-    // on Windows, a no-op on Unix). It is guarded: a failure to clear returns
-    // `Err`, and the `TempPath` rides inside that error, so its drop guard is
-    // still armed and still *attempts* the unlink — best-effort, like every
-    // other cleanup path here (the guard ignores unlink errors). The target is
-    // untouched either way, which is the part that is guaranteed.
-    let staged_path = tmp.into_temp_path();
-    let kept = staged_path
-        .keep()
-        .map_err(|e| WalletFileError::finalize_staged(target.to_path_buf(), e.error))?;
-
-    // `keep()` disarmed `tempfile`'s cleanup, so from here the staged file is
-    // ours. `persist` used to carry the `NamedTempFile` inside its error and
-    // clean up on drop; nothing does that now, and without this arm every
-    // failed rotation would strand a `.<random>.shekyl-tmp` beside the wallet.
-    if let Err(e) = std::fs::rename(&kept, target) {
-        // Drop the hook's value before attempting the unlink. For password
-        // rotation `staged` is a `KeysFileLock` holding an open, byte-0-locked
-        // handle on the file we are about to remove.
-        //
-        // **This is hygiene, not a bug fix, and the distinction was measured
-        // rather than assumed.** On Windows 11 23H2 / NTFS the unlink succeeds
-        // with that lock still alive: Rust's std opens files with
-        // `FILE_SHARE_DELETE`, and a `LockFileEx` byte range does not block
-        // deletion. So the ordering is not load-bearing today — the tempting
-        // claim that a live handle is what would block the cleanup is false
-        // here, and was tested before being written down.
-        //
-        // It stays because "correct until a share mode changes underneath you"
-        // is a poor thing for a cleanup path to depend on, and `staged` has no
-        // use whatever on a path that returns `Err`.
-        drop(staged);
-        if let Err(cleanup) = std::fs::remove_file(&kept) {
-            // Best-effort: the rename failure is the one the caller must see,
-            // and a stranded staged file is clutter rather than corruption —
-            // it is a sibling with a random `.shekyl-tmp` name, never the
-            // wallet itself. Reported so it is not silent.
-            tracing::warn!(
-                staged = %kept.display(),
-                error = %cleanup,
-                "could not remove the staged file after a failed rename"
-            );
+    // whatever must travel with it into place (the keys-file lock).
+    let hooked = match before_persist(&staged_path(target)) {
+        Ok(hooked) => hooked,
+        Err(error) => {
+            // Dropping a `StagedWrite` leaves its file; this write is not
+            // going to commit, so the file is removed here, best-effort (on
+            // Windows through the creating handle).
+            remove_staged(target, staged);
+            return Err(error);
         }
-        return Err(WalletFileError::rename(target.to_path_buf(), e));
-    }
+    };
 
-    // The rename above has already committed the new file into place, and the
-    // file data was fsynced before it. The parent-dir fsync only hardens the
-    // rename against an immediate crash; if it fails the write is still
-    // applied, so this is a completed write with unconfirmed durability — not
-    // a failure a caller must unwind an already-applied write around. Report
-    // it in the return value instead of as an error.
-    match fsync_parent_dir(parent) {
-        Ok(()) => Ok((staged, Durability::Confirmed)),
-        Err(_) => Ok((staged, Durability::Unconfirmed)),
+    // A `Replace` whose rename fails removes its own staged file. The hook's
+    // value (for password rotation, a `KeysFileLock` holding a byte-0-locked
+    // handle on that staged file) is still alive during that removal and is
+    // dropped with the error: measured on Windows 11 23H2 / NTFS, an unlink
+    // succeeds with that lock alive (std opens files with `FILE_SHARE_DELETE`,
+    // and a `LockFileEx` byte range does not block deletion), and a removal
+    // that fails is left to the next write of the target.
+    match staged.commit() {
+        Ok(durability) => Ok((hooked, Durability::from(durability))),
+        // The rename has already committed the new file into place, and the
+        // file data was fsynced before it. The parent-dir fsync only hardens
+        // the rename against an immediate crash; if it fails the write is
+        // still applied, so this is a completed write with unconfirmed
+        // durability — not a failure a caller must unwind an already-applied
+        // write around.
+        Err(CommitError::Unsynced(_, error)) => Ok((
+            hooked,
+            Durability::Unconfirmed(Unconfirmed::DirectoryNotSynced(error)),
+        )),
+        Err(CommitError::Io(_, error)) => {
+            drop(hooked);
+            Err(WalletFileError::rename(target.to_path_buf(), error))
+        }
+        Err(CommitError::HeldOpen(held)) => {
+            drop(hooked);
+            Err(WalletFileError::HeldOpen(held))
+        }
     }
 }
 
-/// Platform-gated parent-directory fsync. POSIX: open the dir and
-/// `fsync` the fd. Windows: no-op (per Windows' durability model, the
-/// `sync_all` on the file suffices once the rename has completed).
-///
-/// Returns the raw `io::Error` (not a `WalletFileError`) so the sole caller
-/// classifies a failure as `Durability::Unconfirmed` rather than an error —
-/// this runs *after* the rename has committed, so the write is already
-/// applied.
-#[cfg(unix)]
-fn fsync_parent_dir(parent: &Path) -> io::Result<()> {
-    // `std::fs::File::open` on a directory is portable on all Unixes we
-    // care about (Linux, macOS, FreeBSD).
-    let dir = File::open(parent)?;
-    dir.sync_all()
+/// A staging failure in this crate's terms: another program holding a
+/// leftover staged file past the wait is [`WalletFileError::HeldOpen`], as
+/// it is at the rename; every other step's failure is the disk's
+/// [`WalletFileError::Io`].
+fn staging_error(error: CommitError) -> WalletFileError {
+    match error {
+        CommitError::HeldOpen(held) => WalletFileError::HeldOpen(held),
+        CommitError::Io(_, error) | CommitError::Unsynced(_, error) => WalletFileError::Io(error),
+    }
 }
 
-#[cfg(not(unix))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the Unix arm's signature: callers handle both platforms the same way"
-)]
-fn fsync_parent_dir(_parent: &Path) -> io::Result<()> {
-    // Windows NTFS guarantees rename durability after the file's
-    // sync_all; there is no directory-fsync equivalent, so the write is
-    // always `Durability::Confirmed` there.
-    Ok(())
+/// Remove the staged file of a write that will not commit. Best-effort: a
+/// stranded staged file is clutter rather than corruption — it is a
+/// `<name>.new` sibling, never the wallet itself, and the next write of the
+/// target removes it. Reported so it is not silent.
+fn remove_staged(target: &Path, staged: StagedWrite<Replace>) {
+    match staged.discard() {
+        Ok(()) => {}
+        Err(error) => tracing::warn!(
+            staged = %staged_path(target).display(),
+            error = %error,
+            "could not remove the staged file after a failed write"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -340,10 +402,14 @@ mod tests {
     use super::*;
     use crate::lock::KeysFileLock;
     use std::fs;
+    use std::fs::File;
+    use std::io::Write;
 
     /// Replacing a **locked** target is where `NamedTempFile::persist` and
     /// [`std::fs::rename`] diverge, and the module's *Why not `persist`*
-    /// section is written against this fact. On Windows `persist` issues
+    /// section (and the tree's ban on both, `rust/clippy.toml`) is written
+    /// against this fact. It calls them on purpose, to pin the platform
+    /// behaviour the one replace is chosen against. On Windows `persist` issues
     /// `MoveFileExW` alone and is refused with `ERROR_ACCESS_DENIED`; `rename`
     /// issues the same call and then retries through
     /// `SetFileInformationByHandle(FileRenameInfoEx)` with POSIX semantics,
@@ -354,7 +420,8 @@ mod tests {
     /// the wallet handle holds the lock on it, so the divergence is the
     /// difference between rotation working and **every rotation on Windows
     /// failing** — which is what it did until this module stopped using
-    /// `persist`.
+    /// `persist`. This module now replaces through the handle rename
+    /// directly ([`replaces_a_target_held_by_a_live_lock`]).
     ///
     /// The edit that turns the Windows `persist` arm red is `tempfile` gaining
     /// the fallback std already has, at which point the module doc's premise —
@@ -362,6 +429,11 @@ mod tests {
     /// std loses it, and rotation would be broken again. The POSIX arms go red
     /// if a mandatory lock ever appears there.
     #[test]
+    // CLIPPY: disallowed_methods — test support.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test support: pins how persist and std's rename behave over a locked target, the behaviour the one replace is chosen against"
+    )]
     fn replacing_a_locked_target_is_platform_dependent() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("x.keys");
@@ -423,18 +495,17 @@ mod tests {
         );
     }
 
-    /// The staged file is created by `tempfile` with `FILE_ATTRIBUTE_TEMPORARY`,
-    /// which asks the cache manager to avoid writing the data back while cache
-    /// is available. `rename` does **not** clear it — `TempPath::keep` does —
-    /// so without the `keep` a permanent wallet artifact is left permanently
-    /// marked temporary: false metadata, and a standing hint for any later
-    /// writer that does not flush explicitly. It does not undo this module's
-    /// own `sync_all`, which flushes unconditionally.
+    /// A `tempfile` staged file carries `FILE_ATTRIBUTE_TEMPORARY`, which asks
+    /// the cache manager to avoid writing the data back while cache is
+    /// available, and a rename carries it onto the target: a permanent wallet
+    /// artifact left permanently marked temporary is false metadata, and a
+    /// standing hint for any later writer that does not flush explicitly. The
+    /// staged file here is a plain create and never carries it.
     ///
     /// The reason this needs a test rather than a comment is that the failure
-    /// is **invisible in the bytes**: a `keep` refactored away as a cleanup
-    /// formality changes no content and no test that compares content. Only
-    /// the attribute moves, and only here.
+    /// is **invisible in the bytes**: a staging step that went back to a
+    /// temporary-file create changes no content and no test that compares
+    /// content. Only the attribute moves, and only here.
     #[cfg(windows)]
     #[test]
     fn the_target_is_never_left_marked_temporary() {
@@ -481,43 +552,33 @@ mod tests {
         drop(new_lock);
         assert_eq!(fs::read(&target).unwrap(), b"NEW");
 
-        // The staged file must not be left behind. `keep()` disarms
-        // `tempfile`'s cleanup, so nothing but this module's own error arm
-        // removes it — and on the success path the rename consumed it.
-        let strays: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .filter(|n| n.to_string_lossy().ends_with(".shekyl-tmp"))
-            .collect();
-        assert!(strays.is_empty(), "staged files left behind: {strays:?}");
+        // The staged file must not be left behind: on the success path the
+        // rename consumed it.
+        assert!(
+            !staged_path(&target).exists(),
+            "the staged file {} was left behind",
+            staged_path(&target).display()
+        );
     }
 
     /// A **failed** rename must still unlink the staged file.
     ///
-    /// This is the arm `keep()` created: it disarms `tempfile`'s drop guard, so
-    /// on the failure path nothing but this module's explicit `remove_file`
-    /// removes the staged file, and without it every failed write strands a
-    /// `.<random>.shekyl-tmp` beside the wallet. The success-path assertion in
+    /// A [`Replace`]'s failed commit removes its own staged file, and without
+    /// that every failed write strands a `<name>.new` beside the wallet until
+    /// the next write. The success-path assertion in
     /// [`replaces_a_target_held_by_a_live_lock`] cannot see this: there the
-    /// rename consumed the staged file, so deleting the cleanup arm would leave
+    /// rename consumed the staged file, so losing the removal would leave
     /// that test green.
     ///
-    /// A directory at the target is the portable way to make `rename` fail
-    /// after everything before it has succeeded — the staging, the write and the
-    /// fsync all complete, and only the swap is refused. The edit that turns
-    /// this red is deleting the `remove_file` call; observed red before being
-    /// trusted, with the stray file named in the failure message.
+    /// A non-empty directory at the target is the portable way to make the
+    /// rename fail after everything before it has succeeded — the staging, the
+    /// write and the fsync all complete, and only the swap is refused. The
+    /// edit that turns this red is staging the write as a `Journal`, whose
+    /// failed commit keeps its file.
     ///
-    /// **`AtomicWriteRename` means the rename on both platforms**, which is
-    /// what makes this test sound rather than merely suggestive. An earlier
-    /// form of this code mapped a `keep()` failure onto the same variant, and
-    /// then this doc had to admit that the Windows arm proved less than the
-    /// Unix one: a `keep()` failure leaves `tempfile`'s guard armed, so it does
-    /// the cleanup and the test would pass with the `remove_file` arm never
-    /// running. The fix was to the error model, not to the test — `keep()`
-    /// failures are now [`WalletFileError::AtomicWriteFinalizeStaged`], so
-    /// matching `AtomicWriteRename` pins the failing step everywhere and the
-    /// asymmetry is gone rather than documented.
+    /// **`AtomicWriteRename` means the rename on both platforms**: a failure
+    /// while producing the staged file is [`WalletFileError::Io`], so matching
+    /// `AtomicWriteRename` pins the failing step everywhere.
     ///
     /// The Unix arm additionally pins the errno (`EISDIR`/`ENOTDIR`). That is
     /// a refinement, not the load-bearing claim, and it stays Unix-only
@@ -528,23 +589,22 @@ mod tests {
     fn a_failed_rename_still_removes_the_staged_file() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("x.keys");
-        // A directory cannot be replaced by a file rename on either platform.
+        // A non-empty directory cannot be replaced by a file rename on either
+        // platform.
         fs::create_dir(&target).unwrap();
+        fs::write(target.join("occupied"), b"").unwrap();
 
         // The pre-persist hook is the only place the staged path is visible, and
         // capturing it is what makes this test name a file rather than scan for
         // a suffix. It also proves staging got as far as the hook: if the write
         // had failed earlier the hook would never run, `staged` would be `None`,
-        // and a suffix scan would have reported "no strays" for the wrong
-        // reason — the very fail-open shape this suite keeps finding.
+        // and a check for a stray would pass for the wrong reason.
         //
         // The hook also takes a real `KeysFileLock`, which is what password
         // rotation — the only production caller of this entry point — does, so
         // the test exercises the production shape rather than a stub that holds
-        // no handle. It is worth being clear about what that does *not* buy:
-        // measured on Windows, an open byte-0-locked handle does **not** block
-        // the unlink, so this arm passes with or without the `drop(staged)` it
-        // sits next to. It guards the shape, not that specific hazard.
+        // no handle. Measured on Windows, an open byte-0-locked handle does
+        // **not** block the unlink, so this guards the shape, not that hazard.
         let mut staged: Option<std::path::PathBuf> = None;
         let err = atomic_write_file_with(&target, b"NEW", |p| {
             staged = Some(p.to_path_buf());
@@ -555,12 +615,13 @@ mod tests {
 
         let staged = staged.expect(
             "the pre-persist hook never ran, so the failure was before staging and \
-             this test is not exercising the cleanup arm at all",
+             this test is not exercising the cleanup at all",
         );
+        assert_eq!(staged, staged_path(&target));
         let WalletFileError::AtomicWriteRename { ref source, .. } = err else {
             panic!(
                 "the failure must be the rename step, not an earlier one — otherwise \
-                 this test is not exercising the cleanup arm it exists for: {err:?}"
+                 this test is not exercising the cleanup it exists for: {err:?}"
             );
         };
         #[cfg(unix)]
@@ -573,8 +634,7 @@ mod tests {
                 matches!(source.raw_os_error(), Some(EISDIR | ENOTDIR)),
                 "expected a directory-conflict errno from `rename`, got {source} — \
                  a different code means the write failed somewhere other than the \
-                 swap, and `tempfile`'s guard would be doing the cleanup instead \
-                 of the arm under test"
+                 swap"
             );
         }
         #[cfg(windows)]
@@ -587,14 +647,76 @@ mod tests {
         );
     }
 
+    /// A hook that fails leaves the target untouched and removes the staged
+    /// file: dropping a `StagedWrite` leaves its file, so this module removes
+    /// it. Red edit: return the hook's error without `remove_staged`, and the
+    /// staged file is left beside the target.
+    #[test]
+    fn a_failed_hook_removes_the_staged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("x.keys");
+        fs::write(&target, b"OLD").unwrap();
+        let err = atomic_write_file_with(&target, b"NEW", |staged| -> Result<(), _> {
+            assert!(staged.exists(), "the hook sees the complete staged file");
+            Err(WalletFileError::Io(io::Error::other("the hook refused")))
+        })
+        .expect_err("the hook's failure is the write's");
+        assert!(matches!(err, WalletFileError::Io(_)), "{err:?}");
+        assert_eq!(fs::read(&target).unwrap(), b"OLD");
+        assert!(!staged_path(&target).exists());
+    }
+
+    /// A save on a FAT volume is applied and unconfirmed, and the refusal
+    /// a broadcast gives for it names the volume's file system and the fix,
+    /// an NTFS volume (Rick, 2026-11-18). Refuses, never passes, when the
+    /// variable is unset. Red edit: report `Confirmed` whatever the file
+    /// system, and the save is confirmed.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs SHEKYL_TEST_FAT_DIR: a directory on a FAT32 volume (a scratch VHD)"]
+    fn a_save_on_fat_is_unconfirmed_and_names_the_file_system() {
+        let Some(dir) = std::env::var_os("SHEKYL_TEST_FAT_DIR") else {
+            panic!("SHEKYL_TEST_FAT_DIR is unset: set it to a directory on a FAT32 volume");
+        };
+        let dir = tempfile::tempdir_in(dir).unwrap();
+        let target = dir.path().join("x.wallet");
+        let durability = atomic_write_file(&target, b"sealed").unwrap();
+        let Durability::Unconfirmed(why) = durability else {
+            panic!("a save on FAT was confirmed: {durability:?}");
+        };
+        let name = why
+            .file_system()
+            .expect("the reason is the volume's file system");
+        assert!(["FAT32", "FAT"].contains(&name), "the volume is {name}");
+        let refusal = why.to_string();
+        assert!(
+            refusal.contains(name) && refusal.contains("NTFS"),
+            "the refusal does not name the file system and the fix: {refusal}"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"sealed");
+    }
+
+    /// The file-system reason's sentence names the file system and the
+    /// fix, on every platform; the other reasons do not send the user to
+    /// NTFS. Red edit: drop the volume's name from the sentence.
+    #[test]
+    fn the_file_system_reason_names_it_and_the_fix() {
+        let fat = Unconfirmed::FileSystem("exFAT".to_owned()).to_string();
+        assert!(fat.contains("exFAT") && fat.contains("NTFS"), "{fat}");
+        let unsynced = Unconfirmed::DirectoryNotSynced(io::Error::other("EIO")).to_string();
+        assert!(!unsynced.contains("NTFS"), "{unsynced}");
+    }
+
     #[test]
     fn writes_to_fresh_target() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("foo.bin");
-        // A normal write on a healthy filesystem confirms durability.
-        assert_eq!(
-            atomic_write_file(&target, b"hello").unwrap(),
-            Durability::Confirmed
+        // A normal write on a healthy filesystem confirms durability (on
+        // Windows, the test directory on NTFS).
+        let durability = atomic_write_file(&target, b"hello").unwrap();
+        assert!(
+            matches!(durability, Durability::Confirmed),
+            "{durability:?}"
         );
         assert_eq!(fs::read(&target).unwrap(), b"hello");
     }

@@ -15,7 +15,9 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use serde::Serialize;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
+use shekyl_wire::transaction::COINBASE_RESERVE;
 
 use crate::engine::SimParams;
 use crate::eup4::release_multiplier_at;
@@ -34,12 +36,90 @@ pub(crate) struct StepRead {
     pub(crate) resting_ratio: f64,
 }
 
-/// The up edge, and the unclamped ratio's values over year 1 after the
-/// window's first fill.
+/// The up edge, and the unclamped ratio's values and the capacity over
+/// year 1 after the window's first fill.
 pub(crate) struct HonestStep {
     pub(crate) up: StepRead,
     /// Ratio, scaled, to the blocks that read it.
     pub(crate) year_one_ratios: BTreeMap<u64, u64>,
+    pub(crate) capacity: CapacityRead,
+}
+
+/// Year 1's room against its arrivals, after the window's first fill
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.35; Rick, 2026-11-16).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct CapacityRead {
+    /// The cap in transactions, least and most over the year: the
+    /// effective median less the coinbase reserve, over the Standard
+    /// rung's ordinary transaction at the block's depth.
+    pub cap: (u64, u64),
+    /// Percent of blocks whose own arrivals exceed the cap.
+    pub overflow_pct: f64,
+    /// Percent of blocks after which the pool still holds bodies.
+    pub backlog_pct: f64,
+    /// The lower-middle median of the transactions offered a block, and of
+    /// those it carried.
+    pub median_offered: u64,
+    pub median_carried: u64,
+}
+
+/// [`CapacityRead`]'s tally, block by block.
+#[derive(Default)]
+struct CapacityTally {
+    cap: Option<(u64, u64)>,
+    blocks: u64,
+    overflowed: u64,
+    backlogged: u64,
+    offered: BTreeMap<u64, u64>,
+    carried: BTreeMap<u64, u64>,
+}
+
+impl CapacityTally {
+    fn add(&mut self, seen: &BlockSeen<'_, '_>) {
+        let priced = seen.priced;
+        let reserve = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
+        let cap = priced
+            .medians
+            .effective_median
+            .to_raw()
+            .saturating_sub(reserve)
+            / priced.tx.weight;
+        self.cap = Some(
+            self.cap
+                .map_or((cap, cap), |(least, most)| (least.min(cap), most.max(cap))),
+        );
+        let offered = priced.filled.rungs.sum(|rung| rung.demand_txs);
+        let carried = priced.filled.carried_txs();
+        self.blocks += 1;
+        self.overflowed += u64::from(offered > cap);
+        self.backlogged += u64::from(priced.filled.waiting > 0);
+        *self.offered.entry(offered).or_insert(0) += 1;
+        *self.carried.entry(carried).or_insert(0) += 1;
+    }
+
+    fn read(&self) -> CapacityRead {
+        let share = |n: u64| 100.0 * n as f64 / self.blocks.max(1) as f64;
+        CapacityRead {
+            cap: self.cap.unwrap_or_default(),
+            overflow_pct: share(self.overflowed),
+            backlog_pct: share(self.backlogged),
+            median_offered: lower_median(&self.offered, self.blocks),
+            median_carried: lower_median(&self.carried, self.blocks),
+        }
+    }
+}
+
+/// The lower-middle median of `blocks` values held as value to count.
+fn lower_median(counts: &BTreeMap<u64, u64>, blocks: u64) -> u64 {
+    let rank = blocks.saturating_sub(1) / 2;
+    let mut seen = 0;
+    for (&value, &n) in counts {
+        seen += n;
+        if seen > rank {
+            return value;
+        }
+    }
+    0
 }
 
 struct Sample {
@@ -56,6 +136,7 @@ struct StepProbe<'p> {
     /// window's first fill: not an edge.
     counted: Range<u64>,
     year_one_ratios: BTreeMap<u64, u64>,
+    capacity: CapacityTally,
 }
 
 impl FoldProbe for StepProbe<'_> {
@@ -72,6 +153,7 @@ impl FoldProbe for StepProbe<'_> {
         if self.counted.contains(&seen.block) {
             let ratio = ratio_at(seen, self.params);
             *self.year_one_ratios.entry(ratio).or_insert(0) += 1;
+            self.capacity.add(seen);
         }
     }
 }
@@ -145,11 +227,13 @@ pub(crate) fn honest_step(params: &SimParams) -> HonestStep {
         samples: BTreeMap::new(),
         counted: TX_VOLUME_WINDOW..edge,
         year_one_ratios: BTreeMap::new(),
+        capacity: CapacityTally::default(),
     };
     a1_year_aggs_probed(params, &config, &mut probe);
     HonestStep {
         up: settle_up(&probe.samples, edge),
         year_one_ratios: probe.year_one_ratios,
+        capacity: probe.capacity.read(),
     }
 }
 
@@ -163,6 +247,19 @@ mod tests {
 
     /// A jump that is immediate in the blocks settles only once the window
     /// mean has covered 95 % of it. A flat series does not settle.
+    /// The lower-middle median of a tally: the value at rank
+    /// `(blocks − 1) / 2` counting from zero.
+    #[test]
+    fn the_lower_median_reads_the_middle_rank() {
+        let tally = BTreeMap::from([(3, 2), (5, 1), (9, 1)]);
+        assert_eq!(lower_median(&tally, 4), 3, "3 3 | 5 9");
+        assert_eq!(
+            lower_median(&BTreeMap::from([(3, 1), (5, 1), (9, 1)]), 3),
+            5
+        );
+        assert_eq!(lower_median(&BTreeMap::new(), 0), 0);
+    }
+
     #[test]
     fn the_window_mean_settles_when_it_covers_ninety_five_percent() {
         let edge = 10_000;

@@ -209,8 +209,8 @@ pub(crate) trait WatchdogHost: Send + Sync {
     /// through `commit` under the same ledger guard. The release frees
     /// inputs a new send can select, so it reaches disk before anything
     /// else can act on it. A save that fails before the rename puts the
-    /// locks back. A rename whose parent-directory fsync did not confirm
-    /// leaves the applied rows. **Release is not rebuild authorization.**
+    /// locks back. A rename whose durability was not confirmed leaves the
+    /// applied rows. **Release is not rebuild authorization.**
     fn release_awaiting_confirmation(
         &self,
         tx_hashes: &HashSet<TxHash>,
