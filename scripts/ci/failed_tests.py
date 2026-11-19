@@ -48,6 +48,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from workflow_pass import WORKFLOWS as PASS_WORKFLOWS  # noqa: E402
@@ -106,13 +107,26 @@ def gh(path: str) -> str:
     return subprocess.run(["gh", "api", path], check=True, capture_output=True, text=True).stdout
 
 
+def job_log(job_id: int) -> str:
+    """The job's log through the REST endpoint, not `gh api`: newer `gh`
+    refuses to print a body holding terminal escapes (a test runner's
+    colours) without a flag older `gh` does not know. The endpoint
+    redirects to a signed URL; the token is an unredirected header, so it
+    is not sent there."""
+    api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+    req = urllib.request.Request(f"{api}/repos/{os.environ['GITHUB_REPOSITORY']}/actions/jobs/{job_id}/logs")
+    req.add_unredirected_header("Authorization", f"Bearer {os.environ['GH_TOKEN']}")
+    req.add_header("Accept", "application/vnd.github+json")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
 def describe(job: dict) -> dict:
-    repo = os.environ["GITHUB_REPOSITORY"]
     try:
-        log = gh(f"repos/{repo}/actions/jobs/{job['id']}/logs")
-    except subprocess.CalledProcessError as e:
+        log = job_log(job["id"])
+    except OSError as e:
         log = ""
-        print(f"::warning::no log for job {job['id']} ({job['name']}): {e.stderr.strip()}", file=sys.stderr)
+        print(f"::warning::no log for job {job['id']} ({job['name']}): {e}", file=sys.stderr)
     return {
         "id": job["id"],
         "name": job["name"],
