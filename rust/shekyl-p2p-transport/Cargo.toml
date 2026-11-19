@@ -29,6 +29,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 gungraun = "0.19"
 rand = "0.8"
 shekyl-levin = { path = "../shekyl-levin" }
+# TEST-ONLY: the cover carrier's window size, for the test that a real and
+# a dummy window seal alike (`CVR-R3`).
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 
 [[bench]]
 name = "c5"

@@ -472,4 +472,67 @@ mod tests {
             "ac9785f15ea6b2a4eac23e7c168e34ca3aa62f35a5d84cdbc01eb822264aed4d43016f"
         );
     }
+
+    /// **What the cover carrier needs from the record layer** (`CVR-R3`;
+    /// Rick, 2026-11-15; `P2P_TRANSPORT_LAYER.md`, "What cover needs from
+    /// the record layer"): a real window and a dummy window seal to the
+    /// same wire length and spend the same nonces, so neither the bytes on
+    /// the wire nor the point at which the key turns over says which was
+    /// sent.
+    ///
+    /// Two sessions with the same pinned keys carry the two streams: one
+    /// seals carrier windows that hold a transaction, the other the
+    /// carrier's dummy. Each pair of records has one length. After any
+    /// count of windows, the same probe seals to the same bytes on both,
+    /// which holds only if both sit on the same key and the same nonce —
+    /// checked after one window and again past a rekey.
+    ///
+    /// Red edits: compress or pad by content in `seal_chunk` (the lengths
+    /// differ), skip the nonce or the rekey count for a dummy (the probes
+    /// differ), or count rekeys in real bytes only.
+    #[test]
+    fn a_real_and_a_dummy_window_seal_to_one_length_and_spend_the_same_nonces() {
+        use shekyl_levin::{
+            fragmented_notify, noise_notify, NewTransactions, PortableMap as _,
+            NOTIFY_NEW_TRANSACTIONS,
+        };
+        use shekyl_relay_privacy::params::carrier::WINDOW_BYTES;
+
+        let dummy = noise_notify(WINDOW_BYTES).expect("the carrier's dummy");
+        let payload = NewTransactions {
+            txs: vec![vec![0xA5; 1_500]],
+            padding: Vec::new(),
+            dandelionpp_fluff: false,
+        }
+        .store()
+        .expect("a stem");
+        let real = fragmented_notify(WINDOW_BYTES, NOTIFY_NEW_TRANSACTIONS, &payload)
+            .expect("the stem as the carrier frames it");
+        assert_eq!(real.len(), WINDOW_BYTES, "fixture: one window");
+        assert_eq!(dummy.len(), WINDOW_BYTES);
+        assert_ne!(real, dummy, "fixture: the two windows differ in content");
+
+        let (real_session, _, _, _) = pinned_pair();
+        let (dummy_session, _, _, _) = pinned_pair();
+        let (mut real_send, _) = real_session.split();
+        let (mut dummy_send, _) = dummy_session.split();
+
+        // Two nonces a record, so this many windows cross one rekey.
+        let past_a_rekey = usize::try_from(REKEY_NONCES / 2).expect("small") + 3;
+        for window in 0..past_a_rekey {
+            let a = real_send.seal(&real).unwrap();
+            let b = dummy_send.seal(&dummy).unwrap();
+            assert_eq!(a.len(), b.len(), "window {window}: one wire length");
+            assert_ne!(a, b, "window {window}: fixture, the contents differ");
+            if window == 0 || window + 1 == past_a_rekey {
+                // The probe itself spends the same nonces on both.
+                assert_eq!(
+                    real_send.seal(b"probe").unwrap(),
+                    dummy_send.seal(b"probe").unwrap(),
+                    "after {} window(s) the two streams are on different keys or nonces",
+                    window + 1
+                );
+            }
+        }
+    }
 }

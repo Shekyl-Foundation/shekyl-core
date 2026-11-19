@@ -350,6 +350,28 @@ The worker count, the blocking cap, the shutdown timeout, and the
 handshake span are the caller's, labelled unmeasured until a measurement
 names them.
 
+## What cover needs from the record layer (RULED 2026-11-15, `CVR-R3`)
+
+The relay's cover carrier sends fixed-size windows on an encrypted
+session, some holding a stem and most holding a dummy
+(`TOR_COVER_POSTURE.md`). It adds no encryption of its own. Whatever
+record layer sits under it owes two things, or the cover is undone below
+the carrier:
+
+- **A record's size on the wire is a function of its plaintext length
+  only.** No compression, and no padding chosen by content. A real window
+  and a dummy window of one length then seal to one length.
+- **Rekeying counts dummy bytes like real ones.** A key that turned over
+  on real traffic alone would mark the windows that carried it.
+
+The interim record framer meets both: each record is an encrypted
+two-byte length and an encrypted body under ChaCha20-Poly1305, two nonces
+a record whatever it holds, and the key turns over every `REKEY_NONCES`
+nonces (`shekyl-p2p-transport/src/channel.rs`, `shekyl-noise`). The test
+`a_real_and_a_dummy_window_seal_to_one_length_and_spend_the_same_nonces`
+(`shekyl-p2p-transport/src/noise.rs`) holds it to that. The fixed-window
+framer that replaces it is not merged; it must keep both.
+
 ## Seam — construction contract (RULED 2026-09-28)
 
 *Superseded 2026-11-05: the seam, its strands, the executor and the

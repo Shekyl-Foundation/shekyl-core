@@ -5121,6 +5121,7 @@ dependencies = [
  "shekyl-levin",
  "shekyl-network",
  "shekyl-noise",
+ "shekyl-relay-privacy",
  "x25519-dalek",
  "zeroize",
 ]

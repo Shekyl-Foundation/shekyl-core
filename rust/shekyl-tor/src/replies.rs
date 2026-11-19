@@ -230,9 +230,11 @@ impl Observed {
 }
 
 /// How an onion stream ended after it opened (§3.2), from what shared
-/// code observed. Every Tor stream crosses the one guard link, so a
-/// circuit that collapses with this node's link looks the same as an onion
-/// that hangs up: each end is Uncertain and keeps its redial.
+/// code observed. Every Tor stream crosses this node's guard links (three
+/// guard connections, with conflux spreading one stream's cells over two:
+/// TRC-1's guard-connection reading, 2026-11-12), so a circuit that
+/// collapses with one of this node's links looks the same as an onion that
+/// hangs up: each end is Uncertain and keeps its redial.
 #[must_use]
 pub const fn stamp_stream_end(end: StreamEnd) -> DialFailure {
     match end {
@@ -298,7 +300,8 @@ mod tests {
     }
 
     /// After the stream opened, every end shared code observes is
-    /// Uncertain on Tor (the one guard link) and keeps its redial.
+    /// Uncertain on Tor (it crossed this node's guard links) and keeps its
+    /// redial.
     #[test]
     fn an_onion_streams_end_is_uncertain() {
         for end in [
