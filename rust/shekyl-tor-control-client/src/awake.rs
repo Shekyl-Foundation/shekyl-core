@@ -152,6 +152,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
     use std::time::Duration;
 
     use shekyl_timing_engine::{Clock, ManualClock, Tick};
@@ -224,31 +227,36 @@ mod tests {
     }
 
     /// **A budget starts when the wait is built.** An unpolled `sleep` of
-    /// 40 ms, held across 80 ms of awake time, is already done. Fails if
-    /// the deadline is read at the first poll, which would wait another
-    /// 40 ms here.
+    /// 40 ms, held across 80 ms of awake time, is done at its first poll.
+    /// Fails if the deadline is read at the first poll, which would leave
+    /// that poll pending for another 40 ms. The first poll is the whole
+    /// check: a loaded host only adds awake time before it, so nothing
+    /// here is bounded by how fast the host runs.
     #[tokio::test]
     async fn a_budget_starts_when_the_wait_is_built() {
-        let waiting = sleep(Duration::from_millis(40));
+        let mut waiting = pin!(sleep(Duration::from_millis(40)));
         std::thread::sleep(Duration::from_millis(80));
-        let started = std::time::Instant::now();
-        waiting.await;
+        let mut cx = Context::from_waker(Waker::noop());
         assert!(
-            started.elapsed() < Duration::from_millis(30),
+            waiting.as_mut().poll(&mut cx).is_ready(),
             "the deadline was read at the first poll"
         );
     }
 
     /// **A timeout budget starts when the bound is built.** Same failure
-    /// as the sleep budget: the deadline is read at the call.
+    /// as the sleep budget: the deadline is read at the call, so the first
+    /// poll after it has passed is the elapsed bound.
     #[tokio::test]
     async fn a_timeout_budget_starts_when_the_bound_is_built() {
-        let bounded = timeout(Duration::from_millis(40), std::future::pending::<()>());
+        let mut bounded = pin!(timeout(
+            Duration::from_millis(40),
+            std::future::pending::<()>()
+        ));
         std::thread::sleep(Duration::from_millis(80));
-        let started = std::time::Instant::now();
-        assert_eq!(bounded.await, Err(Elapsed));
-        assert!(
-            started.elapsed() < Duration::from_millis(30),
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(
+            bounded.as_mut().poll(&mut cx),
+            Poll::Ready(Err(Elapsed)),
             "the deadline was read at the first poll"
         );
     }

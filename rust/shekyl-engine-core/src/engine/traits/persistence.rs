@@ -83,7 +83,7 @@ use crate::engine::sealing_keys::StateWrapKey;
 /// - `Send + Sync + 'static` — `PersistenceEngine` instances are
 ///   shared across the orchestration future and the sync lifecycle
 ///   path that drives a flush from a Tokio worker via
-///   [`drive_persistence`](super::lifecycle::drive_persistence)
+///   [`drive_persistence`](crate::engine::lifecycle::drive_persistence)
 ///   (`block_in_place` + `block_on`), typically as `Arc<P>`.
 ///   [`WalletFile`](shekyl_engine_file::WalletFile) (Stage 1) and
 ///   `ActorRef<PersistenceActor>` (Stage 4) both satisfy these bounds.
@@ -123,7 +123,8 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
     /// with a stale key seals state that fails authentication on the next open
     /// (Poly1305 MAC failure).
     /// Returns a [`Send`] future so sync lifecycle code can drive persistence
-    /// from a Tokio worker via [`drive_persistence`](super::lifecycle::drive_persistence)
+    /// from a Tokio worker via
+    /// [`drive_persistence`](crate::engine::lifecycle::drive_persistence)
     /// (`block_in_place` + `block_on`). Matches [`RefreshEngine`](super::refresh::RefreshEngine)
     /// precedent (`impl Future + Send`, not `async fn` on the trait).
     ///

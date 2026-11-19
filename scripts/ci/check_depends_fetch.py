@@ -3,30 +3,37 @@
 #
 # All rights reserved.
 # BSD-3-Clause
-"""Depends falls back to a package's alternate download paths, and keeps
-only bytes that match the pinned hash.
+"""Depends fetches a source from the Foundation's mirror, then the
+package's own path, then its alternates, and keeps only bytes that match
+the pinned hash.
 
 # What is held (Rick, 2026-11-19)
 
-Two gitian runs on 2026-11-18 failed in the FreeBSD job: download.freebsd.org
-timed out, and the inherited fallback (Monero's depends mirror) answered 404.
-`contrib/depends/funcs.mk`'s `fetch_file` now tries the package's own
-download path, then each of its `_download_path_alternates` in order, and
-every fetch checks the pinned SHA-256 before the file is kept.
-`freebsd_base` names FreeBSD's community mirrors as its alternates.
+A release build must not depend on one upstream host answering at the
+moment it runs: download.freebsd.org timed out on two gitian runs on
+2026-11-18, and the inherited fallback (Monero's mirror) answered 404.
+`contrib/depends/funcs.mk`'s `fetch_file` tries `MIRROR_DOWNLOAD_PATH`
+first, then the package's own download path, then each of its
+`_download_path_alternates` in order. Every fetch checks the package's
+pinned SHA-256 before the file is kept, so bytes that fail it fall through
+to the next host. `freebsd_base` names FreeBSD's community mirrors as its
+alternates.
 
-The selftest runs depends' own fetch (`make download-one`) in a scratch copy
-of `contrib/depends` with one planted package, against local HTTP servers,
-and needs no network:
+The selftest runs depends' own fetch (`make download-one`) in a scratch
+copy of `contrib/depends` with one planted package, against local HTTP
+servers, and needs no network:
 
-  1. The primary blocked, an alternate holds the file: fetched from it, and
-     the kept file has the pinned hash.
-  2. The primary blocked, the alternate's file has one byte changed: the
-     fetch fails and keeps nothing.
-  3. The primary blocked, the first alternate lacks the file, the second
-     holds it: fetched from the second.
-  4. The primary serves it: fetched from the primary, no alternate asked.
-  5. No host holds it: the fetch fails.
+  1. The mirror holds the file: fetched from it, no other host asked.
+  2. The mirror lacks it, the package's path holds it: fetched from there.
+  3. The mirror refuses, the package's path holds it: fetched from there.
+  4. The mirror's file has one byte changed, the package's path holds it:
+     fetched from the package's path; the changed bytes are never kept.
+  5. The mirror lacks it, the package's path refuses, both alternates hold
+     it: the first serves it.
+  6. As 5, but the first alternate lacks it: the second serves it.
+  7. As 5, but the one alternate holding it has one byte changed: the fetch
+     fails and keeps nothing.
+  8. No host holds it: the fetch fails.
 
 It also checks that no depends file names the retired Monero mirror, and
 that `freebsd_base` declares alternates.
@@ -34,7 +41,8 @@ that `freebsd_base` declares alternates.
 # Rule 47
 
 Each case asserts its subject: the server logs show which host served the
-file, and a passing case's file is read back and hashed.
+file and that no later host was asked, and a passing case's file is read
+back and hashed.
 """
 
 from __future__ import annotations
@@ -57,7 +65,7 @@ PAYLOAD = b"shekyl depends fetch selftest payload\n" * 64
 NAME = "zzfetch-1.tar.gz"
 RETIRED = "getmonero"
 # The hosts in the order `fetch_file` must try them.
-ORDER = ("primary", "first", "second")
+ORDER = ("mirror", "primary", "first", "second")
 SERVED: list[str] = []
 
 
@@ -84,7 +92,8 @@ def closed_port() -> int:
     return port
 
 
-def fetch(tmp: Path, primary: str, alternates: list[str], digest: str) -> tuple[int, str, Path]:
+def fetch(tmp: Path, mirror: str, primary: str, alternates: list[str], digest: str) -> tuple[int, str, Path]:
+    """Run depends' fetch for the planted package; the kept file's path."""
     depends = tmp / "depends"
     if depends.exists():
         shutil.rmtree(depends)
@@ -103,7 +112,8 @@ def fetch(tmp: Path, primary: str, alternates: list[str], digest: str) -> tuple[
     if sources.exists():
         shutil.rmtree(sources)
     proc = subprocess.run(
-        ["make", "-C", str(depends), "download-one", "HOST=x86_64-unknown-linux-gnu", f"SOURCES_PATH={sources}"],
+        ["make", "-C", str(depends), "download-one", "HOST=x86_64-unknown-linux-gnu",
+         f"SOURCES_PATH={sources}", f"MIRROR_DOWNLOAD_PATH={mirror}"],
         capture_output=True,
         text=True,
         env=dict(os.environ, MAKEFLAGS=""),
@@ -125,20 +135,28 @@ def selftest() -> int:
         url = {k: f"http://127.0.0.1:{p}" for k, p in ports.items()}
         blocked = f"http://127.0.0.1:{closed_port()}"
         try:
+            all_hold = (PAYLOAD, PAYLOAD, PAYLOAD, PAYLOAD)
             cases = [
-                # label, files on (primary, first, second), primary url, want ok, served by
-                # Both alternates hold it, so the first served and the second
-                # never asked is the order, not the only host that answered.
-                ("the primary blocked, both alternates hold the file: the first serves it",
-                 (None, PAYLOAD, PAYLOAD), blocked, True, "first"),
-                ("the primary blocked, the alternate's file has one byte changed",
-                 (None, changed, None), blocked, False, None),
-                ("the primary blocked, the first alternate lacks it, the second holds it",
-                 (None, None, PAYLOAD), blocked, True, "second"),
-                ("the primary serves it", (PAYLOAD, PAYLOAD, PAYLOAD), url["primary"], True, "primary"),
-                ("no host holds it", (None, None, None), url["primary"], False, None),
+                # label, files on (mirror, primary, first, second), mirror url,
+                # primary url, want ok, served by. A host after the one that
+                # serves holds the file too, so "served by" is the order, not
+                # the only host that answered.
+                ("the mirror holds the file", all_hold, url["mirror"], url["primary"], True, "mirror"),
+                ("the mirror lacks it, the package's path holds it",
+                 (None, PAYLOAD, PAYLOAD, PAYLOAD), url["mirror"], url["primary"], True, "primary"),
+                ("the mirror refuses, the package's path holds it",
+                 (None, PAYLOAD, PAYLOAD, PAYLOAD), blocked, url["primary"], True, "primary"),
+                ("the mirror's file has one byte changed, the package's path holds it",
+                 (changed, PAYLOAD, PAYLOAD, PAYLOAD), url["mirror"], url["primary"], True, "primary"),
+                ("the mirror lacks it, the package's path refuses, both alternates hold it",
+                 (None, None, PAYLOAD, PAYLOAD), url["mirror"], blocked, True, "first"),
+                ("the mirror lacks it, the package's path refuses, the first alternate lacks it",
+                 (None, None, None, PAYLOAD), url["mirror"], blocked, True, "second"),
+                ("the only alternate holding it has one byte changed",
+                 (None, None, changed, None), url["mirror"], blocked, False, None),
+                ("no host holds it", (None, None, None, None), url["mirror"], url["primary"], False, None),
             ]
-            for label, bodies, primary, want_ok, served_by in cases:
+            for label, bodies, mirror, primary, want_ok, served_by in cases:
                 for key, body in zip(ORDER, bodies):
                     path = roots[key] / NAME
                     if path.exists():
@@ -146,7 +164,7 @@ def selftest() -> int:
                     if body is not None:
                         path.write_bytes(body)
                 SERVED.clear()
-                rc, out, kept = fetch(tmp, primary, [url["first"], url["second"]], digest)
+                rc, out, kept = fetch(tmp, mirror, primary, [url["first"], url["second"]], digest)
                 if want_ok:
                     ok = rc == 0 and kept.is_file() and hashlib.sha256(kept.read_bytes()).hexdigest() == digest
                     hit = [s for s in SERVED if s.endswith(NAME)]
@@ -173,8 +191,8 @@ def selftest() -> int:
         print("selftest FAIL: freebsd_base.mk declares no alternate download paths")
         failed = 1
     if not failed:
-        print(f"selftest: 5 fetch cases; no depends file names the retired mirror; "
-              f"freebsd_base has {len(alternates.group(1).split())} alternate(s)")
+        print(f"selftest: {len(cases)} fetch cases in the order mirror, package path, alternates; no depends "
+              f"file names the retired mirror; freebsd_base has {len(alternates.group(1).split())} alternate(s)")
     return failed
 
 

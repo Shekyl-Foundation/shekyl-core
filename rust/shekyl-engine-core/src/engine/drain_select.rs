@@ -19,7 +19,7 @@
 //! so there is nothing for lineage-aware selection to buy.
 //!
 //! The type names of the stripped-away fields are deliberately absent from
-//! this file; the import-check arm ([`tests`]) greps for their reappearance.
+//! this file; the import-check arm (`tests`) greps for their reappearance.
 
 use shekyl_types::{BlockHeight, GlobalOutputIndex};
 use shekyl_units::AtomicUnits;

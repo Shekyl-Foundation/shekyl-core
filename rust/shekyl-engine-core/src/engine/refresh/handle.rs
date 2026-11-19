@@ -177,7 +177,7 @@ impl RefreshHandle {
     ///
     /// Production construction lives in
     /// [`crate::engine::Engine::spawn_refresh_producer`]; tests inject
-    /// stand-in ends via [`Self::for_test`]. The `Option` around
+    /// stand-in ends via `Self::for_test`. The `Option` around
     /// `completion_rx` exists so [`Self::join`] can move the receiver
     /// out of a type that implements [`Drop`] — a non-optional field
     /// cannot be moved out.

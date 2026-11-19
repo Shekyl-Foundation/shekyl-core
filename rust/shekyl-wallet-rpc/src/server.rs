@@ -656,7 +656,7 @@ impl BoundListener {
     }
 
     /// One `info!` line per transport. The pipe's name is deliberately not
-    /// logged: it carries the user's SID (see [`SelfHostedPipe`]).
+    /// logged: it carries the user's SID (see `SelfHostedPipe`).
     fn log_ready(&self, what: &str) -> std::io::Result<()> {
         match self {
             Self::Tcp(listener) => {
@@ -835,7 +835,7 @@ pub enum InProcessListen {
 }
 
 /// Manual: the pipe name embeds the user's SID and is redacted, as in
-/// [`SelfHostedPipe`]; the other arms render as derived.
+/// `SelfHostedPipe`; the other arms render as derived.
 impl std::fmt::Debug for InProcessListen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

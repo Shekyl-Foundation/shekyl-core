@@ -241,7 +241,7 @@ def selftest():
     exporter = "shekyl-exporter"
     crates = {exporter}
     cases = {
-        "a depends package": (["contrib/depends/packages/boost.mk"], "all"),
+        "a depends package": (["contrib/depends/packages/freebsd_base.mk"], "all"),
         "the Makefile": (["Makefile"], "all"),
         "this workflow": ([".github/workflows/depends.yml"], "all"),
         "this script": ([SELF], "all"),

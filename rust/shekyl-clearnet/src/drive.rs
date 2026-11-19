@@ -945,7 +945,7 @@ const SYN_RETRANSMISSIONS: u8 = 1;
 
 /// The socket for one dial to `target`: the peer when `direct`, or the
 /// operator's proxy. Only a direct dial's socket takes
-/// [`SYN_RETRANSMISSIONS`].
+/// `SYN_RETRANSMISSIONS`.
 fn dial_socket(target: SocketAddr, direct: bool) -> std::io::Result<TcpSocket> {
     let socket = if target.is_ipv4() {
         TcpSocket::new_v4()?

@@ -5,10 +5,10 @@
 
 //! The archival half of [`ChainView`](crate::view::ChainView), as one macro.
 //!
-//! [`archival_reads!`] is `#[macro_export]`, so it is named
+//! [`archival_reads!`](crate::archival_reads!) is `#[macro_export]`, so it is named
 //! `shekyl_chain_rules::archival_reads` wherever this module is loaded.
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A23) as one policy.
+/// Implement every archival [`ChainView`](crate::ChainView) read (A1–A9, A11–A23) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers

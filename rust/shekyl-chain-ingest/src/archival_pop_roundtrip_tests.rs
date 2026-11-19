@@ -36,20 +36,22 @@ use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
 
 use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
-use crate::archival_driver::{first_spending_height, record_of, ENDPOINT, FEE};
+use crate::archival_driver::{record_of, ENDPOINT, FEE};
 use crate::archival_slash_tests::{run_slash_chain, ConnectMode};
 use crate::chain_drive::{
     catch_up, priced_emission_claim, spender_owning_before, Driven, EmissionClaimParts,
 };
 use crate::emission_assembly::ClaimTerms;
+use crate::forged_fill::{self, FIRST_POST_COINBASE};
 use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, inside_one_epoch_of, load_shard_fill, mine_to,
-    settled_epoch_blocks, settled_rules, settled_schedule, FILL_FROM_COINBASE,
+    first_admissible_compact_join, inside_one_epoch_of, mine_to, settled_epoch,
+    settled_epoch_blocks, settled_schedule,
 };
 use crate::support_trees::{drive_support_trees, price_trees_claim};
 use shekyl_harness_spender::{Owner, Recipient, Spender};
+use shekyl_network::Network;
 
 /// The claim chain's transaction key. The straddle's three claims each
 /// have their own, in the order they are priced.
@@ -88,11 +90,11 @@ const STRADDLE_AGAIN_TX_KEY: [u8; 32] = [0x73; 32];
 async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
     // The settled schedule: admitted draws give a pair its counted draws
     // only on it (`settled_epoch_blocks`).
-    let rules = settled_rules();
-    let mut scenario = Scenario::open_under("archival-pop-claim", FreeHash, rules);
-    // The shard is closed by the captured chain (`load_shard_fill`): its
-    // spends were proved once, and every rule judges them as they connect.
-    let (mut mined, filled) = load_shard_fill(&mut scenario, 1).await;
+    // The shard is closed by the forged shard-fill chain (`forged_fill`):
+    // its spends were proved once, and every rule judges them as they
+    // connect.
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect("archival-pop-claim", settled_epoch(), 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
@@ -317,12 +319,10 @@ async fn claim_of(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused() {
-    let rules = settled_rules();
     let schedule = settled_schedule();
     let window = MAX_CLAIM_AGE_W;
-    let mut scenario = Scenario::open_under("archival-pop-straddle", FreeHash, rules);
-    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
-    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    let (mut scenario, mut mined, rules, filled) =
+        forged_fill::connect("archival-pop-straddle", settled_epoch(), 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
@@ -335,15 +335,15 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
     let mut spender = Spender::on(scenario.network_id(), &mined);
     let mut seen = mined.len();
 
-    // The join rides coinbase 0, paying the persona the claims' backing and
-    // the first claim's fee; coinbases 1 and 2 pay the other two fees, each
+    // The join rides the first post coinbase, paying the persona the claims'
+    // backing and the first claim's fee; the next two pay the other two fees, each
     // in its own block (the spender draws output keys from the height).
-    let persona = Persona::at(1);
+    let persona = Persona::on(Network::Regtest, 1);
     let recipient = Recipient::persona(persona.keys());
     let mut fee_keys = Vec::new();
     let funding = spender.spend_coinbase_to(
         scenario.wallet(),
-        BlockHeight::ZERO,
+        BlockHeight::from_raw(FIRST_POST_COINBASE),
         join_height,
         FEE,
         Some(&persona.join(shard_set(vec![0]), ENDPOINT)),
@@ -358,7 +358,7 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
         .await
         .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
     mined.push(block);
-    for coinbase in 1..=2u64 {
+    for coinbase in FIRST_POST_COINBASE + 1..=FIRST_POST_COINBASE + 2 {
         catch_up(&mut spender, &mined, &mut seen);
         let height = BlockHeight::from_raw(u64::try_from(mined.len()).expect("a height"));
         let paying = spender.spend_coinbase_to(

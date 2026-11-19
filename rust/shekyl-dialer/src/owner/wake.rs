@@ -9,7 +9,7 @@
 //! host is already reached. That wake does not settle. The Tor census is
 //! published on both: the seats after settle, or the seats held when the
 //! wake only resumes. The open test lives on
-//! [`Attempts`](crate::attempts::Attempts); this module only decides which
+//! [`Attempts`]; this module only decides which
 //! wake makes it.
 
 use std::collections::BTreeSet;

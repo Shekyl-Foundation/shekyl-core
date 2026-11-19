@@ -30,14 +30,18 @@ define fetch_file_inner
 endef
 
 # A source already in SOURCES_PATH is used as it is; its hash is checked
-# again before it is extracted. Otherwise it is fetched from the package's
-# own download path, then from each of its `_download_path_alternates` in
-# order (the same `_download_file` under each). Every fetch checks the
-# pinned SHA-256 before the file is kept: an alternate is trusted to serve
-# bytes, never for what they are.
+# again before it is extracted. Otherwise it is fetched from the
+# Foundation's sources mirror (MIRROR_DOWNLOAD_PATH, under the package's
+# file name); when the mirror does not answer, does not hold it, or serves
+# bytes that fail the pinned hash, from the package's own download path;
+# then from each of its `_download_path_alternates` in order (the same
+# `_download_file` under each). Every fetch checks the pinned SHA-256 before
+# the file is kept: a host is trusted to serve bytes, never for what they
+# are.
 define fetch_file
     ( test -f $$($(1)_source_dir)/$(4) || \
-    ( $(call fetch_file_inner,$(1),$(2),$(3),$(4),$(5)) \
+    ( $(call fetch_file_inner,$(1),$(MIRROR_DOWNLOAD_PATH),$(4),$(4),$(5)) || \
+      $(call fetch_file_inner,$(1),$(2),$(3),$(4),$(5)) \
       $(foreach alternate,$($(1)_download_path_alternates),|| $(call fetch_file_inner,$(1),$(alternate),$(3),$(4),$(5))) ) )
 endef
 

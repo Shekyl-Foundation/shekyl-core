@@ -77,7 +77,7 @@ pub(crate) const TIP_REFRESH_INTERVAL_DIVISOR: u32 = 4;
 /// What the gate actually needs is a bound on **block distance**: a cached
 /// tip `k` blocks behind the chain shifts `P`'s gate centre down by `k`, and
 /// an honest challenge is refused once `k > L`
-/// ([`PASS_ANCHOR_LAG_BLOCKS`]). An earlier version of this constant claimed
+/// ([`PASS_ANCHOR_LAG_BLOCKS`](shekyl_archival_retention::pass_anchor::PASS_ANCHOR_LAG_BLOCKS)). An earlier version of this constant claimed
 /// one block target "caps that error at one block, so cache age can never be
 /// what pushes an honest `P` out of the window". **That was false**, and the
 /// error is worth naming precisely because it is seductive: a block target

@@ -28,7 +28,7 @@
 //! pre-genesis testnet recalibration** (emission speed factor, burn
 //! coefficients, staker shares). The method *surfaces* are
 //! stable; the *values* may churn each calibration generation
-//! ([`CALIBRATION_GENERATION`](shekyl_economics::CALIBRATION_GENERATION)).
+//! ([`CALIBRATION_GENERATION`]).
 //! Value-vector tests are calibration-tagged; the generation-invariant
 //! differential (C4) survives recalibration because it pins the shared 0h
 //! primitive, not a specific height's emission.

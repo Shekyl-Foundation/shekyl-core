@@ -62,6 +62,8 @@ subjects=(
   'archival_slash_tests::the_slash_chain_judges_each_row_on_one_record'
   'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects'
   'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects'
+  'forged_fill::tests::the_forged_fill_connects_under_every_readers_schedule'
+  'forged_fill::tests::the_manifest_closes_each_shard_where_the_capture_rule_does'
   'miner_tests::a_chain_at_the_difficulty_floor_mines_its_way_back'
   'miner_tests::the_miner_extends_the_chain_block_after_block'
   'miner_tests::the_miners_rate_per_worker'
@@ -116,6 +118,11 @@ if [ "$missing" -ne 0 ] || [ "$extra" -ne 0 ]; then
 fi
 echo "shekyl-chain-ingest ignored set: ${#subjects[@]} test(s) run and ${#helpers[@]} helper(s) not, exactly the listed set"
 ignored_set_stop_after_judgement
+
+# The forged shard-fill chain the long scenarios build on (CHAIN_FORGE.md
+# CF-4a), pulled by its pin and checked layer by layer before anything
+# reads it. A missing or damaged copy stops the lane here, by name.
+python3 ../scripts/ci/fetch_test_chain.py shard-fill
 
 START=$(date +%s)
 status=0

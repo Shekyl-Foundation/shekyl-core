@@ -9,7 +9,7 @@
 //! Three tables the C++ left as raw bytes gain types here; the grow path
 //! (DRS-E3) will write what these describe and may not choose a second
 //! shape for the same byte. The vocabulary two stores share —
-//! [`TreePosition`], [`TreeLeaf`] — lives in `shekyl-types` with its codec
+//! [`TreePosition`], [`TreeLeaf`](shekyl_types::TreeLeaf) — lives in `shekyl-types` with its codec
 //! in `shekyl-store-codec` (`SCU-Q2`); what is here is the daemon store's
 //! own: the tree's summary row and the layer table's value. The layer
 //! key's types live in [`crate::ids`] (`LayerChunk::key` is the tuple).
@@ -24,7 +24,7 @@
 //! [`CurveTreeState`] under the unit key: the three facts the C++ wrote in
 //! one grow (`:8936–8966`) cannot disagree, and **the empty tree is a
 //! written row** — [`CurveTreeState::EMPTY`], put by the seal at store
-//! creation — so an absent row is [`StoreInvariant::CellCorrupt`]
+//! creation — so an absent row is [`StoreInvariant::CellCorrupt`](crate::store::StoreInvariant::CellCorrupt)
 //! (`crate::store::StoreInvariant`), never a default. No caller compares a
 //! root against `hash_init` to learn whether the tree is empty.
 //!
@@ -138,7 +138,7 @@ impl Canonical for LeafCount {
 
 /// The tree's summary — `curve_tree_meta`'s one row (module docs).
 ///
-/// Layout (41 bytes): `root`[32] ‖ `depth` u8 ‖ `leaf_count` u64 LE.
+/// Layout (41 bytes): `root`\[32\] ‖ `depth` u8 ‖ `leaf_count` u64 LE.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CurveTreeState {
     /// The root stored with this summary — **the live root**,

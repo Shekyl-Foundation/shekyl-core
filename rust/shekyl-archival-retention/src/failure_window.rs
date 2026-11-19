@@ -24,7 +24,7 @@
 //! pass's gather ([`settlement_window_slashable`]), which the validator's
 //! slash pass (`shekyl-chain-rules`, `archival::slash`) calls and which
 //! decides through [`failure_window_slashable`]. The
-//! interval-append the slash performs is unchanged — [`slash_open_interval_to_append`]
+//! interval-append the slash performs is unchanged — [`slash_open_interval_to_append`](crate::bond_connect::slash_open_interval_to_append)
 //! still produces exactly what the writer appends; only **whether** it fires
 //! moves here.
 //!
@@ -51,7 +51,7 @@
 //! ## Standing bounds both gathers
 //!
 //! Both gathers stop where the record's current continuous challengeable
-//! run ends. [`good_through`] is false before `E_join + 1`, so a record
+//! run ends. [`good_through`](crate::consensus_state::good_through) is false before `E_join + 1`, so a record
 //! cannot be charged for epochs predating its own join, and it is false
 //! across a closed bad interval (slash → `Reinstate`), so the walk stops
 //! at the reinstatement boundary.

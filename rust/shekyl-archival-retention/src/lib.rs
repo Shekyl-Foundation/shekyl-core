@@ -34,7 +34,7 @@
 //!   row, and the issued-draw digest term.
 //! - [`pass_anchor`] — the pass transcript and the receipt verify
 //!   ([`verify_receipt_transcript`]).
-//! - [`shard_view_hash`] — `SV-D1`'s view hash of a `W`-byte shard: the
+//! - [`fn@shard_view_hash`] — `SV-D1`'s view hash of a `W`-byte shard: the
 //!   streaming [`ShardViewHasher`] over each in-domain transaction's prunable
 //!   region and `pqc_auths`. Not a verification digest; never a skeleton row.
 //!

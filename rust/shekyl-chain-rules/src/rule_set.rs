@@ -529,7 +529,7 @@ impl RuleSet {
     /// (`PopBeyondReorgCap`); the block is not invalid for it. The store's
     /// undo retention is at least this (S-CHAIN-W SCW-7), so a reorg the
     /// node does follow never meets `PopBelowFloor`. Readers take this,
-    /// never [`D_MAX`](crate::D_MAX) directly, so a levered set and its
+    /// never [`D_MAX`] directly, so a levered set and its
     /// store agree.
     #[must_use]
     pub const fn reorg_cap(&self) -> BlockCount {

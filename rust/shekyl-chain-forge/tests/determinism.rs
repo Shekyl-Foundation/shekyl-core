@@ -45,11 +45,16 @@ use std::process::Command;
 use executor::seeds::Source;
 use executor::{forge, Options, Outcome, BLOCKS_FILE, FILES, MANIFEST_FILE};
 use shekyl_chain_forge::{sha256_hex, BlocksTxt, Manifest, Plan, PlanRef};
+use shekyl_chain_ingest::corpus::CORPUS_FORMAT_VERSION;
 
 /// The plan, from the crate's directory.
 const PLAN: &str = "plans/small.toml";
 /// The committed `blocks.txt` and manifest, from the crate's directory.
 const COMMITTED: &str = "chains/small";
+/// The hosted shard-fill chain: its name, plan and committed ledger.
+const SHARD_FILL: &str = "shard-fill";
+const SHARD_FILL_PLAN: &str = "plans/shard-fill.toml";
+const SHARD_FILL_COMMITTED: &str = "chains/shard-fill";
 
 /// The child process's switches: the directory it writes, the sources it
 /// swaps, and the ledger it stops at.
@@ -257,29 +262,7 @@ fn first_difference(a: &Path, b: &Path) -> Option<String> {
 #[test]
 #[ignore = "minutes of proofs; run in release by chain-forge.yml"]
 fn the_small_plan_forges_the_same_bytes_in_two_processes() {
-    let outs: Vec<tempfile::TempDir> = ENVIRONMENTS
-        .iter()
-        .map(|env| {
-            tempfile::Builder::new()
-                .prefix(&format!("forge-out-{}-", env.name))
-                .tempdir()
-                .expect("an output directory")
-        })
-        .collect();
-    for (env, out) in ENVIRONMENTS.iter().zip(&outs) {
-        let started = std::time::Instant::now();
-        let status = spawn_child(env, out.path(), None, None);
-        assert!(
-            status.success(),
-            "the {} forging failed: {status}",
-            env.name
-        );
-        eprintln!(
-            "forged the small plan under {} in {:.1} s",
-            env.name,
-            started.elapsed().as_secs_f64()
-        );
-    }
+    let outs = forge_in_two_processes("small", PLAN);
     let (a, b) = (outs[0].path(), outs[1].path());
     if let Some(difference) = first_difference(a, b) {
         panic!("two forgings of one plan at one commit differ: {difference}");
@@ -451,30 +434,92 @@ fn each_source_drawn_from_the_os_moves_the_chain() {
 #[test]
 #[ignore = "two producer-plan forgings, minutes each; run by chain-forge.yml's nightly"]
 fn the_producer_plan_forges_the_same_bytes_in_two_processes() {
+    let outs = forge_in_two_processes("producer", "plans/producer.toml");
+    if let Some(difference) = first_difference(outs[0].path(), outs[1].path()) {
+        panic!("two forgings of the producer plan differ: {difference}");
+    }
+}
+
+/// The shard-fill plan's two forgings, in the two environments, and each the
+/// pinned hosted chain (`CHAIN_FORGE.md` §9, §10.4): its `blocks.txt` is the
+/// committed one and every layer is its pin's, size and SHA-256. Nightly at
+/// `dev`'s head this is the regeneration check: red means a merged change
+/// moved the chain without re-publishing it and moving the pin.
+#[test]
+#[ignore = "two shard-fill forgings, minutes each; run by chain-forge.yml's nightly"]
+fn the_shard_fill_plan_forges_its_pinned_chain_in_two_processes() {
+    let outs = forge_in_two_processes("shard-fill", SHARD_FILL_PLAN);
+    let a = outs[0].path();
+    if let Some(difference) = first_difference(a, outs[1].path()) {
+        panic!("two forgings of the shard-fill plan differ: {difference}");
+    }
+    let committed = crate_dir().join(SHARD_FILL_COMMITTED).join(BLOCKS_FILE);
+    let ours = BlocksTxt::parse(&std::fs::read_to_string(a.join(BLOCKS_FILE)).expect("forged"))
+        .expect("parses");
+    let theirs = BlocksTxt::parse(
+        &std::fs::read_to_string(&committed)
+            .unwrap_or_else(|e| panic!("{}: {e}", committed.display())),
+    )
+    .expect("the committed ledger parses");
+    if let Some(difference) = ours.first_difference(&theirs) {
+        panic!(
+            "the forged shard-fill chain is not the committed one (ours, committed): {difference}. \
+             A change that moves it regenerates blocks.txt, re-publishes the chain and moves its \
+             pin in the same pull request (CHAIN_FORGE.md §9)"
+        );
+    }
+    let pin = shekyl_chain_forge::Pins::load()
+        .and_then(|pins| pins.chain(SHARD_FILL).cloned())
+        .unwrap_or_else(|fault| panic!("{fault}"));
+    shekyl_chain_forge::hosted::open_in(a, pin).unwrap_or_else(|fault| {
+        panic!(
+            "forging the shard-fill plan here does not give its pinned artifact: {fault}. A merged \
+             change moved the chain without re-publishing it (CHAIN_FORGE.md §9)"
+        )
+    });
+}
+
+/// Each hosted layer's media type names the format version its bytes are
+/// written in, so a layout change cannot ship under the old type (§10.4).
+#[test]
+fn the_hosted_media_types_name_the_formats_they_carry() {
+    use shekyl_chain_forge::hosted::{CORPUS_MEDIA_TYPE, TRACE_MEDIA_TYPE};
+    assert!(
+        CORPUS_MEDIA_TYPE.ends_with(&format!(".v{CORPUS_FORMAT_VERSION}")),
+        "{CORPUS_MEDIA_TYPE} names corpus layout {CORPUS_FORMAT_VERSION}"
+    );
+    assert!(
+        TRACE_MEDIA_TYPE.ends_with(&format!(".v{}", shekyl_chain_ingest::trace::TRACE_VERSION)),
+        "{TRACE_MEDIA_TYPE} names trace version {}",
+        shekyl_chain_ingest::trace::TRACE_VERSION
+    );
+}
+
+/// `plan`, forged once in each of [`ENVIRONMENTS`] by a child process,
+/// each into its own directory.
+fn forge_in_two_processes(label: &str, plan: &str) -> Vec<tempfile::TempDir> {
     let outs: Vec<tempfile::TempDir> = ENVIRONMENTS
         .iter()
         .map(|env| {
             tempfile::Builder::new()
-                .prefix(&format!("forge-producer-{}-", env.name))
+                .prefix(&format!("forge-{label}-{}-", env.name))
                 .tempdir()
                 .expect("an output directory")
         })
         .collect();
     for (env, out) in ENVIRONMENTS.iter().zip(&outs) {
         let started = std::time::Instant::now();
-        let status = spawn_child_with(env, out.path(), &[(CHILD_PLAN, "plans/producer.toml")]);
+        let status = spawn_child_with(env, out.path(), &[(CHILD_PLAN, plan)]);
         assert!(
             status.success(),
-            "the {} producer forging failed: {status}",
+            "the {} forging of the {label} plan failed: {status}",
             env.name
         );
         eprintln!(
-            "forged the producer plan under {} in {:.1} s",
+            "forged the {label} plan under {} in {:.1} s",
             env.name,
             started.elapsed().as_secs_f64()
         );
     }
-    if let Some(difference) = first_difference(outs[0].path(), outs[1].path()) {
-        panic!("two forgings of the producer plan differ: {difference}");
-    }
+    outs
 }

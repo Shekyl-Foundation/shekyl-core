@@ -127,7 +127,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// live in [`departure_ledger`](super::departure_ledger) — this is the
     /// seam that binds the ledger to *this* refresh's reads. The binding is
     /// the whole content: the observation height is
-    /// [`CoherentChainView::reconcile`]'s verdict on the bracketed sync
+    /// [`CoherentChainView::reconcile`](crate::engine::daemon::synced_chain_facts::CoherentChainView::reconcile)'s verdict on the bracketed sync
     /// witness and the record's own height, never a number chosen here, so
     /// neither a stale witness nor a rolled-back record can set the clock.
     ///
