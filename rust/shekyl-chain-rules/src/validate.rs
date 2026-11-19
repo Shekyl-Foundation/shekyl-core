@@ -126,7 +126,7 @@ macro_rules! judge_block {
 /// the seed height (CEN-D3), the target CEN-D4 derives from the headers
 /// below that height ([`target_claim`](crate::target_claim), the one
 /// derivation), each listed body's reference, and the network id read from
-/// the caller's [`Trust`](crate::Trust) (`trust.network_id()`, NI-Q4).
+/// the caller's [`Trust`] (`trust.network_id()`, NI-Q4).
 /// `validate` checks each of them and returns a [`Stale`] fault, not a
 /// refusal, if one moved (a reorg between the stages, a rule-set boundary,
 /// or two stages that named different networks).

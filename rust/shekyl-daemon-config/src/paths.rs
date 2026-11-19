@@ -37,7 +37,7 @@ pub fn root(platform: &Platform, mode: RunMode, option: &str) -> Result<PathBuf,
         RunMode::User => platform
             .home
             .as_deref()
-            .map(|home| home.join(if cfg!(windows) { "Shekyl" } else { ".shekyl" }))
+            .map(shekyl_os_account::per_account_root_in)
             .ok_or_else(|| Diagnostic::new(Code::PathNoHome, Source::Machine).option(option)),
         RunMode::Service => platform
             .service_parent

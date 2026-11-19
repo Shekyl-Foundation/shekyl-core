@@ -1008,9 +1008,9 @@ def rust_selftest(inputs, trees):
                     bad += 1
                     break
     if "contrib/depends/" in dirs:
-        job, tests, reasons = rust_scope(["contrib/depends/packages/boost.mk"], inputs, trees, workspace, owners, workflows)
+        job, tests, reasons = rust_scope(["contrib/depends/Makefile"], inputs, trees, workspace, owners, workflows)
         if (job, tests) != ("skip", "none"):
-            print(f"WRONG: a depends package gave {job} {rust_tests_value(tests)}: {reasons}")
+            print(f"WRONG: the depends Makefile gave {job} {rust_tests_value(tests)}: {reasons}")
             bad += 1
     stale = [p for p in owners if p not in tracked and p not in dirs]
     if stale:

@@ -21,7 +21,7 @@
 //! ## The age-realization invariant (GENESIS-FROZEN)
 //!
 //! The `age ∈ [0,1]` here is the **same age normalization the reward curve
-//! consumes**, realized as [`shard_age_milli`](crate::consensus_state::shard_age_milli)
+//! consumes**, realized as [`shard_age_milli`]
 //! (relative tree-depth fraction, milli-scaled to `[0, WORK_MILLI_SCALE]`). The sim
 //! feeds one age variable into both the scarcity/reward curve and its own retention
 //! lock (`agent.rs`). The reward path already realizes that age as `shard_age_milli`.

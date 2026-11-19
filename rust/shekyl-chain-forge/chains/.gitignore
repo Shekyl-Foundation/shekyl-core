@@ -1,0 +1,3 @@
+# A hosted chain's fetched copy (CHAIN_FORGE.md §10.4): pulled by digest
+# into <chain>/hosted/ and checked against hosted.toml, never committed.
+*/hosted/

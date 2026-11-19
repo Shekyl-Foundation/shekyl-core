@@ -5,9 +5,9 @@
 
 //! The judge in the owner (`DIALER_OUTAGE_EVIDENCE.md` §4.1, `OE-D8`;
 //! §3.3 as ruled 2026-11-15): each connector's source of path readings,
-//! the waiting verdict, and clearing. [`crate::judge`] decides; this asks
+//! the waiting verdict, and clearing. [`fn@crate::judge`] decides; this asks
 //! the dialing connector and performs what it decides through
-//! [`Peerlist::apply`].
+//! [`Peerlist::apply`](shekyl_peerlist::Peerlist::apply).
 //!
 //! - **The source.** Each connector supplies its own
 //!   ([`Dialer::set_path_source`]); until it does, the connector has none

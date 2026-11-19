@@ -20,7 +20,7 @@
 //! | --- | --- | --- |
 //! | [`PseudoOutBlinds::random`] | the OS | a solo spend |
 //! | [`PseudoOutBlinds::from_intent`] | the intent's seed, in the intent's input order (`PQC_MULTISIG.md` §9.5) | a group's spend: every member derives the same blinds |
-//! | [`PseudoOutBlinds::seeded`] | a ChaCha20 stream over a caller's seed, only under the TEST_ONLY `seeded-rng` feature | the chain forge's reproducible chains (`CHAIN_FORGE.md` §5.2, S2) |
+//! | `PseudoOutBlinds::seeded` | a ChaCha20 stream over a caller's seed, only under the TEST_ONLY `seeded-rng` feature | the chain forge's reproducible chains (`CHAIN_FORGE.md` §5.2, S2) |
 //!
 //! A drawn blind is `Scalar::random` over the generator, one per input but
 //! the last, in input order: the seeded stream reproduces the forge's

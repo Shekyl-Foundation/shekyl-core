@@ -23,7 +23,7 @@
 //!    `bond_debit == 0` (§7.1). The vin carries no signature: its on-chain
 //!    authorization is the transaction-level `pqc_auths` slot (surface A), not
 //!    an on-vin blob (ARCHIVAL_BOND_GATE4.md §3.4.1; SA-2b, SIGNATURE_ALIGNMENT.md §2.2).
-//! 2. [`ReleaseVin`]: [`BondPostKind::Release`] with empty holdings,
+//! 2. [`ReleaseVin`]: [`BondPostKind::Release`](shekyl_archival_retention::bond_wire::BondPostKind::Release) with empty holdings,
 //!    `bonded_total_atomic == bond_credit == 0`, and
 //!    `bond_debit == record_bonded_total`. The debit term rides the **input**
 //!    side as an [`InputTerm`].

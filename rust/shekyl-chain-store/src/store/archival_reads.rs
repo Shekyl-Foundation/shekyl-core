@@ -100,6 +100,8 @@
 //! question is a fold over recorded state, not a read the store composes).
 //! No composed "emission source" read (`SAR-Q4`): the rule that needs
 //! A1, A7 and A8 composes them at its call site.
+//!
+//! [`last_settled_slash_epoch`]: super::ReadSnapshot::last_settled_slash_epoch
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -412,7 +414,7 @@ pub(super) fn bond_records<T: ReadTables>(
 }
 
 /// **A12.** Whether `archival_slash_applied` holds `(persona, shard,
-/// epoch)`. A set table ([`Present`](crate::schema::Present)): the row's
+/// epoch)`. A set table ([`Present`](crate::codec::Present)): the row's
 /// existence is the whole fact, so there is nothing to decode and nothing
 /// to be `Option` about.
 pub(super) fn slash_applied<T: ReadTables>(
@@ -563,7 +565,7 @@ pub(super) fn issued_digest<T: ReadTables>(
 /// seek to the next shard, never walk the shard ids between — and
 /// point-reads each requested epoch. An
 /// epoch with no Served shard is absent from the map. Empty `epochs` reads
-/// nothing. The set names each epoch once ([`ChainView::served_at`]). Only
+/// nothing. The set names each epoch once ([`ChainView::served_at`](shekyl_chain_rules::ChainView::served_at)). Only
 /// a requested epoch is decoded; a row that does not decode is SI-7.
 pub(super) fn served_at<T: ReadTables>(
     txn: &T,

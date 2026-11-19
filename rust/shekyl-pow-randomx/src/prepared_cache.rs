@@ -229,7 +229,7 @@ impl PreparedCache {
     ///
     /// **Cite for this accessor.** The production-reachability
     /// property is anchored at the **consumer**, not at Argon2d's
-    /// image: [`Cache::compute_hash`] reads cache memory as an
+    /// image: [`compute_hash`](crate::compute_hash) reads cache memory as an
     /// opaque 256-MiB byte string and does not re-derive it from a
     /// seedhash, verify its provenance, or otherwise consume any
     /// property beyond the byte content. Per Phase 2c §5.11.4 the

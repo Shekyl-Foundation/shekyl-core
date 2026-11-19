@@ -198,12 +198,40 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
     }))
     .await;
 
-    // `A` is closed, so it is synced; its miner posts a job one follower
-    // pass after the state, so the miner is asked rather than the flag
-    // (`daemon_status` said synchronized while the posting still read
-    // `no_view`, observed 2026-10-29). The refusal retried is the
-    // wire-pinned `mine.syncing`, for the moment `B`'s session opens
-    // and its claim has not yet arrived (the opening, CS-Q2 step 8).
+    // `A` is closed, so it is synced at open; `B`'s session, once it
+    // opens, starts the opening (CS-Q2 step 8) and `A` reads `NoView`
+    // until `B`'s claim, no heavier than `A`'s chain, resolves it. A block
+    // mined before the session opened would leave the next mine refused
+    // `mine.syncing` (seen 2026-11-16 on #1416's run), so `A` mines only
+    // once its sync view holds the session and reads synced: the opening
+    // has resolved, and nothing reopens it while the session holds.
+    let deadline = Instant::now() + LINK_WAIT;
+    loop {
+        let view = a
+            .rpc
+            .call::<wire::SyncStatus>(NoParams)
+            .await
+            .expect("sync_status");
+        if !view.session.is_empty() && view.state == wire::p2p::SyncState::Synced {
+            break;
+        }
+        if Instant::now() >= deadline {
+            a.panic_with_log(
+                "A's opening never resolved against B",
+                format!(
+                    "after {LINK_WAIT:?}: state {:?}, {} session(s); B's log tail:\n{}",
+                    view.state,
+                    view.session.len(),
+                    b.log_tail()
+                ),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    // Its miner posts a job one follower pass after the state, so the
+    // miner is asked rather than the flag (`daemon_status` said
+    // synchronized while the posting still read `no_view`, observed
+    // 2026-10-29). The refusal retried is the wire-pinned `mine.syncing`.
     let deadline = Instant::now() + LINK_WAIT;
     loop {
         match try_generate_blocks(&a.rpc, 1).await {

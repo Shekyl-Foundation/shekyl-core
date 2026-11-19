@@ -46,6 +46,7 @@ shekyl-wire = {}
 shekyl-crypto-pq = {}
 shekyl-address = {}
 shekyl-units = {}
+shekyl-os-account = {}
 shekyl-types = {}
 
 [features]

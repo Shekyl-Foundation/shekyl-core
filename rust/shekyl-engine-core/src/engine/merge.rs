@@ -1091,14 +1091,14 @@ fn collect_detection_residue(result: &ScanResult) -> DetectionResidue {
 /// directly via the public cryptographic primitive
 /// [`derive_output_handle`] — a stateless pure function that requires
 /// only `(view_secret, tx_hash, output_index)`. No
-/// [`super::traits::KeyEngine`] instance is needed; no `.await` chain
+/// [`super::traits::key::KeyEngine`] instance is needed; no `.await` chain
 /// is introduced. The orchestrator-side handle population property
 /// M3b ships (every output the scanner ingests has a deterministic
 /// handle on its `TransferDetails`) is delivered by the cryptographic
 /// primitive directly.
 ///
 /// M3c+ wires `LocalKeys` onto `Engine` and re-routes this helper
-/// through [`super::traits::KeyEngine::try_claim_output`] — at that
+/// through [`super::traits::key::KeyEngine::try_claim_output`] — at that
 /// point the helper signature becomes `async fn` and
 /// [`Engine::apply_scan_result`] takes the corresponding `.await`.
 /// The two-step trajectory is intentional: M3b's architectural

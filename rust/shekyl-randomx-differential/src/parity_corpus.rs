@@ -21,7 +21,7 @@
 //! self-describing binary file. Determinism (T9 + R6-D1: fixed
 //! ChaCha20 seed, platform-independent stream) makes the file
 //! byte-identical on every regeneration at the same corpus revision;
-//! the [`tests::parity_corpus_file_sha256_pin`] pin makes any drift
+//! the `tests::parity_corpus_file_sha256_pin` pin makes any drift
 //! (generator, canonicals, or format) fire per-PR in the structural
 //! gate rather than a day later in the parity cron.
 //!

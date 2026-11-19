@@ -265,7 +265,7 @@ pub(crate) const DEFAULT_SERVING_LAUNCH_WINDOW: Duration = Duration::from_secs(1
 /// vectors are pinned to that meaning, so a second semantic riding the same
 /// function would make those vectors ambiguous and couple two windows that have
 /// no reason to move together. The *arithmetic* is shared all the same — this
-/// draws through [`bounded_uniform`](shekyl_standoff::bounded_uniform), the
+/// draws through [`bounded_uniform`], the
 /// standoff family's single unbiased sampler, exactly as the WI-3 dispatch
 /// driver's dispersal draw does. Modulo bias would be privacy-load-bearing here
 /// for the same reason it is there.

@@ -137,7 +137,7 @@ pub struct ConnTracker {
     limits: ConnLimits,
     /// Live connections in the owner's reserve and the console's reserve.
     /// Mutated only under `per_ip`'s lock, as `total` is. Each counter is
-    /// named: a new reserve is a new field, and [`Reserve::slots`] does
+    /// named: a new reserve is a new field, and [`ConnTracker::slots`] does
     /// not compile until it is.
     owner: AtomicU64,
     console: AtomicU64,
