@@ -68,7 +68,11 @@ fn pscan(
     outputs: Vec<PFundingOutputRecord>,
 ) -> PScanState {
     PScanState::new(
-        PScanCursor::at(BlockHeight::from_raw(5_000), [0x11; 32]),
+        PScanCursor::at(
+            BlockHeight::from_raw(5_000),
+            [0x11; 32],
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         BTreeMap::new(),
         pending_releases,
         matches,

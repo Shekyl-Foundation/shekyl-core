@@ -171,6 +171,491 @@
                     ]
                   }
                 }
+              },
+              {
+                "name": "archival",
+                "ty": {
+                  "name": "ArchivalFold",
+                  "ty": {
+                    "Struct": [
+                      {
+                        "name": "total",
+                        "ty": {
+                          "name": "ArchivalLength",
+                          "ty": {
+                            "NewtypeStruct": {
+                              "name": "u64",
+                              "ty": "U64"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "name": "closes",
+                        "ty": {
+                          "name": "Vec<T>",
+                          "ty": {
+                            "Seq": {
+                              "name": "ShardClose",
+                              "ty": {
+                                "Struct": [
+                                  {
+                                    "name": "height",
+                                    "ty": {
+                                      "name": "BlockHeight",
+                                      "ty": {
+                                        "NewtypeStruct": {
+                                          "name": "u64",
+                                          "ty": "U64"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "name": "before",
+                                    "ty": {
+                                      "name": "ArchivalLength",
+                                      "ty": {
+                                        "NewtypeStruct": {
+                                          "name": "u64",
+                                          "ty": "U64"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "name": "hash",
+                                    "ty": {
+                                      "name": "[T; N]",
+                                      "ty": {
+                                        "Tuple": [
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          },
+                                          {
+                                            "name": "u8",
+                                            "ty": "U8"
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "name": "rows",
+                                    "ty": {
+                                      "name": "ShardRowsDigest",
+                                      "ty": {
+                                        "NewtypeStruct": {
+                                          "name": "[T; N]",
+                                          "ty": {
+                                            "Tuple": [
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              },
+                                              {
+                                                "name": "u8",
+                                                "ty": "U8"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "name": "open_rows",
+                        "ty": {
+                          "name": "ShardRowsDigest",
+                          "ty": {
+                            "NewtypeStruct": {
+                              "name": "[T; N]",
+                              "ty": {
+                                "Tuple": [
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
               }
             ]
           }

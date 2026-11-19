@@ -222,7 +222,11 @@ fn walk_accrual(id: PCanonicalId) -> PScanAccrual {
     let mut pending = BTreeMap::new();
     pending.insert(id, SettlementEpoch::from_raw(0));
     let state = PScanState::new(
-        PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
+        PScanCursor::at(
+            BlockHeight::from_raw(cursor_height),
+            [0u8; 32],
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         BTreeMap::new(),
         pending,
         Vec::new(),

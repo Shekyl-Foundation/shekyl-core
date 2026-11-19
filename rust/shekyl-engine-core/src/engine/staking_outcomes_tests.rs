@@ -399,7 +399,11 @@ fn an_in_flight_record_reports_what_it_still_holds() {
     // 99, which no record reserves.
     let scan_at = |frontier: u64| {
         PScanState::new(
-            PScanCursor::at(BlockHeight::from_raw(frontier), [0; 32]),
+            PScanCursor::at(
+                BlockHeight::from_raw(frontier),
+                [0; 32],
+                shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+            ),
             Default::default(),
             Default::default(),
             Vec::new(),
@@ -499,7 +503,11 @@ fn a_stake_with_every_input_spent_reads_held() {
     };
     let state = |frontier: u64| {
         PScanState::new(
-            PScanCursor::at(BlockHeight::from_raw(frontier), [0; 32]),
+            PScanCursor::at(
+                BlockHeight::from_raw(frontier),
+                [0; 32],
+                shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+            ),
             Default::default(),
             Default::default(),
             vec![matched.clone()],

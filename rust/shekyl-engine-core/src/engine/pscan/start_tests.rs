@@ -91,7 +91,11 @@ async fn wallet_file_store_round_trips_a_pscan_state_through_the_real_seal() {
     // matches so the privacy-sensitive reconcile evidence is exercised through the
     // real `.wallet.pscan` AEAD seal + atomic write, not just postcard.
     let state_a = PScanState::new(
-        PScanCursor::at(BlockHeight::from_raw(5_000), [0x1A; 32]),
+        PScanCursor::at(
+            BlockHeight::from_raw(5_000),
+            [0x1A; 32],
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         accruals(&[(0, 100), (1, 250)]),
         pending(&[(0xAB, 1)]),
         vec![
@@ -129,7 +133,11 @@ async fn wallet_file_store_round_trips_a_pscan_state_through_the_real_seal() {
 
     // Crash-recovery: the latest seal is the single durable resume point.
     let state_b = PScanState::new(
-        PScanCursor::at(BlockHeight::from_raw(9_000), [0x2B; 32]),
+        PScanCursor::at(
+            BlockHeight::from_raw(9_000),
+            [0x2B; 32],
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         accruals(&[(0, 100), (1, 250), (2, 75)]),
         pending(&[(0xAB, 1)]),
         Vec::new(),

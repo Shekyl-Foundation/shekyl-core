@@ -335,6 +335,7 @@ where
         let verified = verify_exhaustive(
             BlockHeight::from_raw(start),
             BlockHash::from_bytes(accrual.frontier_hash()),
+            accrual.fold(),
             &blocks,
         )?;
 

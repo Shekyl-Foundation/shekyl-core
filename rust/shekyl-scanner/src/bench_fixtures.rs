@@ -388,12 +388,19 @@ fn assemble_scannable_block(
         transaction_hashes: vec![placeholder_tx_hash],
     };
 
-    ScannableBlock {
+    let mut scannable = ScannableBlock {
         block,
         transactions: vec![bound(&tx)],
         first_output_index: Some(0),
         archival_cumulative: shekyl_types::ArchivalLength::ZERO,
-    }
+    };
+    // The running total of a chain this block opens: its own bound lengths
+    // over a zero base, the value the P-scan's archival step checks
+    // (`WSS-Q16`). A caller chaining it after other blocks restamps it.
+    scannable.archival_cumulative = scannable
+        .archival_increment()
+        .expect("a fixture block's archival length fits u64");
+    scannable
 }
 
 /// A prunable region, empty but present, for a fixture spend with

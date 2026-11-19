@@ -306,6 +306,11 @@ pub mod __test_helpers {
     /// batch and the error are `pub(crate)`; the verdict is flattened to a
     /// `String` so neither leaks.
     ///
+    /// The archival fold the check starts from is the genesis fold (no
+    /// archival good, no shard closed), so the range must start before the
+    /// chain's first archival good. Each block's reported running total in
+    /// the range is then checked against its bound lengths (`WSS-Q16`).
+    ///
     /// Test-only (feature-gated); never compiled into a default production
     /// build.
     pub fn verify_exhaustive_for_test(
@@ -313,9 +318,14 @@ pub mod __test_helpers {
         anchor: shekyl_types::BlockHash,
         blocks: &[crate::engine::ScannableBlock],
     ) -> Result<(), String> {
-        crate::engine::pscan::exhaustiveness::verify_exhaustive(first_height, anchor, blocks)
-            .map(|_batch| ())
-            .map_err(|e| e.to_string())
+        crate::engine::pscan::exhaustiveness::verify_exhaustive(
+            first_height,
+            anchor,
+            &shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+            blocks,
+        )
+        .map(|_batch| ())
+        .map_err(|e| e.to_string())
     }
 
     /// The proof paths' transaction fetch (`engine/proofs_chain_facts.rs`):
