@@ -369,6 +369,10 @@ impl LedgerEngine for LocalLedger {
     fn staking_enabled(&self) -> bool {
         self.read().ledger.staking.staking_enabled
     }
+
+    fn bonded_slots(&self) -> Vec<u32> {
+        self.read().ledger.staking.bonded_slots.clone()
+    }
 }
 
 impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
@@ -388,5 +392,9 @@ impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
 
     fn staking_enabled(&self) -> bool {
         (**self).staking_enabled()
+    }
+
+    fn bonded_slots(&self) -> Vec<u32> {
+        (**self).bonded_slots()
     }
 }

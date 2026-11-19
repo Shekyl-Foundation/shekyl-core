@@ -39,7 +39,7 @@ use std::sync::Arc;
 use shekyl_archival_retention::HoldingsKind;
 use shekyl_engine_file::WalletFile;
 use shekyl_rpc_transport::DaemonTarget;
-use shekyl_types::ShardId;
+use shekyl_types::{PSlot, ShardId};
 use shekyl_wire::shard_frame::frame_rows_digest;
 use tokio::sync::RwLock;
 
@@ -186,45 +186,48 @@ where
         state: &mut ReconcileState,
         alarms: &ShardAlarms,
     ) -> Result<(), ReconcileError> {
-        let stake = { self_arc.read().await.stake_handle() };
+        let (stake, bonded) = {
+            let g = self_arc.read().await;
+            (g.stake_handle(), g.ledger.bonded_slots())
+        };
         let Some(stake) = stake else {
             return Ok(());
         };
-        let active = stake
-            .active_persona()
-            .await
-            .map_err(|e| ReconcileError::Record(e.to_string()))?;
-        let Some(active) = active else {
-            // No active persona owes anything.
+        if bonded.is_empty() {
+            // No bonded persona owes anything.
             alarms.retain_owed(&BTreeSet::new());
             state.owed = Some(BTreeSet::new());
             return Ok(());
-        };
-        let p_id = shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey(
-            &active
-                .bond_id
-                .to_canonical_bytes()
-                .map_err(|e| ReconcileError::Record(e.to_string()))?,
-        );
+        }
 
         let ctx = Self::fill_context(self_arc, daemon).await?;
-        let vouched = fetch_vouched_claim_source(ctx.rpc(), &p_id.to_bytes())
-            .await
-            .map_err(|e| ReconcileError::Record(e.to_string()))?;
-        let owed: BTreeSet<ShardId> = match vouched.source().bond.as_ref() {
-            None => BTreeSet::new(),
-            Some(bond) => match bond.holdings.kind {
-                HoldingsKind::CompleteTree => ctx.final_shards().into_iter().collect(),
-                HoldingsKind::ShardSetCompact => bond
-                    .holdings
-                    .shard_ids
-                    .as_slice()
-                    .iter()
-                    .copied()
-                    .map(ShardId::from_raw)
-                    .collect(),
-            },
-        };
+        // What every bonded persona's connected record owes, whether or not
+        // the persona is active this session: an open is idle until a
+        // request activates one, and the obligation is the record's.
+        let mut owed = BTreeSet::new();
+        for slot in bonded {
+            let p_id = stake
+                .persona_canonical_id(PSlot::from_raw(slot))
+                .await
+                .map_err(|e| ReconcileError::Record(e.to_string()))?;
+            let vouched = fetch_vouched_claim_source(ctx.rpc(), &p_id.to_bytes())
+                .await
+                .map_err(|e| ReconcileError::Record(e.to_string()))?;
+            match vouched.source().bond.as_ref() {
+                None => {}
+                Some(bond) => match bond.holdings.kind {
+                    HoldingsKind::CompleteTree => owed.extend(ctx.final_shards()),
+                    HoldingsKind::ShardSetCompact => owed.extend(
+                        bond.holdings
+                            .shard_ids
+                            .as_slice()
+                            .iter()
+                            .copied()
+                            .map(ShardId::from_raw),
+                    ),
+                },
+            }
+        }
 
         // Pull first: what became owed since the last pass is routine.
         let mut pulled = BTreeSet::new();
