@@ -10,16 +10,14 @@ on:
     - cron: "30 4 * * 1"   # Every Monday at 4:30 AM UTC
   workflow_dispatch:
 
-# Superseded-run cancellation. A burst of merges is analysed once, at its
-# newest commit (rule 06's principle for every push run on dev): the newer
-# run analyses the whole tree, which holds every change the cancelled run
-# would have seen, so no merged code goes unanalysed; an alert is raised
-# against the newest commit of the burst rather than the one that brought
-# it. Not cancelling would spend a full analysis per merge on code the next
-# analysis covers.
+# A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
+# one runs and one waits, and a newer push replaces the waiting one, so a
+# burst of merges costs at most two analyses and the second analyses the
+# whole tree, every change of the burst included (06-branching.mdc). A pull
+# request's newer push cancels its older run.
 concurrency:
   group: codeql-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Change scope: see build.yml's `changes` job for why this is a job-level
