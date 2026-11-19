@@ -1238,7 +1238,7 @@ mod s6_self_cert {
     /// so the extracted self-cert returns the typed start error. Proves
     /// fail-stop *decides* correctly without spawning. The spawn's fail-stop
     /// is `degenerate_self_cert_fail_stops_spawn` below; the wallet open's
-    /// refusal is the lifecycle suite's
+    /// refusal is `lifecycle/assemble_tests.rs`'s
     /// `a_failed_random_source_check_refuses_the_open_and_stops_its_actors`.
     #[test]
     fn run_session_self_cert_rejects_stuck_rng() {
