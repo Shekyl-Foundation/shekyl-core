@@ -507,7 +507,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | list | tx, request, shard, peer, ban, txpool | *verb* — print the entries | tx:verb, request:verb, shard:verb, peer:verb, ban:verb, txpool:verb |
 | note | tx | *view* — a transaction's local note | tx:view |
 | abandon | tx | *verb* — give up on a dispatched send | tx:verb |
-| alarm | tx | *view* — the held sends that need the user's decision, each with why (A19) | tx:view |
+| alarm | tx, shard | *view* — the held sends that need the user's decision, each with why (A19); under `shard`, the shards a bond owes that the body store did not hold or could not verify, each with its refill (WSS-Q17) | tx:view, shard:view |
 | resend | tx | *verb* — offer a held send's saved bytes to the daemon again, by the user's decision (A19) | tx:verb |
 | decode | tx | *verb* — decode a transaction blob | tx:verb |
 | make | uri | *verb* — compose | uri:verb |
@@ -608,6 +608,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `shard list`, `shard list all`, `shard list mine` | `shard list`, `shard list all`, `shard list held` | | | R (IG-Q22) |
 | `shard show <id>` | same | integer | | K |
 | `shard fetch <id> [--png p] [--size n]` | same | integer | `--png-file <path>`; `--png-pixels` integer | R (IG-Q22) |
+| — | `shard alarm` | | | N (WSS-Q17, 2026-11-19): the shards this wallet's bond owes that its body store did not hold or could not verify this session, and what each refill did — `shard_alarm`'s reply |
 | `mine start [threads\|auto]`, `mine stop`, `mine status` | same | integer or `auto` | | K (IG-Q21) |
 | `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | hash, address, text; amount, text | | K; views (IG-Q34) |
 | `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; views (IG-Q34) |
@@ -785,6 +786,16 @@ The wallet lane's PR 2 (Rick, 2026-11-12; the balance legs and the fee tiers, 20
 The refusals added are `-29123 TOO_MANY_INPUTS` and `-29124 TOO_MANY_OUTPUTS` (`data`: `count`, `limit`), and `-29125 INPUT_NOT_IN_TREE` and `-29126 INPUT_UNSPENDABLE` (`data`: `input`, a position). `-29127` is retired and never reused (the user freeze is removed; Rick, 2026-11-15). `-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set: `no-inputs`, `no-outputs`, `zero-input-amount`, `zero-output-amount`, `input-amount-overflow`, `output-amount-overflow`, `insufficient-funds`, `empty-leaf-chunk`, `pqc-leaf-derivation`, `leaf-chunk-too-large`, `zero-tree-depth`, `tree-too-shallow`, `tree-depth-too-large`, `branch-layer-mismatch`, `invalid-combined-ss-length`, `bulletproof`, `fcmp-prove`, `pqc-sign`, `wire`, `balance-self-check` (the builder's invariants), and `primitive`, `handle-mismatch`, `missing-key-image`, `source-decapsulation`, `rid-not-encodable`, `proof`, `bulletproof-parse`, `wire-encode`, `randomness` (the wallet state signing reads, and its random source). A fee variant the build should have made unreachable is the builder's `insufficient-funds`, not a second keyword.
 
 The balance's terms (§19 rows): `spendable`, `incoming` and `outgoing` are new. The wallet has no user-set hold on outputs (Rick, 2026-11-15), so the balance has no third leg and no name for the part a send cannot use now: that part is `incoming`. `held` keeps its one meaning, the shards a wallet holds (`shard list held`). The method registry rejects `freeze`, `thaw` and `frozen`, and so does the CLI's table (§12.3).
+
+### 16.3 The wallet RPC's names added for the persona body-store fill
+
+The body-store fill (`WALLET_SIDE_STORE.md` `WSS-Q4`, `WSS-Q17`; Rick, 2026-11-18) adds one read, and takes Part C's rules as §16.1 did.
+
+| Method | Path | Parameters | Reply | Notes |
+|---|---|---|---|---|
+| `shard_alarm` | `shard alarm` (§12.3) | — | a list (IG-Q53) of `{shard, alarm, refill}` | a view, in `tx_alarm`'s shape: re-derived each open, nothing stored; `shard` is the shard's id (integer), `alarm` one keyword (IG-Q86): `missing`, `corrupt`; `refill` one keyword: `pending`, `refilled`, `discarded`, `failed` |
+
+`stake` gains seven refusals, each W1-clean: `-29538 STAKE_SCAN_BEHIND` (`data`: `scanned`, `needed`, heights), `-29539 STAKE_SHARD_DISCARDED` (`data`: `shard`), `-29540 STAKE_DAEMON_MISMATCH` (`data`: `shard`, `detail`), `-29541 STAKE_LOCAL_NODE_REQUIRED` (`data`: `detail`), `-29542 STAKE_BODY_STORE_FAILED` (`data`: `shard`, `detail`), `-29543 STAKE_DAEMON_SYNCING`, and `-29544 STAKE_DAEMON_UNREACHABLE` (`data`: `detail`). Value keywords added: `missing`, `corrupt` (shard alarm); `pending`, `refilled`, `discarded`, `failed` (refill). `refill` joins the glossary under `shard`.
 
 ## 17. The method census
 
@@ -1091,6 +1102,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | flagged | tor | the consensus does not recommend this Tor; independent of the state and of the cause (IG-Q70) | |
 | fix | tor | a fix the operator may apply; the list is empty except for an install cause | |
 | missing | tx | a slot state: the node was asked and holds no such item (IG-Q73) | |
+| refill | shard | what a lost shard's refill from the wallet's own node did (WSS-Q17) | |
 | retired | txpool | the pool's file faulted and the node holds no pool until it restarts (IG-Q74) | |
 | publication | tx | where the caller's own transaction stands with the relay: one-of `held`, `overdue`, `public`, `untracked` (IG-Q75) | |
 | session | sync | a peer session chain sync holds (IG-Q80) | |

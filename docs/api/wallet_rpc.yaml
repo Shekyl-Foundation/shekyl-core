@@ -83,6 +83,11 @@
 #     get_staked_balance, get_staked_outputs,
 #     staking_info                                 (authoritative staking
 #                                                   read view; read-only)
+#     shard_alarm                                  (WSS-Q17 — the shards
+#                                                   the bond owes that the
+#                                                   body store lost, and
+#                                                   their refill; Part C
+#                                                   name)
 #   SPECIFIED (WI-RPC-2a — CLI-off-wallet2 transport swap):
 #     restore_wallet                               (deterministic inverse of
 #                                                   create_wallet's BIP-39
@@ -341,7 +346,8 @@
 #                            operation that reaches the daemon)
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
-#   -29500..-29599           staking (-29500..-29506 and -29512 live on
+#   -29500..-29599           staking (-29500..-29506, -29512 and
+#                            -29538..-29544 (the fill, WSS-Q4) live on
 #                            `stake`; -29507..-29511 live on `drain`
 #                            (WI-RPC-5); -29513..-29522 and -29528 live on
 #                            `unstake` and -29523..-29527 and -29529 on
@@ -549,7 +555,19 @@ info:
   # confirms) and -29133 SAVE_INTERNAL_FAULT (a fault in the wallet before
   # the disk was touched). Each sent nothing and keeps the reservation.
   # api_version stays 1.
-  version: 0.21.0
+  # 0.22.0: the persona body-store fill (WSS-Q4, Rick 2026-11-18). stake
+  # fills the body store with every shard the bond owes before anything
+  # durable is written, and refuses with a code each when it cannot:
+  # -29538 STAKE_SCAN_BEHIND (data.scanned, data.needed), -29539
+  # STAKE_SHARD_DISCARDED (data.shard), -29540 STAKE_DAEMON_MISMATCH
+  # (data.shard, data.detail), -29541 STAKE_LOCAL_NODE_REQUIRED
+  # (data.detail), -29542 STAKE_BODY_STORE_FAILED (data.shard,
+  # data.detail), -29543 STAKE_DAEMON_SYNCING and -29544
+  # STAKE_DAEMON_UNREACHABLE (data.detail). Each is W1-clean: nothing was
+  # written. shard_alarm (WSS-Q17) lists, in the tx_alarm shape, the
+  # shards the bond owes that the body store did not hold or could not
+  # verify this session, and what the refill did. api_version stays 1.
+  version: 0.22.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -617,6 +635,7 @@ x-shekyl-method-registry:
   get_staked_balance: { status: SPECIFIED }
   get_staked_outputs: { status: SPECIFIED }
   staking_info: { status: SPECIFIED }
+  shard_alarm: { status: SPECIFIED }
   stake_in: { status: SPECIFIED }
   get_drain_balance: { status: SPECIFIED }
   drain: { status: SPECIFIED }
@@ -753,6 +772,7 @@ components:
             - get_staked_balance
             - get_staked_outputs
             - staking_info
+            - shard_alarm
             - stake_in
             - get_drain_balance
             - drain
@@ -941,6 +961,13 @@ components:
         - -29535   # SHARD_UNAVAILABLE
         - -29536   # SHARD_VIEW_NOT_OFFERED
         - -29537   # SHARD_VIEW_BUSY
+        - -29538   # STAKE_SCAN_BEHIND
+        - -29539   # STAKE_SHARD_DISCARDED
+        - -29540   # STAKE_DAEMON_MISMATCH
+        - -29541   # STAKE_LOCAL_NODE_REQUIRED
+        - -29542   # STAKE_BODY_STORE_FAILED
+        - -29543   # STAKE_DAEMON_SYNCING
+        - -29544   # STAKE_DAEMON_UNREACHABLE
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -1794,6 +1821,47 @@ components:
                                           one (bound.shard); a view it
                                           already held would have answered.
                                           Transient — retry shortly
+          -29538 STAKE_SCAN_BEHIND        stake: the persona scan has not
+                                          verified the chain up to the
+                                          finality horizon, so the shards a
+                                          CompleteTree bond owes are not
+                                          known yet (data.scanned,
+                                          data.needed). The scan runs on its
+                                          own; retry once it has caught up.
+                                          Nothing was written
+          -29539 STAKE_SHARD_DISCARDED    stake: the node has discarded the
+                                          bodies of a shard the bond owes
+                                          (data.shard), and a node does not
+                                          yet read below its horizon, so the
+                                          bond cannot be posted until one
+                                          can. A CompleteTree server joining
+                                          after the first epochs meets this.
+                                          Nothing was written
+          -29540 STAKE_DAEMON_MISMATCH    stake: the node's reply for a
+                                          shard the bond owes does not match
+                                          the chain the persona scan
+                                          verified (data.shard, data.detail).
+                                          Bonding against it would be
+                                          slashed; nothing was written —
+                                          check the node
+          -29541 STAKE_LOCAL_NODE_REQUIRED stake: the body store is filled
+                                          from the wallet's own node over
+                                          loopback, and this server's daemon
+                                          address is not loopback
+                                          (data.detail). Configuration, not
+                                          a fault
+          -29542 STAKE_BODY_STORE_FAILED  stake: the body store could not
+                                          write a shard the bond owes
+                                          (data.shard, data.detail). Nothing
+                                          was posted; check the disk
+          -29543 STAKE_DAEMON_SYNCING     stake: the node is still
+                                          synchronizing, so finality cannot
+                                          be judged. Retry once it has
+                                          caught up
+          -29544 STAKE_DAEMON_UNREACHABLE stake: the node could not be read
+                                          while filling the body store
+                                          (data.detail). Nothing was
+                                          posted; check the node and retry
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -2030,7 +2098,13 @@ components:
         refuses -29506 and the refusal message is the full warning (D-4).
         Market staking today refuses -29505: shard assignment is its own
         round, so a well-funded wallet is told so rather than silently
-        owing the corpus.
+        owing the corpus. Fill first, then post (WSS-Q4): after the funding
+        check and before anything durable, the persona body store is filled
+        from the wallet's own node with every shard the bond owes — for
+        CompleteTree every closed and final shard — and each is checked
+        against the chain the persona scan verified. A fill that cannot
+        complete refuses with its own code (-29538..-29544), having written
+        nothing.
       properties:
         password:
           type: string
@@ -2415,6 +2489,49 @@ components:
           type: integer
           format: int64
           description: The wallet's synced height when the send left.
+
+    ShardAlarmParams:
+      type: object
+      description: >
+        `shard_alarm` (WSS-Q17) takes no parameters.
+
+    ShardAlarmResult:
+      type: array
+      description: >
+        The shards the persona's bond owes that its body store did not hold,
+        or held with a body that did not verify against the rows the
+        persona scan sealed, this session, ascending by shard, each with
+        what its refill from the wallet's own node did. Re-derived by each
+        open's reconcile passes (at open, at each settlement epoch, and
+        after a fill); nothing about the alarm is stored. A shard the bond
+        no longer owes leaves the list. Empty when nothing was lost.
+      items:
+        $ref: "#/components/schemas/ShardAlarmEntry"
+
+    ShardAlarmEntry:
+      type: object
+      required: [shard, alarm, refill]
+      properties:
+        shard:
+          type: integer
+          format: int64
+          description: The shard's id.
+        alarm:
+          type: string
+          enum: [missing, corrupt]
+          description: >
+            missing: the body store did not hold it. corrupt: it held it,
+            and a chunk failed authentication or the frame's rows were not
+            the shard's.
+        refill:
+          type: string
+          enum: [pending, refilled, discarded, failed]
+          description: >
+            pending: the refill has not finished. refilled: refilled from
+            the node and verified. discarded: the node has discarded the
+            shard's bodies and a node does not yet read below its horizon,
+            so it cannot be refilled until one can. failed: the refill
+            failed for another reason; the next pass retries.
 
     TxResendParams:
       type: object
