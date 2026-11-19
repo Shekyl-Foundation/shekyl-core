@@ -258,6 +258,30 @@ fn a_local_origin_with_no_successor_is_held_until_it_can_stem() {
     assert!(rig.pool.shown().is_empty(), "never shown");
 }
 
+/// **A node built with no connector shows its own transaction at once.** It
+/// has no network: there is no stem to send and no peer to hide it from, and
+/// its own blocks can carry the transaction only once it is shown. The
+/// clock does not move in this test, so no retry or embargo shows it.
+///
+/// What edit reds this: delete the no-connector arm of `dispatch` (the
+/// transaction is held and never shown).
+#[test]
+fn a_node_with_no_connector_shows_its_own_transaction_at_once() {
+    let rig = Rig::build(Build {
+        offline: true,
+        ..Build::default()
+    });
+    let tx = id_of(&blob(4));
+    assert!(rig.relay.relay_local(tx, blob(4)), "the owner took it");
+    support::wait_until("its own transaction was shown", || {
+        rig.pool.shown().contains(&tx)
+    });
+    assert!(
+        rig.relay.snapshot().stem_in_flight == 0,
+        "nothing was stemmed: there is nowhere to send it"
+    );
+}
+
 /// **A node that opts out of cover relays no stems** (`CVR-R1`; Rick,
 /// 2026-11-15). A stem it receives is broadcast through the no-stem path,
 /// though it has an outbound successor a stem could go to; its own

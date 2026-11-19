@@ -318,6 +318,8 @@ pub struct Build {
     /// idle and stems go bare.
     pub encrypted: bool,
     pub node_sync: NodeSync,
+    /// Build the relay with no connector: a node with no network.
+    pub offline: bool,
     /// Each channel's send-queue cap. A message larger than this closes
     /// the session it is sent on.
     pub send_cap: usize,
@@ -329,6 +331,7 @@ impl Default for Build {
             cover: true,
             encrypted: false,
             node_sync: NodeSync::Synchronised,
+            offline: false,
             send_cap: SEND_CAP,
         }
     }
@@ -378,7 +381,11 @@ impl Rig {
         // whether its clearnet sessions stand for encrypted ones.
         let Started { port, handle } = start(RelayParts {
             config: RelayConfig::inherited(
-                vec![ConnectorId::Clearnet],
+                if build.offline {
+                    Vec::new()
+                } else {
+                    vec![ConnectorId::Clearnet]
+                },
                 if build.encrypted {
                     vec![ConnectorId::Clearnet]
                 } else {

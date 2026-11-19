@@ -51,7 +51,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> super::Actor<C> {
     /// a relayed stem here and holds this node's own. Cover off is a fluff
     /// epoch for a received stem (`CVR-R1`), decided by the zone. Before its
     /// first send this node's own transaction waits: every arm here that would
-    /// end its stem phase holds it instead. A relayed stem whose phase ends
+    /// end its stem phase holds it instead. The one exception is a node
+    /// built with no connector: it has no network to wait for, so its own
+    /// transaction is shown at once. A relayed stem whose phase ends
     /// here is broadcast. Once a transaction has been sent, nothing treats
     /// this node's own differently (`graph::embargo`).
     pub(super) fn dispatch(
@@ -91,6 +93,13 @@ impl<C: Clock + Clone + Send + Sync + 'static> super::Actor<C> {
                 StemOut::Written | StemOut::Carried | StemOut::Ended => return,
                 StemOut::WriteFailed => {}
             }
+        }
+        if local && self.offline {
+            // A node with no connector has no network: there is no stem to
+            // send and no peer to hide it from. Its own transaction is shown
+            // at once, so its own blocks can carry it, and sent nowhere.
+            self.fluff_and_record(txs, source);
+            return;
         }
         if local {
             // This node's own transaction: no route, or its ordinary write

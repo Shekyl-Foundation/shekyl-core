@@ -439,6 +439,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         last_verdict,
         snapshot,
         origins,
+        offline: config.connectors.is_empty(),
     };
     runtime.spawn(actor.run());
     Ok(Started { port, handle })
@@ -473,6 +474,9 @@ struct Actor<C: Clock + Clone + Send + Sync + 'static> {
     last_verdict: OriginVerdict,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
     origins: Arc<Mutex<Arc<HashMap<TxId, Millis>>>>,
+    /// The node was built with no connector: it has no network, so it can
+    /// send nothing and no watcher can see a stem.
+    offline: bool,
 }
 
 impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {

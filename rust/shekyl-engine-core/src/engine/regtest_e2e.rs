@@ -798,7 +798,8 @@ impl RegtestDaemon {
 
     /// [`Self::start_for_seed`] with the restricted listener bound as well:
     /// an offline daemon mining to `seed`'s address, whose own transactions
-    /// are shown at once (no route, RD's NoRoute fluff at the origin).
+    /// are shown at once (built with no connector, it has no network to stem
+    /// over: the relay owner's no-connector arm).
     pub(super) async fn start_for_seed_with_restricted_listener(
         seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     ) -> RegtestDaemon {
