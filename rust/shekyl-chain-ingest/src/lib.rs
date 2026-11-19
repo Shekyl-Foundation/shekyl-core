@@ -159,6 +159,10 @@ pub mod fetch;
 // The tip follower: the seed window, then the pool, then the miner's job.
 #[cfg(feature = "pipeline")]
 pub mod follower;
+/// `CF-4a` (`CHAIN_FORGE.md`): the forged shard-fill chain, fetched by its
+/// pin and connected into a scenario; the long scenarios build on it.
+#[cfg(all(test, feature = "pipeline"))]
+mod forged_fill;
 #[cfg(all(test, feature = "pipeline"))]
 mod header_path_tests;
 /// The logical-state digest at a tip, and at every height of a

@@ -1,0 +1,37 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The shard-fill chain (CHAIN_FORGE.md CF-4a, CF-R28): three shards closed by
+# real spends, the chain the long scenarios and the store's boundary tests
+# build on. It replaces the captured shard-fill.bin, whose bytes do not
+# regenerate; this one is forged, so it does, byte for byte, on x86_64 and
+# aarch64.
+#
+# Hosted, not committed (CF-R6: its corpus is about 12.8 MB, over the 5 MB
+# line): the corpus, the trace and the manifest are an OCI artifact pinned
+# by digest in ../chains/hosted.toml; this plan and ../chains/shard-fill/
+# blocks.txt are committed.
+#
+# The schedule is the store's capture rules (SEB 100, cap 50). A reader
+# connects the chain under its own schedule, every rule judging each block,
+# and takes each shard's close height from the manifest's
+# shard-<k>-closed events, never from a number written down: a re-forge
+# moves them.
+#
+# Coinbases 1 to 9 are left to a reader's own posts: block 0 is regtest's
+# table genesis, and the fill spends from coinbase 10.
+#
+# The seed is SHA-256("shekyl/chain-forge/shard-fill-plan-v1").
+
+chain = "shard-fill"
+seed = "26255c2f34c9e1a7c4fc710c277841d2d92af6809115ea7c6e6aeddf1e27e06e"
+network = "regtest"
+fixed_difficulty = 1
+block_seconds = 1
+schedule = { settlement_epoch_blocks = 100, reorg_cap_blocks = 50 }
+
+[[step]]
+do = "fill-shards"
+count = 3

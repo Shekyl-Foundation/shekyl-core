@@ -3872,6 +3872,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-bundle-producer",
+ "shekyl-chain-forge",
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-chain-sync",
