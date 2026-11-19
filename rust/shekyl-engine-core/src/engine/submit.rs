@@ -33,9 +33,9 @@ impl<
 {
     /// Submit a [`PendingTx`](super::pending::PendingTx) handle via [`PendingTxEngine::submit`].
     ///
-    /// `seen_gen` is the [`PendingTx::content_gen`] the consumer last reviewed;
+    /// `seen_gen` is the [`PendingTx::content_gen`](crate::engine::pending::PendingTx::content_gen) the consumer last reviewed;
     /// it gates broadcast against a submit-time re-anchor that changed the
-    /// authorized content (CT-5d, [`docs/design/CT5D_REANCHOR.md`] §4).
+    /// authorized content (CT-5d, `docs/design/CT5D_REANCHOR.md` §4).
     ///
     /// Success is the identity-bearing [`SubmitOutcome`](super::pending::SubmitOutcome) — fresh accept,
     /// pool-resident duplicate, or the daemon's already-in-chain claim

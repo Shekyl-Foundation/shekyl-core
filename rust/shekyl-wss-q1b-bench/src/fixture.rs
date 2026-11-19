@@ -19,7 +19,7 @@
 //!
 //! *Should*. That claim is load-bearing for the whole approach, so the harness
 //! **proves it rather than citing the padding comment** — see
-//! [`control_experiment`]. The control is run at a depth where both arms are
+//! [`ControlExperiment`]. The control is run at a depth where both arms are
 //! cheap, and it holds sparsity as the only variable: same depth, dense path
 //! versus sparse path. Comparing a sparse depth-6 path against a dense depth-4
 //! one — as this harness's opening brief proposed — varies depth *and*
@@ -216,7 +216,7 @@ pub fn read_off_path(layers: &[Vec<[u8; 32]>], leaf_pos: usize) -> Path {
 /// The root this returns is a genuine hash of the chain below it — the prover
 /// and the verifier both see a well-formed tree. What makes it *synthetic* is
 /// only that no chain produced it. Nothing about the circuit's cost depends on
-/// that, which is the claim [`control_experiment`] checks.
+/// that, which is the claim [`ControlExperiment`] checks.
 ///
 /// # Panics
 /// If a hash-grow or point conversion fails, which for valid leaf scalars is a

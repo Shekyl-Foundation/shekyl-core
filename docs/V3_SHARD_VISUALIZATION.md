@@ -1075,7 +1075,13 @@ does not exist:
   every human and every dashboard, and a paragraph three files away
   does not travel with the checkmark. The gate is named
   `shard-visual-x86-smoke` — not a budget or performance gate — so
-  the name cannot overclaim either.
+  the name cannot overclaim either. Its thresholds are wall clock on
+  GitHub's hosted runners, and it fails only there
+  (`RUNNER_ENVIRONMENT=github-hosted`). A fleet build VM running the
+  CI job's steps is about half as fast and shared with other lanes, so
+  there the smoke reports its cells over threshold and does not fail
+  (Rick, 2026-11-18). A gate that holds on every host would be an
+  instruction count, not a wall clock.
 
 If a candidate algorithm can't hit the amended targets on the floor
 device, it gets dropped from the palette or restricted to higher-end

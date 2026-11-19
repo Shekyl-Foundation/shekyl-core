@@ -3,14 +3,17 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# One pull request's freshness re-test, called by freshness.yml for each
-# open pull request a merge to `dev` reaches (Brief C, option (a)).
+# One pull request's freshness re-test, called by freshness.yml for a
+# pull request carrying the `merge-next` label that is not fresh against
+# `dev` (Brief C, ruled 2026-11-19).
 #
 #   re-test  checks out the pull request's head, merges the new `dev` into
-#            it locally (the branch is never changed), and runs the
-#            pull request's own scoped tests (scripts/ci/rust_scoped_tests.sh,
-#            the Rust job's commands) inside a time budget. Read-only: it
-#            runs the pull request's code and holds no write token.
+#            it locally (the branch is never changed), and runs the tests
+#            both the pull request and the merges since it was last fresh
+#            reach (freshness_overlap.py's shared tests) with the Rust job's
+#            commands (scripts/ci/rust_scoped_tests.sh), inside a time
+#            budget. Read-only: it runs the pull request's code and holds no
+#            write token.
 #   report   posts `fresh-against-dev` on the head: green, or red with the
 #            reason (failing tests, a conflict with `dev`, the time budget,
 #            a cancelled re-test), and a comment naming the merge and the
@@ -39,6 +42,10 @@ on:
         description: the `dev` commit to merge into the head
         type: string
         required: true
+      since:
+        description: the `dev` the head was last fresh against (freshness_status.py)
+        type: string
+        required: true
       merged:
         description: the merged pull requests, `#N` each
         type: string
@@ -48,11 +55,11 @@ on:
         type: string
         required: true
       rust_tests:
-        description: change_scope.py's `rust_tests` for the pull request
+        description: members whose rdeps() is the shared tests, as change_scope.py's `rust_tests`
         type: string
         required: true
       rust_doc_pkgs:
-        description: change_scope.py's `rust_doc_pkgs` for the pull request
+        description: their doctest packages, as change_scope.py's `rust_doc_pkgs`
         type: string
         required: true
 
@@ -137,7 +144,7 @@ jobs:
           save-if: false
       - name: install cargo-nextest
         run: bash scripts/ci/rust_scoped_tests.sh install-nextest
-      - name: the pull request's tests against the new dev
+      - name: the shared tests against the new dev
         id: tests
         working-directory: rust
         shell: bash
@@ -150,7 +157,7 @@ jobs:
           TEST_BUDGET_MINUTES: 240
         run: |
           if [ "$RUST_TESTS" = none ]; then
-            echo "scope: the pull request's change runs no Rust test"
+            echo "scope: no shared Rust test"
             exit 0
           fi
           rc=0
@@ -174,10 +181,12 @@ jobs:
       pull-requests: write
       statuses: write
     steps:
-      # `dev`'s scripts (the caller's commit), not the pull request's: this
-      # job holds write tokens.
+      # `dev`'s scripts, by SHA, not the pull request's: this job holds
+      # write tokens, and on the label the run's own commit is the pull
+      # request's merge.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.dev }}
           sparse-checkout: |
             scripts/ci/freshness_status.py
             scripts/ci/failed_tests.py
@@ -189,6 +198,7 @@ jobs:
           FRESHNESS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DEV: ${{ inputs.dev }}
           MERGED: ${{ inputs.merged }}
+          SINCE: ${{ inputs.since }}
           CRATES: ${{ inputs.crates }}
           CONFLICT: ${{ needs.retest.outputs.conflict }}
           TIMED_OUT: ${{ needs.retest.outputs.timed_out }}

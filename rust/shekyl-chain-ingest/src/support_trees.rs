@@ -38,6 +38,7 @@ use shekyl_archival_retention::{
 use shekyl_bundle_producer::DrawTarget;
 use shekyl_chain_rules::{CenRow, EpochFloor};
 use shekyl_harness_spender::{Owner, Recipient, Spender};
+use shekyl_network::Network;
 use shekyl_types::archival::SettlementOutcome;
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
@@ -48,16 +49,19 @@ use crate::chain_drive::{
     catch_up, failure_window_epochs, priced_emission_claim, Driven, EmissionClaimParts,
 };
 use crate::emission_assembly::ClaimTerms;
+use crate::forged_fill::FIRST_POST_COINBASE;
 use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_shard::ClosedShard;
 
-/// The release's funding coinbase. The joins ride coinbases 0 to 2. The
-/// refused early release spends it too: it never connects.
-const RELEASE_COINBASE: u64 = 3;
+/// The release's funding coinbase. The joins ride the first three post
+/// coinbases (the forged chain leaves them to the scenario,
+/// [`FIRST_POST_COINBASE`]). The refused early release spends it too: it
+/// never connects.
+const RELEASE_COINBASE: u64 = FIRST_POST_COINBASE + 3;
 
 /// The refused rejoin's funding coinbase.
-const REJOIN_COINBASE: u64 = 4;
+const REJOIN_COINBASE: u64 = FIRST_POST_COINBASE + 4;
 
 /// The claim the caller connects, and the facts it is priced from.
 pub(crate) struct TreesClaim {
@@ -127,16 +131,16 @@ pub(crate) async fn drive_support_trees(drive: &mut Driven, closed: ClosedShard)
     assert_eq!(closed.shard.to_raw(), 0);
     let schedule = drive.scenario.settlement_schedule();
     let join_height = drive.height();
-    let persona = Persona::at(1);
-    let released = Persona::at(2);
-    let slashed = Persona::at(3);
+    let persona = Persona::on(Network::Regtest, 1);
+    let released = Persona::on(Network::Regtest, 2);
+    let slashed = Persona::on(Network::Regtest, 3);
     let mut spender = Spender::on(drive.scenario.network_id(), &drive.chain);
     let mut seen = drive.chain.len();
     let (joins, backing_key, fee_key) = {
         let recipient = Recipient::persona(persona.keys());
         let funding = spender.spend_coinbase_to(
             drive.scenario.wallet(),
-            BlockHeight::ZERO,
+            BlockHeight::from_raw(FIRST_POST_COINBASE),
             join_height,
             FEE,
             Some(&persona.join(shard_set(vec![0]), ENDPOINT)),
@@ -148,7 +152,7 @@ pub(crate) async fn drive_support_trees(drive: &mut Driven, closed: ClosedShard)
         spender.own(fee_key);
         let trees: Vec<Transaction> = [&released, &slashed]
             .into_iter()
-            .zip(1u64..)
+            .zip(FIRST_POST_COINBASE + 1..)
             .map(|(tree, coinbase)| {
                 spender.spend_coinbase_posting(
                     drive.scenario.wallet(),

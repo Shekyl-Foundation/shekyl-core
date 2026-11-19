@@ -31,7 +31,7 @@
 //! *do* with the two slots was never a C++ if-else over these predicates.
 //! The C++ writers went with the handler's sync half (CS-5); chain sync
 //! maps the ingest entry's reply through [`crate::SyncReplyAction`].
-//! An unrecognised byte is [`Self::Unclassified`]: not added, not
+//! An unrecognised byte is [`BlockIngest::Unclassified`]: not added, not
 //! rejected, not missing-txs, not orphaned — and, because drop is a
 //! different slot, not a reason to sever.
 

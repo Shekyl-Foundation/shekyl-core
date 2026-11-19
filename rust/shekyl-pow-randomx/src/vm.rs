@@ -1205,10 +1205,10 @@ impl VmState {
     /// # Allocation breakdown
     ///
     /// - One [`RANDOMX_SCRATCHPAD_L3`]-sized heap allocation
-    ///   (2 MiB) for [`scratchpad`], zero-initialized via the
+    ///   (2 MiB) for [`scratchpad`](crate::vm::VmState::scratchpad), zero-initialized via the
     ///   [`alloc_zeroed_scratchpad`] carve-out.
     /// - One `size_of::<Program>()`-sized heap allocation (3 KiB)
-    ///   for [`program`], constructed via [`Program::default`]
+    ///   for [`program`](crate::vm::VmState::program), constructed via [`Program::default`]
     ///   ([`core::array::from_fn`] of [`Instruction::default`]) and
     ///   moved into a [`Box`].
     /// - All other fields are inlined into the [`VmState`] struct
@@ -2434,7 +2434,7 @@ pub(crate) fn compute_hash_inner(
 }
 
 /// Feed the 256-byte register-file (`r[0..8] || f[0..4] || e[0..4] ||
-/// a[0..4]`) to a [`Digest`] hasher, matching the C reference's
+/// a[0..4]`) to a [`Digest`](blake2::Digest) hasher, matching the C reference's
 /// `blake2b(..., &reg, sizeof(RegisterFile), ...)` byte-for-byte.
 ///
 /// The C `RegisterFile` struct layout per

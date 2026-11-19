@@ -197,7 +197,7 @@ jobs:
                 '',
                 ...since,
                 '',
-                'Each pull request was green on its own head. Find the two changes that disagree and fix it on a new pull request before more merges land on top (06-branching.mdc, "The runs on `dev` test the merge result"). This issue closes itself when the job is next green on `dev`.',
+                'Each pull request was green on its own head. Find the two changes that disagree and fix it on a new pull request before more merges land on top (06-branching.mdc, "The runs on `dev` test the merge result"). This issue closes itself when the job is next green on `' + branch + '`.',
               ].join('\n');
               const title = titleOf(job.name);
               const existing = open.find((i) => i.title === title);

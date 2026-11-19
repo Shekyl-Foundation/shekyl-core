@@ -36,9 +36,12 @@ name: ci/multisig-feature
 on:
   workflow_dispatch:
 
+# A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
+# one runs and one waits, and a newer push replaces the waiting one, so the
+# run that finishes covers every merge since the last (06-branching.mdc).
 concurrency:
   group: multisig-feature-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

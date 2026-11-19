@@ -146,7 +146,7 @@ pub(crate) fn tor_service_config(
 ///
 /// An override that does not resolve to an existing file falls back to
 /// discovery **and says so once**, rather than failing. The reason is the
-/// travel residual on [`DevicePrefs::tor_binary_path`]: `<P>.prefs.toml` sits
+/// travel residual on [`DevicePrefs::tor_binary_path`](shekyl_engine_prefs::schema::DevicePrefs::tor_binary_path): `<P>.prefs.toml` sits
 /// beside the wallet file, so a cluster copied to another machine carries a
 /// path that machine may not have. Treating that as fatal would make moving a
 /// wallet break it; treating it silently would hide a genuine operator typo.

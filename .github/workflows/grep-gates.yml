@@ -36,9 +36,12 @@ name: ci/grep-gates
 on:
   workflow_dispatch:
 
+# A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
+# one runs and one waits, and a newer push replaces the waiting one, so the
+# run that finishes covers every merge since the last (06-branching.mdc).
 concurrency:
   group: grep-gates-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -304,6 +307,8 @@ jobs:
             python3 scripts/ci/check_shard_fill_frozen.py --selftest
           run_one "The shard-fill chain is frozen, with no new consumer" \
             python3 scripts/ci/check_shard_fill_frozen.py
+          run_one "Depends fetches from the Foundation mirror first and keeps only pinned bytes (selftest)" \
+            python3 scripts/ci/check_depends_mirror.py
           run_one "A feature never changes a public type's shape (selftest)" \
             python3 scripts/ci/check_feature_gated_members.py --selftest
           run_one "A feature never changes a public type's shape (rule 25)" \

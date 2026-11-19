@@ -11,7 +11,7 @@
 //! `shekyl-engine-core`'s `AssembleBond` / `AssembleRelease` call, so the
 //! vin carries the identity key, the derived `P_canonical_id`, the
 //! floor-priced total and the genesis-frozen term side); and the
-//! transaction around it ([`Spender::spend_coinbase_posting`]: funding
+//! transaction around it ([`Spender::spend_coinbase_posting`](crate::Spender::spend_coinbase_posting): funding
 //! spend, two confidential outputs, `sign_transaction_with_terms` with the
 //! post's term on its side, the bond slot last in `pqc_auths` and signed
 //! by the named key — the identity key for a credit, `bond_spend_sk` for a
@@ -60,7 +60,7 @@ const MASTER: [u8; MASTER_SEED_BYTES] = [0x51; MASTER_SEED_BYTES];
 pub struct Persona {
     keys: ArchivalPKeys,
     /// Where this persona's signatures draw ML-DSA's randomness: the OS, or
-    /// a signing seed ([`Self::with_signing_seed`], `seeded-rng`).
+    /// a signing seed (`Self::with_signing_seed`, `seeded-rng`).
     draw: MlDsaDraw,
 }
 

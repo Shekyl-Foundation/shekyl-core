@@ -18,6 +18,9 @@ publish = false
 # channel's handshake stack.
 [dependencies]
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The per-account root's name (rule 83 IG-13), which a Windows account's
+# rendezvous directory sits in: one owner, the account leaf.
+shekyl-os-account = { path = "../shekyl-os-account" }
 
 [target.'cfg(windows)'.dependencies]
 # `%ProgramData%`, the root of the service's rendezvous directory on

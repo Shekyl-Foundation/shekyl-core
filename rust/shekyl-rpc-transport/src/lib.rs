@@ -34,7 +34,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A failure of the connection itself, classified where it is raised.
 ///
-/// The wallet's [`RpcError`](shekyl_rpc_client::RpcError) still folds this
+/// The wallet's [`RpcError`] still folds this
 /// into `ConnectionError`. Callers that can act on the cause — the shell —
 /// match the variant instead of searching the sentence.
 #[derive(Clone, Debug)]
@@ -67,7 +67,7 @@ impl std::error::Error for TransportFault {}
 /// [`TransportFault`] is the connection. [`PostFault::Protocol`] is a
 /// failure of this side of the request — digest authentication, a header
 /// that would not encode — which the wallet still reports as its own
-/// [`RpcError`](shekyl_rpc_client::RpcError) variant.
+/// [`RpcError`] variant.
 #[derive(Clone, Debug)]
 pub enum PostFault {
     /// The connection failed.

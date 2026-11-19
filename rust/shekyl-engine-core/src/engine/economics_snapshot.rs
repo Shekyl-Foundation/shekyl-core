@@ -7,7 +7,7 @@
 //!
 //! [`EconomicsParametersSnapshot`] is the **rulebook** returned by
 //! [`EconomicsEngine::parameters_snapshot`](super::traits::economics::EconomicsEngine::parameters_snapshot):
-//! the resolved [`EconomicParams`](shekyl_economics::EconomicParams)
+//! the resolved [`EconomicParams`]
 //! constants plus the staker-emission calibration consts,
 //! tagged with a [`CalibrationStamp`] for staleness detection. It is
 //! **not** a dashboard — time-varying derived state (live burn %,
@@ -56,7 +56,7 @@ pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x03;
 
 /// Blake2b-256 over the calibration surface an
 /// [`EconomicsParametersSnapshot`] exposes: a version tag and
-/// [`params_digest`](shekyl_economics::params_digest).
+/// [`params_digest`].
 ///
 /// `shekyl_economics::params_digest` covers every `EconomicParams`
 /// field, including the staker-emission share, its decay and the
@@ -100,7 +100,7 @@ pub(crate) struct CalibrationStamp {
     pub generation: u32,
 
     /// Blake2b-256 of one version byte and
-    /// [`params_digest`](shekyl_economics::params_digest)
+    /// [`params_digest`]
     /// ([`snapshot_calibration_digest`]). Share and decay move the stamp
     /// because they are fields of that digest. The version byte keeps
     /// this stamp off the bare sub-digest. **Not** raw JSON bytes,
@@ -113,7 +113,7 @@ pub(crate) struct CalibrationStamp {
 /// Resolved economic rulebook for governance / display (PR 7 §5.3 R2).
 ///
 /// All values are **base** constants from the build-time
-/// [`EconomicParams`](shekyl_economics::EconomicParams) loader, in
+/// [`EconomicParams`] loader, in
 /// integer units (basis points / milli-units / atomic units) — no
 /// floats, matching the consensus no-float discipline. Effective
 /// height-varying quantities (decayed emission share, live burn) are

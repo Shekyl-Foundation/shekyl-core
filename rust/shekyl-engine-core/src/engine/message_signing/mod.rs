@@ -43,7 +43,7 @@
 //! blocking task, so a burst of concurrent `sign_message` calls queues
 //! FIFO instead of stacking multi-second CPU-bound jobs — see the
 //! `sign_permit` field docs on
-//! [`KeyEngineHandle`](super::key_actor::KeyEngineHandle).
+//! [`KeyEngineHandle`].
 //!
 //! # Verify is here, and is not an `Engine` method
 //!

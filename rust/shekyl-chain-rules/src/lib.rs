@@ -10,7 +10,7 @@
 //! Two stages: [`form`] takes a candidate block, a `RuleSet` and a
 //! [`Substrate`] (clock, longhash — the world, not the chain) and yields a
 //! [`StructurallyValid`], stateless and outside any transaction;
-//! [`validate`] takes that, a `ChainView<'id>` (narrow, read-only trait over
+//! [`fn@validate`] takes that, a `ChainView<'id>` (narrow, read-only trait over
 //! **recorded** chain facts), the rule set in force and the node's [`Trust`]
 //! (the genesis pin it carries), and yields
 //! `ChainValid<'id, V>` or `InvalidBlock { rule: CenRow, .. }` — or a
@@ -82,7 +82,7 @@
 //!
 //! * **Block connect** (S-CHAIN-W): [`form`] outside the write transaction
 //!   — the ingest driver supplies the [`Substrate`] and its seed, target and
-//!   rule-set claims — then [`validate`] inside it, over the store's
+//!   rule-set claims — then [`fn@validate`] inside it, over the store's
 //!   projected `ChainView<'id>`; the `ChainValid<'id, V>` it mints is the
 //!   only thing `connect` accepts, branded with both the batch `'id` and
 //!   the view type `V` so an unbranded impl cannot satisfy `connect`. A
@@ -94,20 +94,21 @@
 //!   unconfirmed set. There is no second validator
 //!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1). The one block-scoped row
 //!   a transaction must also pass is CEN-H19's range proof, which
-//!   [`validate`] folds over the block; the pool verifies it as a batch of
+//!   [`fn@validate`] folds over the block; the pool verifies it as a batch of
 //!   one through the same body (`shekyl_bulletproofs::verify_batch`), as the
 //!   submit engine does.
 //! * **Replay** (DRS-E2): every block of a captured chain through
-//!   [`validate`], held to the chain's Rust baseline (`shekyl-chain-ingest`'s
+//!   [`fn@validate`], held to the chain's Rust baseline (`shekyl-chain-ingest`'s
 //!   `rebaseline`): a refusal, or a derived value that differs from the
 //!   baseline, is a change in what this crate decides.
 //!
 //! # Faults are not verdicts
 //!
-//! A view's substrate can fail to answer. That is [`ChainView::Fault`], an
-//! associated type the crate never inspects, returned as the *outer* `Err`
-//! of [`tx_against`] and — wrapped in [`Fault::View`] — of [`validate`].
-//! [`validate`] has two more outer arms of its own ([`Fault::Stale`],
+//! A view's substrate can fail to answer. That is
+//! [`ChainView::Fault`](HeaderView::Fault), an associated type the crate
+//! never inspects, returned as the *outer* `Err` of [`tx_against`] and —
+//! wrapped in [`Fault::View`] — of [`fn@validate`]. [`fn@validate`] has two
+//! more outer arms of its own ([`Fault::Stale`],
 //! [`Fault::Corrupt`]; `fault.rs`): a claim the stateless stage was given
 //! that the committing view refutes, and view data no conforming store
 //! holds. [`form`]'s outer position is the [`Substrate`]'s fault; [`tx_form`]

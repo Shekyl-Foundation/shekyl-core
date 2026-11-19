@@ -5,7 +5,7 @@
 
 //! Read-only fee/weight query surface (WI-RPC-1).
 //!
-//! Projects the existing Phase-2a fee substrate — [`predict_weight`]'s
+//! Projects the existing Phase-2a fee substrate — [`predict_weight`](crate::engine::tx_fee_model::predict_weight)'s
 //! wire-exact byte model and the daemon's multi-tier
 //! [`FeeEstimates`](super::traits::FeeEstimates) snapshot — as `&self` Engine
 //! queries for the wallet-RPC layer, **without** re-deriving any byte model
@@ -46,7 +46,7 @@ pub struct TxShapeEstimate {
 /// Per-tier converged fees for one tx shape.
 ///
 /// Projected from one atomic daemon [`FeeEstimates`](super::traits::FeeEstimates)
-/// snapshot through the same [`converge_fee`](super::tx_fee_model::converge_fee)
+/// snapshot through the same [`converge_fee`]
 /// fixpoint the build path uses, so a quote here equals what a build at the
 /// same snapshot/shape/depth would charge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,7 +119,7 @@ impl<
     /// [`FeeEstimates`](super::traits::FeeEstimates) snapshot.
     ///
     /// Read-only: one daemon `get_fee_estimates` RPC plus the same
-    /// [`converge_fee`](super::tx_fee_model::converge_fee) fixpoint the build
+    /// [`converge_fee`] fixpoint the build
     /// path runs. The default tier is **standard**
     /// ([`FeePriority::default`]).
     ///

@@ -41,7 +41,7 @@
 //!
 //! The scan judges a snapshot taken as the epoch's scan begins and slashes
 //! the live post-image (P2B-9 Pin 5). Record-shaped failures of that fold
-//! are [`Corrupt`](crate::Corrupt), not refusals of the block.
+//! are [`Corrupt`], not refusals of the block.
 
 use core::num::NonZeroU64;
 use std::collections::BTreeMap;
