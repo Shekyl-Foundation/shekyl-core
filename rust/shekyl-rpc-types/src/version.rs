@@ -119,15 +119,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 7)` is `(4 << 16) | 7` = 262151. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 8)` is `(4 << 16) | 8` = 262152. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_151);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 7);
+        assert_eq!(CORE_RPC_VERSION, 262_152);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 8);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 7);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.7");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 8);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.8");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }
