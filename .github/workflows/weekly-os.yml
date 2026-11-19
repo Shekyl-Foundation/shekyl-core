@@ -10,9 +10,8 @@ name: ci/weekly-os
 # `dev` that Ubuntu 24.04 / MSVC would not have caught, and the weekly
 # run is how it was found.
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  schedule:
-    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
   workflow_dispatch:
 
 concurrency:

@@ -21,19 +21,9 @@
 
 name: ci/rpc-route-liveness
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: &paths
-      - "rust/shekyl-daemon-rpc/**"
-      - "rust/shekyl-rpc-client/**"
-      - "rust/shekyl-engine-core/**"
-      - "utils/python-rpc/**"
-      - "scripts/ci/check_rpc_route_liveness.sh"
-      - ".github/workflows/rpc-route-liveness.yml"
-  push:
-    branches: [dev]
-    paths: *paths
+  workflow_dispatch:
 
 concurrency:
   group: rpc-route-liveness-${{ github.ref }}

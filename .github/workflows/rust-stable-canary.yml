@@ -8,13 +8,8 @@ name: rust stable canary
 # a red run is an early warning, not a gate. `@stable` only — no `@beta`/nightly
 # for a cryptocurrency.
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  # Schedule removed 2026-08-24: the Monday cron had been red on
-  # `@stable rustfmt` for five-plus weeks, occupying a runner and a
-  # red-dot in the Actions tab with no owner for the fmt delta. Keep
-  # workflow_dispatch so whoever lands the next toolchain bump can
-  # re-run the canary before flipping rust-toolchain.toml. Re-add the
-  # cron in the same PR that makes `cargo +stable fmt --check` green.
   workflow_dispatch:
 
 permissions:

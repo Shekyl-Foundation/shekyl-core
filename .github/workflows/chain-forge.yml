@@ -36,27 +36,10 @@ name: chain-forge
 # check, so the `paths` filter suppressing the workflow on other changes
 # waits on nothing.
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  push:
-    branches: [dev, main]
-    paths:
-      - 'rust/**'
-      - 'config/**'
-      - '.github/workflows/chain-forge.yml'
-      - '.github/actions/install-rust/**'
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - 'rust/**'
-      - 'config/**'
-      - '.github/workflows/chain-forge.yml'
-      - '.github/actions/install-rust/**'
-  schedule:
-    - cron: "35 3 * * *"
   workflow_dispatch:
 
-# A scheduled or dispatched run is its own group: a push landing mid-night
-# must not cancel the nightly whose red is the issue.
 concurrency:
   group: chain-forge-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || github.ref }}
   cancel-in-progress: true

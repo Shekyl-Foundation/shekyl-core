@@ -22,19 +22,9 @@
 
 name: ci/wallet-rpc-liveness
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: &paths
-      - "docs/api/wallet_rpc.yaml"
-      - "rust/shekyl-wallet-rpc/**"
-      - "rust/shekyl-cli/**"
-      - "utils/python-rpc/**"
-      - "scripts/ci/check_wallet_rpc_liveness.sh"
-      - ".github/workflows/wallet-rpc-liveness.yml"
-  push:
-    branches: [dev]
-    paths: *paths
+  workflow_dispatch:
 
 concurrency:
   group: wallet-rpc-liveness-${{ github.ref }}

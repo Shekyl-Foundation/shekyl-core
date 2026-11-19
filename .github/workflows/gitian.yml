@@ -1,22 +1,8 @@
 name: ci/gh-actions/gitian
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  push:
-    tags:
-      - '*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to build (e.g. v3.0.2-RC1)'
-        required: true
-      repo_url:
-        description: 'Repository URL override (leave empty for default)'
-        required: false
-      package_dry_run:
-        description: 'Also run the package job (deb, rpm, installer, checksums) without publishing'
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: write

@@ -48,7 +48,7 @@ name: ci/freshness
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, ci-scratch/brief-c-demo-base]
 
 permissions: {}
 

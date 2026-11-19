@@ -12,26 +12,10 @@ name: vendored crypto content
 # §5/§6 (Track A, A1), in its drift-from-snapshot form; it upgrades to byte-exact-vs-pin
 # once A0 re-syncs the subtree to a clean fork baseline.
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  push:
-    # dev/main only. PR branches are covered by the pull_request event (which
-    # tests the PR merged into its base); an unrestricted push trigger would
-    # double-run the job on every push to an open PR. Mirrors build.yml.
-    branches: [dev, main]
-    paths: &crypto_paths
-      - 'rust/shekyl-oxide/crypto/**'
-      - 'rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256'
-      - 'scripts/ci/check_vendored_crypto_manifest.sh'
-      - '.github/workflows/vendored-crypto-content.yml'
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: *crypto_paths
+  workflow_dispatch:
 
-# Superseded-run cancellation (house pattern: build.yml).
-# Without a concurrency group, every push to an open PR stacks a full new
-# run behind the old one — with the shared runner pool, repeated pushes
-# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
-# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 concurrency:
   group: vendored-crypto-content-${{ github.ref }}
   cancel-in-progress: true

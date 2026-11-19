@@ -3,20 +3,10 @@ name: "CodeQL Analysis"
 # No pull request trigger (ruled 2026-11-16): a push to dev analyses what
 # merged, and the weekly schedule analyses the whole tree. A pull request's
 # alert arrives with its merge, on dev's push run.
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  push:
-    branches: [dev]
-  schedule:
-    - cron: "30 4 * * 1"   # Every Monday at 4:30 AM UTC
   workflow_dispatch:
 
-# Superseded-run cancellation. A burst of merges is analysed once, at its
-# newest commit (rule 06's principle for every push run on dev): the newer
-# run analyses the whole tree, which holds every change the cancelled run
-# would have seen, so no merged code goes unanalysed; an alert is raised
-# against the newest commit of the burst rather than the one that brought
-# it. Not cancelling would spend a full analysis per merge on code the next
-# analysis covers.
 concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: true

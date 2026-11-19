@@ -51,41 +51,10 @@
 
 name: ci/schema-snapshot
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    # One anchored list, aliased into `push` below, so the two triggers
-    # cannot drift apart.
-    paths: &paths
-      # The gate's subject is every crate whose code can change a byte a
-      # `.snap` pins: the codecs themselves (`shekyl-store-codec`, the chain
-      # store's own, the wallet's in `shekyl-engine-state`) and everything
-      # they encode *through* -- `to_raw` / `as_bytes` on the `shekyl-types`
-      # and `shekyl-units` vocabulary, `RuleSetId` in `shekyl-chain-rules`,
-      # `CumulativeDifficulty` in `shekyl-difficulty`, the block parse in
-      # `shekyl-wire`, and their own dependencies down to the vendored
-      # `shekyl-oxide` crates. That closure is twelve first-party crates
-      # plus vendored ones today and moves whenever a manifest does. Every
-      # first-party and vendored crate is a path dependency under `rust/`
-      # (rule 25), so `rust/**` is the closure by construction -- there is no
-      # list here to drift. `workflow_gates_this_crate` derives the closure
-      # from the manifests and asserts this trigger covers each member, so
-      # narrowing this pattern goes red. An external encoder changing (a
-      # `redb` bump that re-renders `TypeName`, say) arrives as a lock-file
-      # change, which is under the same pattern.
-      - "rust/**"
-      - ".github/workflows/schema-snapshot.yml"
-  # The push run on `dev` saves the build cache the pull requests restore
-  # (the cache step below), and tests the snapshots on what the merges made.
-  push:
-    branches: [dev]
-    paths: *paths
+  workflow_dispatch:
 
-# Superseded-run cancellation (house pattern: build.yml).
-# Without a concurrency group, every push to an open PR stacks a full new
-# run behind the old one — with the shared runner pool, repeated pushes
-# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
-# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 concurrency:
   group: schema-snapshot-${{ github.ref }}
   cancel-in-progress: true

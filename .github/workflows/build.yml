@@ -1,29 +1,9 @@
 name: ci/gh-actions/cli
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  push:
-    # `dev` and `main`. A pull request's run tests its head merged onto the
-    # `dev` of its last push; the run on `dev` tests what the merges
-    # actually made, the one place two pull requests each green alone can
-    # show red together (06-branching.mdc). Branches without a PR get CI
-    # by opening a draft PR. The weekly Arch / MSYS2 matrix lives in
-    # `.github/workflows/weekly-os.yml`.
-    branches: [dev, main]
-  pull_request:
-    # `ready_for_review`: the heavy jobs below skip a draft, and run when it
-    # is marked ready (ruled 2026-11-16).
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
-# Superseded-run cancellation (the house pattern the other workflows cite).
-# Without a concurrency group, every push to an open PR stacks a full new
-# run behind the old one — with the shared runner pool, repeated pushes
-# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
-# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
-# Only a pull request's run is cancelled: every push to `dev` shares one
-# ref, so a merge queues behind the running `dev` run, which finishes, and
-# a newer merge replaces the queued one. The `changes` job measures a push
-# from the last green run, not from the previous push, so a replaced
-# run's commits are still in scope (`scripts/ci/check_dev_push_runs_finish.py`).
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: "${{ github.event_name == 'pull_request' }}"

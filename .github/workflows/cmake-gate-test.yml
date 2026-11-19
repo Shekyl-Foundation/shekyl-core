@@ -15,31 +15,10 @@
 
 name: cmake-gate-test
 
+# DEMO BASE ONLY (Brief C): never triggers here.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "contrib/depends/Makefile"
-      - "tests/cmake-gate-test/**"
-      - "tests/build-target-refusal/**"
-      - ".github/workflows/cmake-gate-test.yml"
-  push:
-    branches: [dev]
-    paths:
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "contrib/depends/Makefile"
-      - "tests/cmake-gate-test/**"
-      - "tests/build-target-refusal/**"
-      - ".github/workflows/cmake-gate-test.yml"
+  workflow_dispatch:
 
-# Superseded-run cancellation (house pattern: build.yml).
-# Without a concurrency group, every push to an open PR stacks a full new
-# run behind the old one — with the shared runner pool, repeated pushes
-# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
-# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 concurrency:
   group: cmake-gate-test-${{ github.ref }}
   cancel-in-progress: true
