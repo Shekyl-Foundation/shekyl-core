@@ -26,7 +26,7 @@ use shekyl_harness_spender::{
     complete_tree, first_spending_height, Linked, MinerWallet, Persona, PostedBond, Spender,
 };
 use shekyl_harness_wallet::coinbase::repay;
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockHash, BlockHeight, KeyImage};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, Ct, Input, Transaction};
 
@@ -197,6 +197,12 @@ pub(in super::super) struct Grown {
     /// [`Self::record`] moves the ones the block listed to `spent` and
     /// forgets the rest (built and dropped — not spent).
     building: BTreeMap<[u8; 32], u64>,
+    /// The key image a spend of each coinbase carries, by height: read when
+    /// a recorded block lists an image no spend built here carries — a
+    /// replayed capture's ([`super::super::shard_fill::regrown`]) — so its
+    /// spent coinbases reach `spent` too. Filled up to the newest matured
+    /// coinbase as such a block needs it; cut back by [`Self::pop`].
+    coinbase_images: Vec<Option<[u8; 32]>>,
 }
 
 impl Grown {
@@ -211,6 +217,7 @@ impl Grown {
             spent_at: Vec::new(),
             images: Vec::new(),
             building: BTreeMap::new(),
+            coinbase_images: Vec::new(),
         }
     }
 
@@ -507,7 +514,11 @@ impl Grown {
         let images: Vec<[u8; 32]> = listed.iter().flat_map(key_images).collect();
         let mut took = Vec::new();
         for key_image in &images {
-            if let Some(coinbase) = self.building.remove(key_image) {
+            let coinbase = match self.building.remove(key_image) {
+                Some(coinbase) => Some(coinbase),
+                None => self.coinbase_spent_by(key_image),
+            };
+            if let Some(coinbase) = coinbase {
                 self.spent.insert(coinbase);
                 took.push(coinbase);
             }
@@ -517,6 +528,34 @@ impl Grown {
         self.blocks.push((block.clone(), listed.to_vec()));
         // A spend built for this block and not listed was not spent.
         self.building.clear();
+    }
+
+    /// The key image a spend of block `height`'s coinbase carries for the
+    /// harness miner, or `None` when the miner does not own it.
+    pub(in super::super) fn coinbase_key_image(&self, height: u64) -> Option<KeyImage> {
+        self.spender
+            .coinbase_key_image(MinerWallet::harness(), BlockHeight::from_raw(height))
+    }
+
+    /// The matured coinbase, spent by no earlier block, whose spend
+    /// carries `key_image`, for the block just recorded; `None` when the
+    /// image spends something else (a watched output). A spend built here
+    /// is found in `building` first; this is how a block built elsewhere —
+    /// a replayed capture — names the coinbases it took, which
+    /// [`Self::spend`] must then skip (CEN-I7).
+    fn coinbase_spent_by(&mut self, key_image: &[u8; 32]) -> Option<u64> {
+        let connected = self.height().to_raw().checked_sub(1)?;
+        let newest = connected.checked_sub(FIRST_SPEND_HEIGHT)?;
+        while (self.coinbase_images.len() as u64) <= newest {
+            let image = self.coinbase_key_image(self.coinbase_images.len() as u64);
+            self.coinbase_images
+                .push(image.map(|image| *image.as_bytes()));
+        }
+        (0..=newest).find(|height| {
+            !self.spent.contains(height)
+                && self.coinbase_images[usize::try_from(*height).expect("small")]
+                    == Some(*key_image)
+        })
     }
 }
 
@@ -534,6 +573,9 @@ impl Grown {
     pub(in super::super) fn pop(&mut self) {
         self.blocks.pop().expect("a block to pop");
         self.hashes.pop();
+        // The popped block's coinbase goes with it; a block mined at that
+        // height again pays another.
+        self.coinbase_images.truncate(self.hashes.len());
         self.images.pop();
         for coinbase in self.spent_at.pop().expect("a block to pop") {
             self.spent.remove(&coinbase);

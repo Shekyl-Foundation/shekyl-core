@@ -858,6 +858,62 @@ fn body_sections(body: &[u8]) -> Vec<std::ops::Range<usize>> {
     sections
 }
 
+/// A chain replayed from the captured prefix knows which coinbases the
+/// capture spent (#1381): every coinbase it offers the next spend is one
+/// whose key image the store has not recorded. The capture leaves its first
+/// `RESERVED_COINBASES` unspent and spends the ones after, so a replay that
+/// learned only the spends it built offered those again: the bench's joins
+/// past the reserved coinbases spent one the chain had spent, and CEN-I7
+/// refused the block. The witness's four joins stayed inside the reserved
+/// ones and never saw it.
+#[test]
+fn the_replayed_prefix_offers_only_coinbases_the_chain_has_not_spent() {
+    let Under {
+        rules,
+        retention,
+        schedule_key,
+    } = Under::BENCH;
+    let horizons = Horizons::new(
+        rules.settlement_schedule().blocks(),
+        BlockCount::from_raw(retention),
+        rules.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    let path = tmp("replayed-prefix-coinbases");
+    let (store, grown) =
+        shard_fill::store_with_prefix(&path, schedule_key, rules, horizons, prefix());
+    let snap = store.begin_read().expect("read");
+    let on_chain = |height: u64| {
+        let image = grown
+            .coinbase_key_image(height)
+            .expect("every prefix coinbase pays the harness miner");
+        snap.has_key_image(&image).expect("read")
+    };
+    let matured = grown.matured();
+    for &height in &matured {
+        assert!(
+            !on_chain(height),
+            "coinbase {height} is offered as unspent, and the chain spent it"
+        );
+    }
+    // The subject (rule 47): the capture spent matured coinbases, and the
+    // replay holds them back.
+    let newest = matured
+        .last()
+        .copied()
+        .expect("the prefix has matured coinbases");
+    let spent = (0..=newest).filter(|&height| on_chain(height)).count();
+    assert!(
+        spent > 0,
+        "the captured prefix spent no coinbase; the test has no subject"
+    );
+    assert_eq!(
+        matured.len() + spent,
+        usize::try_from(newest + 1).expect("small"),
+        "every matured coinbase is offered or spent on the chain"
+    );
+}
+
 /// The 9b slash writes, witnessed in the unit lane: `M` epochs of misses
 /// settled by absence, one epoch of grace, and the epoch-`M` deadline
 /// connect slashes every persona on the shard — nothing before it does.
