@@ -1038,7 +1038,9 @@ mod tests {
             economic,
         )
         .expect("priced");
-        let admitted = fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
+        let admitted = fill
+            .admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered)
+            .taken;
         LastBlock {
             chain_height,
             supply,

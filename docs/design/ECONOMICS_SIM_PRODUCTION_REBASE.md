@@ -4733,18 +4733,24 @@ effect, and **informed** when §5.35.1 or §5.34.1 already showed its figure.
 
 **What is built.** It is read-only: no fold changes, and every narration
 and steady pin passes unregenerated.
-- **The fill's record.** `block_space`'s fill records why it stopped:
+- **The fill's record.** `Fill::admit_up_to` returns what one offer listed:
+  how many bodies end within the penalty-free weight, and why the next body
+  was refused, by the same checks as `admit`. `block_space` keeps that
+  record. The reason on a block is the marginal refusal, the last cohort
+  the template did not finish; on one weight that is the only refusal. It
+  is one of:
   - the pool emptied;
-  - the next body's fee fell under the penalty it adds;
-  - the block's limit.
+  - the marginal body's fee fell under the penalty it adds;
+  - the marginal body would pass the block's limit.
 
-  It also records the bodies it listed past the penalty-free weight, their
-  fees, the block's penalty (the unpenalised reward less the paid reward),
-  and each such body's surplus, its fee less the penalty it added. The
-  record is computed with `Fill`'s own `reward_at`.
+  The bodies past the penalty-free weight are that offer's own complement.
+  The penalty is `Fill::reward_at` of an empty block less the reward the
+  block paid, and each such body's surplus is its fee less the penalty it
+  added.
 - **The trace.** `--growth-trace` folds the baseline scenario to y40, at
   seed 1, on standard traffic and on `steady`, in the inherited zone and the
-  re-derived zone. It prints by quarter from y18 to y23, then by year:
+  re-derived zone. It refuses every other mode, control flag and instrument
+  before those folds. It prints by quarter from y18 to y23, then by year:
   - the LTEM and the effective median;
   - the share of blocks with the effective median at its upper clamp;
   - the share of blocks past the effective median;
