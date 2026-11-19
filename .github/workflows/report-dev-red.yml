@@ -3,29 +3,40 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# A red run on `dev` opens a tracking issue, or comments on the open one.
+# A red job on `dev` opens a tracking issue, or comments on its open one;
+# the same job green again closes it.
 #
 # `dev` has no merge queue: a pull request merges on its own checks, and
 # the push runs on `dev` are the first to test what the merges made
 # (06-branching.mdc). A red there is `dev`'s finding, and a red nobody
-# reads is a silence. This is the route to a human, the same shape as
-# `nightly.yml`'s `report-red`: one open issue per workflow, found by its
-# exact title, so repeated reds thread instead of forking.
+# reads is a silence. This is the route to a human (Brief C, ruled
+# 2026-11-19): one open issue per red job, found by its exact title
+# (`<branch> RED: <workflow> / <job>`, `dev` on `dev` and for a scheduled
+# subject), so repeated reds of a job thread
+# instead of forking and two red jobs are two findings. Each is assigned to
+# the Foundation's lead (`ASSIGNEE`) and names the run, the commit and the
+# pull request that merged it, the job's failed steps, the targets that
+# did not compile and the failing tests,
+# and every pull request merged since the workflow last passed: the push
+# runs measure from that commit, so a red covers all of them. A workflow's
+# aggregate job (`cli-pass`, `rust-pass`) is red because another job is,
+# and gets no issue of its own while one of those does.
 #
-# Called by the last job of `build.yml`, `rust-audit-test.yml` and
-# `benchmarks.yml`, which needs every other job of its workflow and runs on
-# a push run on `dev` in which one of them failed or was cancelled, and of
-# `gui-drift.yml` on its scheduled run (the GUI wallet's pin, nightly); a job past its
-# `timeout-minutes` is cancelled, not failed. scripts/ci/check_dev_red_reporter.py
-# holds the list and the condition to the file. A run cancelled as a whole,
-# because a newer merge superseded it, reports nothing.
+# Called by the last job of `build.yml`, `rust-audit-test.yml`,
+# `benchmarks.yml` and `fuzz-harness.yml`, which needs every other job of
+# its workflow, on every push run on `dev`, red or green; and of
+# `gui-drift.yml` and `chain-forge.yml` on their scheduled runs.
+# scripts/ci/check_dev_red_reporter.py holds the list and the condition to
+# the file. A run cancelled as a whole, because a newer merge superseded
+# it, reports nothing. On a run with no red job it only closes issues, so
+# it runs each time: a job past its `timeout-minutes` is cancelled, not
+# failed, and is red here.
 #
-# The issue names the red jobs, the pull request of the commit under test,
-# and every pull request merged since this workflow last passed on `dev`:
-# the push runs measure from that commit, so a red covers all of them.
-#
-# Checks out nothing: the only job here that holds a write token runs no
-# code from the tree.
+# The failing tests come from each red job's log (scripts/ci/failed_tests.py,
+# which reads nextest's and `cargo test`'s output). The checkout is that
+# script and the table it imports, at the commit under test, which is
+# merged code: the job holding a write token runs nothing a pull request
+# has not been reviewed into.
 
 name: report-dev-red
 
@@ -41,11 +52,28 @@ permissions:
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # an API script; nightly's report-red p90 is 0.1 min
+    timeout-minutes: 10  # API calls and one log read per red job; nightly's report-red p90 is 0.1 min
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/failed_tests.py
+            scripts/ci/workflow_pass.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: the red jobs, their failed steps and failing tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/failed_tests.py --run "${{ github.run_id }}" > "$RUNNER_TEMP/red-jobs.json"
       - uses: actions/github-script@v8
+        env:
+          RED_JOBS: ${{ runner.temp }}/red-jobs.json
         with:
           script: |
+            // The Foundation's lead: every dev-red issue is theirs to route
+            // (ruled 2026-11-19, Brief C).
+            const ASSIGNEE = 'radawson';
+            const fs = require('fs');
             const { owner, repo } = context.repo;
             const repoUrl = `${context.serverUrl}/${owner}/${repo}`;
             const { data: run } = await github.rest.actions.getWorkflowRun({
@@ -59,13 +87,50 @@ jobs:
               run_id: context.runId,
               per_page: 100,
             });
-            // Every finished job that did not pass: failed, cancelled at its
-            // timeout, or any other non-passing conclusion. This job is still
-            // running, so it has no conclusion and is not counted.
-            const passing = new Set(['success', 'skipped', 'neutral']);
-            const red = jobs.filter((job) => job.conclusion && !passing.has(job.conclusion));
-            if (red.length === 0) {
-              core.setFailed('report-dev-red ran and found no job in this run that did not pass: the caller\'s condition and this run disagree.');
+            // This job is still running and has no conclusion. Rule 47: a
+            // run in which no job concluded is not a run to report on.
+            const finished = jobs.filter((job) => job.conclusion);
+            if (finished.length === 0) {
+              core.setFailed('report-dev-red found no finished job in this run: nothing to judge.');
+              return;
+            }
+            const red = JSON.parse(fs.readFileSync(process.env.RED_JOBS, 'utf8'));
+            const named = red.filter((job) => !job.aggregate);
+            const reported = named.length ? named : red;
+            const green = finished.filter((job) => job.conclusion === 'success');
+            // The branch the issue is about: a push run's own branch, so a
+            // red on any other branch can neither thread onto nor close a
+            // `dev` issue; `dev` for a scheduled subject, which tests `dev`'s
+            // state from the default branch's workflow file.
+            const branch = run.event === 'push' ? run.head_branch : 'dev';
+            const prefix = `${branch} RED: ${run.name} / `;
+            const titleOf = (name) => `${prefix}${name}`;
+
+            // Exact-title match over open issues, not text search: the search
+            // API's in:title is a substring match and lags on a fresh issue,
+            // which would fork the thread on back-to-back reds.
+            const open = (await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            })).filter((i) => !i.pull_request && i.title.startsWith(prefix));
+
+            // A job green again closes its issue.
+            for (const job of green) {
+              const issue = open.find((i) => i.title === titleOf(job.name));
+              if (!issue) continue;
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Green again at ${run.head_sha.slice(0, 10)} (${run.event} run): ${job.html_url}. Closing.`,
+              });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+              core.notice(`Closed #${issue.number}: ${issue.title}`);
+            }
+            if (reported.length === 0) {
+              core.notice(`No red job in this run; ${green.length} green.`);
               return;
             }
 
@@ -75,67 +140,78 @@ jobs:
               repo,
               commit_sha: run.head_sha,
             });
-            const headPull = headPulls.find((p) => p.merged_at && p.base.ref === 'dev');
+            const headPull = headPulls.find((p) => p.merged_at && p.base.ref === run.head_branch);
 
-            // Every merge since this workflow last passed on dev.
+            // Every merge since this workflow last passed, on this branch and
+            // for this event (push on `dev`; a scheduled subject's schedule).
             const { data: greens } = await github.rest.actions.listWorkflowRuns({
               owner,
               repo,
               workflow_id: run.workflow_id,
-              branch: 'dev',
-              event: 'push',
+              branch: run.head_branch,
+              event: run.event,
               status: 'success',
               per_page: 1,
             });
-            const green = greens.workflow_runs[0];
+            const lastGreen = greens.workflow_runs[0];
             const since = [];
-            if (!green) {
-              since.push('No push run of this workflow has passed on `dev`; every merge so far is in scope.');
+            if (!lastGreen) {
+              since.push(`No ${run.event} run of this workflow has passed on \`${run.head_branch}\`; every merge so far is in scope.`);
             } else {
               const { data: cmp } = await github.rest.repos.compareCommits({
                 owner,
                 repo,
-                base: green.head_sha,
+                base: lastGreen.head_sha,
                 head: run.head_sha,
               });
               const merges = cmp.commits
                 .map((c) => /^Merge pull request #(\d+) from (\S+)/.exec(c.commit.message))
                 .filter(Boolean)
                 .map((m) => `- #${m[1]} (\`${m[2]}\`)`);
-              since.push(`Merged since this workflow last passed on \`dev\` (${green.head_sha.slice(0, 10)}, ${repoUrl}/compare/${green.head_sha}...${run.head_sha}):`);
+              since.push(`Commit range: ${lastGreen.head_sha.slice(0, 10)}..${run.head_sha.slice(0, 10)}, since this workflow last passed (${repoUrl}/compare/${lastGreen.head_sha}...${run.head_sha}). Merged in it:`);
               since.push(...(merges.length ? merges : ['- none found in the commit messages; read the compare link']));
               if (cmp.total_commits > cmp.commits.length) {
                 since.push(`The compare holds ${cmp.total_commits} commits and the API listed ${cmp.commits.length}; the list above may be short.`);
               }
             }
 
-            const title = `dev RED: ${run.name}`;
-            const body = [
-              `Run: ${run.html_url}`,
-              `Commit: ${run.head_sha}` + (headPull ? `, merged by #${headPull.number}` : ''),
-              '',
-              'Jobs that did not pass:',
-              ...red.map((job) => `- [${job.name}](${job.html_url}): ${job.conclusion}`),
-              '',
-              ...since,
-              '',
-              'Each pull request was green on its own head. Find the two changes that disagree and fix it on a new pull request before more merges land on top (06-branching.mdc, "The runs on `dev` test the merge result").',
-            ].join('\n');
-
-            // Exact-title match over open issues, not text search: the search
-            // API's in:title is a substring match and lags on a fresh issue,
-            // which would fork the thread on back-to-back reds.
-            const open = await github.paginate(github.rest.issues.listForRepo, {
-              owner,
-              repo,
-              state: 'open',
-              per_page: 100,
-            });
-            const existing = open.find((i) => !i.pull_request && i.title === title);
-            if (existing) {
-              await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
-              core.notice(`Commented on #${existing.number}: ${title}`);
-            } else {
-              const { data: issue } = await github.rest.issues.create({ owner, repo, title, body });
-              core.notice(`Opened #${issue.number}: ${title}`);
+            for (const job of reported) {
+              const what = [];
+              if (job.builds.length) {
+                what.push('Did not compile:', ...job.builds.map((b) => `- \`${b}\``), '');
+              }
+              if (job.tests.length) {
+                what.push('Failing tests:', ...job.tests.map((t) => `- \`${t}\``));
+              } else if (!job.builds.length) {
+                what.push('No failing test or target is named in the log (a gate, a runner fault, or a timeout).');
+              }
+              if (job.failed_steps.length) {
+                what.push('', 'Failed steps:', ...job.failed_steps.map((s) => `- ${s}`));
+              }
+              const body = [
+                `Job: [${job.name}](${job.url}): ${job.conclusion}`,
+                `Run: ${run.html_url}`,
+                `Commit: ${run.head_sha}` + (headPull ? `, merged by #${headPull.number}` : ''),
+                '',
+                ...what,
+                '',
+                ...since,
+                '',
+                'Each pull request was green on its own head. Find the two changes that disagree and fix it on a new pull request before more merges land on top (06-branching.mdc, "The runs on `dev` test the merge result"). This issue closes itself when the job is next green on `dev`.',
+              ].join('\n');
+              const title = titleOf(job.name);
+              const existing = open.find((i) => i.title === title);
+              if (existing) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
+                core.notice(`Commented on #${existing.number}: ${title}`);
+              } else {
+                const { data: issue } = await github.rest.issues.create({
+                  owner,
+                  repo,
+                  title,
+                  body,
+                  assignees: [ASSIGNEE],
+                });
+                core.notice(`Opened #${issue.number}: ${title}`);
+              }
             }

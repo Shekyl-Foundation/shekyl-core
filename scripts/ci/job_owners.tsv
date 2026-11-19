@@ -116,6 +116,7 @@ scripts/ci/depends_legs.py	depends:legs,grep-gates:grep-gates
 scripts/ci/domain_registry_gate.sh	grep-gates:grep-gates
 scripts/ci/drop_runner_chrome_apt_source.sh	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,grep-gates:grep-gates,nightly:bench-full
 scripts/ci/engine_decomposition_ratchet.conf	grep-gates:grep-gates
+scripts/ci/failed_tests.py	grep-gates:grep-gates,report-dev-red:report
 scripts/ci/followups_owner_grandfather.txt	docs-gates:check-doc-links
 scripts/ci/gui_wallet_core_deps.toml	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/ignored_set_chain_forge.sh	chain-forge:aarch64,chain-forge:x86_64,rust-audit-test:rust-audit-and-test
@@ -152,4 +153,4 @@ scripts/ci/check_fuzz_inventory.py	fuzz-harness:compile,fuzz-harness:scope,fuzz-
 scripts/ci/test_check_fuzz_inventory.py	fuzz-harness:scope,fuzz-nightly:fuzz-targets
 scripts/ci/fuzz_run.py	fuzz-nightly:fuzz,fuzz-nightly:fuzz-build,fuzz-nightly:fuzz-summary,fuzz-nightly:fuzz-targets,fuzz-nightly:fuzz-weekly,fuzz-nightly:report-red
 scripts/ci/fuzz_coverage_floors.tsv	fuzz-harness:scope,fuzz-nightly:fuzz,fuzz-nightly:fuzz-weekly
-scripts/ci/workflow_pass.py	build:pass,grep-gates:grep-gates,rust-audit-test:pass
+scripts/ci/workflow_pass.py	build:pass,grep-gates:grep-gates,report-dev-red:report,rust-audit-test:pass

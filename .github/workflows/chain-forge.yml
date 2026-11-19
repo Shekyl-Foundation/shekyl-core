@@ -169,7 +169,7 @@ jobs:
 
   report-dev-red:
     needs: [scope, x86_64, aarch64]
-    if: ${{ !cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
     permissions:
       actions: read
       contents: read

@@ -204,14 +204,15 @@ jobs:
       - name: The pin matches the GUI wallet's manifest and release
         run: python3 scripts/ci/check_production_graph.py --gui-wallet gui-wallet
 
-  # A red nightly opens or threads a tracking issue (report-dev-red.yml).
-  # `needs` lists every other job in this file; only a scheduled run
-  # reports, and scripts/ci/check_dev_red_reporter.py holds the list and
-  # this condition to the file. A job past its timeout is cancelled, not
-  # failed, so the condition reads each needed job's result.
+  # Every scheduled run reports to report-dev-red.yml: a red job opens or
+  # threads its tracking issue, and a job green again closes it. `needs`
+  # lists every other job in this file; only a scheduled run reports, and
+  # scripts/ci/check_dev_red_reporter.py holds the list and this condition
+  # to the file. A job past its timeout is cancelled, not failed, and the
+  # reporter counts it red.
   report-dev-red:
     needs: [wallet-ref, gui-builds-against-core, gui-pin, gui-pin-nightly]
-    if: ${{ !cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
     permissions:
       actions: read
       contents: read
