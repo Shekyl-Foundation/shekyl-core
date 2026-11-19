@@ -282,6 +282,11 @@ pub(super) fn discard_path(path: &Path) -> std::path::PathBuf {
 /// Move the validated old file at `path` to [`discard_path`], durably: the
 /// rename is one step, so the pool's path holds the old sealed file or
 /// nothing, and the directory is flushed so the move survives a crash.
+// CLIPPY: disallowed_methods — the old file moved aside to its discard name.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "moves the validated old pool file aside to its .discard name before a recreate; not a file replace"
+)]
 fn retire(path: &Path) -> std::io::Result<()> {
     std::fs::rename(path, discard_path(path))?;
     crate::creation::sync_parent(path)

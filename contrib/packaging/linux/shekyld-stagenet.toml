@@ -80,12 +80,13 @@
 # The SOCKS password for clearnet-socks.
 # clearnet-socks-password = "<secret>"
 
-# The clearnet listen endpoints; `none` is dial-only on clearnet.
+# The clearnet listen endpoints; `none` is dial-only on clearnet. Beside
+# `clearnet off`, `none` confirms it.
 # Default: 0.0.0.0 and the network's p2p port.
 # clearnet-listen = ["127.0.0.1:11029"]
 
 # The clearnet endpoints peers can reach this node at; at most one per
-# address family.
+# address family. Beside `clearnet off`, `none` confirms it.
 # clearnet-advertise = ["<public-address>:11021"]
 
 # Accept peers at private addresses, for a private test network.

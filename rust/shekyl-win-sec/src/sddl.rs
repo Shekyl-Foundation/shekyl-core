@@ -239,7 +239,7 @@ impl OwnerOnlyDescriptor {
 
     /// Hand a finished SDDL string to the OS. Every constructor ends here, so
     /// there is exactly one `unsafe` conversion to review.
-    fn from_sddl(sddl: &str) -> Result<Self, SddlError> {
+    pub(crate) fn from_sddl(sddl: &str) -> Result<Self, SddlError> {
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
 
         let mut psd: *mut c_void = std::ptr::null_mut();

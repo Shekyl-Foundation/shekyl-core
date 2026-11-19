@@ -173,7 +173,7 @@ impl<
         })?;
         drop(guard);
         // The ticket authorizes signing, and the signed post is broadcast.
-        // An unconfirmed parent fsync keeps the applied record and mints
+        // An unconfirmed save keeps the applied record and mints
         // nothing; a retry saves again.
         super::dispatch_durability::require_confirmed(durability)?;
 

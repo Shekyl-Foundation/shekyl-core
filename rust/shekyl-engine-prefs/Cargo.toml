@@ -39,13 +39,10 @@ zeroize = { workspace = true }
 # Structured warnings on tamper / quarantine events.
 tracing = "0.1"
 
-# Atomic-write temp-file guard; same crate used by shekyl-engine-file
-# so the on-disk behavior (sibling temp + random suffix + O_CREAT|O_EXCL)
-# is identical between `.wallet` saves and `.prefs.toml` saves.
-tempfile = "3"
-
-# Directory-fsync portability shim; POSIX only.
-rustix = { version = "1", features = ["fs"] }
+# The prefs files are replaced through the tree's one replace, the same
+# one `.wallet` saves use (Rick, 2026-11-18): a staged sibling created
+# O_CREAT|O_EXCL, synced, renamed over, and the directory synced.
+shekyl-os-account = { path = "../shekyl-os-account" }
 
 # Serde is used for the schema types in the prefs body. Kept feature-
 # gated to avoid pulling macros into consumers that only need
