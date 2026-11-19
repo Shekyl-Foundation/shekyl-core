@@ -7,7 +7,7 @@
 //! successor): which held transactions a block built on `parent` lists,
 //! as a pure function of the pool, the parent's chain and a weight budget.
 //!
-//! Candidates are what the node shows ([`shown`](crate::shown): public — a
+//! Candidates are what the node shows ([`shown`]: public — a
 //! stem-phase transaction is never in a template), most fee per unit of
 //! weight first (ties: the earliest held, then
 //! the hash). Each is judged again by [`tx_against`] at `TxSlot::Lone`

@@ -67,8 +67,8 @@ impl Trust {
 
     /// The id of the network this trust pins: derived from its genesis
     /// (`NETWORK_IDENTITY.md` NI-R10), the id every spend signature's hash
-    /// binds (NI-Q4). Under [`Trust::UNPINNED`] it is
-    /// [`HARNESS_NETWORK_ID`], the id every harness signer signs under.
+    /// binds (NI-Q4). Under `Trust::UNPINNED` it is
+    /// `HARNESS_NETWORK_ID`, the id every harness signer signs under.
     #[must_use]
     pub fn network_id(&self) -> NetworkId {
         match self.genesis.expected_at(BlockHeight::ZERO) {

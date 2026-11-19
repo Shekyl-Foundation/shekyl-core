@@ -72,7 +72,7 @@ use crate::timing::DEFAULT_TOLERANCE_PCT;
 ///   `the_windows_tree_depth_does_not_depend_on_the_rate_model` pins that.
 /// - The **chain's** depth, which is what the curve tree actually is. At
 ///   576 000 leaves/day the chain crosses `min_leaves_for_depth(6)` =
-///   17 778 529 after about 31 days, so [`GRADED_TREE_DEPTH`]'s stated band is
+///   17 778 529 after about 31 days, so [`GRADED_TREE_DEPTH`](crate::corpus::GRADED_TREE_DEPTH)'s stated band is
 ///   satisfied in weeks. Its judgment is sound; it simply is not a statement
 ///   about the window.
 ///

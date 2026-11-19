@@ -83,7 +83,7 @@ impl std::fmt::Debug for LoadedSeal {
 /// `P`-bound transaction bytes — the byte↔persona pairing carried as a value
 /// (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1 part 4).
 ///
-/// [`BroadcastSubmitter::submit_bound`] accepts a [`BoundForSend`](super::transaction_submitter::BoundForSend)
+/// [`BroadcastSubmitter::submit_bound`](crate::engine::transaction_submitter::BroadcastSubmitter::submit_bound) accepts a [`BoundForSend`](super::transaction_submitter::BoundForSend)
 /// built from this pairing and equality-checks the carried persona against
 /// the submitter's constructor-bound persona, so `P1`'s bytes cannot ride
 /// `P2`'s circuit. Full per-persona type branding is rejected (the persona
@@ -100,7 +100,7 @@ impl std::fmt::Debug for LoadedSeal {
 ///   assemble/finalize path, from the transaction it just encoded. The only
 ///   other production path is [`Self::from_pending`], which re-lifts a
 ///   [`PendingBondPost`] this module previously sealed. Tests use
-///   [`Self::bind_for_test`].
+///   `Self::bind_for_test`.
 /// - **P-2 — retries re-send the stored value.** The pending record persists
 ///   the pairing's fields (`persona`, `tx_bytes`); F31/watchdog resubmits
 ///   re-lift and re-send the stored bytes through the same `submit_bound`

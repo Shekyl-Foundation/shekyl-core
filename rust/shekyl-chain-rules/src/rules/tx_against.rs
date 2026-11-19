@@ -360,7 +360,7 @@ impl I11 {
 /// on the parallel stage), and this step reads the record — the chain's
 /// own — for [`judge_reference`] to compare with the claim `form` verified
 /// ([`VerifiedReference`]). A disagreement is
-/// [`Stale::Reference`](crate::Stale::Reference), a fault the driver
+/// [`Stale::Reference`], a fault the driver
 /// answers by forming again, never a verdict; the comparison is the only
 /// place the two witnesses meet, and nothing in `validate` verifies a
 /// proof. The C++ reads only the record (`blockchain.cpp:4152`

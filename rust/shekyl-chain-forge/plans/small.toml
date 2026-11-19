@@ -44,7 +44,6 @@ do = "spend"
 inputs = 2
 
 [[step]]
-event = "shard-0-closed"
 do = "fill-shards"
 count = 1
 

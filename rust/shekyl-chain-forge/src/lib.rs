@@ -4,8 +4,9 @@
 // BSD-3-Clause
 
 //! The chain forge's library (`CHAIN_FORGE.md` §11.1): the plan schema,
-//! the seed derivation, a forged chain's manifest and `blocks.txt`, and the
-//! diff between two forgings.
+//! the seed derivation, a forged chain's manifest and `blocks.txt`, the
+//! diff between two forgings, and a hosted chain's pin and the check a
+//! fetched copy passes (§10.4).
 //!
 //! The forge itself, the executor that turns a plan into a corpus, is not
 //! here. It is a module tree outside `src/` (`executor/`), compiled only
@@ -18,17 +19,21 @@
 
 #![deny(unsafe_code)]
 
+pub mod hosted;
 pub mod ledger;
 pub mod manifest;
 pub mod plan;
 pub mod seed;
 
+pub use hosted::{
+    Fetched, HostedChain, HostedFault, Layer, LayerMismatch, MissingLayer, OrasPin, Pins,
+};
 pub use ledger::{BlocksTxt, Branch, Difference, LedgerFault, Line};
 pub use manifest::{
     sha256_hex, EventRecord, Manifest, ManifestFault, PlanRef, ScheduleRecord, SwitchRecord,
     MANIFEST_FORMAT_VERSION,
 };
-pub use plan::{Action, EpochBlocks, Plan, PlanFault, Schedule, Step};
+pub use plan::{close_event, is_close_event, Action, EpochBlocks, Plan, PlanFault, Schedule, Step};
 pub use seed::{
     message_id, seed_for, seed_for_message, PlanSeed, Role, SeedFault, SEED_CUSTOMIZATION,
 };

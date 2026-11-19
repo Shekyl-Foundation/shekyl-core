@@ -6,11 +6,11 @@
 //! The shell's daemon client.
 //!
 //! One target (`RPC_CHANNEL.md` RT-15; RT-W10 step 5): "this computer",
-//! reached as the enrollment words reach it (a service's console leg when
-//! one runs here, otherwise the owner's leg), or a named address through
-//! one [`SyncDaemon`](shekyl_rpc_transport::SyncDaemon). Connected on the
-//! first request. The SOCKS proxy, the down-hint and the timeout are this
-//! client's; the bytes are the shared transports'.
+//! reached as the enrollment words reach it (a service's console leg when one
+//! runs here, otherwise the owner's leg), or a named address through one
+//! [`SyncDaemon`]. Connected on the first request. The SOCKS proxy, the
+//! down-hint and the timeout are this client's; the bytes are the shared
+//! transports'.
 
 use serde_json::Value;
 use std::fmt;

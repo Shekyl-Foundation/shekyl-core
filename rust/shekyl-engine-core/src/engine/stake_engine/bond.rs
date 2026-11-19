@@ -28,19 +28,19 @@ use super::types::*;
 
 /// Assemble the **full, broadcast-ready** JoinMarket bond transaction inside
 /// the actor (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3) — the production superset
-/// of [`PlanBondPost`] (which constructs the vin only and remains for the composition
+/// of [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost) (which constructs the vin only and remains for the composition
 /// KAT).
 ///
-/// Carries the same handle + ticket typed contracts as [`PlanBondPost`], plus the
+/// Carries the same handle + ticket typed contracts as [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost), plus the
 /// **public** funding contexts the Engine-side orchestrator selected (§3.2)
 /// and path-assembled: records, membership paths, and the tree context. The
 /// spend secrets are **not** in the message — they are re-derived from each
 /// record's `(ciphertext, index)` inside the handler
-/// ([`derive_p_source_secrets_bundle`], rule 36).
+/// ([`derive_p_source_secrets_bundle`](crate::engine::stake_engine::helpers::derive_p_source_secrets_bundle), rule 36).
 ///
 /// The reply pairs the minted [`PBoundBytes`] with the bond-post placement
 /// offset from this request's entry-gap draw — the same seam discipline as
-/// [`BondPostPlacement`]: the caller that receives the constructed vin receives
+/// [`BondPostPlacement`](crate::engine::stake_engine::persona::BondPostPlacement): the caller that receives the constructed vin receives
 /// where to place them.
 ///
 /// Lint-visible, deliberately: the wired Engine orchestrator consumes this, so
@@ -67,7 +67,7 @@ pub(crate) struct AssembleBond {
 }
 
 /// Reply of [`AssembleBond`]: the persona-bound wire bytes (minted at the
-/// single P-1 site, [`finalize_bond_tx`]), the placement offset, and the
+/// single P-1 site, [`finalize_bond_tx`](crate::engine::bond_assembly::finalize_bond_tx)), the placement offset, and the
 /// funding gindexes for the caller's reservation record (§3.5). Secrets never
 /// cross the boundary.
 ///

@@ -66,7 +66,7 @@
 //! names all three rows; the harness's `fixture::emission_vin` is a
 //! parseable vin with filler backing and auths that J23 refuses on the
 //! mock's closeless chain and J25 would refuse on any chain, so J26's
-//! refusals are fixtured on [`I15::verify`] directly and driven on the
+//! refusals are fixtured on [`I15::verify`](crate::rules::tx_against::I15::verify) directly and driven on the
 //! claim with its fee proof corrupted.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -570,8 +570,8 @@ impl J25 {
 /// CEN-J26: the fee-input FCMP++ proof — absent iff the emission has no
 /// fee inputs; present, it verifies over the `txin_to_key` subset
 /// **exactly as CEN-I15** (`blockchain.cpp:4046–4105`, "§7.1 step 7 …
-/// identical to bond-post funding inputs"). The body is [`I15::verify`]
-/// over [`to_key_slots`] — the one derivation of which inputs are `ToKey`,
+/// identical to bond-post funding inputs"). The body is [`I15::verify`](crate::rules::tx_against::I15::verify)
+/// over [`to_key_slots`](crate::rules::tx_against::to_key_slots) — the one derivation of which inputs are `ToKey`,
 /// shared with the spend's and the bond post's attributions — against
 /// J21's context; the absent⇔ clause is
 /// H22's shape, required in `tx_form` and refused again by I15's body

@@ -290,7 +290,7 @@ impl crate::rules::CoinbaseRule for F5 {
 }
 
 /// CEN-F6: the coinbase's `unlock_time` equals `height + window`, the
-/// window being the rule set's [`mined_money_unlock_window`]
+/// window being the rule set's [`mined_money_unlock_window`](crate::RuleSet::mined_money_unlock_window)
 /// (`RuleSet::mined_money_unlock_window`; 60 — Q5). The sum is checked: a
 /// height near `u64::MAX` is not a chain any node reaches, and a wrap
 /// there would compare an unlock time against a number that means nothing.

@@ -10,7 +10,7 @@
 //! handed a [`Substrate`] whose longhash hashes only under the job's seed.
 //!
 //! Production plugs in [`ProductionPow`], over the node's one
-//! [`Hasher`]. A test plugs in a [`Fixture`], a substrate that is its own
+//! [`Hasher`]. A test plugs in a `Fixture`, a substrate that is its own
 //! job and holds no cache. The two differ only in the type plugged in:
 //! there is no flag, and no optional hasher.
 //!

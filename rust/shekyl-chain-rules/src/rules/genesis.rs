@@ -5,7 +5,7 @@
 
 //! Census 4.E — the genesis pin's rules.
 //!
-//! The rows of [`GenesisPin`](crate::GenesisPin). No coded checkpoint pins
+//! The rows of [`GenesisPin`]. No coded checkpoint pins
 //! anything above genesis (S1, design review 2026-11-03):
 //!
 //! - **CEN-E5** — the file a node opens records this network's genesis.
@@ -126,14 +126,14 @@ impl GenesisPin {
     /// `recorded` is block 0, or `None` for an empty file. The store calls
     /// this with the hash its snapshot read.
     /// [`conflict_with`](Self::conflict_with) reads a
-    /// [`HeaderView`](crate::HeaderView) and calls the same comparison, so
+    /// [`HeaderView`] and calls the same comparison, so
     /// the two cannot grow different policies.
     #[must_use]
     pub fn conflict(&self, recorded: Option<BlockHash>) -> Option<GenesisConflict> {
         E5::conflict(self, recorded)
     }
 
-    /// **CEN-E5** over a [`HeaderView`](crate::HeaderView).
+    /// **CEN-E5** over a [`HeaderView`].
     ///
     /// # Errors
     ///

@@ -22,9 +22,7 @@
 //! the load-bearing trait-dispatch commit (§7.X C5). At C4 the
 //! aggregate sits in the crate unconsumed except by future
 //! trait-dispatch sites and by the C7 property tests
-//! (`AssertionSink` / `PanickingSink` / coherence-pair). The
-//! legacy free-function [`super::refresh::produce_scan_result`]
-//! continues to drive production refresh until C5 deletes it.
+//! (`AssertionSink` / `PanickingSink` / coherence-pair).
 //!
 //! # Implementation outline
 //!
@@ -33,7 +31,7 @@
 //!
 //! 1. **Cancellation checkpoint 2** (pre-fetch) — observed at
 //!    method entry, before the daemon-tip read.
-//! 2. **Daemon tip read** — [`DaemonEngine::get_height`] for the
+//! 2. **Daemon tip read** — [`get_height`](shekyl_rpc_client::Rpc::get_height) for the
 //!    attempt's scan ceiling. RPC failure surfaces as
 //!    [`LocalRefreshError::DaemonUnreachable`] or
 //!    [`LocalRefreshError::DaemonProtocol`]; the
@@ -43,7 +41,7 @@
 //!    classification").
 //! 3. **Scanner construction** — a fresh
 //!    [`shekyl_scanner::Scanner`] is built from
-//!    [`Self::view_material`] per attempt (the view-material
+//!    [`LocalRefresh::view_material`] per attempt (the view-material
 //!    bytes are copied into [`Zeroizing<…>`](Zeroizing) wrappers
 //!    the scanner takes ownership of; the scanner's
 //!    [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop) chain wipes them
@@ -143,7 +141,7 @@
 //!
 //! [`LocalRefreshError`] carries no attacker-controlled `String`
 //! (§2.3 + §5.4.7 R6, pinned on
-//! [`RefreshEngine::Error`](super::traits::refresh::RefreshEngine::Error)).
+//! [`RefreshEngine::Error`]).
 //! Per-event detail flows through the [`DiagnosticSink`] channel.
 //! [`LocalRefreshError::PastFinality`] is the exception with fields,
 //! and they are a [`FinalityStop`](super::error::FinalityStop): two
@@ -264,7 +262,7 @@ const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
 /// `LocalRefresh` is `pub` so external callers can name the type
 /// in the orchestrator's `Engine<S, D, L, R = LocalRefresh>`
 /// default (C5). The
-/// [`RefreshEngine`](super::traits::refresh::RefreshEngine) trait
+/// [`RefreshEngine`] trait
 /// it implements is itself `pub(crate)` per
 /// `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.4, so external callers can
 /// name `LocalRefresh` but cannot reach its trait surface
@@ -345,7 +343,7 @@ impl LocalRefresh {
         !self.bond_watch.is_empty()
     }
 
-    /// Build a fresh [`Scanner`](shekyl_scanner::Scanner) from
+    /// Build a fresh [`Scanner`] from
     /// [`Self::view_material`]. Called once per
     /// [`Self::produce_scan_result`] attempt; the scanner's
     /// secret-bearing internal copies are wiped via

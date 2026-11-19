@@ -448,20 +448,6 @@ impl Driven {
         (self.scenario, self.chain)
     }
 
-    /// The scenario and the chain, for a straight prefix (`close_shards`).
-    ///
-    /// # Panics
-    ///
-    /// If round-tripping has started: a prefix connected beside the ledger
-    /// would make the next pop compare against a stale parent.
-    pub fn parts_mut(&mut self) -> (&mut Scenario<FreeHash>, &mut Vec<Mined>) {
-        assert!(
-            matches!(self.recording, Recording::Straight),
-            "a straight prefix is not round-tripped"
-        );
-        (&mut self.scenario, &mut self.chain)
-    }
-
     /// From the next block on, [`Self::connect`] pops and reconnects.
     pub async fn round_trip_from_here(&mut self) {
         assert!(
