@@ -36,12 +36,15 @@
 //!    commits there. What such a file system loses is replacing a file a
 //!    reader holds open: a reader of the destination, whatever it shares,
 //!    fails the classic rename with `ERROR_ACCESS_DENIED`.
-//! 4. A destination whose read-only attribute is set fails either rename
-//!    with `ERROR_ACCESS_DENIED` too. On that denial the destination's
-//!    attribute is read: set, the failure is [`ReplaceError::ReadOnly`] at
-//!    once, which no wait changes; clear, on the classic class it is a
-//!    reader holding the destination ([`Held::Live`]), and on the POSIX
-//!    path the denial itself (Rick, 2026-11-19).
+//! 4. A destination whose read-only attribute is set fails the POSIX rename
+//!    on NTFS with `ERROR_ACCESS_DENIED` too, and the classic rename on
+//!    FAT32 with `ERROR_ALREADY_EXISTS`: the replace it was asked for is
+//!    refused as a collision (Windows 11 23H2, build 22631, 2026-11-19). On
+//!    either refusal the destination's attribute is read: set, the failure
+//!    is [`ReplaceError::ReadOnly`] at once, which no wait changes; clear,
+//!    on the classic class an access denial is a reader holding the
+//!    destination ([`Held::Live`]), and anything else is the refusal itself
+//!    (Rick, 2026-11-19).
 //!
 //! **The creating handle** (Rick, 2026-11-18). A replace that writes its
 //! own staged file holds one handle from the create to the close
@@ -81,8 +84,13 @@
 //! device is `FILE_REMOTE_DEVICE` (`NtQueryVolumeInformationFile`,
 //! `FileFsDeviceInformation`, on the handle) is
 //! [`Unconfirmed::Remote`] whatever file system it reports. A server names
-//! the file system of the disk it shares (a Samba share answers `NTFS`),
-//! and the write-through sentence above is NTFS's, on this computer's disk.
+//! the file system of the disk it shares, and the write-through sentence
+//! above is NTFS's, on this computer's disk. Measured on an SMB share from
+//! a file server on the local network (Windows 11 23H2, build 22631,
+//! 2026-11-19): it reports `NTFS`, its device is `FILE_REMOTE_DEVICE`, and
+//! it refuses the `FileRenameInfoEx` class with `ERROR_INVALID_PARAMETER`
+//! as FAT32 does, so the commit lands through the classic rename and
+//! reports [`Unconfirmed::Remote`]`("NTFS")`.
 //!
 //! **One deadline** (Rick, 2026-11-18): the removal of a leftover staged
 //! file ([`remove`]), the source's open and the rename itself share the
@@ -108,8 +116,8 @@ use windows_sys::Wdk::Storage::FileSystem::{
 };
 use windows_sys::Wdk::System::SystemServices::{FILE_FS_DEVICE_INFORMATION, FILE_REMOTE_DEVICE};
 use windows_sys::Win32::Foundation::{
-    RtlNtStatusToDosError, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_SHARING_VIOLATION,
-    GENERIC_WRITE, INVALID_HANDLE_VALUE, MAX_PATH,
+    RtlNtStatusToDosError, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_INVALID_PARAMETER,
+    ERROR_SHARING_VIOLATION, GENERIC_WRITE, INVALID_HANDLE_VALUE, MAX_PATH,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FileDispositionInfo, FileDispositionInfoEx, FileRenameInfo, FileRenameInfoEx,
@@ -675,21 +683,25 @@ fn attempt(file: &File, destination: &Path) -> Result<Renamed, Fault> {
 
 /// What a failed rename over `destination` through `rename` says (module
 /// docs, steps 2 to 4): a sharing violation is a reader holding it, on
-/// every path. An access denial is its read-only attribute when that is
-/// set; when it is clear, a reader holding it on the classic class, and
-/// the denial itself on the POSIX path (Rick, 2026-11-18 and 2026-11-19).
-/// An attribute that cannot be read leaves the denial as it is: it is
-/// never taken for a reader.
+/// every path. An access denial, and on the classic class a collision (it
+/// was asked to replace), is its read-only attribute when that is set;
+/// when it is clear, an access denial on the classic class is a reader
+/// holding it, and anything else is the refusal itself (Rick, 2026-11-18
+/// and 2026-11-19). An attribute that cannot be read leaves the refusal as
+/// it is: it is never taken for a reader.
 fn destination_fault(error: io::Error, destination: &Path, rename: Renamed) -> Fault {
     if is_sharing_violation(&error) {
         return Fault::Held(Held::Live);
     }
-    if error.raw_os_error() != i32::try_from(ERROR_ACCESS_DENIED).ok() {
+    let code = error.raw_os_error();
+    let denied = code == i32::try_from(ERROR_ACCESS_DENIED).ok();
+    let collided = rename == Renamed::Classic && code == i32::try_from(ERROR_ALREADY_EXISTS).ok();
+    if !denied && !collided {
         return Fault::Final(ReplaceError::Io(error));
     }
     match std::fs::symlink_metadata(destination).map(|meta| meta.permissions().readonly()) {
         Ok(true) => Fault::Final(ReplaceError::ReadOnly),
-        Ok(false) if rename == Renamed::Classic => Fault::Held(Held::Live),
+        Ok(false) if denied && rename == Renamed::Classic => Fault::Held(Held::Live),
         Ok(false) | Err(_) => Fault::Final(ReplaceError::Io(error)),
     }
 }
@@ -926,7 +938,7 @@ mod tests {
     /// for alone. Red edit: drop the device query from the commit, and a
     /// share reporting NTFS is `Durable`.
     #[test]
-    #[ignore = "needs SHEKYL_TEST_SHARE_DIR: a directory on a mapped network share (Samba)"]
+    #[ignore = "needs SHEKYL_TEST_SHARE_DIR: a directory on a network share (SMB)"]
     fn a_commit_on_a_network_share_is_unconfirmed() {
         let dir = volume_dir("SHEKYL_TEST_SHARE_DIR");
         let probe_live = dir.path().join("probe");
@@ -1013,10 +1025,12 @@ mod tests {
         a_read_only_destination_is_refused_at_once_in(dir.path());
     }
 
-    /// On FAT32 the classic rename refuses a read-only destination with the
-    /// denial a held one gets, and the attribute tells them apart: read-only
-    /// at once (Rick, 2026-11-19). Red edit: take every classic denial for a
-    /// reader, and this waits the deadline out as `HeldOpen`.
+    /// On FAT32 the classic rename refuses a read-only destination as a
+    /// collision, `ERROR_ALREADY_EXISTS`, not the denial a held one gets
+    /// (Windows 11 23H2, build 22631, 2026-11-19), and the attribute read on
+    /// it says read-only at once (Rick, 2026-11-19). Red edit: read the
+    /// attribute on an access denial alone, and this is the bare collision
+    /// as `Io`.
     #[test]
     #[ignore = "needs SHEKYL_TEST_FAT_DIR: a directory on a FAT32 volume (a scratch VHD)"]
     fn a_read_only_destination_on_fat_is_refused_at_once() {
