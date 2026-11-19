@@ -510,11 +510,16 @@ fn build_session(
         )?),
         Endpoints::SelfHosted { network, daemon } => {
             let wallet_dir = cli.resolved_wallet_dir()?;
-            // The per-network default is created on demand, with the
-            // per-account root made as the daemon makes it; an explicit
+            // The per-account root is made first, as the daemon makes it,
+            // so whatever is made in it after has the root's protections.
+            // The per-network default is created on demand; an explicit
             // --wallet-dir is also created rather than failing on a path the
             // operator clearly intends to use.
-            shekyl_os_account::make_account_dir(&wallet_dir)
+            if let Some(root) = shekyl_os_account::per_account_root() {
+                shekyl_os_account::ensure_per_account_root(&root)
+                    .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
+            }
+            std::fs::create_dir_all(&wallet_dir)
                 .map_err(|e| format!("cannot create wallet dir {}: {e}", wallet_dir.display()))?;
             Ok(rpc_client::RpcSession::host_in_process(
                 wallet_dir,

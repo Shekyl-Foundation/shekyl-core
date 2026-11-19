@@ -24,8 +24,8 @@
 //!   ([`PER_ACCOUNT_ROOT_NAME`]), where every per-account default path sits
 //!   (rule 83 IG-13). The one owner of that name: the daemon's
 //!   configuration, the rendezvous and the wallets read it here.
-//!   [`ensure_per_account_root`] makes it as the daemon does,
-//!   [`make_account_dir`] makes a directory in it that way, and
+//!   [`ensure_per_account_root`] makes it as the daemon does, which a
+//!   wallet binary does at its start, before it makes anything in it, and
 //!   [`wallet_dir_in`] names the wallet directory in it.
 //! - [`peer_uid`] (Unix): the account of the process at the other end of a
 //!   connected Unix socket (`SO_PEERCRED` on Linux, `getpeereid`
@@ -124,7 +124,10 @@ pub fn wallet_dir_in(root: &Path) -> PathBuf {
 
 /// Creates the per-account root `root` where it does not exist, as the
 /// daemon creates it, so whichever of the daemon and a wallet binary runs
-/// first makes the same directory. On Windows it is owner-only with the
+/// first makes the same directory. A wallet binary calls it at its start,
+/// before it makes anything in the root: a directory made later, under any
+/// spelling of the root's path (Windows matches names without regard to
+/// case), then finds the root already made with its protections. On Windows it is owner-only with the
 /// no-read-up label, made in the creating call
 /// (`shekyl_win_sec::rendezvous::ensure_data_home`); on Unix it has this
 /// process's mode, as the daemon's data directory does. An existing root is
@@ -145,24 +148,10 @@ pub fn ensure_per_account_root(root: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Makes the directory `dir` and any missing parents (`mkdir -p`). When
-/// `dir` is in this account's per-account root, the root is made first by
-/// [`ensure_per_account_root`], so a wallet binary that runs before the
-/// daemon makes the root the daemon would. Every wallet binary makes its
-/// default directories through here.
-///
-/// # Errors
-/// The root or the directory could not be made.
-pub fn make_account_dir(dir: &Path) -> std::io::Result<()> {
-    if let Some(root) = per_account_root().filter(|root| dir.starts_with(root)) {
-        ensure_per_account_root(&root)?;
-    }
-    std::fs::create_dir_all(dir)
-}
-
 /// The calling account's home from the operating system's account interface
 /// (rule 83 IG-13), never `HOME`, `XDG_*` or `%APPDATA%`: the passwd entry's
-/// home on Unix, or `None` when the account has none or it cannot be read.
+/// home on Unix, or `None` when the account has none (unset or
+/// `/nonexistent`) or it cannot be read.
 #[cfg(unix)]
 #[must_use]
 #[allow(unsafe_code, reason = "getpwuid_r has no safe wrapper in std")]
@@ -193,10 +182,19 @@ pub fn account_home() -> Option<PathBuf> {
     }
     // SAFETY: `pw_dir` points at a NUL-terminated string inside `buffer`.
     let dir = unsafe { CStr::from_ptr(entry.pw_dir) };
-    if dir.to_bytes().is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(OsStr::from_bytes(dir.to_bytes())))
+    home_of_passwd_dir(dir.to_bytes()).map(|home| PathBuf::from(OsStr::from_bytes(home)))
+}
+
+/// The passwd home that names no home: a service account's (rule 83 IG-13).
+#[cfg(unix)]
+const NO_HOME_SENTINEL: &[u8] = b"/nonexistent";
+
+/// The home a passwd entry's `pw_dir` names: `None` when it is unset (empty)
+/// or the no-home sentinel `/nonexistent`, so such an account has no
+/// default paths (rule 83 IG-13).
+#[cfg(unix)]
+fn home_of_passwd_dir(dir: &[u8]) -> Option<&[u8]> {
+    (!dir.is_empty() && dir != NO_HOME_SENTINEL).then_some(dir)
 }
 
 /// The calling account's home on Windows: the local application data folder
@@ -295,6 +293,21 @@ pub fn peer_uid(socket: &impl std::os::fd::AsFd) -> std::io::Result<u32> {
 mod tests {
     use super::*;
 
+    /// A passwd entry whose home is unset or `/nonexistent` names no home,
+    /// so the account has no default paths (rule 83 IG-13); any other path
+    /// is the home. Red edit: drop the sentinel, and a service account's
+    /// root is `/nonexistent/.shekyl`.
+    #[test]
+    fn an_unset_or_nonexistent_passwd_home_is_no_home() {
+        assert_eq!(home_of_passwd_dir(b""), None);
+        assert_eq!(home_of_passwd_dir(b"/nonexistent"), None);
+        assert_eq!(home_of_passwd_dir(b"/home/a"), Some(&b"/home/a"[..]));
+        assert_eq!(
+            home_of_passwd_dir(b"/nonexistent/a"),
+            Some(&b"/nonexistent/a"[..])
+        );
+    }
+
     /// The passwd home is absolute and exists for the account the tests
     /// run under; it is read without consulting `HOME`.
     #[test]
@@ -378,15 +391,23 @@ mod per_account_root_tests {
         ensure_per_account_root(&root).expect("an existing root is left as it is");
     }
 
-    /// A directory outside this account's root is made as asked, parents
-    /// included, and making it again is no error.
+    /// On Windows the root is made owner-only with the no-read-up label,
+    /// as the daemon makes it, and a directory made in it afterwards under
+    /// another spelling of its name lands in that same root. Windows only:
+    /// the estate's Windows hosts run it.
+    #[cfg(windows)]
     #[test]
-    fn a_directory_outside_the_root_is_made_as_asked() {
+    fn the_root_is_owner_only_and_a_respelled_path_finds_it() {
         let base = tempfile::tempdir().expect("a scratch directory");
-        let dir = base.path().join("a").join("b");
-        make_account_dir(&dir).expect("made");
-        assert!(dir.is_dir(), "{}", dir.display());
-        make_account_dir(&dir).expect("made again");
+        let root = per_account_root_in(base.path());
+        ensure_per_account_root(&root).expect("the root is made");
+        shekyl_win_sec::rendezvous::check_owner_only_labelled(&root)
+            .expect("the root is owner-only and refuses read-up");
+        let respelled = base.path().join("SHEKYL").join("wallets");
+        std::fs::create_dir_all(&respelled).expect("made");
+        assert!(root.join("wallets").is_dir(), "the same root");
+        shekyl_win_sec::rendezvous::check_owner_only_labelled(&root)
+            .expect("the root keeps its protections");
     }
 
     /// The root this account resolves is its home's, on every platform the

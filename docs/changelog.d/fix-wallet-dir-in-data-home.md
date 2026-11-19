@@ -15,6 +15,9 @@
   `%USERPROFILE%\.shekyl\wallets\<network>`, outside the root, and on
   every platform it read `HOME`. Its shell history moves from
   `XDG_DATA_HOME`/`%LOCALAPPDATA%\shekyl-cli\history.txt` to
-  `shekyl-cli-history.txt` in the root. Both are made with the root made as
-  the daemon makes it (`shekyl_os_account::make_account_dir`), and
-  `shekyl-cli` no longer depends on `dirs`.
+  `shekyl-cli-history.txt` in the root. The CLI makes the root as the daemon
+  makes it before it makes either, and `shekyl-cli` no longer depends on
+  `dirs`.
+- **A passwd home of `/nonexistent` is no home** (rule 83 IG-13): such an
+  account has no default paths, so the daemon refuses with
+  `config.path.no-home` where it used to resolve `/nonexistent/.shekyl`.

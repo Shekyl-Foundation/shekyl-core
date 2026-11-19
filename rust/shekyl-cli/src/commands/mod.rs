@@ -811,7 +811,7 @@ const HISTORY_FILE: &str = "shekyl-cli-history.txt";
 /// the shell keeps no history.
 fn history_path() -> Option<String> {
     let root = shekyl_os_account::per_account_root()?;
-    drop(shekyl_os_account::make_account_dir(&root));
+    drop(shekyl_os_account::ensure_per_account_root(&root));
     Some(root.join(HISTORY_FILE).to_string_lossy().into_owned())
 }
 
