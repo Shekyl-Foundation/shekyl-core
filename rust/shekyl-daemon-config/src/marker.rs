@@ -35,10 +35,13 @@ pub enum MarkerRead {
 }
 
 /// What the marker said, or that it was written.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum MarkerOutcome {
     /// The directory held no store and no marker; the marker is written.
-    Written,
+    /// `Some` names why its save is not confirmed to survive a power loss
+    /// (storage the daemon does not support), which the daemon logs once its
+    /// logger runs (Rick, 2026-11-19).
+    Written(Option<private_file::Unconfirmed>),
     /// The marker names this network and this id.
     Matched,
 }
@@ -125,7 +128,7 @@ pub fn check_or_write(
         MarkerRead::Matched => Ok(MarkerOutcome::Matched),
         MarkerRead::Absent => {
             let path = data_dir.join(MARKER_FILE);
-            write(&path, network, network_id).map_err(|e| match e {
+            let written = write(&path, network, network_id).map_err(|e| match e {
                 // A scanner holding the marker's leftover staged file (or
                 // the marker) past the wait: its own refusal, naming the
                 // file and the directory to exclude from scanning.
@@ -146,7 +149,13 @@ pub fn check_or_write(
                         )
                 }
             })?;
-            Ok(MarkerOutcome::Written)
+            Ok(MarkerOutcome::Written(match written {
+                private_file::Replaced::Written(private_file::Durability::Unconfirmed(why)) => {
+                    Some(why)
+                }
+                private_file::Replaced::Written(private_file::Durability::Durable)
+                | private_file::Replaced::Unchanged => None,
+            }))
         }
     }
 }
@@ -181,13 +190,12 @@ fn write(
     path: &Path,
     network: Network,
     network_id: NetworkId,
-) -> Result<(), private_file::CommitError> {
+) -> Result<private_file::Replaced, private_file::CommitError> {
     private_file::replace(
         path,
         render(network, network_id).as_bytes(),
         Access::Default,
-    )?;
-    Ok(())
+    )
 }
 
 #[cfg(test)]
@@ -252,17 +260,18 @@ mod tests {
     #[test]
     fn a_fresh_directory_is_marked_and_then_matches() {
         let (_d, lock) = locked();
-        assert_eq!(
-            check_or_write(&lock, Network::Testnet, ID_A).unwrap(),
-            MarkerOutcome::Written
+        let written = check_or_write(&lock, Network::Testnet, ID_A).unwrap();
+        assert!(
+            matches!(written, MarkerOutcome::Written(None)),
+            "a local disk's write is confirmed: {written:?}"
         );
         let text = std::fs::read_to_string(lock.data_dir().join(MARKER_FILE)).unwrap();
         assert_eq!(text, render(Network::Testnet, ID_A));
         assert_eq!(parse(&text), Some((Network::Testnet, ID_A)));
-        assert_eq!(
+        assert!(matches!(
             check_or_write(&lock, Network::Testnet, ID_A).unwrap(),
             MarkerOutcome::Matched
-        );
+        ));
         assert!(!private_file::staged_path(&lock.data_dir().join(MARKER_FILE)).exists());
     }
 

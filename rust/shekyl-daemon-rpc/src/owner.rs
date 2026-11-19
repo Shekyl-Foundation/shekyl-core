@@ -227,9 +227,10 @@ mod windows {
     /// and rename it over the path: a reader sees the old record or the new
     /// one.
     fn publish(plan: &OwnerSocketPlan, record: &[u8]) -> Result<(), CommitError> {
-        StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)?
-            .commit()
-            .map(drop)
+        let durability =
+            StagedWrite::<Replace>::create(&plan.path, record, Access::OwnerOnly)?.commit()?;
+        crate::channel::files::note_durability(&plan.path, &durability);
+        Ok(())
     }
 
     /// The start-up dial (`RPC_CHANNEL.md` §7.1).

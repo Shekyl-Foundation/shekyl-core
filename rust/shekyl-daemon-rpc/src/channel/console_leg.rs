@@ -95,8 +95,10 @@ pub fn bind(dir: &Path) -> Result<ConsoleListener, crate::run::StartFault> {
     );
     let listener = shekyl_win_sec::OwnerOnlyPipeListener::bind_console(name.clone())
         .map_err(|e| format!("the console's pipe: {e}"))?;
-    shekyl_os_account::private_file::replace_console(&place(dir), name.as_bytes())
+    let path = place(dir);
+    let replaced = shekyl_os_account::private_file::replace_console(&path, name.as_bytes())
         .map_err(super::files::FileRefused::from)?;
+    super::files::note_replaced(&path, &replaced);
     Ok(crate::owner::OwnerListener::from(listener))
 }
 

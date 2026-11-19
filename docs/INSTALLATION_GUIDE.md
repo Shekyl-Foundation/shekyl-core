@@ -48,9 +48,10 @@ are not a supported configuration.
   `SAVE_ON_NETWORK_DRIVE`, and the others in `docs/api/wallet_rpc.yaml`),
   and its message says why and what to change.
 - **The daemon**, on such storage, still starts. A file it replaces at
-  start (its rendezvous record, its console key, the service bundle) is
-  written, but not confirmed to survive a power cut; the daemon does not
-  report that.
+  start (its network marker, its rendezvous record, its console key, the
+  service bundle) is written, but not confirmed to survive a power cut,
+  and the daemon logs a warning naming the file, why, and the supported
+  storage.
 
 ### Practical baseline
 

@@ -2061,7 +2061,8 @@ the rename at once, `config.replace.read-only`, which no wait changes
 the write-through handle's rename is flushed with it (`CreateFileW`'s
 "Caching Behavior"); on a network drive, whatever file system it reports,
 and on any other file system a publish lands, unconfirmed, and the start
-goes on without reporting it. The daemon's supported storage is a local
+goes on, logging a warning that names the file, why its save is not
+confirmed, and the supported storage (Rick, 2026-11-19). The daemon's supported storage is a local
 NTFS volume on Windows and a local disk on Unix; network shares are not a
 supported configuration (Rick, 2026-11-19; `INSTALLATION_GUIDE.md`,
 "Supported storage"). A stale record, which a crashed daemon

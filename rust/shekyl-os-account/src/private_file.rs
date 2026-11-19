@@ -342,25 +342,25 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> 
 /// The bytes are the file's journal until the rename, so a reader sees the
 /// old bytes or the new ones.
 ///
-/// # Errors
-///
-/// [`PrivateFileError::Io`] when a step fails.
-pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> {
-    replace_as(path, bytes, Access::OwnerOnly)
-}
-
-/// Replace the console file at `path` with `bytes` ([`Access::Console`]).
+/// [`replace`] tells whether the file was written, and with what
+/// durability.
 ///
 /// # Errors
 ///
 /// [`PrivateFileError::Io`] when a step fails.
-pub fn replace_console(path: &Path, bytes: &[u8]) -> Result<(), PrivateFileError> {
-    replace_as(path, bytes, Access::Console)
+pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<Replaced, PrivateFileError> {
+    Ok(replace(path, bytes, Access::OwnerOnly)?)
 }
 
-fn replace_as(path: &Path, bytes: &[u8], access: Access) -> Result<(), PrivateFileError> {
-    replace(path, bytes, access)?;
-    Ok(())
+/// Replace the console file at `path` with `bytes` ([`Access::Console`]),
+/// and say whether it was written, and with what durability, as
+/// [`replace`] does.
+///
+/// # Errors
+///
+/// [`PrivateFileError::Io`] when a step fails.
+pub fn replace_console(path: &Path, bytes: &[u8]) -> Result<Replaced, PrivateFileError> {
+    Ok(replace(path, bytes, Access::Console)?)
 }
 
 /// Whether only this account can read `path`: a file, not a link, owned by

@@ -248,9 +248,13 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         Ok(l) => l,
         Err(d) => return end.refuse(&[d]),
     };
-    if let Err(d) = marker::check_or_write(&lock, network, network_id) {
-        return end.refuse(&[d]);
-    }
+    // A marker written on storage the daemon does not support is logged once
+    // the logger runs, below (Rick, 2026-11-19).
+    let marker_unconfirmed = match marker::check_or_write(&lock, network, network_id) {
+        Ok(marker::MarkerOutcome::Written(why)) => why,
+        Ok(marker::MarkerOutcome::Matched) => None,
+        Err(d) => return end.refuse(&[d]),
+    };
     // The console key's reset (IG-Q88): under the lock just taken, held
     // through the whole replacement, so it cannot run beside a daemon and a
     // start waits on it (`RPC_CHANNEL.md` §5). It touches no other
@@ -313,6 +317,12 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         }));
     let lines = announced.into_lines();
     announce_all(&lines);
+    if let Some(why) = &marker_unconfirmed {
+        shekyl_daemon_rpc::channel::files::warn_unconfirmed(
+            &lock.data_dir().join(marker::MARKER_FILE),
+            why,
+        );
+    }
 
     // The RPC's runtime and the owner's leg, dialled and bound before the
     // node opens: a second daemon of this account, network and instance

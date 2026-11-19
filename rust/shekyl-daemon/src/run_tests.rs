@@ -407,3 +407,29 @@ fn a_start_refusal_s_status_survives_the_teardown() {
     assert_eq!(exit_status(None, EXIT_FAILED), EXIT_FAILED);
     assert_eq!(exit_status(None, 0), 0);
 }
+
+/// A file the daemon replaced on storage it does not support is written and
+/// the start goes on, but the log says so: the path, why its save is not
+/// confirmed, and the supported storage (Rick, 2026-11-19). A confirmed
+/// save says nothing. Red edit: drop the warning from `warn_unconfirmed`,
+/// and the unsupported volume passes unremarked.
+#[test]
+fn an_unconfirmed_replace_is_logged_with_its_cause() {
+    use shekyl_daemon_rpc::channel::files::note_durability;
+    use shekyl_os_account::private_file::{Durability, Unconfirmed};
+
+    let path = Path::new("/data/shekyld.network");
+    let fat = crate::logged(|| {
+        note_durability(
+            path,
+            &Durability::Unconfirmed(Unconfirmed::FileSystem("FAT32".to_owned())),
+        );
+    });
+    assert_eq!(fat.lines().count(), 1, "{fat}");
+    assert!(fat.contains("WARN"), "{fat}");
+    assert!(fat.contains("/data/shekyld.network"), "{fat}");
+    assert!(fat.contains("FAT32"), "{fat}");
+    assert!(fat.contains("supported storage"), "{fat}");
+    let local = crate::logged(|| note_durability(path, &Durability::Durable));
+    assert!(local.is_empty(), "{local}");
+}
