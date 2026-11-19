@@ -91,6 +91,8 @@ pub mod filter;
 pub mod subsystem;
 
 mod appender;
+
+pub use appender::append_before_start;
 mod colour;
 mod queue;
 mod reload;

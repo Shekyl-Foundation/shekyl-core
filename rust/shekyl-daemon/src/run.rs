@@ -35,7 +35,6 @@ use shekyl_options::{read_cli, Cli, Code, Diagnostic};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_spawn::owning::OwningConnection;
 
-use shekyl_daemon_config::exit::refuse;
 use shekyl_daemon_config::{load, Loaded};
 
 use crate::options::DaemonOptions;
@@ -49,6 +48,93 @@ pub use shekyl_daemon_config::exit::{EXIT_FAILED, EXIT_REFUSED};
 /// change the exit status.
 pub(crate) fn tell(out: &mut impl Write, line: &str) {
     drop(writeln!(out, "{line}"));
+}
+
+/// The one way a start ends refused or failed (Rick, 2026-11-18): each line
+/// on standard error, prefixed with the daemon's name, and in the log file
+/// when it can be opened. Every refusal and failure of [`main_loading`]
+/// goes through it, so a service, whose standard error the operator may
+/// never see, leaves why it did not start where its log is.
+pub(crate) enum StartEnd {
+    /// Before the configuration names a log file, and in `--config-verify`,
+    /// which writes nothing: standard error alone.
+    Stderr,
+    /// The configuration named this log file and the logger is not running
+    /// yet: the lines are appended to it as the logger would append them,
+    /// the file created at `0600` when its directory exists.
+    LogFile(std::path::PathBuf),
+    /// The logger runs: its two sinks carry the lines, flushed before the
+    /// exit.
+    Logger,
+}
+
+impl StartEnd {
+    /// A refusal: its diagnostics, and [`EXIT_REFUSED`].
+    pub(crate) fn refuse(&self, diagnostics: &[Diagnostic]) -> i32 {
+        self.say(
+            &diagnostics
+                .iter()
+                .map(Diagnostic::render)
+                .collect::<Vec<_>>(),
+        );
+        EXIT_REFUSED
+    }
+
+    /// A failure: its line, and [`EXIT_FAILED`].
+    pub(crate) fn fail(&self, line: String) -> i32 {
+        self.say(&[line]);
+        EXIT_FAILED
+    }
+
+    fn say(&self, lines: &[String]) {
+        match self {
+            Self::Stderr => {
+                for line in lines {
+                    tell(&mut std::io::stderr(), &format!("shekyld: {line}"));
+                }
+            }
+            Self::LogFile(path) => {
+                for line in lines {
+                    tell(&mut std::io::stderr(), &format!("shekyld: {line}"));
+                }
+                // A log that cannot be opened is left unwritten; standard
+                // error has the lines.
+                drop(shekyl_logging::append_before_start(path, lines));
+            }
+            Self::Logger => {
+                for line in lines {
+                    shekyl_logging::announce(&format!("shekyld: {line}"), line);
+                }
+                let _flushed = shekyl_logging::flush(shekyl_logging::FLUSH_WITHIN);
+            }
+        }
+    }
+
+    /// A start fault of the RPC's set-up, at its open (before the node) or
+    /// its start (after it): a file held open past the wait
+    /// (`config.replace.held-open`) and a missing or exposed rendezvous key
+    /// (`config.service.rendezvous-key`) are refusals; anything else fails
+    /// with `context` before its words.
+    fn rpc_fault(
+        &self,
+        fault: shekyl_daemon_rpc::run::StartFault,
+        data_dir: &std::path::Path,
+        context: &str,
+    ) -> i32 {
+        match fault {
+            shekyl_daemon_rpc::run::StartFault::HeldOpen(held) => {
+                self.refuse(&[shekyl_daemon_config::replace::held_open_refusal(
+                    &held, data_dir,
+                )])
+            }
+            shekyl_daemon_rpc::run::StartFault::Refused(why) => {
+                self.fail(format!("{context}: {why}"))
+            }
+            shekyl_daemon_rpc::run::StartFault::RendezvousKey { key, found } => {
+                self.refuse(&[shekyl_daemon_rpc::run::rendezvous_key_refusal(&key, &found)])
+            }
+        }
+    }
 }
 
 /// The load step of the sequence: [`load`] in the daemon.
@@ -73,6 +159,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     // Before any handler: what this process can know about an inherited
     // ignore. On Unix that is `SIGINT`'s disposition.
     let interrupt = signals::InheritedInterrupt::at_start();
+    let mut end = StartEnd::Stderr;
     let (program, rest) = match args.split_first() {
         Some((p, rest)) => (p.clone(), rest.to_vec()),
         None => (OsString::from("shekyld"), Vec::new()),
@@ -80,14 +167,14 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     let program = program.to_string_lossy().into_owned();
     let cli = match read_cli(&TABLE, rest.iter().cloned()) {
         Ok(cli) => cli,
-        Err(ds) => return refuse(&ds),
+        Err(ds) => return end.refuse(&ds),
     };
     // The owning connection, adopted before anything else this process does
     // (IG-Q106): close-on-exec or not inheritable before any child can be
     // spawned, so none holds a copy that outlives the daemon.
     let owning = match adopt_owning_connection(&cli) {
         Ok(owning) => owning,
-        Err(d) => return refuse(&[d]),
+        Err(d) => return end.refuse(&[d]),
     };
     // A second handle, held until this function returns and never read or
     // written. The watch drops its own handle when it sees the close, at
@@ -98,11 +185,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     let _owning_to_exit = match owning.as_ref().map(OwningConnection::try_clone).transpose() {
         Ok(held) => held,
         Err(e) => {
-            tell(
-                &mut std::io::stderr(),
-                &format!("shekyld: the owning connection could not be held: {e}"),
-            );
-            return EXIT_FAILED;
+            return end.fail(format!("the owning connection could not be held: {e}"));
         }
     };
     // The build identity, from the one home every binary reads (DC-Q20).
@@ -134,16 +217,21 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         config,
     } = match load(cli, platform) {
         Ok(loaded) => loaded,
-        Err(ds) => return refuse(&ds),
+        Err(ds) => return end.refuse(&ds),
     };
     let network = config.network;
+    // From here a refusal also reaches the log file the configuration
+    // names; `--config-verify` writes nothing.
+    if !config.session.verify {
+        end = StartEnd::LogFile(config.logging.file.clone());
+    }
 
     // The walk (IG-Q59): every refusal a start makes before it creates
     // anything, with nothing created. The check prints its verdict and
     // exits; a start goes on to the effects the walk withheld.
     let walked = match verify::walk(&config, &resolved, platform) {
         Ok(walked) => walked,
-        Err(ds) => return refuse(&ds),
+        Err(ds) => return end.refuse(&ds),
     };
     if config.session.verify {
         return verify::accept(&resolved, &config_file, &config, &walked.warnings);
@@ -154,10 +242,10 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     // absent), the log location.
     let lock = match Lock::take(&config.data_dir) {
         Ok(l) => l,
-        Err(d) => return refuse(&[d]),
+        Err(d) => return end.refuse(&[d]),
     };
     if let Err(d) = marker::check_or_write(&lock, network, network_id) {
-        return refuse(&[d]);
+        return end.refuse(&[d]);
     }
     // The console key's reset (IG-Q88): under the lock just taken, held
     // through the whole replacement, so it cannot run beside a daemon and a
@@ -176,17 +264,11 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
                 drop(lock);
                 0
             }
-            Err(e) => {
-                tell(
-                    &mut std::io::stderr(),
-                    &format!("shekyld: the console key was not replaced: {e}"),
-                );
-                EXIT_FAILED
-            }
+            Err(e) => end.rpc_fault(e, &config.data_dir, "the console key was not replaced"),
         };
     }
     if let Err(d) = log_location_writable(&config.logging.file) {
-        return refuse(&[d]);
+        return end.refuse(&[d]);
     }
 
     // Logging, from its section; then the announcements, to standard error
@@ -198,13 +280,10 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     let logger = match shekyl_logging::init(logging) {
         Ok(guard) => guard,
         Err(e) => {
-            tell(
-                &mut std::io::stderr(),
-                &format!("shekyld: logging could not start: {e}"),
-            );
-            return EXIT_FAILED;
+            return end.fail(format!("logging could not start: {e}"));
         }
     };
+    end = StartEnd::Logger;
     let mut announced =
         announce::announcements(&TABLE, &resolved, &config_file, &config, &walked.warnings);
     announced.rest.extend(mining_notice(&config));
@@ -252,17 +331,12 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         Some(&channel),
     ) {
         Ok(prepared) => prepared,
-        Err(shekyl_daemon_rpc::run::PrepareError::Owner(d)) => return refuse(&[d]),
+        Err(shekyl_daemon_rpc::run::PrepareError::Owner(d)) => return end.refuse(&[d]),
         Err(shekyl_daemon_rpc::run::PrepareError::Runtime(e)) => {
-            tell(&mut std::io::stderr(), &format!("shekyld: the RPC's {e}"));
-            return EXIT_FAILED;
+            return end.fail(format!("the RPC's {e}"));
         }
         Err(shekyl_daemon_rpc::run::PrepareError::Channel(e)) => {
-            tell(
-                &mut std::io::stderr(),
-                &format!("shekyld: the RPC channel cannot start: {e}"),
-            );
-            return EXIT_FAILED;
+            return end.rpc_fault(e, &config.data_dir, "the RPC channel cannot start");
         }
     };
 
@@ -273,7 +347,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     if let Err(refusal) =
         levers::arm_settlement_schedule(dev.settlement_epoch_blocks, dev.archival_reorg_depth)
     {
-        return refuse(&[verify::owner_refusal(
+        return end.refuse(&[verify::owner_refusal(
             &resolved,
             refusal.row(),
             refusal.rule(),
@@ -301,11 +375,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     }) {
         Ok(node) => node,
         Err(error) => {
-            tell(
-                &mut std::io::stderr(),
-                &format!("shekyld: the node did not start: {error}"),
-            );
-            return EXIT_FAILED;
+            return end.fail(format!("the node did not start: {error}"));
         }
     };
     // `mine = on`: the configured miner, once open has returned. `None`
@@ -314,11 +384,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     // the same stop would run twice.
     if config.mine.start {
         if let Err(refused) = node.mining().start(None) {
-            tell(
-                &mut std::io::stderr(),
-                &format!("shekyld: the miner did not start: {refused}"),
-            );
-            return EXIT_FAILED;
+            return end.fail(format!("the miner did not start: {refused}"));
         }
     }
     for bound in &node.network().listening().clearnet {
@@ -335,19 +401,11 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     let pool = match shekyl_runtime::runtime(budget, &name) {
         Ok(p) => p,
         Err(e) => {
-            tell(
-                &mut std::io::stderr(),
-                &format!("shekyld: the signal owner's runtime could not start: {e}"),
-            );
-            return EXIT_FAILED;
+            return end.fail(format!("the signal owner's runtime could not start: {e}"));
         }
     };
     if let Err(e) = signals::own(pool.handle(), interrupt) {
-        tell(
-            &mut std::io::stderr(),
-            &format!("shekyld: the stop triggers could not be owned: {e}"),
-        );
-        return EXIT_FAILED;
+        return end.fail(format!("the stop triggers could not be owned: {e}"));
     }
     // The options handle: the resolved values, the runtime rows' owners
     // behind the RPC's two methods (§2.7). The link rows reach the
@@ -363,11 +421,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     let ready = match owning.map(watch_owning_connection).transpose() {
         Ok(ready) => ready,
         Err(e) => {
-            tell(
-                &mut std::io::stderr(),
-                &format!("shekyld: the owning connection could not be watched: {e}"),
-            );
-            return EXIT_FAILED;
+            return end.fail(format!("the owning connection could not be watched: {e}"));
         }
     };
     let status = supervise(&config, &pool, options, node, tor_inbox, prepared, ready);
@@ -416,7 +470,7 @@ fn supervise(
     // supervisor for `daemon_status`'s Tor fields; its inbox is made
     // already, so an ask before the loop starts waits for it.
     let gone: shekyl_daemon_rpc::run::OnRendezvousGone = Arc::new(signals::rendezvous_gone);
-    let rpc = match shekyl_daemon_rpc::run::start(
+    let (rpc, refused) = match shekyl_daemon_rpc::run::start(
         &config.rpc,
         options,
         node.handles(),
@@ -425,11 +479,15 @@ fn supervise(
         prepared,
         gone,
     ) {
-        Ok(rpc) => Some(rpc),
-        Err(refusal) => {
-            tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
-            None
-        }
+        Ok(rpc) => (Some(rpc), None),
+        // A start refusal like any other (IG-11): through the one path, to
+        // standard error and the log, and its status (2 for a held file or
+        // a bad rendezvous key, 1 for a failure) is the exit's, whatever
+        // the teardown reports.
+        Err(fault) => (
+            None,
+            Some(StartEnd::Logger.rpc_fault(fault, &config.data_dir, "the RPC did not start")),
+        ),
     };
     // The owner's leg is bound, served and published: the starting process
     // may call. A failed write is that process gone, which the watch reports.
@@ -465,7 +523,15 @@ fn supervise(
         note_run(&mut preserve_status, wait);
     }
     notify_driver.abort();
-    finish(pool, supervisor, rpc, preserve_status, node)
+    let status = finish(pool, supervisor, rpc, preserve_status, node);
+    exit_status(refused, status)
+}
+
+/// The run's exit: a start refusal's status when the RPC refused at its
+/// start (2 for a held file or a bad rendezvous key, 1 for a failure),
+/// whatever the teardown that followed reports; otherwise the teardown's.
+fn exit_status(refused: Option<i32>, teardown: i32) -> i32 {
+    refused.unwrap_or(teardown)
 }
 
 /// The teardown: chain sync is asked to stop, the RPC drains, the node is

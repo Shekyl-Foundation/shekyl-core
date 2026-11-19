@@ -58,6 +58,9 @@ tracing = "0.1"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# A late start fault's status test builds the held-file fault the one
+# replace reports (`run_tests.rs`).
+shekyl-os-account = { path = "../shekyl-os-account" }
 tempfile = "3"
 # The owning connection's tests (tests/owning_connection.rs) call the
 # daemon as a GUI does: "this computer"'s client on the owner's leg, the

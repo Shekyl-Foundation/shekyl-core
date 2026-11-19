@@ -143,7 +143,7 @@ impl<S: PendingSealStore> PendingPostStore<S> {
     ) -> Result<R, S::Error> {
         let (out, durability) = self.mutate_reporting(f).await?;
         // A non-broadcast edit treats an applied write as success.
-        crate::engine::dispatch_durability::accept_applied(durability);
+        crate::engine::dispatch_durability::accept_applied(&durability);
         Ok(out)
     }
 
@@ -871,9 +871,10 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             // pin makes it unreachable from production flow). Nothing was
             // sent; the record stays held (funds-safe) and the defect is
             // loud.
-            Err(BroadcastSubmitError::SealUnconfirmed) => {
+            Err(BroadcastSubmitError::SealUnconfirmed(error)) => {
                 tracing::warn!(
                     attempts,
+                    %error,
                     "bond-post dispatch: the seal was applied but not confirmed; nothing was \
                      sent, and the next tick resends the stored bytes"
                 );
