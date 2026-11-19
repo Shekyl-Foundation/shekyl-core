@@ -104,20 +104,20 @@ fn closes_through(manifest: &Manifest, shards: u64) -> Vec<ClosedShard> {
 }
 
 /// How many of `closed` name a height strictly below `height`.
-fn closes_before(closed: &[ClosedShard], height: u64) -> u64 {
+fn closes_before(closed: &[ClosedShard], height: BlockHeight) -> u64 {
     let count = closed
         .iter()
-        .filter(|close| close.close_height.to_raw() < height)
+        .filter(|close| close.close_height < height)
         .count();
     u64::try_from(count).expect("a fill's shard count fits u64")
 }
 
 /// How many of `closed` name `height` itself. One block can close more
 /// than one shard.
-fn closes_at(closed: &[ClosedShard], height: u64) -> u64 {
+fn closes_at(closed: &[ClosedShard], height: BlockHeight) -> u64 {
     let count = closed
         .iter()
-        .filter(|close| close.close_height.to_raw() == height)
+        .filter(|close| close.close_height == height)
         .count();
     u64::try_from(count).expect("a fill's shard count fits u64")
 }
@@ -160,16 +160,18 @@ async fn extend(
             );
             continue;
         }
-        let height = u64::try_from(chain.len()).expect("a test chain's length fits u64");
-        if height > last.to_raw() {
+        // Block 0 is the chain's first entry, so its length is the next
+        // block's height.
+        let height = BlockHeight::from_raw(
+            u64::try_from(chain.len()).expect("a test chain's length fits u64"),
+        );
+        if height > last {
             break;
         }
         // The manifest's close is this block, or it is not a close. The
         // count just before the block, and the count once it is connected,
         // are the producer's own, not a second reading of the manifest.
-        let closes_here = closed
-            .iter()
-            .any(|close| close.close_height.to_raw() == height);
+        let closes_here = closed.iter().any(|close| close.close_height == height);
         if closes_here {
             assert_eq!(
                 closed_shards(scenario).await,
@@ -181,11 +183,7 @@ async fn extend(
             .next_template(candidate.transactions.clone())
             .await
             .unwrap_or_else(|outcome| panic!("the template at {height}: {outcome}"));
-        assert_eq!(
-            next.height.to_raw(),
-            height,
-            "the forged chain loads in order"
-        );
+        assert_eq!(next.height, height, "the forged chain loads in order");
         next.template.block = candidate.block;
         chain.push(
             scenario
@@ -230,18 +228,19 @@ mod tests {
 
     #[test]
     fn a_block_closes_every_shard_the_manifest_names_at_its_height() {
-        let closed = [close(0, 10), close(1, 10), close(2, 12)];
-        assert_eq!(closes_before(&closed, 10), 0);
-        assert_eq!(closes_at(&closed, 10), 2);
-        assert_eq!(closes_before(&closed, 12), 2);
-        assert_eq!(closes_at(&closed, 12), 1);
-        assert_eq!(closes_at(&closed, 11), 0);
+        let at = BlockHeight::from_raw;
+        let closed = [close(0, at(10)), close(1, at(10)), close(2, at(12))];
+        assert_eq!(closes_before(&closed, at(10)), 0);
+        assert_eq!(closes_at(&closed, at(10)), 2);
+        assert_eq!(closes_before(&closed, at(12)), 2);
+        assert_eq!(closes_at(&closed, at(12)), 1);
+        assert_eq!(closes_at(&closed, at(11)), 0);
     }
 
-    fn close(shard: u64, height: u64) -> ClosedShard {
+    fn close(shard: u64, close_height: BlockHeight) -> ClosedShard {
         ClosedShard {
             shard: ShardId::from_raw(shard),
-            close_height: BlockHeight::from_raw(height),
+            close_height,
         }
     }
 
