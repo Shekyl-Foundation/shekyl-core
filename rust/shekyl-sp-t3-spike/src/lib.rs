@@ -79,7 +79,7 @@
 #![deny(unsafe_code)]
 
 /// DEMO BASE ONLY (Brief C): the value the freshness demo's pull requests disagree on.
-pub const FRESHNESS_DEMO: u32 = 1;
+pub const FRESHNESS_DEMO: u32 = 2;
 
 /// DEMO ONLY (Brief C): a change to this crate that keeps the demo value.
 pub const FRESHNESS_DEMO_NOTE: &str = "the demo value is unchanged";
