@@ -10,13 +10,12 @@
 
 use std::io::Cursor;
 
-use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot};
-use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
+use shekyl_network::Network;
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, SectionRoot};
+use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use super::*;
-
-/// The header's length: `MAGIC ‖ version ‖ net ‖ first_height ‖ count`.
-const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
 
 /// A wire-valid transaction distinguishable by `tag`: one `Input::Gen`
 /// (the shape the wire demands of a miner transaction) and one output.
@@ -253,11 +252,8 @@ fn an_unfinished_corpus_is_refused_by_count() {
     .expect("header");
     w.append(&b0, &t0).expect("one");
     w.append(&b1, &t1).expect("two");
-    // Reach in without finishing: the cursor holds the bytes.
-    let bytes = {
-        let CorpusWriter { out, .. } = w;
-        out.into_inner()
-    };
+    // Take the bytes without `finish`: the header still says zero.
+    let bytes = w.into_unfinished().into_inner();
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     let refused = reader
         .next_record()
@@ -283,7 +279,7 @@ fn the_reader_refuses_a_crafted_tx_count_before_reading_bodies() {
     let (_, b0, t0) = blobs(BlockHeight::from_raw(0), 0);
     let mut bytes = write(&[(b0.clone(), t0)]);
     // header ‖ tag ‖ height ‖ block_len ‖ block ‖ tx_count
-    let tx_count_at = HEADER_LEN + 1 + 8 + 4 + b0.len();
+    let tx_count_at = HEADER_LEN + TAG_LEN + HEIGHT_LEN + LEN_PREFIX + b0.len();
     bytes[tx_count_at..tx_count_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     let refused = reader.next_record().expect_err("crafted count");
@@ -294,7 +290,7 @@ fn the_reader_refuses_a_crafted_tx_count_before_reading_bodies() {
                 listed: 0,
                 present,
                 ..
-            } if present == u32::MAX as usize
+            } if present == usize::try_from(u32::MAX).expect("u32 fits usize")
         ),
         "{refused}"
     );
@@ -349,7 +345,10 @@ fn a_record_must_carry_the_next_height() {
     let (_, b1, t1) = blobs(BlockHeight::from_raw(1), 0);
     let mut bytes = write(&[(b0.clone(), t0), (b1, t1)]);
     // The second record's height, patched from 1 to 5.
-    let second_height_at = HEADER_LEN + 1 + 8 + 4 + b0.len() + 4 + 4 + 1;
+    // First record (no bodies): tag, height, block length, block, tx count,
+    // reference count. Then the next record's tag, then its height.
+    let first_record_len = TAG_LEN + HEIGHT_LEN + LEN_PREFIX + b0.len() + LEN_PREFIX + LEN_PREFIX;
+    let second_height_at = HEADER_LEN + first_record_len + TAG_LEN;
     bytes[second_height_at..second_height_at + 8].copy_from_slice(&5u64.to_le_bytes());
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     reader.next_record().expect("first");
@@ -394,8 +393,8 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
     // wrapped height.
     let mut crafted = bytes.clone();
     crafted.extend_from_slice(&bytes[HEADER_LEN..]);
-    let count_at = usize::try_from(super::COUNT_OFFSET).expect("the count sits in the header");
-    crafted[count_at..count_at + core::mem::size_of::<u64>()].copy_from_slice(&2u64.to_le_bytes());
+    let count_at = COUNT_OFFSET;
+    crafted[count_at..count_at + COUNT_LEN].copy_from_slice(&2u64.to_le_bytes());
     let mut reader = CorpusReader::open(Cursor::new(crafted)).expect("open");
     reader.next_record().expect("first").expect("present");
     let refused = reader.next_record().expect_err("no height follows");
@@ -407,7 +406,7 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
     // exhaustion: the reader does not need those bytes to refuse.
     let mut tag_only = bytes;
     tag_only.push(tag::EXTEND);
-    tag_only[count_at..count_at + core::mem::size_of::<u64>()].copy_from_slice(&2u64.to_le_bytes());
+    tag_only[count_at..count_at + COUNT_LEN].copy_from_slice(&2u64.to_le_bytes());
     let mut reader = CorpusReader::open(Cursor::new(tag_only)).expect("open");
     reader.next_record().expect("first").expect("present");
     assert!(matches!(
@@ -504,14 +503,16 @@ fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
     // record: patch the rewind's `to` (the 8 bytes after its tag) to 2,
     // the tip it followed.
     // tag ‖ height ‖ block_len ‖ block ‖ tx_count ‖ ref_count
-    let last_extend_len = 1 + 8 + 4 + b2_again.len() + 4 + 4;
+    let last_extend_len =
+        TAG_LEN + HEIGHT_LEN + LEN_PREFIX + b2_again.len() + LEN_PREFIX + LEN_PREFIX;
     let rewind_at = bytes
         .len()
         .checked_sub(last_extend_len + REWIND_RECORD_LEN)
         .expect("the rewind precedes the last extend");
     assert_eq!(bytes[rewind_at], tag::REWIND);
     let mut patched = bytes;
-    patched[rewind_at + 1..rewind_at + 9].copy_from_slice(&2u64.to_le_bytes());
+    patched[rewind_at + TAG_LEN..rewind_at + TAG_LEN + HEIGHT_LEN]
+        .copy_from_slice(&2u64.to_le_bytes());
     let mut reader = CorpusReader::open(Cursor::new(patched)).expect("open");
     for _ in 0..3 {
         reader.next_record().expect("a block");
@@ -542,7 +543,7 @@ fn an_oversized_length_is_refused_before_it_is_read() {
     let (_, b0, t0) = blobs(BlockHeight::from_raw(0), 0);
     let mut bytes = write(&[(b0, t0)]);
     // The first record's `block_len`.
-    let block_len_at = HEADER_LEN + 1 + 8;
+    let block_len_at = HEADER_LEN + TAG_LEN + HEIGHT_LEN;
     let claimed = u32::try_from(MAX_BLOCK_BLOB_SIZE + 1).expect("the cap fits u32");
     bytes[block_len_at..block_len_at + 4].copy_from_slice(&claimed.to_le_bytes());
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");

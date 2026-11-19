@@ -91,3 +91,11 @@ today's reader refuses every value but 4: an artifact is rebuilt, never
 migrated (rule 15). `CF-3`'s layout 5 is the next such change
 (`CHAIN_FORGE.md` §7.1), and it lands in this crate; which layouts its
 reader accepts while layout-4 corpora remain is `CF-R7`'s ruling.
+
+The record, the height cursor, the integrity checks, the writer and the
+reader are separate modules. A new tag is a `Record` variant and the two
+arms that encode and decode it. The cursor moves only for a tag that
+moves the tip, so an offer — a block that does not extend the tip — does
+not change the height law. The section-blob ceiling (`MAX_SECTION_BLOB`)
+is the bundle-body packet ceiling; the ingest adapter's corpus tests hold
+the two equal.

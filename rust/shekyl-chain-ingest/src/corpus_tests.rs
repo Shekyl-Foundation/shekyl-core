@@ -9,7 +9,7 @@ use shekyl_chain_rules::Candidate;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, SectionRoot};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
-use shekyl_corpus::CorpusWriter;
+use shekyl_corpus::{CorpusWriter, MAX_SECTION_BLOB};
 
 use super::*;
 use crate::test_support::coinbase;
@@ -65,6 +65,17 @@ fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
     let block_blob = block.serialize();
     let tx_blobs = bodies.iter().map(Transaction::serialize).collect();
     (Candidate::new(block, bodies), block_blob, tx_blobs)
+}
+
+/// The edit that makes this red: move `MAX_SECTION_BLOB` or
+/// `DEFAULT_MAX_PACKET_SIZE` and not the other. A section blob is allocated
+/// at the same ceiling command 2017 reads a bundle body at.
+#[test]
+fn the_section_blob_ceiling_is_the_bundle_body_packet_ceiling() {
+    assert_eq!(
+        u64::try_from(MAX_SECTION_BLOB).expect("the ceiling fits u64"),
+        shekyl_levin::DEFAULT_MAX_PACKET_SIZE
+    );
 }
 
 fn write(records: &[(Vec<u8>, Vec<Vec<u8>>)]) -> Vec<u8> {
