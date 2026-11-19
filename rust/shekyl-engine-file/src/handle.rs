@@ -40,9 +40,9 @@
 //!
 //! Do not copy the wallet directory while the lock on the keys file
 //! (`<base>.keys`, where `base` is the `.wallet` path) is held (for example
-//! during an open wallet-RPC session). Use [`Self::close`] (or process shutdown that runs the
-//! close flush) and copy from the filesystem, or [`Self::save_as`] to a
-//! quiescent destination path.
+//! during an open wallet-RPC session). Use `Engine::close` (or process
+//! shutdown that runs the close flush) and copy from the filesystem, or
+//! [`WalletFile::save_as`] to a quiescent destination path.
 //!
 //! # This commit's scope
 //!

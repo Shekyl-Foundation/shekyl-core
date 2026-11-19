@@ -9,7 +9,7 @@
 //! Public half only: pending gate, daemon-claimed-tip `anchor_t0`, anchored
 //! [`ReferenceBlock`], funding sweep, curve-tree paths, `AssembleBond` ask,
 //! persist-before-return via an independently constructed
-//! [`PendingPostStore`](super::pscan::dispatch::PendingPostStore). Secrets stay
+//! [`PendingPostStore`]. Secrets stay
 //! inside the stake actor (rule 36).
 
 use std::sync::Arc;
@@ -505,7 +505,7 @@ where
     /// go-live is gated only by the #332 staker-activation entry that wires
     /// this orchestrator (nothing else guards it; activation sequencing must
     /// be handled there, not assumed from a witness gap). Tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`]. This carries no suppression —
+    /// `SpentRecordsDurablyPruned::for_test`. This carries no suppression —
     /// it is reached from wired code; go-live retires with the RPC stake entry
     /// (`docs/FOLLOWUPS.md`).
     pub(crate) async fn assemble_bond_post(

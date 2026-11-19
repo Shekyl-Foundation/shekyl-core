@@ -140,7 +140,7 @@ impl Rule for J14 {
 ///    `parent_state_shards_from_gather` builds the same rows from the
 ///    process-latched schedule for the C++) — through the retention
 ///    crate's [`check_admission`]: the credited work at `r_market + 1`
-///    clears [`ADMISSION_MIN_WORK_MILLI`].
+///    clears [`ADMISSION_MIN_WORK_MILLI`](shekyl_archival_retention::admission::ADMISSION_MIN_WORK_MILLI).
 ///
 /// A complete tree names no shard and is admitted without a gather
 /// (`check_admission`'s dominance argument); the C++ skips the gather for
@@ -151,7 +151,7 @@ impl Rule for J14 {
 /// The first 4.J row to read a per-height record (the archival fold, through
 /// the predicate), so [`judge_bond_post`]'s fault is a [`ViewRead`] from this
 /// row on: a shard the frontier counts closed with no height that closed it
-/// is [`Corrupt::ShardCloseUnplaced`], the writer halt, never a refusal.
+/// is [`Corrupt::ShardCloseUnplaced`](crate::Corrupt::ShardCloseUnplaced), the writer halt, never a refusal.
 ///
 /// # Witness
 ///
@@ -161,13 +161,14 @@ impl Rule for J14 {
 /// `W = SHARD_LENGTH` — 3 MB of real proof bytes per shard — and the price
 /// is a planted `r_market` row (`MockChain::with_r_market`, the one
 /// archival read the harness plants, for this reason). On a driven chain
-/// the operands are reached, not planted: the ingest crate's
-/// `scenario_shard::close_shards` fills a shard with real spends and lets
-/// it close, and the join scenario, the slash chain and the LMDB
-/// slash-fixture replica join it at `first_admissible_compact_join` —
-/// refused on this row one block earlier, admitted there. Those run in the
-/// ingest crate's live lane (`--ignored`; minutes of real proofs), which
-/// no CI workflow runs; the default lane's driven joins are onto the
+/// the operands are reached, not planted: the forged shard-fill chain
+/// (`shekyl-chain-forge`'s `plans/shard-fill.toml`, the ingest crate's
+/// `forged_fill`) closes shards with real spends, and the join scenario,
+/// the slash chain and the LMDB slash-fixture replica join it at
+/// `first_admissible_compact_join` — refused on this row one block
+/// earlier, admitted there. Those run in the ingest crate's ignored set
+/// (minutes of real proofs; `nightly.yml`'s `chain-ingest-ignored` job);
+/// the default lane's driven joins are onto the
 /// complete tree, which this row admits without a gather.
 pub(crate) struct J15;
 

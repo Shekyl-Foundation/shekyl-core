@@ -159,7 +159,7 @@ pub(crate) enum Undone {
 }
 
 /// A table as the catalogue dispatches to it: a replay target (from a
-/// [`TableOrdinal`] to a typed `open_table`) and, since S-CHAIN-R amendment
+/// [`TableOrdinal`](crate::schema::TableOrdinal) to a typed `open_table`) and, since S-CHAIN-R amendment
 /// A2, a **seal** target — created at `ChainStore::create` and required by
 /// `header::verify`; every catalogued table has a writer, so every one is
 /// sealed. Implemented for both definition shapes;

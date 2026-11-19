@@ -204,7 +204,7 @@ pub enum WalletFileError {
     /// A preferences-layer operation failed (HMAC mismatch on save,
     /// Bucket-3 field slipped through a save path, oversize body,
     /// TOML serialization failure, …). Surfaces
-    /// [`PrefsError`](shekyl_engine_prefs::PrefsError) verbatim so
+    /// [`PrefsError`] verbatim so
     /// the FFI can map each variant to an actionable user message
     /// without this crate having to mirror the prefs taxonomy.
     ///

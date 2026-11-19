@@ -1361,6 +1361,61 @@ async fn submit_reanchor_unavailable_when_tree_too_far_behind() {
     );
 }
 
+/// **A reservation discarded while its submit re-anchors is never reported
+/// held** (Copilot on #1448). The submit releases the state lock across the
+/// re-anchor; a discard lands meanwhile, and the re-anchor then fails (here
+/// the tree is too far behind, as above). The submit reads where the entry
+/// stands before it reports: gone, so `ReservationNotFound`
+/// (`ReservationAfterSubmit::Gone`), never `ReanchorUnavailable` (`Held`),
+/// which would tell the caller to retry or discard a reservation that no
+/// longer exists. Deterministic: the submit parks inside the re-anchor's
+/// fee fetch until the discard has run. Red edit: in `submit_async`, return
+/// the re-anchor's error without `left_consumer_held`.
+#[tokio::test]
+async fn a_reservation_discarded_during_its_reanchor_is_not_reported_held() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (ledger, _tree_dir, tree) = funded_ledger_and_tree(&[(1, 50_000)], 1, 20).await;
+    let entered = Arc::new(AtomicUsize::new(0));
+    // One permit for the build's own fee fetch; the submit's parks.
+    let gate = Arc::new(tokio::sync::Semaphore::new(1));
+    let pending = test_pending_tx_with_tree_and_fee_source(
+        Arc::clone(&ledger),
+        tree,
+        GatedFeeSnapshotSource {
+            entered: Arc::clone(&entered),
+            gate: Arc::clone(&gate),
+        },
+    );
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
+
+    let submit = pending.submit(built.id, built.content_gen, &NoSaveCommit);
+    let interleave = async {
+        while entered.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+        pending
+            .discard(built.id, DiscardReason::ConsumerExplicit)
+            .expect("the reservation is consumer-held while its submit re-anchors");
+        gate.add_permits(1);
+    };
+    let (submitted, ()) = tokio::join!(submit, interleave);
+
+    let err = submitted.unwrap_err();
+    assert!(
+        matches!(err, SubmitError::ReservationNotFound { reservation_id } if reservation_id == built.id),
+        "a discarded reservation is gone, not held: {err:?}"
+    );
+    assert_eq!(
+        err.reservation_after(),
+        crate::engine::error::ReservationAfterSubmit::Gone
+    );
+    assert_eq!(pending.outstanding(), 0);
+}
+
 /// CT-5c: a spend requires the curve tree to assemble a membership proof.
 /// With no tree configured (a degenerate test/partial-construction state),
 /// a build that clears selection is **refused** rather than producing an

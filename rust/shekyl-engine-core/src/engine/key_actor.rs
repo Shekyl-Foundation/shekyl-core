@@ -9,7 +9,7 @@
 //!
 //! Per [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`], this module migrates the
 //! wallet's key material + signing operations out of the in-process
-//! [`LocalKeys`](super::local_keys::LocalKeys) composition and into a true
+//! [`LocalKeys`] composition and into a true
 //! actor with its own `tokio` task and message protocol. The actor owns
 //! [`AllKeysBlob`] privately; no `&AllKeysBlob` escapes its task. The trait
 //! surface ([`KeyEngine`]) is unchanged — Stage 2 swaps the dispatcher, not the
@@ -83,7 +83,7 @@ use super::traits::key::{
 /// the actor-dispatched [`KeyEngine`] operations ([`ClaimOutput`],
 /// [`SignTransaction`]).
 ///
-/// Mirrors [`LocalKeys`](super::local_keys::LocalKeys)'s owned key material.
+/// Mirrors [`LocalKeys`]'s owned key material.
 /// The actor's single-threaded message loop serializes access to `keys`.
 pub(crate) struct KeyActor {
     /// Wallet key material and derived scalars for signing.
@@ -384,7 +384,7 @@ impl ZeroizeOnDrop for HandleDerivationViewSecret {}
 /// `Clone` handle the orchestrator holds in place of an inline `K: KeyEngine`
 /// field. Wraps the actor's [`ActorRef`] plus the construction-time public
 /// projection (§3.1). Implements the same `pub(crate) trait` [`KeyEngine`]
-/// that [`LocalKeys`](super::local_keys::LocalKeys) implements, so the swap is
+/// that [`LocalKeys`] implements, so the swap is
 /// transparent to the trait's callers.
 ///
 /// **Capability object.** Holding a `KeyEngineHandle` *is* the authority to

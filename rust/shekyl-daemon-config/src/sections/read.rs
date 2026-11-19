@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Strict readers over a [`Resolved`](crate::resolve::Resolved).
+//! Strict readers over a [`Resolved`].
 //!
 //! A row the table fills is present after resolve, and a derived default
 //! the process uses is present after materialize. Absence of such a row,

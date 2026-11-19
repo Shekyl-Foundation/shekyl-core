@@ -820,7 +820,7 @@ pub enum WalletRpcError {
     #[error("the daemon's fee answer could not be read")]
     DaemonFeeResponseInvalid,
     /// `-29119`: the wallet's own signer hit an internal fault, named by
-    /// one keyword: a builder invariant ([`InternalSignFault`]) or the
+    /// one keyword: a builder invariant ([`InternalSignFault`](shekyl_engine_core::InternalSignFault)) or the
     /// wallet state signing reads. A bug, never the request's doing.
     #[error("the wallet's signer hit an internal fault ({fault}) — report it; the wallet log has the detail")]
     SignerFailed {
@@ -1018,7 +1018,8 @@ pub enum WalletRpcError {
     /// Submit: definite daemon rejection.
     #[error("submit rejected")]
     SubmitRejected {
-        /// OpenAPI `error.data`: serde-tagged [`SubmitVerdict`] projection.
+        /// OpenAPI `error.data`: the `rejected` verdict with its [`RejectCause`]
+        /// (and `row` when a chain row refused it).
         data: Value,
     },
     /// Submit: transport-level ambiguity.
@@ -1339,7 +1340,7 @@ pub enum WalletRpcError {
     /// open" — and `data` carries the file name and both versions so a client
     /// can tell the two apart without parsing prose (the `-29511` precedent).
     /// `file` is the name only. The directory stays on
-    /// [`PScanStartError::StateFileVersionUnsupported`](shekyl_engine_core::PScanStartError::StateFileVersionUnsupported),
+    /// [`PScanStartError::StateFileVersionUnsupported`],
     /// which is what the server log prints. The remedy is the only one that
     /// exists today — nothing rewrites the file, `rescan_blockchain` needs an
     /// open wallet, and the wallet opens once the file is out of the way,

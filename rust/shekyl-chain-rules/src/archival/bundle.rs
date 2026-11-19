@@ -262,9 +262,9 @@ pub struct SupportSeat {
     pub receipt_key: FnDsaHybridPublicKey,
 }
 
-/// The section checker: form, the window, then the budget. The only
-/// admission path. `bundle_section::inside_window` is the window
-/// [`verify_bundle`] asks too.
+// The section checker: form, the window, then the budget. The only
+// admission path. `bundle_section::inside_window` is the window
+// [`verify_bundle`] asks too.
 #[path = "bundle_section.rs"]
 mod bundle_section;
 
@@ -277,8 +277,8 @@ pub use bundle_section::{
     SectionCheckFailed, SectionRefused, SectionStanding,
 };
 
-/// The support stream's carry (`SO-D12` S2), on the connect path since the
-/// switch's C5.
+// The support stream's carry (`SO-D12` S2), on the connect path since the
+// switch's C5.
 #[path = "support_carry.rs"]
 mod support_carry;
 
@@ -844,8 +844,8 @@ fn select_pairs<V: BundleView>(
     Ok(pairs)
 }
 
-/// The draws a producer reads. Re-exported here so the verifier's module
-/// stays the name callers use.
+// The draws a producer reads. Re-exported here so the verifier's module
+// stays the name callers use.
 #[path = "bundle_targets.rs"]
 mod bundle_targets;
 

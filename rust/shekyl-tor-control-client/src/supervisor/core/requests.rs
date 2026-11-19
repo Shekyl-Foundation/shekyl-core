@@ -19,8 +19,8 @@
 //! `DEL_ONION` and then `ADD_ONION`. A probe, a route publish, and a
 //! progress line ordered after a request stay behind it until the reply is
 //! folded. The reply's own decisions join after that request's follower and
-//! ahead of the tail ([`Core::begin_reply_fold`]). A request, or a probe,
-//! that no longer stands when its turn comes ([`Core::action_stands`]) is
+//! ahead of the tail ([`Core::begin_reply_fold`](crate::supervisor::Core::begin_reply_fold)). A request, or a probe,
+//! that no longer stands when its turn comes ([`Core::action_stands`](crate::supervisor::Core::action_stands)) is
 //! withheld there.
 //!
 //! The reply bound is a deadline here, one bound after the send in the

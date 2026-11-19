@@ -188,7 +188,8 @@ pub(crate) enum ReleaseRequestError {
     /// pending-post seal) — fail-closed, never an invented-empty set over a
     /// bad seal. This is our own store, so a failure here is internal
     /// corruption, not a reachable-daemon condition: distinct from
-    /// [`DaemonUnreachable`], which the caller can retry.
+    /// [`DaemonUnreachable`](ReleaseRequestError::DaemonUnreachable), which the
+    /// caller can retry.
     #[error("engine state read ({context}): {detail}")]
     State {
         /// Which read refused.
@@ -199,9 +200,9 @@ pub(crate) enum ReleaseRequestError {
     /// A daemon query needed to *prepare* the exit failed transiently — the
     /// dispatch-tip clock read here. Every such site is **before** the seal,
     /// so nothing was assembled or propagated and the caller may retry at
-    /// will. Kept distinct from [`State`] (a local sealed-store read) so
-    /// wallet-RPC can name a reachable daemon outage as retryable rather than
-    /// an opaque internal fault.
+    /// will. Kept distinct from [`State`](ReleaseRequestError::State) (a local
+    /// sealed-store read) so wallet-RPC can name a reachable daemon outage as
+    /// retryable rather than an opaque internal fault.
     #[error("daemon unreachable ({context}): {detail}")]
     DaemonUnreachable {
         /// Which daemon query failed.
@@ -362,7 +363,7 @@ where
     /// (§7.4 pin: the principal's daemon session cannot be passed here — it
     /// does not implement the marker). `pruning_landed` is the shared SP-R0
     /// witness every funding-output spender takes; tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`].
+    /// `SpentRecordsDurablyPruned::for_test`.
     ///
     /// [`ClaimSourceFor`]: super::emission_source::ClaimSourceFor
     // The `dead_code` staging allow retired with PR-C: the production caller

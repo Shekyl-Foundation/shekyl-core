@@ -720,7 +720,7 @@ struct StakeParams {
     /// [`StakePostureParam::SupportCompleteTree`], ignored for market.
     ///
     /// Not a validation nicety — the refusal it guards *is* the warning
-    /// (see [`FOUNDATION_POSTURE_WARNING`]), so a client either shows the
+    /// (see [`FOUNDATION_POSTURE_WARNING`](crate::FOUNDATION_POSTURE_WARNING)), so a client either shows the
     /// operator those terms or deliberately echoes an acknowledgment it
     /// was handed. The GUI never sends this field, which is what keeps the
     /// foundation posture off that surface by construction rather than by

@@ -45,7 +45,7 @@
 //! id **before** assembly, and the id is derivable only from the persona's
 //! public identity key — actor-held state. The seam derives it from the
 //! actor's read-only projection
-//! ([`StakeEngineHandle::persona_identity`]) rather than a caller-supplied
+//! ([`StakeEngineHandle::persona_identity`](crate::engine::stake_engine::StakeEngineHandle::persona_identity)) rather than a caller-supplied
 //! id that could disagree with the slot (a mismatch would fetch one
 //! persona's epochs and sign with another's keys — a claim the daemon
 //! rejects, but a foot-gun the seam can simply not have). Deliberately
@@ -258,7 +258,7 @@ where
     /// reward is fully consumed by the loud vout). Go-live remains
     /// compile-blocked on a production [`SpentRecordsDurablyPruned`] mint
     /// (SP-R0), exactly as the bond path; tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`].
+    /// `SpentRecordsDurablyPruned::for_test`.
     ///
     /// The production caller is the cadence driver's epoch-claim leg
     /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 3) — the `claim` RPC method

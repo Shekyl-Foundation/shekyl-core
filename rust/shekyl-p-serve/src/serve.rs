@@ -583,7 +583,7 @@ enum Lookup {
 /// [`sign_envelope`], because the serve path's cost is gated per thread
 /// (`benches/serve_response_iai.rs`): Callgrind keeps one collection state
 /// per thread, so the gate measures these steps composed on one thread
-/// ([`serve_one_in_memory`]), and a closure has no name to compose.
+/// (`serve_one_in_memory`), and a closure has no name to compose.
 fn gate_and_open(
     signer: &dyn PassSigner,
     provider: &dyn ShardProvider,

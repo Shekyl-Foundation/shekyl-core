@@ -19,7 +19,7 @@
 //! loop, and one owner on the timing engine carries the earliest deadline.
 //! Every socket lingers for the same span, so the earliest is always the
 //! oldest. How many may linger at once is capped by what the connector
-//! admits in one span ([`Sockets::clearnet_linger_cap`]); a refusal beyond
+//! admits in one span ([`Sockets::clearnet_linger_cap`](shekyl_transport_layer::Sockets::clearnet_linger_cap)); a refusal beyond
 //! the cap closes at once and leaves the RST residual D10.2 states. Two
 //! listen endpoints share that cap, which is the cap the daemon reserves
 //! once.
