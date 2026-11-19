@@ -174,7 +174,7 @@ pub(in super::super) fn anchor(
 /// decapsulate every surviving coinbase again.
 struct HeldCoinbases {
     by_height: Vec<Option<KeyImage>>,
-    by_image: BTreeMap<KeyImage, u64>,
+    by_image: BTreeMap<KeyImage, BlockHeight>,
 }
 
 impl HeldCoinbases {
@@ -185,28 +185,27 @@ impl HeldCoinbases {
         }
     }
 
-    /// How many coinbases have been noted, which is one past the highest
-    /// noted height.
-    fn len(&self) -> u64 {
-        self.by_height.len() as u64
+    /// The height whose coinbase is noted next: one past the highest noted.
+    fn next(&self) -> BlockHeight {
+        BlockHeight::from_raw(self.by_height.len() as u64)
     }
 
-    fn image_at(&self, height: u64) -> Option<KeyImage> {
-        let index = usize::try_from(height).expect("a fixture height fits usize");
-        self.by_height.get(index).copied().flatten()
+    fn image_at(&self, height: BlockHeight) -> Option<KeyImage> {
+        self.by_height.get(at(height)).copied().flatten()
     }
 
-    /// The coinbase height `image` spends, when the miner holds that coinbase.
-    fn height_of(&self, image: KeyImage) -> Option<u64> {
+    /// The coinbase `image` spends, when the miner holds that coinbase.
+    fn height_of(&self, image: KeyImage) -> Option<BlockHeight> {
         self.by_image.get(&image).copied()
     }
 
     /// Note block `height`'s coinbase. Heights arrive in order. A coinbase
-    /// that does not open is a broken harness block: the fill stops, and
-    /// the coinbase is not recorded as unspent.
-    fn note(&mut self, height: u64, opened: Result<HeldKeyImage, CryptoError>) {
+    /// that does not open, or a second coinbase carrying an image already
+    /// noted, is a broken harness block: the fill stops, and the coinbase
+    /// is not recorded as unspent.
+    fn note(&mut self, height: BlockHeight, opened: Result<HeldKeyImage, CryptoError>) {
         assert_eq!(
-            self.len(),
+            self.next(),
             height,
             "coinbase images are noted in height order"
         );
@@ -216,23 +215,24 @@ impl HeldCoinbases {
             Err(error) => panic!("block {height}'s coinbase did not open: {error}"),
         };
         if let Some(image) = image {
-            // The lowest height keeps the image. A later coinbase does not
-            // overwrite it.
-            self.by_image.entry(image).or_insert(height);
+            let earlier = self.by_image.insert(image, height);
+            assert!(
+                earlier.is_none(),
+                "blocks {earlier:?} and {height} carry one coinbase key image"
+            );
         }
         self.by_height.push(image);
     }
 
-    /// Drop coinbases at and above `len`. A popped block's coinbase pays
-    /// another output when that height is mined again.
-    fn truncate_to(&mut self, len: usize) {
-        while self.by_height.len() > len {
-            let height = u64::try_from(self.by_height.len() - 1).expect("a fixture height fits");
-            if let Some(image) = self.by_height.pop().flatten() {
-                if self.height_of(image) == Some(height) {
-                    self.by_image.remove(&image);
-                }
-            }
+    /// Forget the coinbases at `height` and above. A popped block's
+    /// coinbase pays another output when that height is mined again.
+    fn truncate_to(&mut self, height: BlockHeight) {
+        for image in self
+            .by_height
+            .drain(at(height).min(self.by_height.len())..)
+            .flatten()
+        {
+            self.by_image.remove(&image);
         }
     }
 }
@@ -600,8 +600,8 @@ impl Grown {
         for key_image in &images {
             let image = KeyImage::from_canonical_bytes(*key_image);
             if let Some(coinbase) = self.held_coinbases.height_of(image) {
-                self.spent.insert(coinbase);
-                took.push(coinbase);
+                self.spent.insert(coinbase.to_raw());
+                took.push(coinbase.to_raw());
             }
         }
         self.spent_at.push(took);
@@ -615,7 +615,7 @@ impl Grown {
     /// the harness miner holds it. This reads the map [`Self::record`]
     /// filled; it does not open the coinbase again.
     pub(in super::super) fn coinbase_key_image(&self, height: BlockHeight) -> Option<KeyImage> {
-        self.held_coinbases.image_at(height.to_raw())
+        self.held_coinbases.image_at(height)
     }
 
     /// Note every coinbase matured for the block connecting next. A listed
@@ -625,16 +625,11 @@ impl Grown {
         let Some(through) = self.height().to_raw().checked_sub(FIRST_SPEND_HEIGHT) else {
             return;
         };
-        assert!(
-            through < self.hashes.len() as u64,
-            "a matured coinbase is a block this chain has connected"
-        );
+        let through = BlockHeight::from_raw(through);
         let wallet = MinerWallet::harness();
-        while self.held_coinbases.len() <= through {
-            let height = self.held_coinbases.len();
-            let opened = self
-                .spender
-                .coinbase_key_image(wallet, BlockHeight::from_raw(height));
+        while self.held_coinbases.next() <= through {
+            let height = self.held_coinbases.next();
+            let opened = self.spender.coinbase_key_image(wallet, height);
             self.held_coinbases.note(height, opened);
         }
     }
@@ -657,7 +652,7 @@ impl Grown {
         // The popped block's coinbase goes with it; a block mined at that
         // height again pays another. The images of the blocks that remain
         // stay: the spender is rebuilt over those same blocks.
-        self.held_coinbases.truncate_to(self.hashes.len());
+        self.held_coinbases.truncate_to(self.height());
         self.images.pop();
         for coinbase in self.spent_at.pop().expect("a block to pop") {
             self.spent.remove(&coinbase);
