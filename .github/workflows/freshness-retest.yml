@@ -1,0 +1,205 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# One pull request's freshness re-test, called by freshness.yml for a
+# pull request carrying the `merge-next` label that is not fresh against
+# `dev` (Brief C, ruled 2026-11-19).
+#
+#   re-test  checks out the pull request's head, merges the new `dev` into
+#            it locally (the branch is never changed), and runs the tests
+#            both the pull request and the merges since it was last fresh
+#            reach (freshness_overlap.py's shared tests) with the Rust job's
+#            commands (scripts/ci/rust_scoped_tests.sh), inside a time
+#            budget. Read-only: it runs the pull request's code and holds no
+#            write token.
+#   report   posts `fresh-against-dev` on the head: green, or red with the
+#            reason (failing tests, a conflict with `dev`, the time budget,
+#            a cancelled re-test), and a comment naming the merge and the
+#            failing tests when red; then re-runs the pull request's
+#            `rust-pass` to read it (scripts/ci/freshness_status.py). Runs
+#            whatever the re-test did, so no head is left pending. The
+#            re-test hands it a conflict and the time budget as job outputs:
+#            the log carries each step's script, so text a step can print
+#            is already in it before the step runs.
+#
+# One re-test per pull request at a time: a newer merge's re-test of the
+# same pull request cancels this one, and the newer run reports.
+
+name: freshness-retest
+
+on:
+  workflow_call:
+    inputs:
+      pr:
+        type: number
+        required: true
+      head:
+        type: string
+        required: true
+      dev:
+        description: the `dev` commit to merge into the head
+        type: string
+        required: true
+      since:
+        description: the `dev` the head was last fresh against (freshness_status.py)
+        type: string
+        required: true
+      merged:
+        description: the merged pull requests, `#N` each
+        type: string
+        required: true
+      crates:
+        description: the crates the merge changed that the pull request's tests reach
+        type: string
+        required: true
+      rust_tests:
+        description: members whose rdeps() is the shared tests, as change_scope.py's `rust_tests`
+        type: string
+        required: true
+      rust_doc_pkgs:
+        description: their doctest packages, as change_scope.py's `rust_doc_pkgs`
+        type: string
+        required: true
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  APT_SET_CONF: |
+    tee -a /etc/apt/apt.conf.d/80-custom << EOF
+    Acquire::Retries "3";
+    Acquire::http::Timeout "120";
+    Acquire::ftp::Timeout "120";
+    EOF
+
+jobs:
+  retest:
+    name: re-test
+    runs-on: ubuntu-latest
+    outputs:
+      conflict: ${{ steps.merge.outputs.conflict }}
+      timed_out: ${{ steps.tests.outputs.timed_out }}
+    concurrency:
+      group: freshness-pr-${{ inputs.pr }}
+      cancel-in-progress: true
+    # The tests' own budget is TEST_BUDGET_MINUTES below; this bounds the
+    # setup around them. The Rust job's setup steps took 2 to 39 minutes
+    # over 18 green runs (2026-11-19), the 39 an apt mirror at 81 kB/s.
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      # The Rust job's container setup (rust-audit-test.yml), for the
+      # same toolchain and the same cache.
+      - name: set apt conf
+        run: ${{ env.APT_SET_CONF }}
+      - name: update apt
+        run: apt update
+      - name: install dependencies
+        run: apt -y install build-essential git curl pkg-config libssl-dev valgrind libclang-dev clang
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.head }}
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - name: merge the new dev into the head
+        # Locally: the pull request's branch is never changed. A conflict
+        # is a red result of its own ("does not merge with dev").
+        id: merge
+        shell: bash
+        env:
+          DEV: ${{ inputs.dev }}
+        run: |
+          git fetch --no-tags origin "$DEV"
+          if ! git -c user.name=freshness -c user.email=freshness@invalid merge --no-edit --no-ff "$DEV"; then
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "::error::#${{ inputs.pr }} does not merge with dev at ${DEV:0:10}:"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+          git submodule update --init --recursive
+          echo "re-testing $(git rev-parse --short=10 HEAD^1) (the head) merged with ${DEV:0:10}"
+      - name: install Rust
+        uses: ./.github/actions/install-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The Rust job's cache: its key is the job id `rust-audit-and-test`
+          # plus the toolchain and the lockfiles, and `shared-key` puts the
+          # same name in this job's key. The workspaces are the Rust job's,
+          # so the lockfile hash matches too. Read-only: only `dev`'s push
+          # runs of the Rust job save it.
+          shared-key: rust-audit-and-test
+          workspaces: |
+            rust -> target
+            docs/formal/checkct/dynamic -> target
+          save-if: false
+      - name: install cargo-nextest
+        run: bash scripts/ci/rust_scoped_tests.sh install-nextest
+      - name: the shared tests against the new dev
+        id: tests
+        working-directory: rust
+        shell: bash
+        env:
+          RUST_TESTS: ${{ inputs.rust_tests }}
+          RUST_DOC_PKGS: ${{ inputs.rust_doc_pkgs }}
+          # A full-workspace re-test took 103 minutes at the median and 140
+          # at most over 13 green Rust jobs (2026-11-19, setup included);
+          # this is about twice the slowest test phase seen (125 + 2.5).
+          TEST_BUDGET_MINUTES: 240
+        run: |
+          if [ "$RUST_TESTS" = none ]; then
+            echo "scope: no shared Rust test"
+            exit 0
+          fi
+          rc=0
+          timeout --kill-after=60 "${TEST_BUDGET_MINUTES}m" sh -c \
+            'bash ../scripts/ci/rust_scoped_tests.sh nextest && bash ../scripts/ci/rust_scoped_tests.sh doctests' || rc=$?
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "timed_out=true" >> "$GITHUB_OUTPUT"
+            echo "::error::the tests passed the re-test's time budget (${TEST_BUDGET_MINUTES} min)"
+          fi
+          exit "$rc"
+
+  report:
+    name: report
+    needs: retest
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API calls, one log read, and a wait of at most five minutes for a rust-pass re-run
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      # `dev`'s scripts, by SHA, not the pull request's: this job holds
+      # write tokens, and on the label the run's own commit is the pull
+      # request's merge.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.dev }}
+          sparse-checkout: |
+            scripts/ci/freshness_status.py
+            scripts/ci/failed_tests.py
+            scripts/ci/workflow_pass.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          FRESHNESS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEV: ${{ inputs.dev }}
+          MERGED: ${{ inputs.merged }}
+          SINCE: ${{ inputs.since }}
+          CRATES: ${{ inputs.crates }}
+          CONFLICT: ${{ needs.retest.outputs.conflict }}
+          TIMED_OUT: ${{ needs.retest.outputs.timed_out }}
+        run: python3 scripts/ci/freshness_status.py report "${{ inputs.pr }}" "${{ inputs.head }}" "${{ needs.retest.result }}"

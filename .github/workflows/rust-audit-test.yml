@@ -282,11 +282,10 @@ jobs:
         # has a chance to populate ~/.cargo/bin first.
         run: cargo install cargo-audit --locked
       - name: install cargo-nextest
-        # Same cache behaviour as cargo-audit above. Pinned: the runner
-        # decides which tests run and what counts as a pass, so a new
-        # version is a change to the gate and comes in its own commit.
-        # 0.9.138 needs Rust 1.91; the workspace pins 1.94.0.
-        run: cargo install cargo-nextest --locked --version 0.9.138
+        # Same cache behaviour as cargo-audit above. The pinned version is
+        # scripts/ci/rust_scoped_tests.sh's, shared with the freshness
+        # re-test, so both run the tests under the same runner.
+        run: bash scripts/ci/rust_scoped_tests.sh install-nextest
       - name: cargo audit
         working-directory: rust
         run: |
@@ -536,20 +535,11 @@ jobs:
         # the decision, and a package name that no longer exists fails the
         # expression instead.
         if: ${{ needs.changes.outputs.rust_tests != 'none' }}
+        # The commands are scripts/ci/rust_scoped_tests.sh's, shared with the
+        # freshness re-test (freshness.yml), so both run the same selection.
         env:
           RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
-        run: |
-          set -u
-          if [ "$RUST_TESTS" = all ]; then
-            echo "scope: every workspace test"
-            cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential
-          else
-            expr=""
-            for pkg in $RUST_TESTS; do expr="${expr:+$expr + }rdeps($pkg)"; done
-            echo "scope: $expr"
-            cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential \
-              --no-tests=pass -E "$expr"
-          fi
+        run: bash ../scripts/ci/rust_scoped_tests.sh nextest
       - name: doctests (workspace crates in scope)
         working-directory: rust
         # nextest does not run doctests. They run whether or not a test
@@ -561,16 +551,7 @@ jobs:
         env:
           RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
           RUST_DOC_PKGS: ${{ needs.changes.outputs.rust_doc_pkgs }}
-        run: |
-          set -u
-          if [ "$RUST_TESTS" = all ]; then
-            cargo test --locked --doc --workspace --exclude shekyl-randomx-differential
-          elif [ -z "$RUST_DOC_PKGS" ]; then
-            echo "scope: no package in scope has a library target; no doctests"
-          else
-            echo "scope: cargo test --doc $RUST_DOC_PKGS"
-            cargo test --locked --doc $RUST_DOC_PKGS
-          fi
+        run: bash ../scripts/ci/rust_scoped_tests.sh doctests
       - name: report flaky and slow tests
         # Flaky tests (failed, then passed on the retry) to the job summary
         # and as warnings on the pull request; then the slowest tests and
@@ -906,16 +887,32 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
     steps:
       - uses: actions/checkout@v5
         with:
-          sparse-checkout: scripts/ci/workflow_pass.py
+          sparse-checkout: |
+            scripts/ci/workflow_pass.py
+            scripts/ci/freshness_status.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: every job succeeded or was skipped by scope
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/ci/workflow_pass.py --decide --scope changes
+      # Brief C: a merge to `dev` that shares a test with this pull request
+      # marks its head stale (freshness.yml), and the `merge-next` label
+      # re-tests it against the new `dev`; both report `fresh-against-dev`
+      # on the head. Absent or green passes; stale, re-testing or red fails,
+      # so a stale pull request cannot merge untested. freshness.yml re-runs
+      # this job when the verdict changes.
+      - name: fresh against dev (absent or green)
+        if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/freshness_status.py check "${{ github.event.pull_request.head.sha }}"
 
   # Every push run on `dev` reports to `report-dev-red.yml`: a red job
   # opens or threads its own tracking issue, and a job green again closes
