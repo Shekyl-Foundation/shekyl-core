@@ -1872,10 +1872,11 @@ components:
                                           Nothing was written
           -29539 STAKE_SHARD_DISCARDED    stake: the node has discarded the
                                           bodies of a shard the bond owes
-                                          (data.shard), and a node does not
-                                          yet read below its horizon, so the
-                                          bond cannot be posted until one
-                                          can. A CompleteTree server joining
+                                          (data.shard); they come back only
+                                          through the node's recovery fetch,
+                                          which does not exist yet, so the
+                                          bond cannot be posted until it
+                                          does. A CompleteTree server joining
                                           after the first epochs meets this.
                                           Nothing was written
           -29540 STAKE_DAEMON_MISMATCH    stake: the node's reply for a
@@ -2570,8 +2571,9 @@ components:
           description: >
             pending: the refill has not finished. refilled: refilled from
             the node and verified. discarded: the node has discarded the
-            shard's bodies and a node does not yet read below its horizon,
-            so it cannot be refilled until one can. failed: the refill
+            shard's bodies, which come back only through the node's
+            recovery fetch; that does not exist yet, so it cannot be
+            refilled until it does. failed: the refill
             failed for another reason; the next pass retries.
 
     TxResendParams:

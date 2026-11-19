@@ -485,8 +485,9 @@ wallet_rpc_error_codes! {
     /// caught up.
     StakeScanBehind = -29538 => "STAKE_SCAN_BEHIND",
     /// Stake: the wallet's node has discarded the bodies of a shard the bond
-    /// owes, and a node does not yet read below its horizon, so the bond
-    /// cannot be posted until it does (`WSS-Q15`). Nothing was written.
+    /// owes. They come back only through the node's recovery fetch (the
+    /// `WSS-Q9` handoff), which is not built, so the bond cannot be posted
+    /// until it is (`WSS-Q15`). Nothing was written.
     StakeShardDiscarded = -29539 => "STAKE_SHARD_DISCARDED",
     /// Stake: the node's reply for a shard the bond owes does not match the
     /// chain the persona scan verified. Nothing was written; the node needs
@@ -1105,7 +1106,9 @@ pub enum WalletRpcError {
     /// intact). Carries the public headroom constant, never the wallet's
     /// record count.
     #[error(
-        "stake refused: persona funding is fragmented across more than {max} spendable          outputs — more than one bond post can carry; avoid splitting persona funding          across more than {max} stake_in transfers"
+        "stake refused: persona funding is fragmented across more than {max} spendable \
+         outputs — more than one bond post can carry; avoid splitting persona funding \
+         across more than {max} stake_in transfers"
     )]
     StakeFundingFragmented {
         /// The per-transaction funding-input headroom (public constant).
@@ -1441,7 +1444,9 @@ pub enum WalletRpcError {
     /// (`WALLET_SIDE_STORE.md` `WSS-Q15`). The scan runs on its own; nothing
     /// was written.
     #[error(
-        "the staking scan has checked the chain up to block {scanned} and needs to reach block          {needed} before this bond's shards are known; nothing was written — try again once it          has caught up"
+        "the staking scan has checked the chain up to block {scanned} and needs to reach block \
+         {needed} before this bond's shards are known; nothing was written — try again once it \
+         has caught up"
     )]
     StakeScanBehind {
         /// The scan's frontier: the first height it has not verified.
@@ -1450,12 +1455,16 @@ pub enum WalletRpcError {
         needed: u64,
     },
     /// `stake` (`-29539`): the node has already discarded the bodies of
-    /// `shard`, which this bond owes, and a node does not yet read below its
-    /// horizon, so the persona body store cannot be filled with it and the
+    /// `shard`, which this bond owes: its full-form read answers `archived`
+    /// (`SB-Q2`). The bodies come back only through the node's recovery
+    /// fetch (`WALLET_SIDE_STORE.md` §6.5.4, the `WSS-Q9` handoff), which is
+    /// not built, so the persona body store cannot be filled with it and the
     /// bond cannot be posted. This is also what a `CompleteTree` server
     /// joining after the first epochs meets. Nothing was written.
     #[error(
-        "your node has already discarded shard {shard}, which this bond must hold, and a node          cannot yet read shards below its horizon — this bond cannot be posted until it can.          Nothing was written"
+        "your node has already discarded shard {shard}, which this bond must hold; its bodies \
+         come back only through the node's recovery fetch, which does not exist yet, so this \
+         bond cannot be posted until it does. Nothing was written"
     )]
     StakeShardDiscarded {
         /// The discarded shard.
@@ -1466,7 +1475,8 @@ pub enum WalletRpcError {
     /// bodies that do not add up). Bonding against it would be slashed, so
     /// nothing was written.
     #[error(
-        "your node's reply for shard {shard} does not match the chain this wallet verified, so          nothing was written — check the node: {detail}"
+        "your node's reply for shard {shard} does not match the chain this wallet verified, so \
+         nothing was written — check the node: {detail}"
     )]
     StakeDaemonMismatch {
         /// The shard being filled.
@@ -1478,7 +1488,8 @@ pub enum WalletRpcError {
     /// wallet's own node over loopback; this server's daemon address is not
     /// loopback.
     #[error(
-        "staking needs this wallet's own node: the shards a bond holds are read from it over          loopback — point the wallet server's daemon address at a local node"
+        "staking needs this wallet's own node: the shards a bond holds are read from it over \
+         loopback — point the wallet server's daemon address at a local node"
     )]
     StakeLocalNodeRequired {
         /// The transport constructor's own refusal.

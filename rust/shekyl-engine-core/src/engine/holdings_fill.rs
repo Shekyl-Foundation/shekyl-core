@@ -29,9 +29,10 @@
 //!
 //! **Where the bytes come from.** The wallet's own node, on the persona's
 //! loopback transport ([`LocalNodeRpc`]); a non-loopback daemon is a typed
-//! refusal. A shard the node has already discarded comes back only through
-//! the node's own read below its horizon, which does not exist yet
-//! (`DRS_SB_BELOW_HORIZON.md`), so it is a refusal that says so.
+//! refusal. A shard the node has already discarded answers `archived`
+//! (`SB-Q2`), and its bodies come back only through the node's recovery
+//! fetch (§6.5.4, the `WSS-Q9` handoff), which is not built, so it is a
+//! refusal that says so.
 //!
 //! A shard the store already holds is not re-fetched: its body is the
 //! reconcile's to check (`WSS-Q17`).
@@ -122,11 +123,13 @@ pub enum FillFailure {
         /// The load's reason.
         detail: String,
     },
-    /// The node has discarded the shard's bodies at its horizon and does not
-    /// yet read below it, so the shard cannot be filled.
+    /// The node has discarded the shard's bodies at its horizon, and the
+    /// recovery fetch that would bring them back is not built, so the shard
+    /// cannot be filled.
     #[error(
-        "the node has already discarded shard {shard}'s bodies, and a node does not yet read \
-         below its horizon, so this bond cannot be posted until it does"
+        "the node has already discarded shard {shard}'s bodies; they come back only through \
+         the node's recovery fetch, which does not exist yet, so this bond cannot be posted \
+         until it does"
     )]
     Discarded {
         /// The discarded shard.

@@ -87,8 +87,9 @@ pub(crate) enum ShardFillError {
         source: RpcError,
     },
     /// The daemon has discarded the shard's bodies at its horizon
-    /// (`PDM-Q2`) and answers `archived`. It does not yet read below its
-    /// horizon (`DRS_SB_BELOW_HORIZON.md`), so the shard cannot be filled.
+    /// (`PDM-Q2`) and answers `archived` (`SB-Q2`). The bodies come back
+    /// only through the recovery fetch (`WSS-Q9`), which is not built, so
+    /// the shard cannot be filled from this read.
     #[error("shard {shard}: the daemon has discarded this shard's bodies")]
     Discarded { shard: ShardId },
     /// The daemon's reply is not the chain the persona scan verified.

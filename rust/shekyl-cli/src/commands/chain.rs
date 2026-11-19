@@ -166,8 +166,8 @@ pub(crate) fn show_shard_alarm(val: &Value) {
             "pending" => "being refilled from your node",
             "refilled" => "refilled from your node and checked",
             "discarded" => {
-                "your node has discarded it, and a node cannot yet read shards below its \
-                 horizon: it cannot be refilled until one can"
+                "your node has discarded it, and it comes back only through the node's \
+                 recovery fetch, which does not exist yet: it cannot be refilled until it does"
             }
             "failed" => "the refill failed; the wallet tries again as the chain advances",
             _ => "(an outcome this version does not know)",

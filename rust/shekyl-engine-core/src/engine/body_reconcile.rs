@@ -11,9 +11,10 @@
 //! digest the persona scan sealed for it. A shard owed and not held, or held
 //! with a body that does not verify, raises a [`ShardAlarm`] and is refilled
 //! from the wallet's own node, the same fill the post went through. A refill
-//! the node can no longer answer — the shard is past its horizon — leaves the
-//! alarm saying so, because the only remedy is the node's read below its
-//! horizon (`DRS_SB_BELOW_HORIZON.md`), which does not exist yet.
+//! the node can no longer answer — the shard is past its horizon, and the
+//! read answers `archived` — leaves the alarm saying so, because the bodies
+//! come back only through the node's recovery fetch (§6.5.4, the `WSS-Q9`
+//! handoff), which is not built.
 //!
 //! **What is owed** is the connected record's holdings, read the way the
 //! serving pinner reads them (`fetch_vouched_claim_source`): a market bond's
@@ -22,8 +23,11 @@
 //! posted.
 //!
 //! **Pull first, then reconcile.** A shard that became owed since this
-//! session's last pass — a `CompleteTree` bond's newly final shard, in its
-//! freeze epoch — is the routine pull, filled quietly. Only after that does
+//! session's last pass — a `CompleteTree` bond's newly final shard — is the
+//! routine pull, filled quietly. The leg runs on every chain advance, so the
+//! pull follows finality by one advance: for a shard final before its
+//! freeze epoch opens, that is in its close epoch, before the open at which
+//! a support draw first counts it (§6.5.9). Only after that does
 //! the reconcile look for loss, so routine operation never shows as an
 //! alarm. At the first pass of a session nothing counts as newly owed: an
 //! owed shard missing at open is missing.
@@ -68,8 +72,9 @@ pub enum ShardRefill {
     Pending,
     /// The shard was refilled from the node and is held, verified.
     Refilled,
-    /// The node has discarded the shard's bodies at its horizon and does not
-    /// yet read below it, so the shard cannot be refilled.
+    /// The node has discarded the shard's bodies at its horizon, and the
+    /// recovery fetch that would bring them back is not built, so the shard
+    /// cannot be refilled.
     Discarded,
     /// The refill failed for another reason (the node unreachable, a reply
     /// that did not verify, the store); the next pass retries.
