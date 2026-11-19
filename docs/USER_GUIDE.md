@@ -455,9 +455,11 @@ A failed wallet-RPC read is not reported as a dead daemon.
 A pipe runs the same commands and stops at the first failure; pass
 `--password-file` with `--wallet`.
 
-Wallet files live under `~/.shekyl/wallets/<network>/` by default, one
-directory per network, so a testnet wallet can never shadow a mainnet one.
-`--wallet-dir <path>` overrides the directory.
+Wallet files live under `~/.shekyl/wallets/<network>/` by default
+(`%LOCALAPPDATA%\Shekyl\wallets\<network>\` on Windows), one directory
+per network, so a testnet wallet can never shadow a mainnet one.
+`--wallet-dir <path>` overrides the directory. The shell keeps its command
+history beside them, in `~/.shekyl/shekyl-cli-history.txt`.
 
 **Crash dumps.** `shekyl-cli` and `shekyl-wallet-rpc` harden themselves as
 `shekyld` does, before they read an argument: on every Unix they write no
