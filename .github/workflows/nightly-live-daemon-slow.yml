@@ -14,7 +14,7 @@ name: nightly/live-daemon-slow-gates
 # draws and the second walk's quiet wait of 3,770 s, about 110
 # runner-minutes of walks at the mean on each branch (derived 2026-11-18,
 # not yet measured on a runner). It takes those two walks out of the slow leg, where they ran
-# 62 minutes on the fixed interval they replaced. Its timeout is the
+# 62 minutes on the fixed interval they replaced. The job's timeout is the
 # hosted-runner maximum, so that a long draw is not reported as a red.
 #
 # Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
@@ -56,7 +56,11 @@ jobs:
     # house pattern. workflow_dispatch with ref=dev exercises a newer config
     # before it lands on main.
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.lane == 'embargo' && 360 || 240 }}
+    # One number for both legs (the timeout gate takes a whole number): the
+    # hosted-runner maximum, which the embargo leg needs. The slow leg ran
+    # 144 to 186 minutes over six nights to 2026-11-18, the two walks'
+    # 62 minutes included.
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
