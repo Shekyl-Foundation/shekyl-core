@@ -2711,13 +2711,13 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
         "popping the spend's block must restore both coinbase-sum legs"
     );
 
-    daemon.generate_blocks(1).await;
-    assert_eq!(daemon.height().await, height_mined);
-    assert_eq!(
-        daemon.tx_pool_size().await,
-        0,
-        "re-mining must take the spend back out of the pool"
-    );
+    // Re-mining is mining it again: the block must carry the spend, and
+    // the pool, which the tip follower reconciles after the chain's commit,
+    // must drop it within the bound (seen 2026-11-16 on a loaded build VM:
+    // the block carried the spend and the pool still held it a second
+    // later).
+    let height_remined = assert_tx_confirmed(&daemon, accepted).await;
+    assert_eq!(height_remined, height_mined);
     assert_eq!(
         daemon.key_image_statuses(&key_images).await,
         vec![Spent::Chain; key_images.len()],

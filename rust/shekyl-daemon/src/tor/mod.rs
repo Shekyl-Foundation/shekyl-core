@@ -18,7 +18,7 @@
 //! `control::RESUMED_AFTER` past the deadline it was armed with: the loop's
 //! wait, whatever woke it, or a control ask. The core does not infer one
 //! from a deadline that merely looks late. The wait itself lives in
-//! [`inbox`]: one queue of what happened, in order, and one doorbell for
+//! [`mod@inbox`]: one queue of what happened, in order, and one doorbell for
 //! the cells that hold state. Each pass folds the sleep the wait observed,
 //! then every cell that changed, then the one arrival that woke it.
 

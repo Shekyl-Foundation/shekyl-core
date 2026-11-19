@@ -229,7 +229,7 @@ impl FirstStakeIntent {
 ///
 /// Borrowed-where-possible to avoid stack copies of the master seed.
 /// CLI / RPC call sites pay the verbosity tax of explicit struct
-/// construction once each; tests use [`Self::for_test_full`].
+/// construction once each; tests use `Self::for_test_full`.
 pub struct EngineCreateParams<'a> {
     /// Base path. The envelope writes `<base>.keys` (region 1) and
     /// `<base>` (region 2).

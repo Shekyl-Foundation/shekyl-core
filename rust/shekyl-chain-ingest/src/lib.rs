@@ -56,7 +56,7 @@
 //!   (`CHAIN_RULES_SLICE_6.md` §5.3). It has no feature flag of its own and
 //!   nothing outside this crate's tests can reach it — by design: a driver
 //!   that shipped would be a second producer.
-//! - [`emission_assembly`] — the one exception to that sentence, and a
+//! - `emission_assembly` — the one exception to that sentence, and a
 //!   narrow one: the driver's emission-claim assembly (E6 slice 8 row 7,
 //!   Q3), compiled under `cfg(test)` **or** the `harness` feature. The
 //!   feature exists for one consumer — `shekyl-engine-core`'s byte-identity
@@ -80,7 +80,7 @@
 
 #![deny(unsafe_code)]
 
-/// What an arrival costs, and who pays: the door's checks before parse.
+// What an arrival costs, and who pays: the door's checks before parse.
 #[cfg(feature = "pipeline")]
 pub mod admission;
 /// Admitted draws on a scenario chain (`SO-D12` 4b preparation). The
@@ -137,8 +137,8 @@ pub mod bench_support;
 mod bundle_producer_gate_tests;
 #[cfg(all(test, feature = "producer"))]
 mod bundle_producer_tests;
-/// Where an arrival goes, and the claims it is formed under.
-/// The two RandomX seeds an arrival may hash under.
+// Where an arrival goes, and the claims it is formed under.
+// The two RandomX seeds an arrival may hash under.
 #[cfg(feature = "pipeline")]
 mod cache_window;
 /// The scenario driver that round-trips a connect, and the prune a pop is
@@ -157,9 +157,13 @@ pub mod corpus;
 pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
-/// The tip follower: the seed window, then the pool, then the miner's job.
+// The tip follower: the seed window, then the pool, then the miner's job.
 #[cfg(feature = "pipeline")]
 pub mod follower;
+/// `CF-4a` (`CHAIN_FORGE.md`): the forged shard-fill chain, fetched by its
+/// pin and connected into a scenario; the long scenarios build on it.
+#[cfg(all(test, feature = "pipeline"))]
+mod forged_fill;
 #[cfg(all(test, feature = "pipeline"))]
 mod header_path_tests;
 /// The logical-state digest at a tip, and at every height of a
@@ -178,7 +182,7 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
-/// Step 1 of a switch: the blocks a plan names, formed off the actor.
+// Step 1 of a switch: the blocks a plan names, formed off the actor.
 #[cfg(feature = "pipeline")]
 pub mod plan_form;
 /// DRS-E5 PR-b (`DRS_E5_POOL_ALT_PRUNE.md` §2.2): the pool door held to
@@ -191,8 +195,8 @@ mod pool_door_tests;
 mod pool_restart_tests;
 #[cfg(all(test, feature = "pipeline"))]
 mod pool_submit_tests;
-/// The E2 corpus re-baselined from Rust: a store's chain written as the
-/// trace a replay must reproduce (`DAEMON_REDB_STORE.md` §12.1).
+// The E2 corpus re-baselined from Rust: a store's chain written as the
+// trace a replay must reproduce (`DAEMON_REDB_STORE.md` §12.1).
 #[cfg(feature = "pipeline")]
 pub mod pow;
 #[cfg(feature = "pipeline")]
@@ -243,11 +247,11 @@ pub mod schedule;
 pub mod seed;
 #[cfg(feature = "pipeline")]
 pub mod sequencer;
-/// The live arrival path: one door, the router, the connector.
+// The live arrival path: one door, the router, the connector.
 #[cfg(feature = "pipeline")]
 pub mod service;
-/// The fetch scheduler's store-backed facts (`SV-D9`), read by the shard
-/// view and the bundle producer.
+// The fetch scheduler's store-backed facts (`SV-D9`), read by the shard
+// view and the bundle producer.
 #[cfg(feature = "producer")]
 pub mod shard_facts;
 pub mod snapshot_json;
@@ -270,7 +274,7 @@ mod switch_timing_tests;
 mod sync_wire_tests;
 #[cfg(feature = "pipeline")]
 pub mod target;
-/// The node's one block template, built by the tip follower on one snapshot.
+// The node's one block template, built by the tip follower on one snapshot.
 #[cfg(feature = "pipeline")]
 mod template;
 #[cfg(any(test, feature = "forge"))]

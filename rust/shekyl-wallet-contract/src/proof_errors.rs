@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! [`ProofsError`](shekyl_engine_core::engine::proofs::ProofsError) onto the
+//! [`ProofsError`] onto the
 //! contract's proof codes.
 //!
 //! One map for every embedder. The RPC server and the desktop wallet both

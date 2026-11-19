@@ -31,7 +31,7 @@
 //! | `MDB_DUPFIXED` | storage hint only; no semantic effect |
 //! | `compare_uint64` | `u64` ordering — numeric, same as `MDB_INTEGERKEY` |
 //! | `compare_string` | `&str` — byte-lexicographic with a length tiebreak |
-//! | `compare_hash32` | [`LmdbHashKey`] — **not** [`Hash32`], see that type |
+//! | `compare_hash32` | [`LmdbHashKey`] — **not** [`Hash32`](crate::lmdb_order::Hash32), see that type |
 //! | no flags, no comparator | `&[u8]` — byte-lexicographic |
 //!
 //! Default-flag tables that store `BE(x)` 8-byte keys are correctly mapped as
@@ -738,7 +738,7 @@ tables! {
         TableDefinition::new("curve_tree_leaf_counts");
 
     /// `undo_log` — **Rust-only** ([`RUST_ONLY_TABLES`]); height → the
-    /// [`UndoLog`](crate::codec::UndoLog) of pre-images `connect` recorded
+    /// [`UndoLog`] of pre-images `connect` recorded
     /// at that height, replayed in reverse by `pop` (C2-R8 Q5; register row
     /// SI-6). Appended when added so no existing ordinal moved; a later
     /// table is likewise appended, never inserted.

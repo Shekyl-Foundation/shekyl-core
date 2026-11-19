@@ -34,7 +34,7 @@
 /// must never run concurrently.
 ///
 /// Serving reuses [`RefreshSlot`] (this file's primitive) rather than a
-/// third copy of the same `AtomicBool`. P-scan keeps [`PScanSlot`] so
+/// third copy of the same `AtomicBool`. P-scan keeps [`PScanSlot`](crate::engine::pscan::task::PScanSlot) so
 /// that workflow's call sites do not move in this slice.
 pub(crate) struct OpenTaskSlots {
     /// The 2d-1 P-scan task. Independent of [`Self::serving`].
@@ -111,7 +111,7 @@ impl RefreshSlot {
 /// Deliberately not `Clone`: the guard's whole purpose is to
 /// uniquely own the claim, so cloning it would defeat single-
 /// flight enforcement. The producer task receives the guard from
-/// [`Engine::start_refresh`] and holds it through `run_refresh_task`'s
+/// [`Engine::start_refresh`](crate::engine::Engine::start_refresh) and holds it through `run_refresh_task`'s
 /// full lifetime; the `Drop` releases the slot whether the task
 /// returned successfully, errored, or was cancelled.
 #[derive(Debug)]

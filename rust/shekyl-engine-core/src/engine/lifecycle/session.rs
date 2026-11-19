@@ -36,7 +36,7 @@ impl<
     /// parameters of the on-disk envelope wrap.
     ///
     /// The handle's cached envelope bytes are updated in place; no
-    /// re-derivation of [`AllKeysBlob`] runs. `.wallet` (region 2) is
+    /// re-derivation of [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) runs. `.wallet` (region 2) is
     /// untouched — the rotation rewraps `file_kek` only.
     ///
     /// # Errors
@@ -150,7 +150,8 @@ impl<
     /// returns the wallet's stores are closed either way and the wallet can
     /// be reopened at once. Then the drop sequence runs:
     ///
-    /// 1. `self.persistence` — when the default [`WalletFile`] implementor is
+    /// 1. `self.persistence` — when the default
+    ///    [`WalletFile`](shekyl_engine_file::WalletFile) implementor is
     ///    used, `Drop` releases the advisory lock on the keys file (`<base>.keys`,
     ///    where `base` is the `.wallet` path; see
     ///    `shekyl_engine_file::handle::WalletFile::drop`).

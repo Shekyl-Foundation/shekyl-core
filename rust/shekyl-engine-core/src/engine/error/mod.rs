@@ -77,8 +77,8 @@ pub(crate) use refresh::LedgerError;
 pub use refresh::{CurveTreeIngestFault, FinalityBreach, FinalityStop, RefreshError};
 pub use send::{PendingTxError, SendError};
 pub use submit::{
-    AmbiguousErrorKind, CenRowName, OutputSelectorError, RetryableRejectCause, SignerError,
-    SignerFault, SubmitError, TerminalErrorKind,
+    AmbiguousErrorKind, CenRowName, OutputSelectorError, ReservationAfterSubmit,
+    RetryableRejectCause, SignerError, SignerFault, SubmitError, TerminalErrorKind,
 };
 
 pub use super::fee_policy::{CeilingViolation, FeeEstimatorError};

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-/// A wire object: the struct, its serde derives and its [`Schema`], written
+/// A wire object: the struct, its serde derives and its [`Schema`](crate::schema::Schema), written
 /// together.
 ///
 /// The holder is the glossary path of what the object describes. A field
@@ -12,7 +12,7 @@
 /// - `["tx"]`: the name walks under another holder (a modifier, IG-Q42);
 /// - `[optional]` or `[optional "tx"]`: a request parameter that may be
 ///   left out. Its type is `Option<T>`, or `bool` with `#[serde(default)]`
-///   for a switch that defaults off. Refused in a reply ([`kind_faults`]).
+///   for a switch that defaults off. Refused in a reply ([`kind_faults`](crate::schema::kind_faults)).
 /// - `[asked "switch"]`: a reply field present exactly when the request
 ///   turned `switch` on (RW-Q4). Its type is [`Asked<T>`](crate::kinds::Asked),
 ///   and it carries `#[serde(default, skip_serializing_if =

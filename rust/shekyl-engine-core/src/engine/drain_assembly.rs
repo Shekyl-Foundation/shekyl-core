@@ -7,7 +7,7 @@
 //!
 //! A drain moves value **out** of an archival persona's `P`-space back to the
 //! wallet's own principal address: it spends the persona's sealed
-//! [`PFundingOutputRecord`] funding slice (persona-keyed, exactly like a bond or
+//! [`PFundingOutputRecord`](shekyl_engine_state::pscan_state::PFundingOutputRecord) funding slice (persona-keyed, exactly like a bond or
 //! claim fee sweep) and produces a **transfer-shaped** transaction — a
 //! confidential payment to the principal plus a confidential `P`-space change
 //! output.
@@ -20,7 +20,7 @@
 //! construction* — it owns no wire-shaping decision of its own. Every leg is the
 //! **same primitive the transfer path uses**, and the whole wire record is built
 //! by the **single shared constructor**
-//! [`assemble_transfer_wire`](super::sign_bridge::assemble_transfer_wire) that
+//! [`assemble_transfer_wire`] that
 //! [`sign_bridge::sign_tx`](super::sign_bridge) itself calls: transfer-parity is
 //! then a compile-time fact (one constructor, two callers), not a property a test
 //! has to re-establish.
@@ -55,6 +55,7 @@
 //!     - **drain-all** (`change == 0`): the principal payment is **split into two
 //!       nonzero principal outputs** `[principal a, principal b]` (a sweep to
 //!       self) — never a single output plus a distinguishable zero-value change.
+//!
 //!   Because Pedersen commitments are perfectly hiding, both regimes serialize to
 //!   the same two-confidential-output wire shape; an observer cannot tell a
 //!   partial drain from a drain-all, nor either from an ordinary 2-out transfer.

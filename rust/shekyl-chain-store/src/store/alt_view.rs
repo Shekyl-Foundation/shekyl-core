@@ -56,7 +56,7 @@
 //! # The chains the store holds
 //!
 //! [`ReadSnapshot::alternate_chains`] lists every stored chain: the tips of
-//! [`AltLinks`](super::alt_reads::AltLinks), each walked by
+//! [`AltLinks`], each walked by
 //! [`AltChain::build`]. The listing and admission are one walk, so a cycle,
 //! a height that disagrees with the links, and a chain that reaches no
 //! recorded block are the same answers a candidate gets.

@@ -70,7 +70,7 @@ const DEL_ONION_REMOVED: u16 = 250;
 /// Service`): nothing of ours is loaded, which is what the delete wanted.
 const DEL_ONION_UNKNOWN: u16 = 552;
 
-/// Spawn-time configuration for [`DaemonTorControl::start`].
+/// Spawn-time configuration for [`DaemonTorControl::launch`].
 ///
 /// Every instance-identifying input is a parameter (PWD-E9): the binary
 /// witness and the DataDirectory *parent* arrive from the caller; this crate
@@ -95,7 +95,7 @@ pub struct DaemonTorConfig {
     pub socks_timeout: SocksTimeout,
 }
 
-/// Why [`DaemonTorControl::start`] failed. Terminal for the boot: the caller
+/// Why [`DaemonTorControl::launch`] failed. Terminal for the boot: the caller
 /// logs and continues with no tor zone (this crate does not retry — see the
 /// crate doc's no-respawn rationale).
 #[derive(Debug)]
@@ -337,7 +337,7 @@ impl DaemonTorControl {
 
     /// Publish the onion for `identity`, which stays with the caller.
     /// `local_target` (loopback only, enforced structurally by
-    /// [`OnionPort::loopback`]). Runs after the caller has bound its inbound
+    /// [`OnionPort::loopback`](shekyl_tor_control_client::control::onion::OnionPort::loopback)). Runs after the caller has bound its inbound
     /// listener, so the target names a port the OS actually granted.
     ///
     /// The caller keeps `identity` for the boot. This call mints one

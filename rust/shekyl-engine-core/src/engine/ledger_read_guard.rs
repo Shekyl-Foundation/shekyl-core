@@ -13,8 +13,8 @@ use shekyl_engine_state::WalletLedger;
 
 use super::local_ledger::LedgerState;
 
-/// RAII guard returned by [`Engine::ledger`]: holds a read lock on
-/// the wallet's [`LocalLedger`] and derefs transparently to
+/// RAII guard returned by [`Engine::ledger`](crate::engine::Engine::ledger): holds a read lock on
+/// the wallet's [`LocalLedger`](crate::engine::LocalLedger) and derefs transparently to
 /// [`WalletLedger`].
 ///
 /// The guard is opaque: external callers cannot observe the
@@ -39,7 +39,7 @@ use super::local_ledger::LedgerState;
 /// "`LedgerReadGuard` field type leaks crate-private `LedgerState`".
 ///
 /// Hold the guard for the minimum span necessary; concurrent writers
-/// (`apply_scan_result` and the [`pending`]-module mutators) cannot
+/// (`apply_scan_result` and the [`pending`](mod@super::pending)-module mutators) cannot
 /// acquire the write lock while any reader is live.
 ///
 /// [`Deref`]: std::ops::Deref

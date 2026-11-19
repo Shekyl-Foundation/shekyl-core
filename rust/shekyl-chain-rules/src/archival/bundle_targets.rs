@@ -8,7 +8,7 @@
 //! One shape from selection through the read: [`Drawn`]. Economy and
 //! support select differently, and [`DrawOrigin`] is that difference.
 //! The stream is derived from the origin, so it is not stored twice.
-//! [`draw_targets`] calls the verifier's [`select_pairs`](super::select_pairs)
+//! [`draw_targets`] calls the verifier's [`select_pairs`]
 //! and [`support_seats`](super::records::support_seats), so the pair a
 //! producer reads is the pair the verifier derives.
 

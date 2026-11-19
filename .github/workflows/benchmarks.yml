@@ -127,7 +127,11 @@ jobs:
     outputs:
       bench_rows: ${{ steps.scope.outputs.bench_rows }}
     steps:
+      # The full fetch takes 18-37 s (the 25 pull-request runs before
+      # 2026-11-18); one stalled for the job's whole 10 minutes (#1424,
+      # job 134465704085). A stall now fails here in two.
       - uses: actions/checkout@v5
+        timeout-minutes: 2
         with:
           fetch-depth: 0
       - id: scope

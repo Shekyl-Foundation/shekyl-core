@@ -6,8 +6,8 @@
 //! The one judge-and-record step of a connect.
 //!
 //! [`Apply`](super::Apply) and the staged admitting connect
-//! ([`ApplyAdmitting`](super::bundles::ApplyAdmitting)) both hold a source's
-//! height to the chain, run `validate_with_memo`, and record what connected.
+//! (`ApplyAdmitting`) both hold a source's height to the chain, run
+//! `validate_with_memo`, and record what connected.
 //! The live path then calls `connect`. The admitting path, which is in
 //! flight for 4b, calls `connect_admitting`. Neither keeps a second copy of
 //! the height claim, the refusal, or the bookkeeping.

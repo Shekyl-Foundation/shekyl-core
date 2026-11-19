@@ -55,7 +55,7 @@ use crate::failure_output::FORK_PIN_SHA;
 /// structured-output channel is reserved for the §5.1.14 failure
 /// schema per R1-D11) and is emitted before any per-mode output
 /// begins. The `mode` argument is the active mode-tag per
-/// [`crate::Mode::as_str`] (`correctness` / `worst-case` /
+/// the binary's `Mode::as_str` (`correctness` / `worst-case` /
 /// `latency` / `concurrent`).
 ///
 /// # Errors

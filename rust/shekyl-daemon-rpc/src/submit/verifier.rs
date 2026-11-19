@@ -18,7 +18,7 @@
 //!
 //! Check order mirrors the C++ submit path where it is observable in logs
 //! (never in the verdict — every failure here is one of the three
-//! [`VerifyFailure`] wire-causes, each carried by a [`VerifyReject`] that
+//! [`VerifyFailure`](crate::submit::verify::VerifyFailure) wire-causes, each carried by a [`VerifyReject`] that
 //! names the leg): `ver_non_input_consensus`'s battery first
 //! (O6 mask non-triviality, N8 CT balance + Bp+ range proof), then
 //! `check_tx_inputs`'s (K12 FCMP++ membership, K13 PQC hybrid auth).
