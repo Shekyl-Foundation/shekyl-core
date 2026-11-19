@@ -136,7 +136,7 @@ impl<'a> Reader<'a> {
         );
     }
 
-    fn range(&mut self, name: &str, value: &str, rule: &str) {
+    pub(super) fn range(&mut self, name: &str, value: &str, rule: &str) {
         self.faults.push(
             Diagnostic::new(Code::ValueRange, self.source(name))
                 .option(name)

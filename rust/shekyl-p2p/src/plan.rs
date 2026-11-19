@@ -35,8 +35,9 @@ pub struct NetworkPlan {
     pub reserved_descriptors: u64,
     /// The operator's link budget.
     pub limits: LinkLimits,
-    /// Whether the relay carries noise (`dev` relay cover).
-    pub relay_noise: bool,
+    /// Whether the relay runs cover on its stem connections
+    /// (`relay-cover`, `CVR-R1`): on unless the operator opted out.
+    pub relay_cover: bool,
     /// The clearnet connector, or none.
     pub clearnet: Option<ClearnetPlan>,
     /// The Tor connector.
@@ -170,7 +171,7 @@ mod tests {
             allow_local: true,
             reserved_descriptors: 8,
             limits: LinkLimits::default(),
-            relay_noise: false,
+            relay_cover: true,
             clearnet: (listen > 0).then(|| ClearnetPlan {
                 listen: vec![at; listen],
                 proxy: None,

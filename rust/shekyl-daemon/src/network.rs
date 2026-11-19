@@ -193,6 +193,19 @@ fn bans(config: &DaemonConfig) -> Vec<BanTarget> {
         .collect()
 }
 
+/// What the operator is told on every start with `relay-cover off`
+/// (`CVR-R1`, rule 82): what they lose, what the node still does, and how to
+/// get it back. `None` with cover on.
+#[must_use]
+pub fn cover_off_warning(config: &DaemonConfig) -> Option<&'static str> {
+    (!config.p2p.relay_cover).then_some(
+        "relay-cover is off: this node sends its own transactions without cover traffic, so \
+         anyone watching its connections can see when it sends one. It also relays no \
+         transactions privately for others; it broadcasts them at once. To turn cover on, \
+         remove `relay-cover off` and restart.",
+    )
+}
+
 /// The network's plan from the sections. The connectors whose own
 /// addresses the configuration knows state them here: clearnet, when it
 /// is on, with `clearnet-advertise` or none for dial-only; Tor on the
@@ -232,7 +245,7 @@ pub fn plan(config: &DaemonConfig, network_id: [u8; 16]) -> NetworkPlan {
             upload: config.p2p.upload_max,
             download: config.p2p.download_max,
         },
-        relay_noise: config.dev.relay_cover,
+        relay_cover: config.p2p.relay_cover,
         clearnet,
         tor,
         peers: PeerPlan {
@@ -285,6 +298,23 @@ mod tests {
     /// dropping that term, or adding it for an operator's Tor, fails this.
     /// Clearnet adds its linger cap (D10.2). Either Tor adds its fetch
     /// client's view lane (IG-Q90).
+    /// An operator who opted out of cover is told on every start what that
+    /// costs and how to undo it (`CVR-R1`, rule 82); with cover on there is
+    /// nothing to say, and the plan carries the switch either way.
+    ///
+    /// Red edit: warn only when the row is unset, or never.
+    #[test]
+    fn an_opted_out_node_is_warned_at_start_and_planned_without_cover() {
+        let on = config(&[]);
+        assert_eq!(cover_off_warning(&on), None);
+        assert!(plan(&on, [0; 16]).relay_cover);
+        let off = config(&["--relay-cover", "off"]);
+        let line = cover_off_warning(&off).expect("an opted-out node is warned");
+        assert!(line.contains("relay-cover off"), "{line}");
+        assert!(line.contains("without cover"), "{line}");
+        assert!(!plan(&off, [0; 16]).relay_cover);
+    }
+
     #[test]
     fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
         let held = |c: ConnectorId| {

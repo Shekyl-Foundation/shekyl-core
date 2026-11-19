@@ -87,11 +87,17 @@
 # A file of addresses to refuse, one per line.
 # p2p-ban-file = "/path"
 
-# The upload rate limit, or `unlimited`.
+# The upload rate limit, or `unlimited`. With `relay-cover on` it is at
+# least the cover rate.
 # p2p-upload-max = "unlimited"
 
 # The download rate limit, or `unlimited`.
 # p2p-download-max = "unlimited"
+
+# Cover traffic on the connections this node stems transactions over.
+# `off` also stops it relaying stems, and sends its own transactions
+# without cover.
+# relay-cover = "on"
 
 # A command to run on a new block, with {height} and {hash}.
 # notify-block = ["/path/to/command", "{height}"]

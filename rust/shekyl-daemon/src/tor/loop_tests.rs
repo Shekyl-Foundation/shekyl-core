@@ -77,7 +77,7 @@ fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
                 upload: None,
                 download: None,
             },
-            relay_noise: false,
+            relay_cover: true,
             clearnet: None,
             tor: TorPlan::None,
             peers: PeerPlan {

@@ -58,7 +58,7 @@ fn plan(dir: &std::path::Path, clearnet: Option<ClearnetPlan>) -> NetworkPlan {
             upload: None,
             download: None,
         },
-        relay_noise: false,
+        relay_cover: true,
         clearnet,
         tor: TorPlan::None,
         peers: PeerPlan {

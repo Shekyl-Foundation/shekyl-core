@@ -192,7 +192,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 
 Value keywords: `on`, `off`, `managed`, `operator`, `auto`, `unlimited`, `none`, `stdin`, the four network names, the five levels.
 
-Two words are given one meaning each by this table, ending two collisions: **address** is a Shekyl address only (network locations are *endpoints*; `mine-address` keeps its name, and Part B renames `shekyl-wallet-rpc --daemon-address`); **carrier** is the serve-credit witness carrier only ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)), so today's `--carrier-development`, which arms the Dandelion++ *cover* traffic (`command_line_args.h:114-141`), becomes `dev-relay-cover`.
+Two words are given one meaning each by this table, ending two collisions: **address** is a Shekyl address only (network locations are *endpoints*; `mine-address` keeps its name, and Part B renames `shekyl-wallet-rpc --daemon-address`); **carrier** is the serve-credit witness carrier only ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)), so today's `--carrier-development`, which arms the Dandelion++ *cover* traffic (`command_line_args.h:114-141`), becomes `relay-cover` (a public one-of row since `CVR-R1`, 2026-11-18).
 
 ---
 
@@ -257,7 +257,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `ban-list` | `p2p-ban-file` | path | unset | both |  | peers | R; read in Rust at parse |
 | `out-peers` | — | | | |  |  | X (the outbound degree is a protocol constant) |
 | `in-peers` | — | | | |  |  | X (no operator inbound cap: the descriptor safety bound is the only inbound bound, and the rate rows bound what an operator pays; reopens as a byte quota for metered links, IG-Q40) |
-| `limit-rate-up` | `p2p-upload-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | status | R; runtime `set_limit` shares the constructor; `0` refused on both surfaces |
+| `limit-rate-up` | `p2p-upload-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | status | R; runtime `set_limit` shares the constructor; `0` refused on both surfaces; below the cover rate refused on both while `relay-cover` is `on` (`CVR-R5`) |
 | `limit-rate-down` | `p2p-download-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | status | R |
 | `limit-rate` | — | | | |  |  | R (one option per value) |
 | `tos-flag` | — | | | |  |  | X (a traffic-class marking is a label any on-path observer can classify Shekyl traffic by) |
@@ -265,7 +265,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `pad-transactions` | — | | | |  |  | L relay |
 | `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both |  |  | R; testnet, stagenet, regtest, a staging flag their rows stage (`NETWORK_IDENTITY.md` NI-R9; IG-8: never mainnet); deleted at the Noise flip |
 | `no-sync` | `dev-sync` | one-of `on` `off` | `on` | both |  |  | R; regtest; the chain-sync lane owns it |
-| `carrier-development` | `dev-relay-cover` | switch | off | both |  |  | R; testnet, stagenet, regtest, a staging flag their rows stage (`NETWORK_IDENTITY.md` NI-R9; IG-8: never mainnet); `check_carrier_flag_hidden.sh` replaced by a table test |
+| `carrier-development` | `relay-cover` | one-of `on`/`off` | `on` | both |  |  | R; cover traffic on the relay's stem connections, on by default on every network with an operator opt-out (`CVR-R1`, Rick 2026-11-15; IG-4: a capability on by default is a closed set). `off` also stops the node relaying stems. With it on, `p2p-upload-max` is at least the cover rate |
 
 ### Core, pool, notify, mine
 
@@ -399,7 +399,7 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 
 **IG-Q14 — no environment input (IG-13) — RULED 2026-10-13.** Default paths came from `HOME`, and the wallets read `XDG_RUNTIME_DIR` (`shekyl-wallet-rpc/src/server.rs:744`), so the environment still decided values. Home comes from the passwd entry and the Windows known-folder API. Each platform takes its per-user runtime directory from its own OS interface, never from the environment: Linux `/run/user/<uid>`; macOS `confstr(_CS_DARWIN_USER_TEMP_DIR)`; FreeBSD, or any platform without one, the typed refusal (IG-11) naming the explicit, operator-named socket directory ruled in the RPC channel round ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §7.1, 2026-10-09). Terminal reads (`shekyl-cli/src/display.rs:98-104`) stay, as presentation. Cost: a user who relocates `HOME` by environment passes `--data-dir` instead.
 
-**IG-Q15 — `address` and `carrier` (§3, IG-F7, IG-F8) — RULED 2026-10-13.** `address` is a Shekyl address only; network locations are endpoints. `carrier` is the serve-credit witness carrier only; the cover switch is `dev-relay-cover`.
+**IG-Q15 — `address` and `carrier` (§3, IG-F7, IG-F8) — RULED 2026-10-13.** `address` is a Shekyl address only; network locations are endpoints. `carrier` is the serve-credit witness carrier only; the cover switch is `relay-cover` (a public one-of row, on by default: `CVR-R1`, 2026-11-18).
 
 **IG-Q16 — RPC names for the ratified model — RULED 2026-10-13.** RPC_CHANNEL (ratified 2026-10-09) replaces today's listeners with the authenticated channel, the same-user socket, and an optional plaintext loopback listener at view. Naming today's full-access listener `rpc-listen` would hand that name to the channel listener later with a different meaning. `rpc-listen` is reserved for the channel listener; today's full-access listener is `rpc-admin-listen` (what it is: plaintext, loopback, admin), an X row when RT-W12 moves its clients (RT-O33, ruled 2026-10-25, moved it from RT-W10); `rpc-view-listen` is the ratified view listener from now on.
 

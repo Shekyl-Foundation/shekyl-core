@@ -161,6 +161,24 @@ impl OptionsFacts for DaemonOptions {
             return Err(refusals);
         }
 
+        // Cross-row rules, on the values as they would stand: an upload
+        // limit below the cover rate while `relay-cover` is on is refused
+        // here as it is at start (`CVR-R5`), and nothing is applied.
+        let mut candidate = live.clone();
+        for (row, value) in &built {
+            candidate
+                .values
+                .insert(row.name, (value.clone(), Source::Runtime));
+        }
+        if built
+            .iter()
+            .any(|(row, _)| runtime_owner(row.name) == Some(RuntimeOwner::Link))
+        {
+            if let Err(diagnostics) = link_limits(&candidate) {
+                return Err(diagnostics.iter().map(refusal).collect());
+            }
+        }
+
         // Apply: the values first, then each owner from the live map in one
         // step; the audit line carries each row's old and new text.
         let mut audit = Vec::with_capacity(built.len());
@@ -274,6 +292,27 @@ mod tests {
 
     fn handle(args: &[&str]) -> DaemonOptions {
         recording(args).0
+    }
+
+    /// A runtime upload limit below the cover rate is refused while
+    /// `relay-cover` is on, as at start (`CVR-R5`), and nothing is applied:
+    /// the link owner hears nothing and the row keeps its value.
+    ///
+    /// Red edit: apply before checking (the link owner hears the low limit,
+    /// or the handle panics on the rule it admitted).
+    #[test]
+    fn a_runtime_upload_limit_below_the_cover_rate_is_refused_and_not_applied() {
+        let (h, given) = recording(&["--network", "regtest"]);
+        let refusals = h.set(&[pair("p2p-upload-max", "4KiB/s")]).unwrap_err();
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0].code, Code::ValueRange.to_string());
+        assert_eq!(refusals[0].source, "runtime");
+        assert!(given.lock().unwrap().is_empty(), "nothing reached the link");
+        assert_eq!(text_of(&h, "p2p-upload-max").as_deref(), Some("unlimited"));
+
+        let (h, given) = recording(&["--network", "regtest", "--relay-cover", "off"]);
+        h.set(&[pair("p2p-upload-max", "4KiB/s")]).unwrap();
+        assert_eq!(given.lock().unwrap().len(), 1, "an opted-out node may");
     }
 
     /// A set of the link rows reaches the link owner with both rates at

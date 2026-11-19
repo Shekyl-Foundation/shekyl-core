@@ -36,7 +36,7 @@ fn test_plan(config: &DaemonConfig) -> NetworkPlan {
         allow_local: true,
         reserved_descriptors: 0,
         limits: LinkLimits::default(),
-        relay_noise: false,
+        relay_cover: true,
         clearnet: None,
         tor: TorPlan::None,
         peers: PeerPlan {

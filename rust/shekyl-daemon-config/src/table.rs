@@ -256,8 +256,9 @@ const ROWS: &[Row] = &[
         visibility: Visibility::Public,
         help: "A file of addresses to refuse, one per line.",
     },
-    runtime("p2p-upload-max", RATE, "unlimited", "The upload rate limit, or `unlimited`."),
+    runtime("p2p-upload-max", RATE, "unlimited", "The upload rate limit, or `unlimited`. With `relay-cover on` it is at least the cover rate."),
     runtime("p2p-download-max", RATE, "unlimited", "The download rate limit, or `unlimited`."),
+    public("relay-cover", Kind::OneOf(&["on", "off"]), Default::Value("on"), Surface::Both, "Cover traffic on the connections this node stems transactions over. `off` also stops it relaying stems, and sends its own transactions without cover."),
     rejected("upnp", "no UPnP: an attack surface the managed onion makes unnecessary for inbound (DAEMON_CONFIG_CUTOVER.md §8)"),
     rejected("igd", "no UPnP: an attack surface the managed onion makes unnecessary for inbound (DAEMON_CONFIG_CUTOVER.md §8)"),
     rejected("add-priority-node", "it bypasses the identity protections; removed by P2P PR-3"),
@@ -266,7 +267,6 @@ const ROWS: &[Row] = &[
     rejected("tos-flag", "a traffic-class marking is a label any on-path observer can classify Shekyl traffic by"),
     dev("dev-clearnet-encrypt", Kind::Switch, Default::Unset, DevGate::Staging(Staging::ClearnetEncrypt), "Encrypt the clearnet transport; deleted at the Noise flip."),
     dev("dev-sync", Kind::OneOf(&["on", "off"]), Default::Value("on"), DevGate::Lever(Lever::Sync), "Chain synchronisation with peers."),
-    dev("dev-relay-cover", Kind::Switch, Default::Unset, DevGate::Staging(Staging::RelayCover), "The relay's development cover carrier."),
     dev("dev-rpc", Kind::Switch, Default::Unset, DevGate::Lever(Lever::DevRpc), "Serve the armed test levers to the host's administrator."),
     // Core, pool, notify, mine
     dev("dev-difficulty", COUNT, Default::Unset, DevGate::Lever(Lever::Difficulty), "A fixed difficulty."),
@@ -334,25 +334,23 @@ pub const TABLE: Table = Table {
 mod tests {
     use super::*;
 
-    /// The relay's development cover carrier is a `dev-` lever: absent from
-    /// the public help (only `Public` rows render), refused on mainnet,
-    /// never an operator setting (COVER_TRAFFIC_RESTORATION.md §3.1). This
-    /// is the gate `scripts/ci/check_carrier_flag_hidden.sh` was for the
-    /// C++ flag.
+    /// Cover is on by default, with an operator opt-out (`CVR-R1`; Rick,
+    /// 2026-11-15): `relay-cover` is a public one-of row, `on` unless set,
+    /// on every network, and the development flag it replaces is gone.
+    ///
+    /// Red edits: default it to `off`, hide it behind a `dev-` gate, or put
+    /// `dev-relay-cover` back.
     #[test]
-    fn the_relay_cover_lever_is_a_dev_row_off_mainnet() {
+    fn relay_cover_is_a_public_row_on_by_default() {
         let row = TABLE
             .rows
             .iter()
-            .find(|r| r.name == "dev-relay-cover")
+            .find(|r| r.name == "relay-cover")
             .expect("the row");
-        match row.visibility {
-            shekyl_options::Visibility::Dev { gate } => {
-                assert_eq!(gate, DevGate::Staging(Staging::RelayCover));
-                assert!(!gate.admits(shekyl_network::Network::Mainnet));
-            }
-            other => panic!("dev-relay-cover is a dev row, not {other:?}"),
-        }
+        assert!(matches!(row.visibility, shekyl_options::Visibility::Public));
+        assert!(matches!(row.default, Default::Value("on")));
+        assert!(matches!(row.kind, Kind::OneOf(words) if words == ["on", "off"]));
+        assert!(TABLE.rows.iter().all(|r| r.name != "dev-relay-cover"));
     }
 
     /// IG-10: `name` is refused from the command line and from a file, with

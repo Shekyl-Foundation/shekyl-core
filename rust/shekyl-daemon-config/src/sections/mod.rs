@@ -22,7 +22,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
-use shekyl_options::{Code, Diagnostic, PeerEndpoint, Secret, Source};
+use shekyl_options::{Code, Diagnostic, PeerEndpoint, Secret, Source, Value};
+use shekyl_relay_privacy::params::carrier;
 
 use crate::network::Network;
 use crate::platform::{Platform, RunMode};
@@ -156,6 +157,10 @@ pub struct P2p {
     pub upload_max: Option<u64>,
     /// The download rate limit in bytes per second; `None` is unlimited.
     pub download_max: Option<u64>,
+    /// Whether the relay runs cover on its stem connections (`relay-cover`,
+    /// `CVR-R1`): on unless the operator opts out. Off, this node relays no
+    /// stems and sends its own transactions without cover.
+    pub relay_cover: bool,
 }
 
 /// The RPC service's section.
@@ -282,8 +287,6 @@ pub struct Dev {
     pub sync: bool,
     /// Encrypt the clearnet transport.
     pub clearnet_encrypt: bool,
-    /// The relay's development cover carrier.
-    pub relay_cover: bool,
     /// Serve the armed test levers (`dev_block_generate`, `dev_chain_pop`) to the
     /// host's administrator (`RPC_CHANNEL.md` RT-O9.2; `DRS_X_STORE_FLIP.md`
     /// DX-Q3, Q8).
@@ -554,7 +557,8 @@ fn p2p_section(
         },
         Read::Absent | Read::Unreadable => Vec::new(),
     };
-    let (upload_max, download_max) = read_rates(r);
+    let rates = read_rates(r);
+    let (upload_max, download_max) = (rates.upload, rates.download);
     P2p {
         peers,
         closed_peers,
@@ -563,28 +567,72 @@ fn p2p_section(
         bans,
         upload_max,
         download_max,
+        relay_cover: rates.relay_cover,
     }
 }
 
-/// The two link rates, through the same reader the section uses.
-fn read_rates(r: &mut Reader<'_>) -> (Option<u64>, Option<u64>) {
-    (
-        rate_cap(r.rate("p2p-upload-max")),
-        rate_cap(r.rate("p2p-download-max")),
-    )
+/// The link rates and the cover switch they are read beside.
+struct Rates {
+    upload: Option<u64>,
+    download: Option<u64>,
+    relay_cover: bool,
+}
+
+/// `relay-cover`: on unless the operator set `off`.
+fn read_relay_cover(r: &mut Reader<'_>) -> bool {
+    match r.optional_word("relay-cover") {
+        // Absent is the table's default, on. Unreadable already recorded
+        // its fault; the posture stays on so the rest of the section builds.
+        Read::Absent | Read::Present("on") | Read::Unreadable => true,
+        Read::Present("off") => false,
+        Read::Present(other) => {
+            r.word_choice("relay-cover", other, "on, off");
+            true
+        }
+    }
+}
+
+/// The two link rates, through the same reader the section uses, with the
+/// cover floor: while `relay-cover` is on, an upload limit below the cover
+/// rate is refused (`CVR-R5`, rule 82). The carrier sends at that rate
+/// whatever the node has to say, so a lower limit would starve everything
+/// else the node uploads, and then the cover itself.
+fn read_rates(r: &mut Reader<'_>) -> Rates {
+    let upload = rate_cap(r.rate("p2p-upload-max"));
+    let download = rate_cap(r.rate("p2p-download-max"));
+    let relay_cover = read_relay_cover(r);
+    let cover_rate = u64::from(carrier::PER_NODE_BUDGET_BYTES_PER_SEC);
+    if let Some(limit) = upload.filter(|limit| relay_cover && *limit < cover_rate) {
+        r.range(
+            "p2p-upload-max",
+            &Value::Rate(limit).render(),
+            &format!(
+                "with `relay-cover on` the upload limit is at least the cover rate, {}; \
+                 raise it, or set `relay-cover off`, which also stops this node relaying \
+                 stems and sends its own transactions without cover",
+                Value::Rate(cover_rate).render()
+            ),
+        );
+    }
+    Rates {
+        upload,
+        download,
+        relay_cover,
+    }
 }
 
 /// The link budget from the resolved rates: `(upload, download)`, each
 /// `None` when the row is `unlimited`.
 ///
 /// # Errors
-/// A rate row absent where the table fills it, or of the wrong arm. An
+/// A rate row absent where the table fills it, or of the wrong arm; or an
+/// upload limit below the cover rate while `relay-cover` is on. An
 /// unreadable row is not treated as unlimited.
 pub fn link_limits(resolved: &Resolved) -> Result<(Option<u64>, Option<u64>), Vec<Diagnostic>> {
     let mut r = Reader::new(resolved);
-    let limits = read_rates(&mut r);
+    let rates = read_rates(&mut r);
     if r.faults.is_empty() {
-        Ok(limits)
+        Ok((rates.upload, rates.download))
     } else {
         Err(r.faults)
     }
@@ -736,7 +784,6 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
         difficulty: r.optional_integer("dev-difficulty"),
         sync,
         clearnet_encrypt: r.switch("dev-clearnet-encrypt"),
-        relay_cover: r.switch("dev-relay-cover"),
         rpc: r.switch("dev-rpc"),
         pow_seed_epoch_blocks: r.optional_integer("dev-pow-seed-epoch-blocks"),
         pow_seed_epoch_lag: r.optional_integer("dev-pow-seed-epoch-lag"),

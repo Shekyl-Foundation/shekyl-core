@@ -345,20 +345,17 @@ impl Lever {
 pub enum Staging {
     /// `dev-clearnet-encrypt`.
     ClearnetEncrypt,
-    /// `dev-relay-cover`.
-    RelayCover,
 }
 
 impl Staging {
     /// Every staging flag.
-    pub const ALL: [Self; 2] = [Self::ClearnetEncrypt, Self::RelayCover];
+    pub const ALL: [Self; 1] = [Self::ClearnetEncrypt];
 
     /// Who owns the flag's exit.
     #[must_use]
     pub const fn owner(self) -> &'static str {
         match self {
             Self::ClearnetEncrypt => "the Noise flip",
-            Self::RelayCover => "the cover-traffic lane (TRC-1)",
         }
     }
 
@@ -367,15 +364,14 @@ impl Staging {
     pub const fn exit(self) -> &'static str {
         match self {
             Self::ClearnetEncrypt => "deleted at the Noise flip",
-            Self::RelayCover => "promoted or deleted by TRC-1's outcome",
         }
     }
 
     /// The release by which the flag has left by its exit, as a tag
     /// (`vMAJOR.MINOR.PATCH[-pre]`, `docs/VERSIONING.md`). A cut at or past
     /// it while the flag exists is refused at release time; moving it is a
-    /// ruling, recorded beside the value. Both flags' deadline is the
-    /// genesis release: mainnet launches with each behaviour in final form
+    /// ruling, recorded beside the value. The deadline is the genesis
+    /// release: mainnet launches with the behaviour in final form
     /// (`RELEASE_CHECKLIST.md`; design review brief, 2026-11-04).
     #[must_use]
     #[allow(
@@ -385,7 +381,6 @@ impl Staging {
     pub const fn deadline(self) -> &'static str {
         match self {
             Self::ClearnetEncrypt => "v3.1.0",
-            Self::RelayCover => "v3.1.0",
         }
     }
 }
@@ -460,7 +455,7 @@ const TESTNET_SEEDS: [Seed; 6] = [
     },
 ];
 
-const STAGED: &[Staging] = &[Staging::ClearnetEncrypt, Staging::RelayCover];
+const STAGED: &[Staging] = &[Staging::ClearnetEncrypt];
 
 const ROWS: [Row; 4] = [
     Row {

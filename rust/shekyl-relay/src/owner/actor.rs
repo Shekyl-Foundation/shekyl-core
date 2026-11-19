@@ -52,8 +52,10 @@ pub struct RelayConfig {
     pub min_epoch_secs: u32,
     /// Added to the floor at each draw, up to this many seconds.
     pub epoch_jitter_secs: u32,
-    /// Whether the zone runs the covert carrier. Development only
-    /// (`dev-relay-cover`); a shipped node never sets it.
+    /// Whether the zone runs the cover carrier (`relay-cover`, `CVR-R1`):
+    /// on unless the operator opted out. Off, this node relays no stems —
+    /// a stem it receives is broadcast — and its own transactions stem
+    /// without cover.
     pub noise: bool,
     /// The connectors this node built. The zone's embargo timers and its
     /// hidden slot are derived from their declarations.
@@ -66,8 +68,8 @@ pub struct RelayConfig {
 
 impl RelayConfig {
     /// The inherited zone: two stems, a ten-minute epoch with up to thirty
-    /// seconds of jitter (`DandelionParams::inherited`), the carrier off
-    /// unless asked.
+    /// seconds of jitter (`DandelionParams::inherited`), the carrier as
+    /// `noise` says.
     #[must_use]
     pub fn inherited(
         connectors: Vec<ConnectorId>,
@@ -320,6 +322,9 @@ enum StemFallback {
     /// stem: its channel's queue refused it, or it holds no slot
     /// (`CVR-R6`). On a covered session a stem leaves only inside a window.
     NoWindow,
+    /// The operator opted out of cover: this node relays no stems
+    /// (`CVR-R1`).
+    CoverOff,
 }
 
 impl StemFallback {
@@ -329,6 +334,7 @@ impl StemFallback {
             Self::EpochFluffs => "the epoch turned to fluff",
             Self::WriteFailed => "the stem successor's session was closing",
             Self::NoWindow => "no carrier window could take the stem",
+            Self::CoverOff => "cover is off, so this node relays no stems",
         }
     }
 }
@@ -829,6 +835,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     /// phase holds it instead. A relayed stem whose phase ends here is
     /// broadcast.
     fn dispatch(&mut self, txs: &[(TxId, TxBlob)], source: Option<ConnectionId>, local: bool) {
+        if !local && !self.driver.zone().noise_enabled() {
+            // The operator opted out of cover (`CVR-R1`): this node relays
+            // no stems. A stem it receives is broadcast, the no-stem path.
+            self.end_stem(txs, source, StemFallback::CoverOff);
+            return;
+        }
         let node_sync = *self.node_sync.borrow();
         let now = self.now();
         let RelayDispatch { plan, carrier } = self.driver.zone_mut().plan_dispatch_with_refresh(

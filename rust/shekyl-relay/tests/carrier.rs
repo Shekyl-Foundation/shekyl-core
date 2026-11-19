@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The relay owner with the covert carrier on (`noise: true`): a stem
+//! The relay owner with cover on over encrypted sessions: a stem
 //! rides fixed-size windows on its stem slot's channel instead of the
 //! ordinary wire, and the owner learns what became of it only from the
 //! carrier's verdict (`DAEMON_RELAY_PRIVACY.md` §42, §92.5c; COVER §3.1).

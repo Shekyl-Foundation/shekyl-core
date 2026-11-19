@@ -296,7 +296,7 @@ impl Network {
             config: RelayConfig::inherited(
                 plan.connectors(),
                 plan.added_encryption(),
-                plan.relay_noise,
+                plan.relay_cover,
             ),
             pool: door,
             node_sync,

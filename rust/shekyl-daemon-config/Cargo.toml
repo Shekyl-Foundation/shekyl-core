@@ -34,6 +34,9 @@ shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 # A directory's entries made durable after a rename (`marker`): one rule
 # with the daemon's key files and the tunnel's (`private_file::sync_dir`).
 shekyl-os-account = { path = "../shekyl-os-account" }
+# The cover rate `p2p-upload-max` must not go below while `relay-cover` is
+# on (`CVR-R5`): read from the carrier's own budget, not restated here.
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 
 [target.'cfg(unix)'.dependencies]
 # Safe wrappers for the data-directory lock (`flock`) and the account's

@@ -311,7 +311,12 @@ impl ProbeSink for Others {
 
 #[derive(Clone, Copy)]
 pub struct Build {
-    pub noise: bool,
+    /// `relay-cover`: on unless a case opts out (`CVR-R1`).
+    pub cover: bool,
+    /// Whether the rig's clearnet sessions stand for encrypted ones. Cover
+    /// runs only on those (`CVR-R3`); on plaintext sessions the carrier is
+    /// idle and stems go bare.
+    pub encrypted: bool,
     pub node_sync: NodeSync,
     /// Each channel's send-queue cap. A message larger than this closes
     /// the session it is sent on.
@@ -321,7 +326,8 @@ pub struct Build {
 impl Default for Build {
     fn default() -> Self {
         Self {
-            noise: false,
+            cover: true,
+            encrypted: false,
             node_sync: NodeSync::Synchronised,
             send_cap: SEND_CAP,
         }
@@ -368,14 +374,17 @@ impl Rig {
             .expect("the nudge registers");
         let pool = FakePool::new();
         let (node_sync, node_sync_rx) = watch::channel(build.node_sync);
-        // The rig's clearnet sessions stand for encrypted ones: a carrier
-        // runs only on an encrypted session (`CVR-R3`), and the loopback
-        // carries no Noise layer of its own.
+        // The loopback carries no Noise layer of its own: `encrypted` says
+        // whether its clearnet sessions stand for encrypted ones.
         let Started { port, handle } = start(RelayParts {
             config: RelayConfig::inherited(
                 vec![ConnectorId::Clearnet],
-                vec![ConnectorId::Clearnet],
-                build.noise,
+                if build.encrypted {
+                    vec![ConnectorId::Clearnet]
+                } else {
+                    Vec::new()
+                },
+                build.cover,
             ),
             pool: pool.clone(),
             node_sync: node_sync_rx,
@@ -614,7 +623,8 @@ pub fn carrier_rig() -> Rig {
 
 pub fn carrier_rig_from(build: Build) -> Rig {
     let rig = Rig::build(Build {
-        noise: true,
+        cover: true,
+        encrypted: true,
         ..build
     });
     wait_until("fixture: the zone must run the carrier", || {

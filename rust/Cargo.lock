@@ -4279,6 +4279,7 @@ dependencies = [
  "shekyl-onion-v3",
  "shekyl-options",
  "shekyl-os-account",
+ "shekyl-relay-privacy",
  "shekyl-rpc-rendezvous",
  "shekyl-win-sec",
  "tempfile",

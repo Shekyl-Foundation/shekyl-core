@@ -98,15 +98,15 @@ _SAMPLE = '''
 pub enum Staging {
     /// `dev-clearnet-encrypt`.
     ClearnetEncrypt,
-    /// `dev-relay-cover`.
-    RelayCover,
+    /// `dev-second-sample`.
+    SecondSample,
 }
 
 impl Staging {
     pub const fn deadline(self) -> &'static str {
         match self {
             Self::ClearnetEncrypt => "v3.1.0",
-            Self::RelayCover => "v3.2.0-beta.1",
+            Self::SecondSample => "v3.2.0-beta.1",
         }
     }
 }
@@ -122,7 +122,7 @@ def selftest() -> int:
     assert len(refused) == 1 and "dev-clearnet-encrypt" in refused[0], refused
     assert len(check("v3.2.0", _SAMPLE)) == 2, "past both"
     for broken in (
-        _SAMPLE.replace('            Self::RelayCover => "v3.2.0-beta.1",\n', ""),
+        _SAMPLE.replace('            Self::SecondSample => "v3.2.0-beta.1",\n', ""),
         _SAMPLE.replace("pub enum Staging", "pub enum Staged"),
         _SAMPLE.replace("pub const fn deadline", "pub const fn due"),
     ):

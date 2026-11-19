@@ -257,3 +257,41 @@ fn a_local_origin_with_no_successor_is_held_and_never_broadcast() {
     );
     assert!(rig.pool.shown().is_empty(), "never shown");
 }
+
+/// **A node that opts out of cover relays no stems** (`CVR-R1`; Rick,
+/// 2026-11-15). A stem it receives is broadcast through the no-stem path,
+/// though it has an outbound successor a stem could go to; its own
+/// transaction still stems, bare.
+///
+/// What edit reds this: relay a received stem on an opted-out node (the
+/// successor reads it flagged stem); or hold or broadcast its own.
+#[test]
+fn an_opted_out_node_broadcasts_received_stems_and_stems_its_own_bare() {
+    let rig = Rig::build(Build {
+        cover: false,
+        ..Build::default()
+    });
+    let mut successor = rig.outbound(1);
+    let sender = rig.inbound(1);
+    sender.inject_blocking(new_transactions(vec![blob(6)], false));
+    support::wait_until("the blob was admitted", || rig.pool.admits().len() == 1);
+    support::wait_until("it was shown", || rig.pool.shown().len() == 1);
+    let batch = rig.read_batch_within(&mut successor, 10);
+    assert!(
+        batch.dandelionpp_fluff,
+        "an opted-out node relayed a stem as a stem"
+    );
+    assert_eq!(batch.txs, vec![blob(6)]);
+
+    let tx = id_of(&blob(7));
+    assert!(rig.relay.relay_local(tx, blob(7)), "the owner took it");
+    let own = rig.read_batch(&mut successor);
+    assert!(!own.dandelionpp_fluff, "its own transaction stems");
+    assert_eq!(own.txs, vec![blob(7)]);
+    assert_eq!(
+        rig.pool.shown().len(),
+        1,
+        "its own transaction is not shown"
+    );
+    drop(sender);
+}
