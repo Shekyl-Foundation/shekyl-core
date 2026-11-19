@@ -73,13 +73,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 # (path from the repo root, type, member) -> who removes the row, and how.
 # Rows come off; none are added. A new case makes the member unconditional.
-ALLOWED: dict[tuple[str, str, str], str] = {
-    (
-        "rust/shekyl-chain-ingest/src/service.rs",
-        "Follow",
-        "producer",
-    ): "SO-D12 lane (increment 4c, 39805a1787): the field becomes unconditional",
-}
+ALLOWED: dict[tuple[str, str, str], str] = {}
 
 HEADER = re.compile(r"(?:^|[\s;}{\]])((?:pub(?:\s*\([^)]*\))?\s+)?)(enum|struct|union)\s+(\w+)")
 PUB_TYPE = re.compile(r"(?m)^\s*pub\s+(?:enum|struct|union)\s+\w+")

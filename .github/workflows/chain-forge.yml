@@ -70,9 +70,12 @@ on:
 
 # A scheduled or dispatched run is its own group: a push landing mid-night
 # must not cancel the nightly whose red is the issue.
+# A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
+# one runs and one waits, and a newer push replaces the waiting one, so the
+# run that finishes covers every merge since the last (06-branching.mdc).
 concurrency:
   group: chain-forge-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -202,7 +205,7 @@ jobs:
 
   report-dev-red:
     needs: [scope, x86_64, aarch64, hosted-pull]
-    if: ${{ !cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
     permissions:
       actions: read
       contents: read

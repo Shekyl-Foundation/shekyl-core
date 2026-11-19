@@ -33,8 +33,9 @@ use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::sync::mpsc;
 
-use crate::bundle_producer::{spawn_read, ReadFn};
+use crate::bundle_producer::spawn_read;
 use crate::connector::{BundleOffered, LearnDraws, Learned, OfferBundle};
+use crate::producer_seat::ReadFn;
 use crate::scenario::{FreeHash, Mined, Scenario, RULES};
 
 /// A witness key and seed the test holds, and the commitment they make.

@@ -201,9 +201,26 @@ pub enum ReadFailure {
     /// it. Nothing was dialled.
     #[error("no holder is bonded to shard {shard_id:?}")]
     NoHolders { shard_id: ShardId },
-    /// Every holder the budget allowed was tried.
-    #[error("every drawn holder failed ({} attempts)", attempts.len())]
+    /// Every holder the budget allowed was tried. The message names the
+    /// last attempt's answer: on a nonce read the scheduler dials only the
+    /// named persona, so that answer is how the read ended, and a log line
+    /// built from this message says whether `P` was unreachable or
+    /// answered and refused (a 404, a 503, a bad countersignature).
+    #[error("every drawn holder failed ({} attempts){}", attempts.len(), LastAnswer(attempts))]
     Exhausted { attempts: Vec<Attempt> },
+}
+
+/// The tail of [`ReadFailure::Exhausted`]'s message: the last attempt's
+/// error, or nothing when no holder was dialled.
+struct LastAnswer<'a>(&'a [Attempt]);
+
+impl std::fmt::Display for LastAnswer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.last() {
+            Some(last) => write!(f, "; the last: {}", last.error),
+            None => Ok(()),
+        }
+    }
 }
 
 /// The daemon's one fetch scheduler.
@@ -588,12 +605,41 @@ enum HolderOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::support_turn;
+    use super::{support_turn, Attempt, ReadFailure};
+    use shekyl_p_fetch::{FetchError, Stall};
+    use shekyl_types::PCanonicalId;
 
     #[test]
     fn a_support_holder_waits_until_a_drawn_holder_has_been_tried() {
         assert!(!support_turn(true, 0));
         assert!(support_turn(true, 1));
         assert!(support_turn(false, 0));
+    }
+
+    fn attempt(error: FetchError) -> Attempt {
+        Attempt {
+            holder: PCanonicalId::from_bytes([7; 32]),
+            error,
+        }
+    }
+
+    /// The emission walk of 2026-11-17 filed six bundles with no pass and
+    /// its logs could not say why: this message was all a log line carried.
+    #[test]
+    fn an_exhausted_read_names_its_last_answer() {
+        let refused = ReadFailure::Exhausted {
+            attempts: vec![
+                attempt(FetchError::Stall(Stall::DialTimeout)),
+                attempt(FetchError::Miss),
+            ],
+        };
+        assert_eq!(
+            refused.to_string(),
+            "every drawn holder failed (2 attempts); the last: miss: P answered 404"
+        );
+        let none = ReadFailure::Exhausted {
+            attempts: Vec::new(),
+        };
+        assert_eq!(none.to_string(), "every drawn holder failed (0 attempts)");
     }
 }

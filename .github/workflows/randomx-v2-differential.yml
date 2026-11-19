@@ -215,9 +215,12 @@ on:
 # `workflow_dispatch` would likewise cancel a running one. A canceled
 # run never fires the alarm a failed run would; that is the
 # armed-gate-with-no-trigger failure mode reborn as a race.
+# A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
+# one runs and one waits, and a newer push replaces the waiting one, so the
+# run that finishes covers every merge since the last (06-branching.mdc).
 concurrency:
   group: randomx-v2-differential-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || format('{0}-{1}', github.event_name, github.ref) }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
