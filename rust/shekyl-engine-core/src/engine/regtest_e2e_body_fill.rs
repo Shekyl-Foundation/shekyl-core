@@ -47,9 +47,10 @@ type Shared = Arc<RwLock<super::super::Engine<super::super::SoloSigner>>>;
 const SLOT: u32 = 0;
 /// One epoch holds both closes and the stake: shard 0 closes near block 405
 /// and shard 1, after the supply its spends are mined from, near 1330. Both
-/// land in epoch 0, so each shard's freeze epoch, the pull window
-/// (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2), is epoch 1, and the node discards
-/// their bodies at block `2 · SEB`. The walk asserts the closes land there.
+/// land in epoch 0 and are final there, so each enters a support draw's
+/// `final_count` at the open of epoch 1, its freeze epoch, and the node
+/// discards their bodies at block `2 · SEB` (`WALLET_SIDE_STORE.md` §6.5.1,
+/// §6.5.9). The walk asserts the closes land there.
 const SEB: u64 = 1_500;
 /// The shards' finality wait, and the P-scan's own test horizon.
 const REORG_CAP: u64 = PSCAN_TEST_REORG_DEPTH;
@@ -279,16 +280,18 @@ async fn draw_and_check(
 ///    it in the body store before the post, and the post confirms.
 /// 2. A draw on shard 0 answers 200 with a body that verifies against the
 ///    chain; a draw on a shard not held is the 404, and the count moves.
-/// 3. Shard 1 closes after the bond. The next reconcile pass pulls it
-///    inside its freeze epoch, quietly.
+/// 3. Shard 1 closes after the bond and is final in its close epoch. The
+///    next reconcile pass pulls it there, quietly, before its freeze epoch
+///    opens: an already-joined tree is drawn on it from that open (§6.5.9).
+///    A draw on it once the epoch has opened answers 200.
 /// 4. A body that does not verify (shard 1's frame written as shard 0's)
 ///    raises `corrupt` and is refilled.
 /// 5. The store file deleted and the wallet reopened: every owed shard
 ///    raises `missing` and is refilled inside the window.
 /// 6. Past the boundary that discards the shards' bodies, a fill that fails
 ///    partway posts nothing, returns `Discarded`, and leaves no partial
-///    shard; the refusal names the read below the horizon. The reconcile's
-///    alarm says the same.
+///    shard; the refusal names the node's recovery fetch, the only way the
+///    bodies come back (§6.5.4). The reconcile's alarm says the same.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; closes two shards with some four hundred real spends, stakes, and walks past the discard boundary"]
 async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
@@ -327,7 +330,8 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
     // (2) A draw on it, and a 404.
     draw_and_check(&daemon, &arc, &seed, shard(0), zero.close_height, shard(7)).await;
 
-    // (3) The next shard, pulled inside its freeze epoch.
+    // (3) The next shard, pulled after finality and before its freeze epoch
+    // opens.
     let alarms = ShardAlarms::default();
     let mut state = ReconcileState::default();
     reconcile(&daemon, &arc, &mut state, &alarms).await;
@@ -356,11 +360,6 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
         !holds(&arc, shard(1)).await,
         "nothing has filled shard 1 yet"
     );
-    // Into shard 1's freeze epoch, the pull window, and pull there.
-    let count = daemon.height().await;
-    if count <= SEB {
-        daemon.generate_blocks(SEB + 1 - count).await;
-    }
     reconcile(&daemon, &arc, &mut state, &alarms).await;
     assert!(
         holds_verified(&arc, shard(1)).await,
@@ -369,9 +368,16 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
     assert_eq!(alarms.list(), [], "a routine pull is not an alarm");
     let tip = daemon.height().await - 1;
     assert!(
-        (SEB..2 * SEB).contains(&tip),
-        "the pull ran inside shard 1's freeze epoch (tip {tip})"
+        tip < SEB,
+        "the pull ran in shard 1's close epoch, before the freeze epoch's open at {SEB} \
+         where a support draw first counts it (tip {tip})"
     );
+    // Into the freeze epoch: the draw that open makes possible is answered.
+    let count = daemon.height().await;
+    if count <= SEB {
+        daemon.generate_blocks(SEB + 1 - count).await;
+    }
+    draw_and_check(&daemon, &arc, &seed, shard(1), one.close_height, shard(7)).await;
 
     // (4) A body that does not verify.
     let stake = arc.read().await.stake_handle().expect("a staker");
@@ -467,8 +473,8 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
         "{err}"
     );
     assert!(
-        err.to_string().contains("below its horizon"),
-        "the refusal names the read below the horizon: {err}"
+        err.to_string().contains("recovery fetch"),
+        "the refusal names the node's recovery fetch: {err}"
     );
     assert!(!holds(&arc, shard(1)).await, "no partial shard was written");
     assert!(
@@ -494,8 +500,9 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
 }
 
 /// A market bond (`WSS-Q4`): a shard set naming a shard that is not final is
-/// refused before anything is filled or posted; the final shard, filled in
-/// its window, posts and is served.
+/// refused before anything is filled or posted; the final shard, filled
+/// while the node holds it, posts at its first admissible join (§6.5.2) and
+/// is served.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; closes a shard with some two hundred real spends and stakes a market bond onto it"]
 async fn e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves() {
@@ -533,12 +540,26 @@ async fn e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_
         "the refusal comes before any fill"
     );
 
-    // The final shard, filled in its window, priced, posted and served.
+    // The final shard, filled while the node holds it, then priced and
+    // posted. Shard 0 closed in epoch 0, so its first pricing pass is the
+    // last block of epoch 1 and its first admissible join is the discard
+    // block, `2 · SEB` (§6.5.2): the fill has to finish before the post can
+    // connect.
     fill_closed_shard(&daemon, &wallet.0, &zero).await;
+    let filled_at = daemon.height().await - 1;
+    assert!(
+        filled_at < 2 * SEB,
+        "filled before the discard block (tip {filled_at})"
+    );
     let priced = price_closed_shard(&daemon, &zero, SCHEDULE).await;
     eprintln!(
         "shard 0 priced by epoch {} at {}",
         priced.priced_by_epoch, priced.pass_height
+    );
+    assert_eq!(
+        (priced.priced_by_epoch, priced.pass_height + 1),
+        (0, 2 * SEB),
+        "an epoch-0 shard is priced by pass 0 and joins at the discard block"
     );
     let market = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
