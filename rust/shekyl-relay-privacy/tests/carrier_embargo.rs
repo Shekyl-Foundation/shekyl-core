@@ -4,8 +4,7 @@
 // BSD-3-Clause
 
 //! The embargo with every stem hop paced by the cover carrier (`CVR-R5`;
-//! Rick, 2026-11-18): the hop's window wait, the epoch tail, and the hold
-//! before the broadcast.
+//! Rick, 2026-11-18): the hop's window wait and the epoch tail.
 
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
 use shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT;
@@ -27,7 +26,6 @@ fn a_carrier_wait_only_lowers_full_travel() {
         hop_windows: 0,
         tail_windows: 0,
         tail_share: 0.0,
-        hold_windows: 0,
     };
     for mean in [400_u32, 2_000, 8_000] {
         let plain = full_travel_probability(&params, mean, DEFAULT_EMBARGO_TICK_MILLIS);
@@ -39,12 +37,7 @@ fn a_carrier_wait_only_lowers_full_travel() {
         let mut last = zero;
         for pacing in [
             CarrierPacing {
-                hold_windows: 5,
-                ..none
-            },
-            CarrierPacing {
                 hop_windows: 1,
-                hold_windows: 5,
                 ..none
             },
             CarrierPacing::shipped(0, params.min_epoch_secs),

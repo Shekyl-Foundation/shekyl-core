@@ -35,7 +35,6 @@ use shekyl_types::relay::RelayMethod;
 use crate::carrier::CarrierView;
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
-mod broadcast_hold;
 mod cover;
 mod embargo;
 mod epoch_map;
@@ -50,7 +49,6 @@ pub use origin::OriginVerdict;
 
 use epoch_map::EpochMap;
 
-pub use broadcast_hold::Broadcast;
 pub use cover::{timing_visible, transit_ms};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
@@ -385,9 +383,6 @@ pub struct Relay {
     /// chose it). With [`link_encrypted`], the connector's native cell, it
     /// is whether a session is encrypted ([`Self::session_encrypted`]).
     added_encryption: Vec<ConnectorId>,
-    /// Transactions whose stem phase ended here, held before their broadcast
-    /// starts (`CVR-R10`, `broadcast_hold`).
-    broadcast_holds: broadcast_hold::BroadcastHolds,
 }
 
 impl Relay {
@@ -463,7 +458,6 @@ impl Relay {
             embargoes: embargo::Embargoes::default(),
             node_sync: NodeSync::Unsynchronised,
             added_encryption: added_encryption.to_vec(),
-            broadcast_holds: broadcast_hold::BroadcastHolds::default(),
         })
     }
 

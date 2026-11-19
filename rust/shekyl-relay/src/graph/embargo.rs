@@ -22,10 +22,10 @@
 //! fire re-stems to the source's alternate, taken from its frozen pin
 //! (never `stem_for` again, W1; never a new edge, §12.2 item 6; stable
 //! across a churn refill within the epoch, W3c). The second fire, or a first
-//! fire with no live alternate, ends the stem phase: the transaction is held
-//! before its broadcast (`CVR-R10`), then fluffed to every session but the
-//! source and marked shown, the W3/W3b last resort (§14.6). Fluff on expiry,
-//! which the C++ pool did, is not ported (§14).
+//! fire with no live alternate, ends the stem phase: the transaction is
+//! fluffed to every session but the source and marked shown, the W3/W3b last
+//! resort (§14.6). Fluff on expiry, which the C++ pool did, is not ported
+//! (§14).
 //!
 //! **This node's own transaction is never broadcast** (`CVR-R6`): an
 //! origin whose embargo ends with no reshape is planned again, keeping its
@@ -183,15 +183,15 @@ pub(super) struct Embargoes {
     pub(super) unsent: HashMap<TxId, Unsent>,
 }
 
-/// What a poll's embargo and held-origin work produced: stems to send.
-///
-/// A stem phase this work ends is held before its broadcast inside the zone
-/// (`CVR-R10`), and this node's own transaction is never broadcast
-/// (`CVR-R6`), so the work carries no publication.
+/// What a poll's embargo and held-origin work produced.
 #[derive(Debug, Default)]
 pub struct EmbargoWork {
     /// A reshape, or a held origin's first send.
     pub stems: Vec<StemWork>,
+    /// Relayed transactions whose stem phase ended here and which the zone
+    /// queued for fluff: the pool's shown bit is set for each. Never this
+    /// node's own (`CVR-R6`).
+    pub published: Vec<TxId>,
 }
 
 /// One stem the zone asks for, sent by [`Relay::carrier_to`] its peer: inside
@@ -265,9 +265,8 @@ impl Relay {
     /// it ([`Relay::record_stem`]), so an embargo cannot expire while the
     /// carrier still holds the transaction. With no window for a covered
     /// alternate, or no alternate, the stem phase ends: a relayed stem is
-    /// held before its broadcast (`CVR-R10`), and this node's own
-    /// transaction is planned again ([`Relay::requeue_origin`]), never
-    /// broadcast.
+    /// fluffed and published, and this node's own transaction is planned
+    /// again ([`Relay::requeue_origin`]), never broadcast.
     pub fn fire_embargoes<R: RelayRng + ?Sized>(
         &mut self,
         now: Millis,
@@ -334,9 +333,9 @@ impl Relay {
                             .held
                             .remove(&tx)
                             .expect("held checked present above");
-                        // The stem phase ends here: held before its
-                        // broadcast (`CVR-R10`); shown when the hold ends.
-                        self.hold_broadcast(&[(tx, held.blob)], source, now, rng);
+                        // The stem phase ends here: fluffed and shown.
+                        self.queue_fluff(&[held.blob], source, now, rng);
+                        work.published.push(tx);
                     }
                 }
             }

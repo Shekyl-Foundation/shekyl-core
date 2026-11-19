@@ -75,25 +75,19 @@ fn a_stem_batch_goes_to_an_outbound_successor_as_a_stem() {
 }
 
 /// A node with no outbound session has no stem successor, so a stem it
-/// receives ends its stem phase here: held before its broadcast
-/// (`CVR-R10`), then fluffed to its other peers. This is the designed path,
-/// taken for every stem such a node holds; its log line is a debug line
-/// (the alpha.11 fleet: an ERROR per stem on an inbound-only node). Nothing
-/// is shown or sent until the hold ends on the rig's clock.
+/// receives ends its stem phase here and goes to its other peers as a
+/// fluff. This is the designed path, taken for every stem such a node
+/// holds; its log line is a debug line (the alpha.11 fleet: an ERROR per
+/// stem on an inbound-only node).
 #[test]
-fn a_stem_with_no_outbound_successor_is_held_then_fluffed_to_the_other_peers() {
+fn a_stem_with_no_outbound_successor_is_fluffed_to_the_other_peers() {
     let rig = Rig::build(Build::default());
     let mut sender = rig.inbound(1);
     let mut other = rig.inbound(2);
     sender.inject_blocking(new_transactions(vec![blob(4)], false));
     support::wait_until("the blob was admitted", || rig.pool.admits().len() == 1);
-    assert!(
-        rig.quiet(&mut other),
-        "the stem is held: no broadcast before the clock moves"
-    );
-    assert!(rig.pool.shown().is_empty(), "not shown during the hold");
-    let batch = rig.read_batch_within(&mut other, 10);
     support::wait_until("it was shown", || rig.pool.shown().len() == 1);
+    let batch = rig.read_batch_within(&mut other, 10);
     assert!(batch.dandelionpp_fluff, "with no successor the stem fluffs");
     assert_eq!(batch.txs, vec![blob(4)]);
     assert!(
@@ -244,7 +238,7 @@ fn stopping_the_owner_refuses_a_local_origin() {
 /// **This node's own transaction is never broadcast** (`CVR-R6`). A node
 /// with a network but no stem successor — only inbound sessions — holds
 /// its own transaction until a successor appears: it is neither sent to
-/// the inbound peer nor shown, however long the clock runs past any hold.
+/// the inbound peer nor shown, however long the clock runs.
 ///
 /// What edit reds this: send a local origin with no route to the fluff
 /// path, as the inherited relay did (the inbound peer reads it, and it is

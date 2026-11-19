@@ -305,8 +305,8 @@ enum StemOut {
     WriteFailed,
 }
 
-/// Why a relayed stem ended its stem phase here: held, then broadcast
-/// (`CVR-R10`). None is a fault. A node with no outbound session takes it
+/// Why a relayed stem ended its stem phase here and was broadcast. None is
+/// a fault. A node with no outbound session takes it
 /// for every stem it holds, so it is a debug line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StemFallback {
@@ -758,15 +758,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                     StemOut::Carried | StemOut::Ended => {}
                 }
             }
-            Effect::Broadcast { txs, source } => {
-                // The hold ended (`CVR-R10`). A transaction a block took
-                // meanwhile is not broadcast.
-                let live: Vec<(TxId, TxBlob)> = txs
-                    .into_iter()
-                    .filter(|(tx, _)| self.pool.holds(tx))
-                    .collect();
-                if !live.is_empty() {
-                    self.fluff_and_record(&live, source);
+            Effect::Published { txs } => {
+                for tx in &txs {
+                    self.pool.shown(tx);
                 }
             }
         }
@@ -832,8 +826,8 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     /// what its channel refuses, or a covered successor with no slot, ends
     /// a relayed stem here and holds this node's own. This node's own
     /// transaction is never broadcast: every arm that would end its stem
-    /// phase holds it instead. A relayed stem whose phase ends here is held
-    /// before its broadcast (`CVR-R10`).
+    /// phase holds it instead. A relayed stem whose phase ends here is
+    /// broadcast.
     fn dispatch(&mut self, txs: &[(TxId, TxBlob)], source: Option<ConnectionId>, local: bool) {
         let node_sync = *self.node_sync.borrow();
         let now = self.now();
@@ -855,9 +849,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             }
             RelayPlan::FluffEpoch if !local => {
                 // This node's fluff decision ends the stem phase.
-                self.driver
-                    .zone_mut()
-                    .hold_broadcast(txs, source, now, &mut *self.rng);
+                self.fluff_and_record(txs, source);
                 return;
             }
             RelayPlan::Stem(destination) | RelayPlan::OwnEdge(destination) => Some(destination),
@@ -899,7 +891,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             RelayPlan::NoRoute => StemFallback::NoSuccessor,
             RelayPlan::FluffEpoch => StemFallback::EpochFluffs,
         };
-        self.end_stem(txs, source, fallback, now);
+        self.end_stem(txs, source, fallback);
     }
 
     /// Send one stem as `carrier` says (`CVR-R6`).
@@ -1005,8 +997,8 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
 
     /// A stem no window could take (`CVR-R6`). This node's own transaction
     /// is planned again, never broadcast or sent bare. A relayed stem ends
-    /// its stem phase here: its relay state is dropped, and it is held
-    /// before its broadcast (`CVR-R10`).
+    /// its stem phase here: its relay state is dropped, and it is
+    /// broadcast.
     fn no_window(
         &mut self,
         txs: &[(TxId, TxBlob)],
@@ -1024,26 +1016,22 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         for (tx, _) in txs {
             self.driver.zone_mut().release(tx);
         }
-        self.end_stem(txs, source, StemFallback::NoWindow, now);
+        self.end_stem(txs, source, StemFallback::NoWindow);
     }
 
-    /// A relayed stem's phase ends here: held before its broadcast
-    /// (`CVR-R10`).
+    /// A relayed stem's phase ends here: it is broadcast.
     fn end_stem(
         &mut self,
         txs: &[(TxId, TxBlob)],
         source: Option<ConnectionId>,
         fallback: StemFallback,
-        now: Millis,
     ) {
         tracing::debug!(
             count = txs.len(),
-            "holding for broadcast what could not stem: {}",
+            "fluffing what could not stem: {}",
             fallback.reason()
         );
-        self.driver
-            .zone_mut()
-            .hold_broadcast(txs, source, now, &mut *self.rng);
+        self.fluff_and_record(txs, source);
     }
 
     /// The pool is told the transactions are shown, then the zone queues

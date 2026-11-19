@@ -272,9 +272,9 @@ fn solve_embargo(
     })
 }
 
-/// How the cover carrier paces a stem (`CVR-R4`, `CVR-R5`, `CVR-R10`; Rick,
+/// How the cover carrier paces a stem (`CVR-R4`, `CVR-R5`; Rick,
 /// 2026-11-18): the waits [`full_travel_probability_paced`] adds to every
-/// hop and to the stem's end.
+/// hop.
 ///
 /// Each wait is a sum of memoryless cadence draws, so a Gamma variable of
 /// whole shape:
@@ -283,10 +283,7 @@ fn solve_embargo(
 ///   behind whatever backlog is queued ahead of it;
 /// - **a hop in an epoch tail** waits `tail_windows` more, since no message
 ///   starts during the tail; `tail_share` is the share of hops that land in
-///   one;
-/// - **the stem's end** holds the transaction `hold_windows` draws before
-///   its broadcast, and every stem node's embargo waits for that broadcast
-///   to come back.
+///   one.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CarrierPacing {
     /// The mean of one cadence draw, in milliseconds.
@@ -297,8 +294,6 @@ pub struct CarrierPacing {
     pub tail_windows: u32,
     /// The share of hops that land in an epoch tail, in `[0, 1]`.
     pub tail_share: f64,
-    /// Cadence draws in the hold before the broadcast.
-    pub hold_windows: u32,
 }
 
 impl CarrierPacing {
@@ -321,7 +316,6 @@ impl CarrierPacing {
             hop_windows: 1 + backlog,
             tail_windows: carrier::EPOCH_TAIL_WINDOWS,
             tail_share,
-            hold_windows: carrier::BROADCAST_HOLD_WINDOWS,
         }
     }
 }
@@ -342,13 +336,13 @@ fn neg_ln_one_minus(p: f64) -> f64 {
 }
 
 /// [`full_travel_probability`] with every stem hop paced by the cover
-/// carrier and the stem's end held before its broadcast ([`CarrierPacing`]).
+/// carrier ([`CarrierPacing`]).
 ///
 /// The fixed per-hop and return terms are as in
 /// [`full_travel_probability`]. The carrier's waits are random and memoryless:
 /// a node at distance `k` from the stem's end outlasts the `k` hop waits
-/// below it and the shared hold, so over a stem of length `h` the exponent
-/// gains `Σ j·Wⱼ` over its hops and `h·H` for the hold. With the hops
+/// below it, so over a stem of length `h` the exponent gains `Σ j·Wⱼ` over
+/// its hops. With the hops
 /// independent, the survival factor is a product of Gamma moment generating
 /// functions, `(1 + j·λ·θ)^(−shape)` with `λ = −ln(1 − p)` per tick and `θ`
 /// the cadence mean in ticks: powers of a reciprocal, no transcendental call
@@ -398,8 +392,7 @@ pub fn full_travel_probability_paced(
         timer_mass *= pow_exact(timer_survives, slack_ticks);
         wait_mass *= (1.0 - pacing.tail_share) * gamma(h, pacing.hop_windows)
             + pacing.tail_share * gamma(h, pacing.hop_windows + pacing.tail_windows);
-        let hold = gamma(h, pacing.hold_windows);
-        total += stem_mass * q * timer_mass * wait_mass * hold;
+        total += stem_mass * q * timer_mass * wait_mass;
         if stem_mass < TAIL_MASS_CUTOFF {
             break;
         }

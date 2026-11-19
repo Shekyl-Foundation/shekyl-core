@@ -50,8 +50,8 @@ impl Write for Sink {
 }
 
 /// **A stem's transactions and successor are never logged.** A stem goes to
-/// its successor, then a second stem's write fails and its stem phase ends
-/// here (held, then broadcast); every event at TRACE is captured. No line names either
+/// its successor, then a second stem's write fails and it falls back to
+/// fluff; every event at TRACE is captured. No line names either
 /// transaction, and no line about a stem names the successor (a fluff may
 /// name the peers it reaches). The test first sees the stem's own event, so
 /// an empty log cannot pass. Red edits: put `?peer` back on "a zone stem

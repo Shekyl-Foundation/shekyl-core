@@ -15,9 +15,8 @@
 //! stem observations (`stem_in_flight`).
 //!
 //! The rig's clock is manual. A carrier window goes out only when the
-//! clock moves (each channel at a memoryless cadence, mean 5 s), and a
-//! stem that ends its phase here is broadcast only when its hold ends
-//! (`CVR-R10`, mean 25 s), so "the carrier took it" is
+//! clock moves (each channel at a memoryless cadence, mean 5 s), so "the
+//! carrier took it" is
 //! recognised the way the C++ cases recognised it: nothing reaches any
 //! wire, nothing is shown, nothing is observed — until the clock moves.
 
@@ -192,13 +191,13 @@ fn a_discarded_origin_is_held_unshown_and_leaves_in_the_next_sessions_window() {
 ///
 /// A relayed transaction is not this node's, and the carrier's discard
 /// leaves nobody else to move it on: without the fallback it is stranded
-/// in this node's pool. It is held before its broadcast (`CVR-R10`), then
-/// shown and fluffed to the peers other than its source.
+/// in this node's pool. It is shown and fluffed to the peers other than
+/// its source.
 ///
 /// What edit reds this: drop the relayed arm of `no_window` (nothing is
 /// shown and nothing is fluffed).
 #[test]
-fn a_discarded_forwarded_stem_is_held_then_fluffed() {
+fn a_discarded_forwarded_stem_falls_back_to_fluff() {
     let rig = carrier_rig();
     let mut first = rig.outbound(1);
     let mut second = rig.outbound(2);
@@ -270,7 +269,7 @@ fn a_transaction_already_in_the_carrier_is_not_enqueued_twice() {
 /// The refusal is by size, the realistic one: a transaction over five
 /// windows cannot be carried. On a covered session a stem leaves only inside
 /// a window (`CVR-R6`), so the refused one is not stemmed on the ordinary
-/// wire: it is held before its broadcast (`CVR-R10`) and fluffed. The
+/// wire: its stem phase ends here and it is fluffed. The
 /// carried one must stay out of that fluff: its verdict resolves it, and
 /// fluffing it too would send it twice and publish it while it is still
 /// being carried.
@@ -306,7 +305,7 @@ fn a_batch_the_carrier_partly_refuses_ends_only_the_refused_half() {
     });
     assert!(
         done,
-        "the carrier never took the small one, or the hold never ended"
+        "the carrier never took the small one, or the refused one was never shown"
     );
     thread::sleep(SETTLE);
     seen.extend(read_all(&rig, &mut [&mut first, &mut second]));
@@ -337,8 +336,8 @@ fn a_batch_the_carrier_partly_refuses_ends_only_the_refused_half() {
 /// its fluff half.)
 ///
 /// At the harness's 64 KiB send cap the oversize fluff's writes are refused,
-/// but the transaction is still shown when its hold ends. The transaction
-/// the carrier holds must not be.
+/// but the transaction is still shown. The transaction the carrier holds
+/// must not be.
 ///
 /// What edit reds this: end the whole batch's stem phase (the carried one is
 /// shown too).
@@ -355,7 +354,7 @@ fn a_split_batch_broadcasts_only_the_refused_half() {
     sender.inject_blocking(new_transactions(vec![blob(1), oversize(2)], false));
     support::wait_until("both blobs were admitted", || rig.pool.admits().len() == 2);
     let shown = rig.drive(STEP, 180, || !rig.pool.shown().is_empty());
-    assert!(shown, "the refused half's hold never ended");
+    assert!(shown, "the refused half was never shown");
     thread::sleep(SETTLE);
     assert_eq!(
         rig.pool.shown(),
@@ -410,17 +409,15 @@ fn a_verdict_for_a_transaction_the_pool_dropped_records_nothing() {
     drop(sender);
 }
 
-/// **A stem whose write fails is not recorded as stemmed; it is held, then
-/// fluffed.**
+/// **A stem whose write fails is not recorded as stemmed; it fluffs.**
 /// (Replaces the C++ `a_failed_stem_is_not_recorded_as_relayed`, which ran
 /// with the carrier off, as this does.)
 ///
 /// First a stem goes out and is observed, so the failure below is known
 /// to be a stem epoch's, on a routed successor. Then the successor's
 /// writer fails: the stem's write is refused, the retry with it, and the
-/// transaction's stem phase ends here: held, then broadcast (`CVR-R10`). An
-/// observation armed for it would charge the successor for a send that
-/// never happened.
+/// transaction's stem phase ends here and it is broadcast. An observation
+/// armed for it would charge the successor for a send that never happened.
 ///
 /// What edit reds this: record the stem in `dispatch` whatever `send_stem`
 /// returned.

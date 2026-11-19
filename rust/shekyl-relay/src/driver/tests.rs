@@ -286,7 +286,7 @@ fn a_due_channel_with_an_unbound_slot_clears_at_every_tick() {
                     sends += 1;
                 }
                 Step::Zone(Effect::Fluff { .. }) => unreachable!("nothing was queued"),
-                Step::Zone(Effect::Stem { .. } | Effect::Broadcast { .. }) => {
+                Step::Zone(Effect::Stem { .. } | Effect::Published { .. }) => {
                     unreachable!("nothing was stemmed or held")
                 }
             }
@@ -367,7 +367,7 @@ fn a_rebind_and_a_noise_disabled_zone_emit_no_unbind() {
                      delivered to the successor"
                 ),
                 Step::Zone(Effect::Fluff { .. }) => unreachable!("nothing was queued"),
-                Step::Zone(Effect::Stem { .. } | Effect::Broadcast { .. }) => {
+                Step::Zone(Effect::Stem { .. } | Effect::Published { .. }) => {
                     unreachable!("nothing was stemmed or held")
                 }
             }
@@ -816,7 +816,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .into_iter()
         .filter_map(|e| match e {
             Step::NoiseSend { channel, .. } | Step::NoiseUnbind { channel } => Some(channel),
-            Step::Zone(Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. }) => {
+            Step::Zone(Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Published { .. }) => {
                 None
             }
         })
@@ -845,7 +845,7 @@ fn a_late_poll_emits_at_most_one_noise_channel() {
         .into_iter()
         .filter_map(|e| match e {
             Step::NoiseSend { channel, .. } | Step::NoiseUnbind { channel } => Some(channel),
-            Step::Zone(Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Broadcast { .. }) => {
+            Step::Zone(Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Published { .. }) => {
                 None
             }
         })

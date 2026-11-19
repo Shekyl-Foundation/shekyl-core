@@ -128,49 +128,6 @@ pub const MAX_FRAGMENTS: u32 = 5;
 /// being sent.
 pub const EPOCH_TAIL_WINDOWS: u32 = MAX_FRAGMENTS - 1;
 
-/// The hold before a node starts a broadcast that ends a stem, in carrier
-/// windows: the hold is this many independent draws of the cadence
-/// (`CVR-R10`; Rick, 2026-11-18).
-///
-/// # Why a hold
-///
-/// On clearnet, cover runs on a node's stem connections and nowhere else,
-/// so a watcher of the node's links sees which connections are stems. A
-/// broadcast that starts the moment a stem arrives then shows which stem
-/// connection just delivered a transaction: the last stem hop. The hold
-/// puts windows from every stem predecessor between the delivery and the
-/// broadcast, so the broadcast's start no longer points at one of them.
-///
-/// # The length
-///
-/// What it must achieve: by the time the broadcast starts, several windows
-/// have arrived from each of the node's stem predecessors. Each predecessor
-/// sends on its channel at the memoryless cadence, so over a hold of `n`
-/// cadence draws it sends a count with mean `n`, and the chance it sends
-/// none is `2^−n` (the hold and its windows are draws of one law). `n` is
-/// [`MAX_FRAGMENTS`]: every predecessor is expected to send as many windows
-/// as the longest message occupies, so the delivering run, however many
-/// windows it took, sits inside a span in which every predecessor sent a
-/// run as long. At five, a given predecessor sends nothing during the hold
-/// one time in 32, and at least two windows about nine times in ten. The
-/// mean hold is `MAX_FRAGMENTS × MEAN_CADENCE_MS`, 25 s, added to a
-/// transaction's propagation at the node that ends its stem.
-///
-/// # The ambiguity it buys
-///
-/// Drawn from the window schedule and nothing about the transaction, the
-/// hold is independent of which predecessor delivered. A watcher who sees
-/// the broadcast start sees, from each of the node's `P` stem predecessors,
-/// about [`MAX_FRAGMENTS`] windows over the hold before it, and any of them
-/// may be the delivery. With one predecessor there is nothing to choose
-/// between: the last stem hop is that predecessor, a residual the user
-/// documents state. On Tor a watcher cannot separate the node's
-/// connections, so there is nothing to point at. How well a watcher still
-/// picks the delivering predecessor, by the node's count of predecessors,
-/// is measured with the pass mark (`CVR-R7`); the per-peer delays as a
-/// broadcast spreads (`FLUFF_AVERAGE_*`) are unchanged.
-pub const BROADCAST_HOLD_WINDOWS: u32 = MAX_FRAGMENTS;
-
 /// The cover budget, **per node**, in bytes per second: 8 KiB/s
 /// (`CVR-R5`; Rick, 2026-11-15).
 ///

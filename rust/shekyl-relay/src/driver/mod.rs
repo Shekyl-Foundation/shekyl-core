@@ -69,13 +69,12 @@ pub enum Effect {
         /// The session it arrived on; `None` for this node's own.
         source: Option<ConnectionId>,
     },
-    /// A broadcast that ends a stem has finished its hold (`CVR-R10`): queue
-    /// these transactions for fluff now, and show them.
-    Broadcast {
-        /// The transactions, with the hashes the pool knows them by.
-        txs: Vec<(crate::TxId, TxBlob)>,
-        /// The session the stem arrived on, which the fluff excludes.
-        source: Option<ConnectionId>,
+    /// The zone fluffed these relayed transactions when their stem phase
+    /// ended at an embargo: the pool's shown bit is set for each
+    /// (criterion 2, Q9).
+    Published {
+        /// The transactions, by hash.
+        txs: Vec<crate::TxId>,
     },
 }
 
@@ -120,8 +119,7 @@ impl Driver {
         // The sources, folded into one answer: the epoch always has a
         // deadline; fluff has one only with a batch pending; stem
         // observations have one while anything is in flight (§38 — silence
-        // resolves on this clock); held origins and held broadcasts have one
-        // while any is held. Per-tx deadlines live in their owners; this only
+        // resolves on this clock); held origins have one while any is held. Per-tx deadlines live in their owners; this only
         // folds the min. The carrier's channels keep their own schedule in
         // their own task (`crate::carrier`, `CVR-R6`).
         let mut wake = self.zone.epoch_deadline();
@@ -133,9 +131,6 @@ impl Driver {
         }
         if let Some(unsent) = self.zone.unsent_deadline() {
             wake = wake.min(unsent);
-        }
-        if let Some(held) = self.zone.broadcast_hold_deadline() {
-            wake = wake.min(held);
         }
         wake
     }
@@ -164,7 +159,7 @@ impl Driver {
         // asio timer actually fires for these — not only when fluff/epoch
         // happen to wake first.
         // A silence is an embargo that fired: the zone re-stems to the
-        // alternate or ends the stem phase (§12.2, §14.7; `CVR-R6`, `CVR-R10`). Then every held origin that is
+        // alternate or ends the stem phase (§12.2, §14.7; `CVR-R6`). Then every held origin that is
         // due is planned again (RX-2). The tallies the silences also feed are
         // §12.11's, whose selection consumer is not built.
         let fired = self.zone.fire_embargoes(now, rng);
@@ -177,10 +172,9 @@ impl Driver {
                 source: stem.source,
             });
         }
-        for held in self.zone.due_broadcasts(now) {
-            effects.push(Effect::Broadcast {
-                txs: held.txs,
-                source: held.source,
+        if !fired.published.is_empty() {
+            effects.push(Effect::Published {
+                txs: fired.published,
             });
         }
 

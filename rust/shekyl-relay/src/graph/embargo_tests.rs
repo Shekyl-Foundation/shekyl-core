@@ -242,7 +242,7 @@ fn the_origin_re_stems_once_to_its_alternate_then_is_planned_again() {
         Some(armed_at),
         "it keeps its first arm time"
     );
-    assert_eq!(z.held_broadcasts(), 0, "never held for broadcast");
+    assert!(second.published.is_empty(), "never published");
     for peer in [successor, alternate] {
         assert!(
             z.peer(&peer).expect("connected").queued.is_empty(),
@@ -252,10 +252,9 @@ fn the_origin_re_stems_once_to_its_alternate_then_is_planned_again() {
 }
 
 /// W3b: with no live alternate the first fire ends the stem phase. This
-/// node's own transaction is planned again; a relayed one is held before
-/// its broadcast (`CVR-R10`), with nothing queued for fluff until the hold
-/// ends. Red edits: re-stem to the successor itself when there is no
-/// alternate; fluff the relayed stem at once.
+/// node's own transaction is planned again; a relayed one is fluffed to
+/// every session but its source and published. Red edits: re-stem to the
+/// successor itself when there is no alternate; publish the origin.
 #[test]
 fn no_live_alternate_ends_the_stem_at_the_first_fire() {
     let mut rng = SplitMix64::new(0xE2);
@@ -266,7 +265,7 @@ fn no_live_alternate_ends_the_stem_at_the_first_fire() {
     let fired = z.fire_embargoes(origin_retry_ms(), &mut rng);
     assert!(fired.stems.is_empty());
     assert!(z.holds_unsent(&sent.0), "the origin is planned again");
-    assert_eq!(z.held_broadcasts(), 0);
+    assert!(fired.published.is_empty());
 
     let mut relay = stem_zone(&[1], &mut rng);
     relay.on_session_established(
@@ -290,10 +289,15 @@ fn no_live_alternate_ends_the_stem_at_the_first_fire() {
     );
     let fired = relay.fire_embargoes(Millis::MAX / 2, &mut rng);
     assert!(fired.stems.is_empty());
-    assert_eq!(relay.held_broadcasts(), 1, "held before its broadcast");
+    assert_eq!(fired.published, vec![forwarded.0], "published");
+    assert_eq!(
+        relay.peer(&successor).expect("connected").queued.as_slice(),
+        std::slice::from_ref(&forwarded.1),
+        "fluffed to the sessions other than its source"
+    );
     assert!(
-        relay.peer(&successor).expect("connected").queued.is_empty(),
-        "nothing is queued for fluff during the hold"
+        relay.peer(&id(9)).expect("connected").queued.is_empty(),
+        "not back to its source"
     );
     assert_eq!(relay.relay_state_len(), 0);
 }
@@ -364,8 +368,10 @@ fn circulation_disarms_and_an_echo_does_not() {
         "an arrival from elsewhere circulates"
     );
     let fired = z.fire_embargoes(Millis::MAX / 2, &mut rng);
-    assert!(fired.stems.is_empty(), "a disarmed embargo never fires");
-    assert_eq!(z.held_broadcasts(), 0);
+    assert!(
+        fired.stems.is_empty() && fired.published.is_empty(),
+        "a disarmed embargo never fires"
+    );
     assert_eq!(z.relay_state_len(), 0);
 }
 
@@ -501,14 +507,15 @@ fn a_departed_entry_leaves_no_relay_state() {
     z.release(&unsent.0);
     assert_eq!(z.relay_state_len(), 0);
     let fired = z.fire_embargoes(Millis::MAX / 2, &mut rng);
-    assert!(fired.stems.is_empty(), "a released transaction never fires");
-    assert_eq!(z.held_broadcasts(), 0);
+    assert!(
+        fired.stems.is_empty() && fired.published.is_empty(),
+        "a released transaction never fires"
+    );
 }
 
 /// §12.2 item 5: the driver's reshape effect carries the transaction's own
-/// bytes and nothing else. A relayed stem whose last fire ends its phase is
-/// broadcast only when the hold ends (`CVR-R10`). Red edits: append a retry
-/// count to the blob; release the broadcast at the fire.
+/// bytes and nothing else, and a relayed stem's last fire names the
+/// transaction for the pool. Red edit: append a retry count to the blob.
 #[test]
 fn the_wire_carries_only_the_transaction() {
     let mut rng = SplitMix64::new(0xE9);
@@ -554,20 +561,9 @@ fn the_wire_carries_only_the_transaction() {
     let second_fire = d.zone().stem_observation_deadline().expect("re-armed");
     let second = d.poll(second_fire, &mut rng);
     assert!(
-        !second
+        second
             .iter()
-            .any(|effect| matches!(effect, Effect::Broadcast { .. })),
-        "the last fire holds; it does not broadcast at once"
-    );
-    let release = d.zone().broadcast_hold_deadline().expect("held");
-    assert!(release > second_fire, "the hold takes time");
-    let released = d.poll(release, &mut rng);
-    assert!(
-        released.iter().any(|effect| matches!(
-            effect,
-            Effect::Broadcast { txs, source } if txs == &vec![(sent.0, TxBlob::clone(&sent.1))]
-                && *source == Some(id(9))
-        )),
-        "the broadcast names the transaction and its source when the hold ends"
+            .any(|effect| matches!(effect, Effect::Published { txs } if txs == &vec![sent.0])),
+        "the last resort names the transaction for the pool"
     );
 }
