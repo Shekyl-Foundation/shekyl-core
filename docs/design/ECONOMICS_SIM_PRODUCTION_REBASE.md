@@ -4865,7 +4865,9 @@ beside its testnet node.
    figures: a body is listed when it does not lower the penalised reward
    plus every fee. The fee's three-way split (burn, stakers, miner) and
    the reward's miner and staker legs come after, so what the miner
-   itself nets from that body is not traced here.
+   itself nets from that body is not traced here. EUP-4 prep measures it
+   as a miner's-net arm beside the production rule, and the fee design
+   rules which comparison the default template makes (`FOLLOWUPS.md`).
 2. **Whether it stops, and where.** It stops at a carried median of 68–69
    ordinary bodies (1 041–1 056 K), where half the blocks stop at the
    penalty. That is 3.2 times the inherited zone's room, and under the
