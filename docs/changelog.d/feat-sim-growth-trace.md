@@ -16,4 +16,9 @@
     - the Standard body's weight and fee.
 
     Its narration is pinned on demand.
+  - **What it read** (§5.36.1).
+    - In the inherited zone the median rests where half the blocks stop at the penalty: 68–69 bodies against a mean of 50.
+    - Each body past the free weight pays its penalty, at about 0.01 % of the reward minted at rest.
+    - The fee falls with the square of the LTEM's rise, which is the fee fall #1424 found.
+    - The re-derived zone does not grow.
   - **A correction.** The reading-pass finding no longer says the daemon runs Monero's pre-v5 fill: the node's template admits through the same `Fill`.
