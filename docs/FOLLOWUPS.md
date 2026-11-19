@@ -228,6 +228,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: EUP-5 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)); the instrument is ESR-16 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §2)
   - Target: pre-genesis
 
+- **The hashrate floor on emission is parked until the existing economics series is finished.** Below a threshold difficulty `D*` the block reward would scale with difficulty, so a quiet launch or a spike earns no more per hash than broad mining (Rick, 2026-11-19). Nothing is built and no `HF-` identifier is minted. Named blocker: EUP-4 prep, EUP-4 and the J, G, F and I rulings; then Rick reopens the note, and its §9 sets the order. Falsify by: Rick's ruling on the note's shape and §5's open questions, recorded in the note.
+  - Owner: `HF-` — [`HASHRATE_FLOOR_EMISSION.md`](design/HASHRATE_FLOOR_EMISSION.md)
+  - Target: pre-genesis (trigger: EUP-4 and the J, G, F and I rulings are done)
+
 - **`--secret-draw-production` runs the shipped count rule only.** The mode is EUP-5 H's instrument (the challenge doctrine), and it reads `archival_params()`. A `--set` is accepted in `--stage2` alone, and there the count-rule fields (the catch-up share, the horizon floor, the cap multiple and the section multiple) are refused as having no reader. Before H runs, the mode takes the run's `ArchivalParams`, so H's cells are overrides on the baseline like every other sweep. Falsifier: `--secret-draw-production --set archival.count_cap_multiple=4` prints a count table that differs from the default run's.
   - Owner: EUP-5 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)); the mode is `rust/shekyl-economics-sim/src/secret_draw_production.rs`
   - Target: pre-genesis
