@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use shekyl_os_account::private_file::{self, PrivateFileError};
+use shekyl_os_account::private_file::{self, CommitError, HeldOpen, PrivateFileError};
 use shekyl_rpc_channel::handshake::{KeyFileError, StaticKeypair};
 
 /// The files' names: `shekyl-rpc-rendezvous`'s, which the clients that read
@@ -33,6 +33,8 @@ pub enum FileRefused {
     Exposed(PathBuf, String),
     /// It is not a key file this build reads.
     Key(PathBuf, KeyFileError),
+    /// Another program held its staged file open past the wait.
+    HeldOpen(HeldOpen),
 }
 
 impl std::fmt::Display for FileRefused {
@@ -45,6 +47,7 @@ impl std::fmt::Display for FileRefused {
                 path.display()
             ),
             Self::Key(path, e) => write!(f, "{}: {e}", path.display()),
+            Self::HeldOpen(held) => held.fmt(f),
         }
     }
 }
@@ -56,7 +59,14 @@ impl From<PrivateFileError> for FileRefused {
         match error {
             PrivateFileError::Io(path, e) => Self::Io(path, e),
             PrivateFileError::Exposed(path, why) => Self::Exposed(path, why),
+            PrivateFileError::HeldOpen(held) => Self::HeldOpen(held),
         }
+    }
+}
+
+impl From<CommitError> for FileRefused {
+    fn from(error: CommitError) -> Self {
+        PrivateFileError::from(error).into()
     }
 }
 

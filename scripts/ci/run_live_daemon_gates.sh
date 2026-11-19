@@ -246,7 +246,8 @@ ARMED=(
   engine::regtest_e2e::send_durable::each_stop_signal_closes_the_wallet
   # Observed red 2026-11-13 against a wallet server rebuilt to mint the
   # hand-off when the dispatch save failed: the submit answered ACCEPTED
-  # (verdict_saved false) where it must refuse -29120.
+  # (verdict_saved false) where it must refuse -29131 SAVE_IO_FAILED (the
+  # blocked rename's EISDIR is the disk's error).
   engine::regtest_e2e::send_durable::a_send_that_cannot_be_saved_is_not_sent
   # The wallet lane's PR 2 (A17, A16): the balance's legs and the signer's
   # change through real shekyl-wallet-rpc processes. Each was observed red

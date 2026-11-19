@@ -59,3 +59,8 @@ shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# The marker's held-file test holds a staged file as a scanner does
+# (`FILE_SHARE_READ`).
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

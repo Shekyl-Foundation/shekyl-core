@@ -3894,6 +3894,7 @@ dependencies = [
  "shekyl-mempool",
  "shekyl-miner",
  "shekyl-network",
+ "shekyl-os-account",
  "shekyl-p-host",
  "shekyl-p-loopback",
  "shekyl-p-serve",
@@ -4241,6 +4242,7 @@ dependencies = [
  "shekyl-node",
  "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-os-account",
  "shekyl-p2p",
  "shekyl-process",
  "shekyl-rpc-channel",
@@ -4284,6 +4286,7 @@ dependencies = [
  "shekyl-win-sec",
  "tempfile",
  "toml 0.8.23",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4344,6 +4347,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4357,6 +4361,7 @@ dependencies = [
  "shekyl-levin",
  "shekyl-network",
  "shekyl-onion-v3",
+ "shekyl-os-account",
  "shekyl-p2p-session",
  "shekyl-peer-policy",
  "shekyl-peerlist",
@@ -4520,6 +4525,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-engine-prefs",
  "shekyl-engine-state",
+ "shekyl-os-account",
  "shekyl-types",
  "tempfile",
  "thiserror",
@@ -4533,9 +4539,9 @@ version = "3.1.0"
 dependencies = [
  "hkdf",
  "hmac",
- "rustix",
  "serde",
  "sha2",
+ "shekyl-os-account",
  "shekyl-units",
  "tempfile",
  "thiserror",
@@ -4930,6 +4936,7 @@ dependencies = [
  "libc",
  "shekyl-win-sec",
  "tempfile",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
@@ -5604,6 +5611,7 @@ dependencies = [
  "sha2",
  "shekyl-onion-key",
  "shekyl-onion-v3",
+ "shekyl-os-account",
  "shekyl-spawn",
  "shekyl-timing-engine",
  "shekyl-tor-status",
@@ -5635,6 +5643,7 @@ dependencies = [
  "getrandom 0.2.17",
  "kameo",
  "shekyl-onion-key",
+ "shekyl-os-account",
  "shekyl-p-transport",
  "shekyl-spawn",
  "shekyl-tor-control-client",

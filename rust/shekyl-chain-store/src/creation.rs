@@ -440,6 +440,11 @@ fn claim_aside_name(path: &Path) -> io::Result<ClaimedAside> {
 /// Rename `from` onto the claimed aside name while `source` still holds
 /// the store file's lock, where the platform can rename an open file.
 /// Elsewhere the lock is dropped first; [`PathGuard`] still holds the path.
+// CLIPPY: disallowed_methods — an unfinished creation moved aside, not a replace.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "moves an unfinished store creation aside onto a name it claimed with create_new; not a file replace"
+)]
 fn rename_classified(source: File, from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
