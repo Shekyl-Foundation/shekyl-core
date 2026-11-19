@@ -30,11 +30,12 @@
 //!   event stream**, not a height-ordered block stream. A reorg is a
 //!   [`IngestEvent::Rewind`] followed by [`IngestEvent::Extend`]s; a source
 //!   that cannot say *rewind* cannot express a fork (RD-Q13).
-//! - [`corpus`] — the replay driver's first source: a chain's blocks with
-//!   full bodies as one Rust-minted, versioned artifact whose writer
-//!   **verifies** completeness against each header (RD-F15) and whose
-//!   reader re-verifies on every record. Network-shaped only; the trace is
-//!   a different artifact with a different door (RD-Q2).
+//! - [`corpus`] — the replay driver's first [`Source`]: [`CorpusSource`]
+//!   turns `shekyl-corpus` records into sequenced [`IngestEvent`]s. The
+//!   artifact's format, and the one writer and reader that verify each
+//!   record (RD-F15), are `shekyl-corpus`'s (`docs/design/CORPUS_CODEC.md`).
+//!   Network-shaped only; the trace is a different artifact with a different
+//!   door (RD-Q2).
 //! - [`trace`] — one facts record per height and one digest checkpoint at
 //!   the covered tip (RD-F18), with typed [`trace::Borrowed`] /
 //!   [`trace::Expected`] doors. [`rebaseline`] writes that artifact from
@@ -293,7 +294,7 @@ pub use connector::{
     RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts, TipChanged,
     WatchDeepReorg, WatchLatch, WatchTip,
 };
-pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
+pub use corpus::CorpusSource;
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
 pub use metrics::{Concurrency, Derives, Metrics, MetricsArtifact};

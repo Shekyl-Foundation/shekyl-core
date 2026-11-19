@@ -45,7 +45,7 @@ use std::process::Command;
 use executor::seeds::Source;
 use executor::{forge, Options, Outcome, BLOCKS_FILE, FILES, MANIFEST_FILE};
 use shekyl_chain_forge::{sha256_hex, BlocksTxt, Manifest, Plan, PlanRef};
-use shekyl_chain_ingest::corpus::CORPUS_FORMAT_VERSION;
+use shekyl_corpus::CORPUS_FORMAT_VERSION;
 
 /// The plan, from the crate's directory.
 const PLAN: &str = "plans/small.toml";

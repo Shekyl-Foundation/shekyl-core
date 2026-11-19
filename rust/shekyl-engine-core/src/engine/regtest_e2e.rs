@@ -6742,7 +6742,7 @@ fn a_version_line_names_its_last_nine_hex_digits() {
 /// `SHEKYL_CAPTURE_CHAIN_VECTORS`; a no-op otherwise, so the generators run
 /// unchanged in CI's live-daemon step.
 ///
-/// The corpus is the production writer's ([`shekyl_chain_ingest::corpus::CorpusWriter`],
+/// The corpus is the production writer's ([`shekyl_corpus::CorpusWriter`],
 /// RD-F15), filled from blocks this daemon read at connect
 /// ([`RegtestDaemon::record_connected`]). A fetch at the end of a walk that
 /// crosses the archival horizon, or the undo retention, is refused: the
@@ -6832,7 +6832,7 @@ async fn maybe_capture_chain_vector(
         recorded.len()
     );
     let file = std::fs::File::create(&corpus).expect("create the corpus");
-    let mut writer = shekyl_chain_ingest::corpus::CorpusWriter::create(
+    let mut writer = shekyl_corpus::CorpusWriter::create(
         file,
         shekyl_network::Network::Regtest,
         shekyl_types::BlockHeight::ZERO,
