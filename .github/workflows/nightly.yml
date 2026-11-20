@@ -116,11 +116,9 @@ jobs:
 
   store-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored' }}
-    # The chain store's `#[ignore]`d set: the shard-boundary deletion test
-    # over real multi-input spends (`prune_tests::
-    # the_boundary_batch_discards_closed_shards_on_real_spends`, minutes of
-    # proving — the unit lane runs its padded-record twin) and the two
-    # benches (`weights_read_bench`, `slash_scan_bench`). This job is the
+    # The chain store's `#[ignore]`d set: the two benches
+    # (`weights_read_bench`, `slash_scan_bench`, which starts from the
+    # forged shard-fill chain) and the RT-W10 harness. This job is the
     # lane that invokes them: an `#[ignore]`d test no scheduled lane runs is
     # a deleted test with a comment on it, and before this job none ran the
     # store's: `slash_scan_bench`'s default persona count overran epoch 0,
@@ -129,10 +127,9 @@ jobs:
     # nobody ran them (both found and fixed on PR #1003). The bench figures
     # a shared runner prints decide nothing (rule 76: the floor device does);
     # what the lane asserts is that every ignored test still builds a chain
-    # its own constants admit, and that the boundary test's deletions match
-    # the calendar. Budget: the weights bench at its 100 000-block default
-    # is about half an hour in release on a workstation, the boundary test
-    # 140 s, the slash bench 25 s, plus the release build.
+    # its own constants admit. Budget: the weights bench at its 100 000-block
+    # default is about half an hour in release on a workstation, the slash
+    # bench 25 s, plus the release build.
     #
     # Same matrix as above. The schedule runs main's copy of this file over
     # both branches, but the set is read from the checked-out ref's
@@ -157,6 +154,17 @@ jobs:
 
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
+
+      - name: Cache the hosted test chains, by their pins
+        # CHAIN_FORGE.md §10.4 (CF-4a): keyed by the pin file, so a runner
+        # pulls each pinned digest once; the fetch checks every layer
+        # against the pin whether it pulled or found it here.
+        uses: actions/cache@v5
+        with:
+          path: |
+            rust/shekyl-chain-forge/chains/*/hosted
+            ${{ runner.temp }}/shekyl-oras
+          key: test-chains-${{ hashFiles('rust/shekyl-chain-forge/chains/hosted.toml') }}
 
       - name: Run the chain store's ignored set
         # The set and its assertions are scripts/ci/ignored_set_chain_store.sh,

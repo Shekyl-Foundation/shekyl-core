@@ -24,7 +24,7 @@ use super::*;
 use crate::verdict::TxSlot;
 
 pub use crate::rules::tx_against::newest_admissible_reference;
-pub use price::{priced, priced_at, repriced};
+pub use price::{priced, priced_at, priced_at_paying, priced_paying, repriced};
 pub use shekyl_harness_wallet::coinbase::{paid, Paid};
 pub use shekyl_harness_wallet::MinerWallet;
 pub use shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT;

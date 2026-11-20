@@ -8,7 +8,7 @@
 //! a popped deadline, and a second write of one row.
 //!
 //! Every epoch here is counted from the personas' join epoch
-//! ([`shifted`]): the chain loads the captured shard-fill prefix first, and
+//! ([`shifted`]): the chain loads the forged shard-fill prefix first, and
 //! the personas join after it.
 //!
 //! The retention floor is specified on
@@ -38,7 +38,7 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
     assert_eq!(
         snap.total_burned().expect("read"),
         chain.prefix_burned,
-        "nothing burned past the captured prefix's fees"
+        "nothing burned past the forged prefix's fees"
     );
     let floor = slash_floor_at(&snap);
     for p in ids_in_table_order(chain.personas) {
@@ -91,7 +91,7 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
 fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
     fn plan(epoch: u64, persona: u64) -> Option<&'static [bool]> {
         // The epochs below are counted from the join's ([`shifted`]).
-        let epoch = epoch.checked_sub(JOIN_EPOCH)?;
+        let epoch = epoch.checked_sub(join_epoch())?;
         match (persona, epoch) {
             (_, 0) | (2, 5) => None,
             (1, 5) => Some(SHORT),
@@ -99,7 +99,7 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
             _ => Some(MISSED),
         }
     }
-    let m = SLASHING_EPOCH;
+    let m = slashing_epoch();
     let schedule = RULES.settlement_schedule();
     let chain = SlashedChain::build_with(
         "slash-window-skip",
@@ -107,7 +107,7 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
         schedule.slash_deadline_height(m + 2),
         plan,
     );
-    let id = |i: u64| Persona::at(slot(i)).id();
+    let id = |i: u64| persona(slot(i)).id();
     let shard = ShardId::from_raw(0);
     let epoch = SettlementEpoch::from_raw;
     let snap = chain.store.begin_read().expect("read");
@@ -311,7 +311,7 @@ fn a_settlement_row_already_recorded_refuses_the_second_write() {
         .slash_deadline_height(shifted(1));
     let mut chain =
         SlashedChain::build_with("slash-settled-twice", 2, deadline - 1, every_epoch_missed);
-    let p = Persona::at(slot(0)).id();
+    let p = persona(slot(0)).id();
     let planted: Result<(), TestErr> = chain.store.write(|batch| {
         batch
             .open_upsert_table(crate::schema::ARCHIVAL_SETTLEMENT)?

@@ -734,8 +734,8 @@ mod edge_tests;
 mod prune_tests;
 
 #[cfg(test)]
-#[path = "shard_fill.rs"]
-mod shard_fill;
+#[path = "forged_fill.rs"]
+mod forged_fill;
 
 /// Where the proofs are verified: `form`, never `validate` (2026-10-16).
 #[cfg(test)]

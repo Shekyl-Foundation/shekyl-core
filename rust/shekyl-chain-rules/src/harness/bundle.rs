@@ -379,6 +379,9 @@ pub struct BundleWorld {
     pub witness_secret_key: FnDsaHybridSecretKey,
     /// The personas, ascending by id.
     pub personas: Vec<FixturePersona>,
+    /// The network the world's bundles are assembled under: the harness id
+    /// unless the chain they ride carries another ([`Self::on_network`]).
+    pub network: shekyl_network::NetworkId,
 }
 
 impl BundleWorld {
@@ -474,7 +477,16 @@ impl BundleWorld {
             witness_public_key,
             witness_secret_key,
             personas,
+            network: crate::HARNESS_NETWORK_ID,
         }
+    }
+
+    /// This world with its bundles assembled under `network`: the id of the
+    /// chain they ride, whose admission checks the commitment under it.
+    #[must_use]
+    pub const fn on_network(mut self, network: shekyl_network::NetworkId) -> Self {
+        self.network = network;
+        self
     }
 
     /// The anchor an honest read of this block carries: `h − 721`.
@@ -685,7 +697,7 @@ impl BundleWorld {
             support,
         };
         assemble_bundle(
-            &crate::HARNESS_NETWORK_ID,
+            &self.network,
             &kept,
             records,
             &self.witness_public_key,
