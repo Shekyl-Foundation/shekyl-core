@@ -165,11 +165,12 @@ pub(super) fn candidate_over(
 /// is).
 pub(super) fn regtest_candidate_over(
     root: CurveTreeRoot,
-    height: u64,
+    height: BlockHeight,
     parent: &Block,
     listed: Vec<Transaction>,
     rules: &RuleSet,
 ) -> Candidate {
+    let height = height.to_raw();
     let unlock_time = height + rules.mined_money_unlock_window().to_raw();
     let block = Block {
         header: BlockHeader {

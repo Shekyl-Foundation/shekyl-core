@@ -511,7 +511,7 @@ impl Grown {
         match self.identity {
             Identity::Harness => candidate_over(root, height, self.tip(), txs),
             Identity::Regtest => {
-                regtest_candidate_over(root, height, self.parent(), txs, &RuleSet::GENESIS)
+                regtest_candidate_over(root, self.height(), self.parent(), txs, &RuleSet::GENESIS)
             }
         }
     }
@@ -594,7 +594,7 @@ impl Grown {
                 let root = batch_root_going_into(view, height)?;
                 Ok(regtest_candidate_over(
                     root,
-                    height,
+                    self.height(),
                     self.parent(),
                     txs,
                     rules,
