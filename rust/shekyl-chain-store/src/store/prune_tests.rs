@@ -1313,7 +1313,8 @@ fn a_shifted_run_between_two_samples_refuses_the_boundary() {
 /// SI-24 at every block the descent passes (Copilot, PR #910): a shift
 /// that starts at one block and persists through the tip keeps the fold
 /// monotone everywhere and agrees with the rows at every block above its
-/// start. Cells from two blocks below shard 1's close to the tip are
+/// start. Cells from two blocks below the top of the boundary's window
+/// (`(E − 1)·SEB − 1`, the block the descent starts from) to the tip are
 /// raised by `W`, rows untouched, so the later sample reads a shard past
 /// the true one and the boundary would discard shards still held. The
 /// descent checks the run's first block against its parent before
@@ -1324,7 +1325,12 @@ fn a_shift_that_persists_through_the_window_refuses_the_boundary() {
     let boundary = first_discarding_boundary(SHORT_SEB) + SHORT_SEB;
     let mut b = short_chain_to(&path, boundary - 1);
     let model = b.model();
-    let start = close_height(1).to_raw() - 2;
+    let top = descent_top(boundary);
+    let start = top - 2;
+    assert!(
+        start > close_height(0).to_raw() && start >= boundary - 3 * SHORT_SEB,
+        "the run starts inside the window the boundary reads, above shard 0's close"
+    );
     let raise = SHARD_LENGTH.to_raw();
     for height in start..boundary {
         plant_info(&path, height, |info| {

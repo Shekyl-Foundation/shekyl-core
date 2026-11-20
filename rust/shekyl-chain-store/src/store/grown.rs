@@ -35,7 +35,7 @@ use shekyl_wire::{Block, Ct, Input, Transaction};
 use super::super::store_tests::TestErr;
 use super::super::*;
 use super::{
-    batch_root_going_into, candidate_over, judge_or_corrupt, regtest_candidate_over,
+    batch_root_going_into, candidate_over, judge_or_corrupt_as, regtest_candidate_over,
     root_going_into, Identity,
 };
 
@@ -538,7 +538,7 @@ impl Grown {
         txs: &[Transaction],
         memo: Option<&mut shekyl_chain_rules::DrawableMemo>,
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-        let cand = self.candidate_at(view, rules, txs.to_vec())?;
+        let cand = self.next_candidate(view, rules, txs.to_vec())?;
         let judged =
             super::connect_fixtures::judge_with_memo_as(self.identity, view, cand, rules, memo)?;
         self.record(judged.block().block(), txs);
@@ -577,11 +577,12 @@ impl Grown {
     }
 
     /// The candidate connecting next on this chain, listing `txs` and
-    /// carrying the batch's root going into its height. A harness chain's
-    /// genesis is endowed ([`endow_genesis`]); a regtest chain's blocks
-    /// stamp their time after the parent's and pay the regtest miner
-    /// ([`regtest_candidate_over`]).
-    fn candidate_at<'b, 'id>(
+    /// carrying the batch's root going into its height, unpriced (the
+    /// judge prices it). A harness chain's genesis is endowed
+    /// ([`endow_genesis`]); a regtest chain's blocks stamp their time after
+    /// the parent's and pay the regtest miner ([`regtest_candidate_over`]).
+    /// For a test that edits the candidate before it judges it.
+    pub(in super::super) fn next_candidate<'b, 'id>(
         &self,
         view: &BatchView<'b, 'id>,
         rules: &RuleSet,
@@ -616,7 +617,7 @@ impl Grown {
         refs: &[shekyl_archival_retention::BundleRef],
         bodies: Vec<shekyl_archival_retention::BundleBody>,
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-        let mut cand = self.candidate_at(view, rules, txs.to_vec())?;
+        let mut cand = self.next_candidate(view, rules, txs.to_vec())?;
         let root = shekyl_archival_retention::section_root(refs).expect("a countable section");
         cand.block.header.section_root = shekyl_types::SectionRoot::from_bytes(root);
         let section = shekyl_types::archival::BundleReferences::new(
@@ -642,13 +643,8 @@ impl Grown {
         view: &BatchView<'b, 'id>,
         rules: &RuleSet,
     ) -> Result<Result<ChainValid<'id, BatchView<'b, 'id>>, Corrupt>, StoreError> {
-        assert_eq!(
-            self.identity,
-            Identity::Harness,
-            "the corrupt-state fixtures build harness chains"
-        );
-        let cand = candidate_at(view, self.height(), self.tip(), Vec::new())?;
-        judge_or_corrupt(view, cand, rules)
+        let cand = self.next_candidate(view, rules, Vec::new())?;
+        judge_or_corrupt_as(self.identity, view, cand, rules)
     }
 
     /// Record `block`, connected listing `listed`, on both trees — holding

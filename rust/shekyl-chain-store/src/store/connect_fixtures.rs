@@ -433,12 +433,22 @@ pub(super) fn judge_or_corrupt<'b, 'id>(
     candidate: Candidate,
     rules: &RuleSet,
 ) -> Result<Result<ChainValid<'id, BatchView<'b, 'id>>, Corrupt>, StoreError> {
-    let candidate = priced(view, candidate)?;
+    judge_or_corrupt_as(Identity::Harness, view, candidate, rules)
+}
+
+/// [`judge_or_corrupt`] on a chain carrying `identity`.
+pub(super) fn judge_or_corrupt_as<'b, 'id>(
+    identity: Identity,
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<Result<ChainValid<'id, BatchView<'b, 'id>>, Corrupt>, StoreError> {
+    let candidate = priced_as(identity, view, candidate)?;
     match validate(
-        formed_under(view, candidate, rules)?,
+        formed_as(identity, view, candidate, rules)?,
         view,
         rules,
-        &Trust::UNPINNED,
+        &identity.trust(),
     ) {
         Ok(verdict) => Ok(Ok(verdict.expect("the fixtures satisfy every landed rule"))),
         Err(Fault::View(fault)) => Err(fault),
@@ -447,19 +457,10 @@ pub(super) fn judge_or_corrupt<'b, 'id>(
     }
 }
 
-/// [`judge_under`] with the connect loop's drawable memo. A [`Corrupt`]
-/// still panics: this door is for a block the rules accept.
-pub(super) fn judge_with_memo<'b, 'id>(
-    view: &BatchView<'b, 'id>,
-    candidate: Candidate,
-    rules: &RuleSet,
-    memo: Option<&mut DrawableMemo>,
-) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    judge_with_memo_as(Identity::Harness, view, candidate, rules, memo)
-}
-
-/// [`judge_with_memo`] on a chain carrying `identity`: the coinbase priced
-/// to its miner, the network claimed and the genesis pinned as it says.
+/// [`judge_under`] with the connect loop's drawable memo, on a chain
+/// carrying `identity`: the coinbase priced to its miner, the network
+/// claimed and the genesis pinned as it says. A [`Corrupt`] still panics:
+/// this door is for a block the rules accept.
 pub(super) fn judge_with_memo_as<'b, 'id>(
     identity: Identity,
     view: &BatchView<'b, 'id>,

@@ -33,9 +33,7 @@ use shekyl_wire::Transaction;
 use crate::codec::Canonical;
 use crate::ids::IssuedDrawKey;
 
-use super::super::super::connect_fixtures::{
-    batch_root_going_into, candidate_over, judge_with_memo,
-};
+use super::super::super::connect_fixtures::judge_with_memo_as;
 use super::super::super::{SettlementFault, StoreBundleView, StoreInvariant};
 use super::super::{shifted, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
 use super::{h_open, join_witness_shard_set, no_draws, witness_shard_slots};
@@ -138,16 +136,16 @@ pub(super) fn connect_committed(
     memo: &mut DrawableMemo,
     commitment: DrawCommitment,
 ) -> Linked {
-    let height = chain.grown.height();
-    let previous = chain.grown.tip();
+    let identity = chain.grown.identity();
     let mut linked = None;
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
-        let root = batch_root_going_into(&view, height.to_raw())?;
-        let mut candidate = candidate_over(root, height.to_raw(), previous, Vec::new());
+        let mut candidate = chain
+            .grown
+            .next_candidate(&view, &chain.rules, Vec::new())?;
         candidate.block.miner_transaction =
             with_commitment(candidate.block.miner_transaction, commitment);
-        let judged = judge_with_memo(&view, candidate, &chain.rules, Some(memo))?;
+        let judged = judge_with_memo_as(identity, &view, candidate, &chain.rules, Some(memo))?;
         linked = Some(Linked {
             draws: judged.block().archival().draws(),
             hash: judged.block().block().hash(),
@@ -535,19 +533,38 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
 /// bundle is judged at, `2`, by admission's own filing step
 /// (`remember_window_epochs`): genesis's epoch, whatever epoch the chain's
 /// tip is in.
+///
+/// The store is the forged chain through the end of epoch 1. Genesis's
+/// drawable digest is a settling row, which the boundary at `(k + 2)·SEB`
+/// retires (the settling family reaches `k` epochs back): a tip past it,
+/// such as the slash chain's after the forged prefix, no longer holds the
+/// digest this reads.
 #[test]
 fn a_bundle_for_genesis_is_refused_at_j33() {
-    let chain = SlashedChain::build_with(
-        "admit-genesis",
-        WITNESS_PERSONAS,
-        h_open(shifted(1)) - 2,
-        no_draws,
+    let seb = super::super::SEB;
+    let tip = 2 * seb - 2;
+    assert!(
+        tip < (shekyl_archival_retention::SLASH_GRACE_EPOCHS + 2) * seb,
+        "the tip at {tip} is below the boundary that retires genesis's settling rows"
+    );
+    let path = super::super::tmp("admit-genesis");
+    let horizons = super::super::super::Horizons::new(
+        RULES.settlement_schedule().blocks(),
+        BlockCount::from_raw(super::super::RETENTION),
+        RULES.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    let (store, _) = super::super::super::forged_fill::store_with_prefix(
+        &path,
+        RULES,
+        horizons,
+        usize::try_from(tip + 1).expect("small"),
     );
     let mut memo = DrawableMemo::new();
     let world = BundleWorld::with(BlockHeight::ZERO, BundleWorld::SEED, 0, &RULES)
         .on_network(super::super::IDENTITY.network_id());
     let (reference, body) = world.bundle(&[]);
-    let out: Result<(), TestErr> = chain.store.write(|batch| {
+    let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         shekyl_chain_rules::remember_window_epochs(
             &view,
