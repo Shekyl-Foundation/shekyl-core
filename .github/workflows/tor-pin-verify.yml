@@ -1,0 +1,387 @@
+# Bundled-Tor integration lane (2d-2 SP-T0; TOR_BUNDLE_DISTRIBUTION.md TB-6 to
+# TB-11). Manual-dispatch because it needs a real, network-reaching `tor` (the
+# unit lane only compile-checks the `#[ignore]`d live tests). For each pinned
+# target, Linux, Windows and macOS, against ONE GPG-verified Expert Bundle, it
+# runs:
+#
+#  1. pin-match (SP-T0c) — the `bundled_tor_matches_recorded_pin` KAT is
+#     `#[ignore]`d on the unit lane, so without this a mistranscribed digest in
+#     config/tor_pins.json would pass every automated gate and fail closed for
+#     users. Runs the checklist chain: fetch the pinned tarball (its SHA-256
+#     checked against the pin file) → GPG-verify it against the Tor Browser
+#     Developers key → stage exactly the pinned files with the packaging tool
+#     → prove the staged directory passes the gate compiled into the binary.
+#     The staging step is the one the release build runs, so this lane is also
+#     where that tool meets a real bundle; on Windows that includes reading
+#     tor.exe's import table against the row's `imports` (TB-11).
+#  2. live lifecycle (SP-T0a/b + DQ-T0.6) — the `--lib` `#[ignore]`d actor +
+#     supervisor tests (managed spawn/reap, handshake, crash-respawn, reap-race
+#     self-lock, degraded-episode recovery) against that same staged bundle,
+#     launched as a user's is: cleared environment, the loader pointed at the
+#     staged directory. These are the crash/reap/hang guarantees whose whole
+#     point is that a unit test cannot reach them. On Windows this is TB-11's
+#     launch test: the pinned tor.exe started by Shekyl's own launcher.
+#  3. daemon ephemeral-onion lifecycle (PWD-E7) — `shekyl-tor-control-daemon`'s
+#     `#[ignore]`d live tests: two boots publishing two different onion
+#     addresses with real reaps, and (Linux) the death watcher telling a
+#     killed tor from a stopped one.
+#
+# The live tests bootstrap against the real Tor network, which times out now
+# and then from a runner. scripts/ci/run_live_tor_tests.sh retries a step once
+# when every failure in it is a bootstrap timeout and the pin-match test is
+# not among them; any other failure is final on the first attempt. A retry is
+# annotated on the run.
+#
+# macOS (TB-11): what ships is Shekyl's Developer ID-signed copy of Tor's
+# `tor` and `libevent`, a release asset on this repository (`signed_url` in
+# config/tor_pins.json). The fetch step downloads it beside the tarball and
+# checks each file against its pinned shipped digest; stage and verify prove
+# every byte outside the signature is Tor's, from the GPG-verified tarball. The
+# runner has no Developer ID and needs none: it runs the exact signed bytes a
+# user gets, against the pin compiled into the binary, with the hardened
+# runtime and library validation live. Nothing here signs or re-signs. The
+# signing host proves the signature at pin time (RELEASE_CHECKLIST.md).
+#
+# There is no bundle-version input. The version, the URL and every digest come
+# from config/tor_pins.json, so the lane always verifies the pin of record and
+# has no default to go stale when the pin moves.
+#
+# NOT covered here (stated, not silently skipped): `tests/circuit_isolation.rs`
+# (DQ-T0.4) needs `tor-gencert` to stand up its hermetic owned-net directory
+# authority, and the Linux Expert Bundle ships only `tor` (no `tor-gencert`), so
+# that measurement has no CI binary source yet — it runs on a dev box with a
+# full tor install until a gencert source is wired.
+#
+# Each entry carries the facts that differ by platform: the runner, the
+# pinned host, the client floor, and the client tests. The wallet's four
+# live tests and the daemon's five are one list each (`WALLET_LIVE_TESTS`,
+# `DAEMON_LIVE_TESTS`), required by name on every entry
+# (scripts/ci/require_live_tests.sh), and their floors are the same
+# everywhere. Those tests kill tor from outside (`shekyl-tor-control-client`
+# `outside_kill`). The client's descriptor-inheritance test is Linux-only,
+# so it is on the Linux entries and off the others. A test that one platform
+# cannot run is left off that entry's list, never skipped by a condition
+# inside a step. A later platform that drops a wallet or daemon test puts
+# that list and its floor back on the entry.
+#
+# Every step runs in bash, Git for Windows' on the Windows runner, so one
+# script serves both.
+#
+# Dispatch after every pin bump, and freely otherwise — it is read-only.
+
+name: tor-pin-verify
+
+# DEMO BASE ONLY (merge-ready): kept for change_scope.py to read; never runs here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: tor integration — pin + live lifecycle (${{ matrix.target.label }})
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 30  # p90 11.3 min (the slowest leg, macos-aarch64, 6 runs)
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - label: linux-x86_64
+            host: x86_64-linux-gnu
+            runner: ubuntu-latest
+            exe: tor
+            client_floor: 10
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
+              control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
+          - label: linux-aarch64
+            host: aarch64-linux-gnu
+            runner: ubuntu-24.04-arm
+            exe: tor
+            client_floor: 10
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
+              control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
+          - label: windows-x86_64
+            host: x86_64-w64-mingw32
+            runner: windows-latest
+            exe: tor.exe
+            client_floor: 9
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
+          # macOS: the inheritance test is Linux-only
+          # (`cfg(target_os = "linux")`).
+          - label: macos-aarch64
+            host: aarch64-apple-darwin11
+            runner: macos-latest
+            exe: tor
+            client_floor: 9
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
+          # The last x86_64 macOS image GitHub offers (retired with macOS 15
+          # in 2027); the pin's x86_64 row is tested on Intel, not Rosetta.
+          - label: macos-x86_64
+            host: x86_64-apple-darwin11
+            runner: macos-15-intel
+            exe: tor
+            client_floor: 9
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
+    env:
+      HOST: ${{ matrix.target.host }}
+      TOR_EXE: ${{ matrix.target.exe }}
+      # One list for every entry. See the note above the job: a platform
+      # that cannot run one of these puts the list and the floor back on
+      # that entry.
+      WALLET_LIVE_FLOOR: 4
+      DAEMON_LIVE_FLOOR: 5
+      WALLET_LIVE_TESTS: >-
+        service::live_tests::crash_is_survived_respawn_reaches_ready_again
+        service::live_tests::onion_is_republished_on_every_incarnation
+        service::live_tests::degraded_episode_clears_only_after_sustained_ready
+        service::live_tests::bootstrap_timeout_restart_does_not_self_lock
+      DAEMON_LIVE_TESTS: >-
+        ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+        ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop
+        probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit
+        probe_live_tests::a_respawn_republishes_the_same_onion_and_is_reachable_again
+        probe_live_tests::a_deleted_onion_is_missed_and_the_republish_restores_it
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The Windows runner's git checks text out with CRLF line endings, and
+      # bash reads the `\r` of a CRLF script as part of each command. The
+      # scripts this lane runs are checked out as committed.
+      - name: check out with committed line endings (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v5
+
+      - name: paths and python3
+        run: |
+          # The staged bundle: exactly the pinned files, in a directory of its
+          # own. On Windows the path is written D:/a/..., which Git's bash,
+          # Python and the Rust tests all read as the same file.
+          ws="$GITHUB_WORKSPACE"
+          if [ "$RUNNER_OS" = Windows ]; then
+            ws="$(cygpath -m "$ws")"
+            # The runner's Python is `python`; the steps below say `python3`,
+            # as the release build does.
+            mkdir -p "$RUNNER_TEMP/python3-shim"
+            printf '#!/bin/sh\nexec python "$@"\n' > "$RUNNER_TEMP/python3-shim/python3"
+            chmod +x "$RUNNER_TEMP/python3-shim/python3"
+            echo "$RUNNER_TEMP/python3-shim" >> "$GITHUB_PATH"
+          fi
+          echo "TOR_DIR=$ws/tor-staged/tor" >> "$GITHUB_ENV"
+
+      - name: fetch the pinned Expert Bundle + signature
+        run: |
+          # `fetch` downloads the tarball the pin file names and refuses one
+          # whose SHA-256 differs. Its verdict is its own exit status; the
+          # URL is read separately for the signature.
+          # For macOS it also downloads the signed files (the release asset),
+          # each refused unless it matches its pinned shipped digest.
+          python3 scripts/release/tor_bundle.py fetch --host "$HOST" --sources tor-sources
+          url="$(python3 scripts/release/tor_bundle.py tarball-url --host "$HOST")"
+          bundle="tor-sources/$(basename "$url")"
+          test -f "$bundle"
+          curl -fsSL -o "$bundle.asc" "$url.asc"
+          echo "BUNDLE=$bundle" >> "$GITHUB_ENV"
+
+      - name: import Tor signing key (WKD) and GPG-verify the bundle
+        run: |
+          set -o pipefail
+          # The fingerprint of record is the pin file's; the binary compiles
+          # the same value (TOR_SIGNING_KEY_FPR).
+          TOR_FPR="$(python3 -c 'import json; print(json.load(open("config/tor_pins.json"))["signing_key_fingerprint"])')"
+          test "${#TOR_FPR}" -eq 40
+          gpg --version
+          # WKD first: the key from torproject.org's own web key directory.
+          # If this gpg cannot do WKD (Git for Windows' build is the one in
+          # question), fetch the key by its full fingerprint from
+          # keys.openpgp.org instead. Either way the source only supplies the
+          # key: the verdict is the VALIDSIG check below, which accepts a
+          # signature only when its primary key is the pinned fingerprint.
+          if gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org; then
+            echo "::notice title=Tor signing key::imported by WKD ($RUNNER_OS)"
+          else
+            gpg --keyserver hkps://keys.openpgp.org --recv-keys "$TOR_FPR"
+            echo "::notice title=Tor signing key::WKD failed; imported by fingerprint from keys.openpgp.org ($RUNNER_OS)"
+          fi
+          gpg --status-fd 1 --verify "$BUNDLE.asc" "$BUNDLE" | tee verify.out
+          # Require VALIDSIG terminating in the pinned primary fingerprint —
+          # GOODSIG alone matches any key the keyring happens to hold.
+          grep -E "^\[GNUPG:\] VALIDSIG .* $TOR_FPR$" verify.out
+
+      - name: stage exactly the pinned files
+        run: |
+          # The tarball's digest is checked again before it is opened, each
+          # file against its own pin, and the result against the rule the
+          # daemon applies. The raw extraction is never used: it carries
+          # pluggable_transports/, which the gate refuses.
+          python3 scripts/release/tor_bundle.py stage --host "$HOST" --sources tor-sources \
+            --dest "$TOR_DIR" --licenses "${TOR_DIR%/tor}/tor-licenses"
+          # verify re-checks the directory and the cached tarball. A row that
+          # carries upstream also ties each staged file to Tor's bytes.
+          python3 scripts/release/tor_bundle.py verify --host "$HOST" --dir "$TOR_DIR" \
+            --sources tor-sources
+
+      - uses: dtolnay/rust-toolchain@1.94.0
+
+      # The process clock is awake time on every platform (Rick,
+      # 2026-11-11): every deadline and age in the node leaves a machine's
+      # sleep out. On Windows its source is the unbiased interrupt time,
+      # which no Linux lane can run. This lane is the one with a Windows
+      # runner, so it runs the clock's tests on every entry, and Windows
+      # names its own source test too. Each is required by name, so a test
+      # that stopped compiling on a platform fails here (rule 47).
+      - name: the process clock's source (shekyl-timing-engine)
+        run: |
+          set -o pipefail
+          cd rust
+          # The status is taken in the `if`: under the step's `-e`, a bare
+          # failing command would end the step before the output is shown.
+          if cargo test --locked -p shekyl-timing-engine --lib clock_tests -- --test-threads=1 > clock.out 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          cat clock.out
+          [ "$rc" -eq 0 ]
+          required=(clock_tests::an_awake_span_keeps_its_length_and_resolution)
+          if [ "$RUNNER_OS" = Windows ]; then
+            required+=(clock_tests::on_windows_the_origin_is_an_unbiased_reading)
+          fi
+          ../scripts/ci/require_live_tests.sh clock.out "${required[@]}"
+
+      # TWO invocations, not one, because the pinned-tor set now spans two
+      # crates: the control protocol and the pin gate live in
+      # `shekyl-tor-control-client`, the supervisor that drives them in `shekyl-tor-control-wallet`.
+      # One `-p a -p b` run would print TWO "test result:" lines, and the
+      # single-valued count below would silently grade only the first — a crate
+      # could stop running its ignored set entirely and the floor would still
+      # hold. Separate steps keep each floor pointed at its own subject, and a
+      # failure names the crate that lost coverage.
+      #
+      # Both point the pinned-tor var (pin-match KAT) and the any-tor var (live
+      # lifecycle) at the same verified binary.
+      #
+      # One cold start writes this job's directory cache, after Tor has been
+      # reaped. Every later live test copies that seed in
+      # (`SHEKYL_TEST_TOR_DIRECTORY_CACHE`). The daemon suite below skips
+      # this test, so its floor is unchanged.
+      - name: seed the directory cache from one cold boot
+        run: |
+          set -o pipefail
+          cache="$RUNNER_TEMP/tor-directory-cache"
+          mkdir -p "$cache"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cache="$(cygpath -m "$cache")"
+          fi
+          echo "SHEKYL_TEST_TOR_DIRECTORY_CACHE=$cache" >> "$GITHUB_ENV"
+          cd rust
+          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+          SHEKYL_TEST_TOR_DIRECTORY_CACHE="$cache" \
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-daemon ignored-cold.out \
+              --exact ephemeral::tests::a_cold_boot_saves_the_public_directory_cache
+          ../scripts/ci/require_live_tests.sh ignored-cold.out \
+            ephemeral::tests::a_cold_boot_saves_the_public_directory_cache
+          ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
+
+      - name: pin-match + control lifecycle (shekyl-tor-control-client)
+        run: |
+          set -o pipefail
+          cd rust
+          SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-client ignored-control.out
+          # The pin-match KAT is this lane's founding guarantee (a mistranscribed
+          # pin otherwise fails closed for every user at first managed
+          # launch) — assert it specifically ran and PASSED, not merely that some
+          # count held. `--test-threads=1` prints one "test <name> ... ok" line.
+          ../scripts/ci/require_live_tests.sh ignored-control.out ${{ matrix.target.client_tests }}
+          # And guard the FULL set — not just that one — against a silent
+          # coverage drop. Floor = this crate's current ignored count on the
+          # entry's platform: Linux 10 (pin + 8 actor + 1 launch), Windows
+          # and macOS 9, the descriptor-inheritance test being Linux-only.
+          # `-ge` so a new live test does not fail the lane before this floor
+          # is raised with it. Lower the floor only when a test is
+          # deliberately removed. `sed ... q`, not a pipe into `head`: the
+          # first summary line, with no pipeline to lose a status (rule 46).
+          passed=$(sed -n '/^test result: ok\. [0-9]* passed/{s/^test result: ok\. \([0-9]*\) passed.*/\1/p;q;}' ignored-control.out)
+          echo "ran ${passed:-0} pinned-tor control tests (floor ${{ matrix.target.client_floor }})"
+          [ "${passed:-0}" -ge ${{ matrix.target.client_floor }} ]
+
+      - name: live supervisor lifecycle (shekyl-tor-control-wallet)
+        run: |
+          set -o pipefail
+          cd rust
+          SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-wallet ignored.out
+          # All four wallet live tests, by name, on every platform: the three
+          # that kill tor from outside (`outside_kill`) and the
+          # bootstrap-timeout restart. Floor = that count. Same `-ge`
+          # discipline as above. Unquoted so each name is one argument.
+          ../scripts/ci/require_live_tests.sh ignored.out $WALLET_LIVE_TESTS
+          passed=$(sed -n '/^test result: ok\. [0-9]* passed/{s/^test result: ok\. \([0-9]*\) passed.*/\1/p;q;}' ignored.out)
+          echo "ran ${passed:-0} pinned-tor supervisor tests (floor $WALLET_LIVE_FLOOR)"
+          [ "${passed:-0}" -ge "$WALLET_LIVE_FLOOR" ]
+          # No tor WE launched may survive the run (the reap/shutdown guarantee).
+          ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
+
+      - name: the owning connection under a managed Tor (shekyl-daemon, Linux)
+        # GS-C3 test 4: with the managed Tor running, the daemon's owning
+        # connection is in none of Tor's descriptors (read from /proc, so
+        # Linux only), and closing the parent's end stops the daemon and its
+        # Tor. Named, so a rename cannot drop it silently.
+        if: runner.os == 'Linux'
+        run: |
+          set -o pipefail
+          cd rust
+          if ! SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+            cargo test --locked -p shekyl-daemon --test owning_connection -- \
+              --ignored --exact tor_does_not_hold_the_owning_connection \
+              > owning-tor.out 2>&1; then
+            cat owning-tor.out
+            exit 1
+          fi
+          cat owning-tor.out
+          ../scripts/ci/require_live_tests.sh owning-tor.out tor_does_not_hold_the_owning_connection
+          ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
+
+      - name: live ephemeral-onion lifecycle (shekyl-tor-control-daemon)
+        run: |
+          set -o pipefail
+          cd rust
+          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-daemon ignored-daemon.out \
+              --skip a_cold_boot_saves_the_public_directory_cache
+          # The PWD-E7 posture end-to-end: spawn → bootstrap → ADD_ONION with
+          # DiscardPK → ServiceID verified → bounded teardown with a real reap,
+          # twice, asserting the two boots publish DIFFERENT addresses (the
+          # ephemeral property observed, not asserted). The cold-boot cache
+          # seed is the step above and is skipped here. `DAEMON_LIVE_TESTS`
+          # names the five that remain, on every platform: the rotation test,
+          # TSR-F1's death watcher (a killed tor is Exited, a shutdown is
+          # Stopped), and the probe's three (TOR_SUPERVISOR.md §4.5:
+          # reachable on its own circuit, reachable again after a respawn, a
+          # deleted onion missed and restored). The death watcher and the
+          # probe's respawn case kill tor from outside (`outside_kill`).
+          # `-ge` so adding a live test never breaks the lane; bump the floor
+          # only on a deliberate removal. Unquoted so each name is one argument.
+          ../scripts/ci/require_live_tests.sh ignored-daemon.out $DAEMON_LIVE_TESTS
+          passed=$(sed -n '/^test result: ok\. [0-9]* passed/{s/^test result: ok\. \([0-9]*\) passed.*/\1/p;q;}' ignored-daemon.out)
+          echo "ran ${passed:-0} pinned-tor daemon tests (floor $DAEMON_LIVE_FLOOR)"
+          [ "${passed:-0}" -ge "$DAEMON_LIVE_FLOOR" ]
+          # Same no-orphan guarantee as the wallet step: a failed daemon start
+          # tears its incarnation down before returning, and shutdown reaps.
+          ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"

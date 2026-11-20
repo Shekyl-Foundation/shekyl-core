@@ -1,0 +1,66 @@
+name: ci/weekly-os
+
+# Arch Linux + Windows MSYS2. These used to sit on every non-docs PR in
+# `build.yml` next to Ubuntu 22.04/24.04 and Windows MSVC. PR coverage is
+# Ubuntu 22.04 and 24.04 + macOS + Windows MSVC (the only runner that can
+# compile `shekyl-win-sec`). MSYS2 is a third Windows build on top of MSVC
+# + depends Win64. Both stay as a weekly canary, not a merge gate.
+#
+# Reopen onto the PR matrix if: a distro-specific compile break lands on
+# `dev` that Ubuntu 24.04 / MSVC would not have caught, and the weekly
+# run is how it was found.
+
+# DEMO BASE ONLY (merge-ready): kept for change_scope.py to read; never runs here.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: weekly-os-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
+
+jobs:
+  build-windows-msys2:
+    name: 'Windows (MSYS2)'
+    runs-on: windows-latest
+    timeout-minutes: 45  # p90 22.0 min over 8 runs
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-rust git
+      - uses: ./.github/actions/set-make-job-count
+      - name: build
+        run: make release-static-win64 -j${{env.MAKE_JOB_COUNT}}
+
+  build-arch:
+    name: 'Arch Linux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # p90 29.6 min over 8 runs
+    container:
+      image: archlinux:latest
+    steps:
+      - name: install dependencies
+        run: pacman -Syyu --noconfirm base-devel git cmake python3 rust
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/set-make-job-count
+      - name: build
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
+        run: ${{env.BUILD_DEFAULT_LINUX}}

@@ -455,6 +455,8 @@ def plan() -> int:
         row = mo.label_row(pr, head, dev, mo.Context())
     except Exception as e:  # fail closed: the pull request's whole scope
         row = mo.fail_closed(pr, head, e, UNKNOWN)
+        print(f"::warning::#{pr}: {row['why']}; re-testing its whole scope")
+    print(f"#{pr} {head[:10]} against dev {dev[:10]}: {row['action']}, {row['why']}")
     if row["action"] == "ready":
         post_kind(head, "ready", f"nothing both changes test changed since {short(row['since'])}", dev, dev)
         return 0

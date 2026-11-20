@@ -374,5 +374,5 @@ mod tests {
     }
 }
 
-/// DEMO BASE ONLY (merge-ready): the value the demo's pull requests disagree on.
+/// DEMO BASE ONLY (merge-ready): the value the demo's pull requests disagree on (the base moved).
 pub const MERGE_READY_DEMO: u32 = 2;
