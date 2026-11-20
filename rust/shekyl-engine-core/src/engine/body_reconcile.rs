@@ -79,7 +79,8 @@ pub enum ShardAlarmCause {
 pub enum ShardRefill {
     /// Not finished yet.
     Pending,
-    /// The shard was refilled from the node and is held, verified.
+    /// The shard was refilled from the node and is held, verified; or a
+    /// later pass found it held and verified.
     Refilled,
     /// The node has discarded the shard's bodies at its horizon, and the
     /// recovery fetch that would bring them back is not built, so the shard
@@ -170,6 +171,24 @@ impl ShardAlarms {
         }
     }
 
+    /// The shards whose refill failed, for the next pass to retry.
+    fn failed_refills(&self) -> BTreeSet<ShardId> {
+        self.0
+            .lock()
+            .expect("shard alarms lock")
+            .alarms
+            .values()
+            .filter(|alarm| alarm.refill == ShardRefill::Failed)
+            .map(|alarm| ShardId::from_raw(alarm.shard))
+            .collect()
+    }
+
+    /// A shard with an alarm now holds a body that verifies: the alarm
+    /// stays for the session, answered.
+    fn repaired(&self, shard: ShardId) {
+        self.settle(shard, ShardRefill::Refilled);
+    }
+
     /// Drop the alarms for shards the bond no longer owes (a released bond).
     fn retain_owed(&self, owed: &BTreeSet<ShardId>) {
         self.0
@@ -224,7 +243,8 @@ where
     /// One pass at chain height `tip`: pull what became owed, then — at a
     /// session's first pass, at the first pass of each settlement epoch, and
     /// after a pull that filled — check every owed shard, refill what is
-    /// lost, and record the check.
+    /// lost, and record the check. Between those, check again each owed
+    /// shard whose refill failed, and refill it.
     ///
     /// # Errors
     ///
@@ -310,33 +330,48 @@ where
 
         let first = state.owed.is_none();
         let new_epoch = state.swept_in_epoch != Some(epoch);
-        if first || new_epoch || !pulled.is_empty() {
-            for &shard in owed.difference(&pulled) {
-                let cause = match ctx
-                    .bodies
-                    .read_frame(shard)
-                    .await
-                    .map_err(ReconcileError::Store)?
-                {
-                    StoredFrame::NotHeld => Some(ShardAlarmCause::Missing),
-                    StoredFrame::Unreadable => Some(ShardAlarmCause::Corrupt),
-                    StoredFrame::Frame(frame) => {
-                        let sealed = ctx.fold.close(shard).map(|close| close.rows);
-                        let verifies = frame_rows_digest(shard, &frame)
-                            .is_ok_and(|digest| Some(digest.rows) == sealed);
-                        (!verifies).then_some(ShardAlarmCause::Corrupt)
-                    }
-                };
-                let Some(cause) = cause else {
-                    continue;
-                };
-                alarms.raise(shard, cause);
-                let refill = match ctx.fill_one(shard).await {
-                    Ok(()) => ShardRefill::Refilled,
-                    Err(e) => refill_outcome(&e),
-                };
-                alarms.settle(shard, refill);
-            }
+        let sweep = first || new_epoch || !pulled.is_empty();
+        // A sweep checks every owed shard. Between sweeps a pass still
+        // retries each refill that failed, as its alarm says it will.
+        let checking: Vec<ShardId> = if sweep {
+            owed.difference(&pulled).copied().collect()
+        } else {
+            alarms
+                .failed_refills()
+                .intersection(&owed)
+                .copied()
+                .collect()
+        };
+        for shard in checking {
+            let cause = match ctx
+                .bodies
+                .read_frame(shard)
+                .await
+                .map_err(ReconcileError::Store)?
+            {
+                StoredFrame::NotHeld => Some(ShardAlarmCause::Missing),
+                StoredFrame::Unreadable => Some(ShardAlarmCause::Corrupt),
+                StoredFrame::Frame(frame) => {
+                    let sealed = ctx.fold.close(shard).map(|close| close.rows);
+                    let verifies = frame_rows_digest(shard, &frame)
+                        .is_ok_and(|digest| Some(digest.rows) == sealed);
+                    (!verifies).then_some(ShardAlarmCause::Corrupt)
+                }
+            };
+            let Some(cause) = cause else {
+                // Held and verified. An alarm this session raised on it
+                // has been answered, whatever answered it.
+                alarms.repaired(shard);
+                continue;
+            };
+            alarms.raise(shard, cause);
+            let refill = match ctx.fill_one(shard).await {
+                Ok(()) => ShardRefill::Refilled,
+                Err(e) => refill_outcome(&e),
+            };
+            alarms.settle(shard, refill);
+        }
+        if sweep {
             state.swept_in_epoch = Some(epoch);
             // Every owed shard was either pulled just now, by the fill that
             // verifies it, or read and checked above.
@@ -428,6 +463,42 @@ mod tests {
         let alarms = ShardAlarms::default();
         alarms.settle(shard(9), ShardRefill::Failed);
         assert!(alarms.report().alarms.is_empty());
+    }
+
+    #[test]
+    fn only_a_failed_refill_is_retried_between_sweeps() {
+        let alarms = ShardAlarms::default();
+        for (n, refill) in [
+            (1, ShardRefill::Refilled),
+            (2, ShardRefill::Failed),
+            (3, ShardRefill::Discarded),
+            (4, ShardRefill::Failed),
+        ] {
+            alarms.raise(shard(n), ShardAlarmCause::Missing);
+            alarms.settle(shard(n), refill);
+        }
+        assert_eq!(
+            alarms.failed_refills(),
+            [shard(2), shard(4)].into_iter().collect(),
+            "a discarded shard waits for the recovery fetch, not for the next pass"
+        );
+        alarms.repaired(shard(2));
+        assert_eq!(alarms.failed_refills(), [shard(4)].into_iter().collect());
+        assert_eq!(
+            alarms.report().alarms[1],
+            ShardAlarm {
+                shard: 2,
+                alarm: ShardAlarmCause::Missing,
+                refill: ShardRefill::Refilled,
+            },
+            "the answered alarm stays for the session"
+        );
+        alarms.repaired(shard(9));
+        assert_eq!(
+            alarms.report().alarms.len(),
+            4,
+            "repairing a shard with no alarm raises none"
+        );
     }
 
     #[test]

@@ -686,7 +686,8 @@ pub enum ShardAlarmCauseView {
 pub enum ShardRefillView {
     /// Not finished yet.
     Pending,
-    /// Refilled from the node; held and verified.
+    /// Refilled from the node, or found held by a later pass; held and
+    /// verified.
     Refilled,
     /// The node has discarded the shard's bodies, which come back only
     /// through the node's recovery fetch; that does not exist yet, so the

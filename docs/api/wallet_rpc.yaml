@@ -2607,11 +2607,12 @@ components:
           enum: [pending, refilled, discarded, failed]
           description: >
             pending: the refill has not finished. refilled: refilled from
-            the node and verified. discarded: the node has discarded the
+            the node and verified, or found held and verified by a later
+            pass. discarded: the node has discarded the
             shard's bodies, which come back only through the node's
             recovery fetch; that does not exist yet, so it cannot be
-            refilled until it does. failed: the refill
-            failed for another reason; the next pass retries.
+            refilled until it does. failed: the refill failed for another
+            reason; the pass at the next chain advance retries it.
 
     TxResendParams:
       type: object
