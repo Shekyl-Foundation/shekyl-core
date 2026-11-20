@@ -70,8 +70,8 @@ indistinguishable from the sends around it, on each such link.
   at the same point whether or not one was in flight. Peer loss still
   restarts a half-sent message.
 - **`CVR-R5` — the cover budget is 8,192 B/s per node, the one stated
-  number.** The mean cadence is derived from it: channels × window ÷ budget,
-  5 s. A channel holds at most one full-size message pending
+  number of the schedule.** The mean cadence is derived from it: channels ×
+  window ÷ budget, 5 s. A channel holds at most one full-size message pending
   (`MAX_FRAGMENTS` windows). The embargo is derived with every stem hop
   carrier-paced, at a channel's expected occupancy on a network of at least
   100 nodes (an Assumption): 1638 s on Tor and 1320 s on clearnet, inside

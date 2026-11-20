@@ -131,8 +131,8 @@ pub const EPOCH_TAIL_WINDOWS: u32 = MAX_FRAGMENTS - 1;
 /// The cover budget, **per node**, in bytes per second: 8 KiB/s
 /// (`CVR-R5`; Rick, 2026-11-15).
 ///
-/// The one stated number of the carrier. The cadence follows from it
-/// ([`MEAN_CADENCE_MS`]); nothing else here is chosen. Per node, with no
+/// The carrier's schedule has this one stated number: the cadence follows
+/// from it ([`MEAN_CADENCE_MS`]). Per node, with no
 /// network term: a node runs [`super::inherited::NOISE_CHANNELS`] channels,
 /// one per stem slot, whatever connectors the sessions in those slots ride,
 /// so a second network adds no channel and no bytes.

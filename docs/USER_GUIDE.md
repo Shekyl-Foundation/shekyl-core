@@ -999,6 +999,10 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 > - **A transaction dropped on its way takes longer to recover than without
 >   cover**: about half an hour on average before your node tries another
 >   route, and as long again before it broadcasts it.
+> - **A low upload limit with steady uploads delays cover.** Cover shares
+>   `p2p-upload-max` with everything else your node sends, so its bursts can
+>   fall behind their schedule. The limit cannot be set below 16 KiB/s while
+>   cover is on.
 >
 > Setting `relay-cover off` turns it off: your node then sends its own
 > transactions where a watcher can see them, and relays none privately for

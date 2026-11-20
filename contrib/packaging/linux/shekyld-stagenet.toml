@@ -106,7 +106,7 @@
 # p2p-ban-file = "/path"
 
 # The upload rate limit, or `unlimited`. With `relay-cover on` it is at
-# least the cover rate.
+# least 16KiB/s, twice the cover budget.
 # p2p-upload-max = "unlimited"
 
 # The download rate limit, or `unlimited`.

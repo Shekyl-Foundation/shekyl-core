@@ -24,6 +24,10 @@
 > - **A transaction dropped on its way takes longer to recover than without
 >   cover**: about half an hour on average before your node tries another
 >   route, and as long again before it broadcasts it.
+> - **A low upload limit with steady uploads delays cover.** Cover shares
+>   `p2p-upload-max` with everything else your node sends, so its bursts can
+>   fall behind their schedule. The limit cannot be set below 16 KiB/s while
+>   cover is on.
 
 Tor is the anonymity network this daemon dials. I2P is not. The usage of
 Tor is still considered experimental - there are a few pessimistic
