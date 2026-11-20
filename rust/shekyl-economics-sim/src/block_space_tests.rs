@@ -13,7 +13,9 @@ use shekyl_curve_tree::PROOF_VALIDITY_HORIZON;
 use shekyl_economics::TxVolume;
 
 use crate::engine::SimParams;
-use shekyl_mempool::policy::AdmissionRank;
+use shekyl_mempool::policy::{make_room, trim_to, AdmissionRank};
+
+use crate::rng::SplitMix64;
 use shekyl_types::{TxHash, UnixSeconds};
 
 /// The point a block is priced at, on `run`'s parameter sets.
@@ -308,82 +310,134 @@ fn admission_makes_room_as_the_pool_does() {
         ),
     ];
     for (case, (pool, tx, demand, limit)) in cases.iter().enumerate() {
-        // The pool's cohorts arrived at 1 000; these arrivals at 2 000.
-        let connecting = 2_000;
-        let mut space = space_of(pool);
-        let mut evicted_by_rung = PerRung::default();
-        let [arrival] = standard(*demand, *tx);
-        let refused = space.admit(connecting, arrival, *limit, 120, &mut evicted_by_rung);
-        let evicted: u64 = evicted_by_rung.iter().sum();
-        assert_total_is_the_pool(&space);
+        assert_admits_as_the_pool_does(pool, *tx, *demand, *limit, case);
+    }
+}
 
-        // The pool's own walk, one arrival at a time. `None` marks an arrival.
-        let mut held: Vec<(AdmissionRank<u64>, Option<usize>)> = every_transaction(pool)
-            .into_iter()
-            .map(|(rank, index)| (rank, Some(index)))
+/// Admission against the pool's walk over random pools: mixed weights,
+/// fees and hours, a limit below and above the pool's weight, so both the
+/// room an arrival finds and every eviction path are reached.
+#[test]
+fn random_admissions_make_room_as_the_pool_does() {
+    const CASES: usize = 400;
+    const MOST_COHORTS: u64 = 6;
+    const MOST_WEIGHT: u64 = 20;
+    const MOST_FEE: u64 = 4_000;
+    const MOST_COUNT: u64 = 40;
+    const HOURS: u64 = 3;
+    const MOST_DEMAND: u64 = 80;
+    let mut rng = SplitMix64::seeded(ADMISSION_CASES_SEED);
+    for case in 0..CASES {
+        let pool: Vec<Cohort> = (0..=rng.below(MOST_COHORTS))
+            .map(|_| {
+                cohort(
+                    1 + rng.below(MOST_FEE),
+                    1 + rng.below(MOST_WEIGHT),
+                    rng.below(MOST_COUNT + 1),
+                    rng.below(HOURS),
+                )
+            })
             .collect();
-        let arrival_hour = (connecting - 1) * 120 / SECONDS_PER_RECEIVED_KEY;
-        let rate = FeeRate::new(tx.fee_atomic, tx.weight);
-        let weight_of = |index: Option<usize>| index.map_or(tx.weight, |i| pool[i].weight);
-        let rate_of = |index: Option<usize>| index.map_or(rate, |i| pool[i].rate());
-        let (mut naive_evicted, mut naive_refused, mut admitted) = (0u64, 0u64, 0u64);
-        for arrival in 0..*demand {
-            held.sort_by(|a, b| a.0.eviction(b.0));
-            let total: u128 = held
-                .iter()
-                .map(|(_, index)| u128::from(weight_of(*index)))
-                .sum();
-            let entries = held
-                .iter()
-                .enumerate()
-                .map(|(position, (_, index))| (position, rate_of(*index), weight_of(*index)));
-            match make_room(total, tx.weight, *limit, rate, entries) {
-                Some(victims) => {
-                    naive_evicted += victims.len() as u64;
-                    let mut keep = vec![true; held.len()];
-                    for position in victims {
-                        keep[position] = false;
-                    }
-                    let mut flags = keep.into_iter();
-                    held.retain(|_| flags.next().expect("one flag per entry"));
-                    held.push((
-                        AdmissionRank::new(rate, arrival_hour, hash_of(usize::MAX, arrival)),
-                        None,
-                    ));
-                    admitted += 1;
+        let held: u64 = pool.iter().map(|c| c.weight * c.count).sum();
+        let tx = OrdinaryTx {
+            fee_atomic: 1 + rng.below(MOST_FEE),
+            weight: 1 + rng.below(MOST_WEIGHT),
+        };
+        let limit = rng.below(2 * held + MOST_WEIGHT);
+        assert_admits_as_the_pool_does(&pool, tx, 1 + rng.below(MOST_DEMAND), limit, case);
+    }
+}
+
+/// The seed of the random admission and trim cases.
+const ADMISSION_CASES_SEED: u64 = 0xAD_317;
+
+/// `demand` arrivals of `tx` admitted to a pool holding `pool` under `limit`
+/// leave, refuse and evict what the pool's own walk does, one arrival at a
+/// time: `make_room` over every entry in eviction order, the hashes
+/// included. Compared by `(fee, weight, hour)` class, which is what the
+/// hash order cannot split.
+fn assert_admits_as_the_pool_does(
+    pool: &[Cohort],
+    tx: OrdinaryTx,
+    demand: u64,
+    limit: u64,
+    case: usize,
+) {
+    // The pool's cohorts arrived at 1 000; these arrivals at 2 000.
+    let connecting = 2_000;
+    let mut space = space_of(pool);
+    let mut evicted_by_rung = PerRung::default();
+    let [arrival] = standard(demand, tx);
+    let refused = space.admit(connecting, arrival, limit, 120, &mut evicted_by_rung);
+    let evicted: u64 = evicted_by_rung.iter().sum();
+    assert_total_is_the_pool(&space);
+
+    // The pool's own walk, one arrival at a time. `None` marks an arrival.
+    let mut held: Vec<(AdmissionRank<u64>, Option<usize>)> = every_transaction(pool)
+        .into_iter()
+        .map(|(rank, index)| (rank, Some(index)))
+        .collect();
+    let arrival_hour = (connecting - 1) * 120 / SECONDS_PER_RECEIVED_KEY;
+    let rate = FeeRate::new(tx.fee_atomic, tx.weight);
+    let weight_of = |index: Option<usize>| index.map_or(tx.weight, |i| pool[i].weight);
+    let rate_of = |index: Option<usize>| index.map_or(rate, |i| pool[i].rate());
+    let (mut naive_evicted, mut naive_refused, mut admitted) = (0u64, 0u64, 0u64);
+    for arrival in 0..demand {
+        held.sort_by(|a, b| a.0.eviction(b.0));
+        let total: u128 = held
+            .iter()
+            .map(|(_, index)| u128::from(weight_of(*index)))
+            .sum();
+        let entries = held
+            .iter()
+            .enumerate()
+            .map(|(position, (_, index))| (position, rate_of(*index), weight_of(*index)));
+        match make_room(total, tx.weight, limit, rate, entries) {
+            Some(victims) => {
+                naive_evicted += victims.len() as u64;
+                let mut keep = vec![true; held.len()];
+                for position in victims {
+                    keep[position] = false;
                 }
-                None => naive_refused += 1,
+                let mut flags = keep.into_iter();
+                held.retain(|_| flags.next().expect("one flag per entry"));
+                held.push((
+                    AdmissionRank::new(rate, arrival_hour, hash_of(usize::MAX, arrival)),
+                    None,
+                ));
+                admitted += 1;
             }
+            None => naive_refused += 1,
         }
-        assert_eq!(
-            (evicted, refused),
-            (naive_evicted, naive_refused),
-            "case {case}"
-        );
-        let arrived: u64 = space
+    }
+    assert_eq!(
+        (evicted, refused),
+        (naive_evicted, naive_refused),
+        "case {case}"
+    );
+    let arrived: u64 = space
+        .waiting
+        .iter()
+        .filter(|cohort| cohort.arrived == connecting)
+        .map(|cohort| cohort.count)
+        .sum();
+    assert_eq!(arrived, admitted, "case {case}: admitted");
+    let classes: std::collections::BTreeSet<(u64, u64, u64)> =
+        pool.iter().map(|c| (c.fee, c.weight, c.hour)).collect();
+    for class in classes {
+        let left: u64 = space
             .waiting
             .iter()
-            .filter(|cohort| cohort.arrived == connecting)
-            .map(|cohort| cohort.count)
+            .filter(|c| c.arrived != connecting && (c.fee, c.weight, c.hour) == class)
+            .map(|c| c.count)
             .sum();
-        assert_eq!(arrived, admitted, "case {case}: admitted");
-        let classes: std::collections::BTreeSet<(u64, u64, u64)> =
-            pool.iter().map(|c| (c.fee, c.weight, c.hour)).collect();
-        for class in classes {
-            let left: u64 = space
-                .waiting
-                .iter()
-                .filter(|c| c.arrived != connecting && (c.fee, c.weight, c.hour) == class)
-                .map(|c| c.count)
-                .sum();
-            let naive_left = held
-                .iter()
-                .filter(|(_, index)| {
-                    index.is_some_and(|i| (pool[i].fee, pool[i].weight, pool[i].hour) == class)
-                })
-                .count() as u64;
-            assert_eq!(left, naive_left, "case {case}, class {class:?}");
-        }
+        let naive_left = held
+            .iter()
+            .filter(|(_, index)| {
+                index.is_some_and(|i| (pool[i].fee, pool[i].weight, pool[i].hour) == class)
+            })
+            .count() as u64;
+        assert_eq!(left, naive_left, "case {case}, class {class:?}");
     }
 }
 
@@ -397,10 +451,52 @@ fn the_trim_passes_over_the_listing_as_the_pool_does() {
         cohort(500, 7, 20, 5),
     ];
     // The block listed 10 of the richest cohort and 5 of the cheapest.
-    let mut after = before;
-    after[1].count -= 10;
-    after[2].count -= 5;
-    let limit = 600;
+    assert_trims_as_the_pool_does(&before, &[0, 10, 5], 600, 0);
+}
+
+/// The trim against `trim_to` over random pools and listings: mixed
+/// weights, fees and hours, limits below and above the pool's weight.
+#[test]
+fn random_trims_pass_over_the_listing_as_the_pool_does() {
+    const CASES: usize = 400;
+    const MOST_COHORTS: u64 = 6;
+    const MOST_WEIGHT: u64 = 20;
+    const MOST_FEE: u64 = 4_000;
+    const MOST_COUNT: u64 = 40;
+    const HOURS: u64 = 3;
+    let mut rng = SplitMix64::seeded(ADMISSION_CASES_SEED);
+    for case in 0..CASES {
+        let cohorts = 1 + rng.below(MOST_COHORTS);
+        // Distinct fees: the comparison finds each cohort by its fee.
+        let before: Vec<Cohort> = (0..cohorts)
+            .map(|index| {
+                cohort(
+                    1 + rng.below(MOST_FEE) * cohorts + index,
+                    1 + rng.below(MOST_WEIGHT),
+                    1 + rng.below(MOST_COUNT),
+                    rng.below(HOURS),
+                )
+            })
+            .collect();
+        let listed: Vec<u64> = before.iter().map(|c| rng.below(c.count)).collect();
+        let held: u64 = before.iter().map(|c| c.weight * c.count).sum();
+        let limit = rng.below(2 * held + MOST_WEIGHT);
+        assert_trims_as_the_pool_does(&before, &listed, limit, case);
+    }
+}
+
+/// A pool that held `before` and listed `listed[i]` of cohort `i` (each
+/// cohort found by its fee, distinct) trims under `limit` what `trim_to`
+/// over every entry in eviction order trims, cohort by cohort.
+fn assert_trims_as_the_pool_does(before: &[Cohort], listed: &[u64], limit: u64, case: usize) {
+    let after: Vec<Cohort> = before
+        .iter()
+        .zip(listed)
+        .map(|(cohort, &listed)| Cohort {
+            count: cohort.count - listed,
+            ..*cohort
+        })
+        .collect();
     // The pool after the listing, with the listing recorded as the block
     // left it: the trim counts it and never chooses it.
     let mut space = space_of(&after);
@@ -412,16 +508,16 @@ fn the_trim_passes_over_the_listing_as_the_pool_does() {
                 .iter()
                 .position(|c| c.fee == left.fee)
                 .expect("one per fee");
-            before[index].count - left.count
+            listed[index]
         })
         .collect();
     let mut evicted = PerRung::default();
     space.trim(limit, &mut evicted);
     let trimmed: u64 = evicted.iter().sum();
 
-    let mut every = every_transaction(&before);
+    let mut every = every_transaction(before);
     every.sort_by(|a, b| a.0.eviction(b.0));
-    let mut listed_left = [0u64, 10, 5];
+    let mut listed_left = listed.to_vec();
     let units: Vec<(usize, u64, bool)> = every
         .iter()
         .map(|(_, index)| {
@@ -440,15 +536,19 @@ fn the_trim_passes_over_the_listing_as_the_pool_does() {
             .map(|(position, (_, weight, _))| (position, *weight)),
         |position| units[*position].2,
     );
-    assert_eq!(trimmed, naive.len() as u64);
+    assert_eq!(trimmed, naive.len() as u64, "case {case}");
     for (index, listed_out) in after.iter().enumerate() {
         let left = space
             .waiting
             .iter()
             .find(|c| c.fee == listed_out.fee)
-            .expect("one per fee");
+            .map_or(0, |c| c.count);
         let naive_taken = naive.iter().filter(|p| units[**p].0 == index).count() as u64;
-        assert_eq!(listed_out.count - left.count, naive_taken, "cohort {index}");
+        assert_eq!(
+            listed_out.count - left,
+            naive_taken,
+            "case {case}, cohort {index}"
+        );
     }
     assert_total_is_the_pool(&space);
 }

@@ -39,7 +39,7 @@ use shekyl_block_template::{Fill, Refusal};
 use shekyl_chain_rules::{admissible_references, EffectiveMedian};
 use shekyl_curve_tree::select_reference_height;
 use shekyl_economics::{EconomicParams, EmissionError, TxVolume};
-use shekyl_mempool::policy::{make_room, template_order, trim_to, FeeRate, Limits};
+use shekyl_mempool::policy::{template_order, FeeRate, Limits};
 use shekyl_types::BlockHeight;
 use shekyl_wire::transaction::COINBASE_RESERVE;
 
@@ -478,13 +478,19 @@ impl BlockSpace {
     /// `connecting`, under `limit`. Evictions are counted against the
     /// evicted entries' rungs in `evicted`; returns the arrivals refused.
     ///
-    /// Each arrival is [`make_room`]'s question: the entries paying
-    /// strictly less per weight, the cheapest first, until it fits. An
-    /// arrival refused once leaves the pool as it was, so every identical
-    /// arrival after it is refused too. Where the next victim has the
-    /// arrival's weight and one victim covers the excess, each arrival
-    /// takes exactly one, which is what [`make_room`] returns for it; those
-    /// arrivals are admitted together.
+    /// Each arrival is [`make_room`](shekyl_mempool::policy::make_room)'s
+    /// question: the entries paying strictly less per weight, the cheapest
+    /// first, until it fits; an arrival refused leaves the pool as it was,
+    /// so every identical arrival after it is refused too. The arrivals are
+    /// answered together. After `j` of them, the pool's walk has evicted
+    /// the shortest cheapest-first run of strictly cheaper entries whose
+    /// weight covers `total + j·weight − limit`: each arrival extends the
+    /// run before it by the fewest entries that cover its own excess, and
+    /// nothing it admits is a victim (its rate is not strictly less). So
+    /// the `j`-th is admitted exactly when that excess is at most the
+    /// cheaper entries' whole weight, and the admitted arrivals evict that
+    /// run, group by group. Pinned against the pool's own walk, one arrival
+    /// at a time, by `admission_makes_room_as_the_pool_does`.
     fn admit(
         &mut self,
         connecting: u64,
@@ -514,67 +520,58 @@ impl BlockSpace {
             rung,
         };
         let rate = arrival.rate();
+        // The groups paying strictly less, the cheapest first.
+        let victims: Vec<core::ops::Range<usize>> = self
+            .groups()
+            .into_iter()
+            .rev()
+            .filter(|group| {
+                self.waiting[group.start].rate().cmp_rate(rate) == Ordering::Less
+                    && self.group_count(group) > 0
+            })
+            .collect();
+        let cheaper: u128 = victims
+            .iter()
+            .map(|group| {
+                u128::from(self.waiting[group.start].weight) * u128::from(self.group_count(group))
+            })
+            .sum();
+        let room = (u128::from(limit) + cheaper).saturating_sub(self.weight_total);
+        let admitted = if tx.weight == 0 {
+            demand
+        } else {
+            u64::try_from((room / u128::from(tx.weight)).min(u128::from(demand)))
+                .expect("at most the demand")
+        };
+        let mut over = (self.weight_total + u128::from(admitted) * u128::from(tx.weight))
+            .saturating_sub(u128::from(limit));
+        for group in victims {
+            if over == 0 {
+                break;
+            }
+            let weight = u128::from(self.waiting[group.start].weight);
+            let held = u128::from(self.group_count(&group));
+            let taken = if weight == 0 {
+                held
+            } else {
+                held.min(over.div_ceil(weight))
+            };
+            over = over.saturating_sub(taken * weight);
+            self.take_from(
+                group,
+                u64::try_from(taken).expect("at most the group"),
+                evicted,
+            );
+        }
+        debug_assert_eq!(over, 0, "the cheaper entries cover the admitted arrivals");
         let new = self
             .waiting
             .partition_point(|cohort| template_cmp(cohort, &arrival) == Ordering::Less);
         self.waiting.insert(new, arrival);
-
-        let mut remaining = demand;
-        while remaining > 0 {
-            let free = u128::from(limit).saturating_sub(self.weight_total);
-            let fits = if tx.weight == 0 {
-                u128::from(remaining)
-            } else {
-                free / u128::from(tx.weight)
-            };
-            let fits = u64::try_from(fits.min(u128::from(remaining))).expect("at most remaining");
-            if fits > 0 {
-                self.add(new, fits);
-                remaining -= fits;
-                continue;
-            }
-            // The groups paying strictly less, the cheapest first.
-            let victims: Vec<core::ops::Range<usize>> = self
-                .groups()
-                .into_iter()
-                .rev()
-                .filter(|group| {
-                    self.waiting[group.start].rate().cmp_rate(rate) == Ordering::Less
-                        && self.group_count(group) > 0
-                })
-                .collect();
-            let over =
-                (self.weight_total + u128::from(tx.weight)).saturating_sub(u128::from(limit));
-            if let Some(first) = victims.first() {
-                if self.waiting[first.start].weight == tx.weight && over <= u128::from(tx.weight) {
-                    let batch = self.group_count(first).min(remaining);
-                    self.take_from(first.clone(), batch, evicted);
-                    self.add(new, batch);
-                    remaining -= batch;
-                    continue;
-                }
-            }
-            // One arrival, through the pool's own walk over every entry.
-            let units = victims.iter().enumerate().flat_map(|(at, group)| {
-                let head = self.waiting[group.start];
-                (0..self.group_count(group)).map(move |_| (at, head.rate(), head.weight))
-            });
-            let Some(taken) = make_room(self.weight_total, tx.weight, limit, rate, units) else {
-                break;
-            };
-            let mut per_group = vec![0u64; victims.len()];
-            for at in taken {
-                per_group[at] += 1;
-            }
-            for (group, n) in victims.iter().zip(per_group) {
-                self.take_from(group.clone(), n, evicted);
-            }
-            self.add(new, 1);
-            remaining -= 1;
-        }
-        // Nothing above removes an entry, so `new` held; drop the empties now.
+        self.add(new, admitted);
+        // Nothing above removes an entry; drop the empties now.
         self.drop_empty();
-        remaining
+        demand - admitted
     }
 
     /// Step 3: offer the pool to `fill` in the template's order; the bodies
@@ -679,8 +676,14 @@ impl BlockSpace {
     }
 
     /// Step 4: bring the pool within `limit`, the bodies this block listed
-    /// (`self.taken`) counting toward the weight and never chosen
-    /// ([`trim_to`]). Evictions are counted per rung in `evicted`.
+    /// (`self.taken`) counting toward the weight and never chosen. Evictions
+    /// are counted per rung in `evicted`.
+    ///
+    /// [`trim_to`](shekyl_mempool::policy::trim_to)'s walk in the eviction
+    /// order, group by group: a group's waiting entries are taken until the
+    /// excess is covered, the fewest that cover it, and the walk ends there.
+    /// Pinned against `trim_to` over every entry by
+    /// `the_trim_passes_over_the_listing_as_the_pool_does`.
     fn trim(&mut self, limit: u64, evicted: &mut PerRung<u64>) {
         let listed_weight: u128 = self
             .waiting
@@ -688,31 +691,24 @@ impl BlockSpace {
             .zip(&self.taken)
             .map(|(cohort, &taken)| u128::from(cohort.weight) * u128::from(taken))
             .sum();
-        if self.weight_total + listed_weight <= u128::from(limit) {
-            return;
-        }
-        // Units in eviction order: per group, the listed ones (never chosen)
-        // and the ones still waiting.
-        let order: Vec<core::ops::Range<usize>> = self.groups().into_iter().rev().collect();
-        let units: Vec<(Option<usize>, u64)> = order
-            .iter()
-            .enumerate()
-            .flat_map(|(at, group)| {
-                let weight = self.waiting[group.start].weight;
-                let listed: u64 = self.taken[group.clone()].iter().sum();
-                let waiting = self.group_count(group);
-                (0..listed)
-                    .map(move |_| (None, weight))
-                    .chain((0..waiting).map(move |_| (Some(at), weight)))
-            })
-            .collect();
-        let trimmed = trim_to(limit, units, |key| key.is_none());
-        let mut per_group = vec![0u64; order.len()];
-        for key in trimmed {
-            per_group[key.expect("only waiting units are chosen")] += 1;
-        }
-        for (group, n) in order.into_iter().zip(per_group) {
-            self.take_from(group, n, evicted);
+        let mut over = (self.weight_total + listed_weight).saturating_sub(u128::from(limit));
+        for group in self.groups().into_iter().rev() {
+            if over == 0 {
+                break;
+            }
+            let weight = u128::from(self.waiting[group.start].weight);
+            let waiting = u128::from(self.group_count(&group));
+            let taken = if weight == 0 {
+                waiting
+            } else {
+                waiting.min(over.div_ceil(weight))
+            };
+            over = over.saturating_sub(taken * weight);
+            self.take_from(
+                group,
+                u64::try_from(taken).expect("at most the group"),
+                evicted,
+            );
         }
     }
 
