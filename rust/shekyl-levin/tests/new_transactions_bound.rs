@@ -25,7 +25,11 @@
 //! 40 bytes of envelope, 4 of length varint and the transaction: 1 000 044.
 //! A fluff leaves the flag member out (its default) and is 20 bytes smaller.
 
-use shekyl_levin::{NewTransactions, NewTransactionsSize, PortableMap, CAP_NEW_TRANSACTIONS};
+use shekyl_levin::{
+    ingress_payload_cap, notify, BucketHead, BucketReader, Command, Error, Flags, NewTransactions,
+    NewTransactionsSize, PortableMap, Received, CAP_NEW_TRANSACTIONS, DEFAULT_MAX_PACKET_SIZE,
+    NOTIFY_NEW_TRANSACTIONS,
+};
 use shekyl_wire::transaction::MAX_TX_SIZE;
 
 fn notice(lens: &[usize], fluff: bool) -> NewTransactions {
@@ -63,6 +67,62 @@ fn the_cap_is_a_stem_of_one_maximum_size_transaction() {
     );
     // The fluff form is smaller by the flag member, so it fits as well.
     assert_eq!(encoded_len(&[MAX_TX_SIZE], true), CAP_NEW_TRANSACTIONS - 20);
+}
+
+/// The receiver's 2002 cap is that figure, on a request and a response.
+///
+/// Red edit: point `Command::NewTransactions`'s arm of `payload_cap` back
+/// at `DEFAULT_MAX_PACKET_SIZE`.
+#[test]
+fn the_receiver_caps_2002_at_the_derived_figure() {
+    assert_eq!(Command::NewTransactions.payload_cap(), CAP_NEW_TRANSACTIONS);
+    for flags in [Flags::REQUEST, Flags::RESPONSE] {
+        assert_eq!(
+            ingress_payload_cap(NOTIFY_NEW_TRANSACTIONS, flags).expect("defined"),
+            CAP_NEW_TRANSACTIONS
+        );
+    }
+}
+
+/// On an established session the reader refuses a 2002 one byte over the
+/// cap at its header, before any of its body is buffered, and admits one
+/// at the cap. The packet limit is 100 MB there, so the cap is what
+/// refuses.
+///
+/// Red edit: the same as above; the header one byte over is then admitted
+/// and the reader waits for a megabyte of body.
+#[test]
+fn a_2002_one_byte_over_the_cap_is_refused_at_its_header() {
+    let over = BucketHead::make(
+        NOTIFY_NEW_TRANSACTIONS,
+        CAP_NEW_TRANSACTIONS + 1,
+        Flags::REQUEST,
+        false,
+    );
+    let mut reader = BucketReader::new();
+    reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+    reader.feed(&over.write()).expect("a header");
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::OversizePacket {
+            claimed: CAP_NEW_TRANSACTIONS + 1,
+            limit: CAP_NEW_TRANSACTIONS,
+        })
+    );
+
+    let stem = notice(&[MAX_TX_SIZE], false).store().expect("stores");
+    let mut reader = BucketReader::new();
+    reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+    reader
+        .feed(&notify(NOTIFY_NEW_TRANSACTIONS, &stem))
+        .expect("within the packet limit");
+    assert_eq!(
+        reader.next_message(),
+        Ok(Some(Received::Notification {
+            command: NOTIFY_NEW_TRANSACTIONS,
+            payload: stem,
+        }))
+    );
 }
 
 /// The count is the encoder's size for every shape the relay sends: no

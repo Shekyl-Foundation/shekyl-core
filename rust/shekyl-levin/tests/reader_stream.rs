@@ -460,7 +460,8 @@ fn per_command_limit_caps_below_packet_limit() {
         })
     );
 
-    // The same size on 2002 (packet-limit arm until PWD-B12) passes.
+    // The same size on 2002, whose cap is a notice of one largest
+    // transaction (PWD-B12), passes.
     let mut reader = BucketReader::new();
     reader.feed(&invoke(2002, &vec![0u8; over])).unwrap();
     assert!(reader.next_message().unwrap().is_some());
