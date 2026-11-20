@@ -18,7 +18,10 @@
 //!
 //! - Flags carry **neither** [`Flags::REQUEST`] nor [`Flags::RESPONSE`] →
 //!   noise / fragment class. The command field is filler (often 0). Bound
-//!   is the packet / framing limit. Do **not** reject on the id.
+//!   is the packet / framing limit. Do **not** reject on the id. That is
+//!   the class of a bucket on the wire. The inner message a fragment train
+//!   reassembles to is never of this class: [`crate::BucketReader`]
+//!   refuses one when it reads the inner header (PWD-B12).
 //! - Flags carry Q or S → dispatch. The command must convert to
 //!   [`Command`], and the payload is then bounded by that command's
 //!   cap.

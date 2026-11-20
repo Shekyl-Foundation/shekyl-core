@@ -113,6 +113,40 @@
 //!    limit so cover traffic with command 0 is not an unknown command. The
 //!    codec still round-trips unknown bits (PWC-A6); ingress is what
 //!    refuses to process them.
+//!
+//! Read side again ([`BucketReader`]), the fragment-train bounds of
+//! PWD-B12. Numbered after the entries above so no earlier number moves:
+//!
+//! 7. **inner header judged on arrival** (PWD-B12, 2026-11-20) — a fragment
+//!    train's inner header is read and judged when its last byte arrives in
+//!    the reassembly buffer, whichever fragment carries it: signature,
+//!    flags, command, and the inner `length` against the command's cap
+//!    ([`Error::InnerOversize`]). The inherited reader judged it only when
+//!    the train ended, so an unfinished train could hold the packet limit
+//!    behind an inner header nobody had read. Unreachable for a conforming sender:
+//!    [`fragmented_notify`] opens every train with a whole inner header of
+//!    a command it may send.
+//! 8. **train overrun** (PWD-B12, 2026-11-20) — once the inner header is
+//!    known, a fragment that does not end the train must leave the inner
+//!    message incomplete ([`Error::FragmentOverrun`]), checked before its
+//!    body is copied. An unfinished train therefore holds fewer bytes than
+//!    its inner message, and a finished one holds the inner message and
+//!    less than its last fragment's body of padding. The inherited reader
+//!    appended every fragment up to the packet limit. Unreachable for a conforming
+//!    sender: [`fragmented_notify`] cuts the inner message into equal
+//!    bodies and pads only the last, so every earlier fragment ends short
+//!    of the inner message's end. What this does **not** bound is one
+//!    bucket: a single fragment or dummy may still claim a body up to the
+//!    packet limit, and its bytes wait in the receive buffer until the
+//!    bucket is complete (entry 6's class rule).
+//! 9. **inner dispatch class** (PWD-B12, 2026-11-20) — a reassembled inner
+//!    message must be a request or a response. An inner header that sets
+//!    neither `Q` nor `S` is refused when it is read
+//!    ([`Error::InnerNotDispatch`]). The inherited reader bounded such an
+//!    inner message by the packet limit alone and delivered it as a
+//!    notification of whatever command its header named. Unreachable
+//!    for a conforming sender: the inner message of a train is a
+//!    [`notify`] bucket, which sets `Q`.
 
 mod error;
 mod fragment;
