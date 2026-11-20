@@ -55,47 +55,54 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 
 ## 6. Open decisions — OPEN, not ruled
 
-### `CBS-E1` — measure the texture first — RULED 2026-11-20 (Rick): measure first, built as its own PR
+### `CBS-E1` — measure the texture first — RULED 2026-11-20 (Rick): from outside the daemon
 
 - **Problem.** "Ordinary size" and "ordinary pace" are not known numbers.
-- **Recommendation.** Before any build, record per session, by message type, each send's size and time, on the test fleet, on every connector in use. The daemon knows its own messages, so this needs no packet capture. Piece size and pace are derived from it.
+- **Ruling.** The texture is read the way the watcher reads it: bytes on each connection over time, captured on the host, with no daemon change. Nothing for this is built in `shekyl-core`, and nothing lands in alpha.12's tree.
 - **Universality.** "Ordinary" is defined by Shekyl's own message set, which is the same on every connector, not by one transport's traffic.
+- **Not in scope:** piece size, pace, or any of `CBS-E2`–`CBS-E7`.
 
-#### The measurement — RULED 2026-11-20 (Rick); the run is proposed
+#### The capture
 
-**What exists** (read at dev `ac63d95d`):
+The tooling lives with the operational tooling, beside TRC-1's, not in this repository.
 
-- A message-size record on clearnet sessions only (`shekyl-clearnet`, `sizes.rs`), in a measurement build (`measurement-spans`, held out of release builds by `scripts/ci/check_measurement_spans.py`).
-- It writes one line per Levin message: size, direction, session number, and the command's class (control, transaction relay, block relay, bundle relay, sync). It keeps no command name on purpose.
-- Its one time stamp for a sent message is taken when the writer takes the message off the session's queue (`shekyl-capped-stream`, `copy.rs`, the `encode` call). That is neither the time its sender queued it nor the time the write returned.
-- Tor sessions have no such record.
+- **Headers only, both directions, no payload.** Each packet's time, size, direction and connection.
+- **Clearnet:** the daemon's P2P connections.
+- **Tor:** the daemon's loopback sockets to the local Tor client, and from the onion service's target port: one per peer session.
+- **Tor, after Tor:** TRC-1's guard-connection sampler for the same hours.
+- **Beside it:** host load, the capture's dropped-packet count, and the daemon's peer count, so the record shows the capture saw every session.
 
-**What is proposed.**
+#### The run — starts on Rick's go, after alpha.12 ships
 
-1. **One line per message, both directions, on every connector.** The record moves from `shekyl-clearnet` to where both connector drives can use it, and the Tor drive feeds it as the clearnet drive does. A line carries: connector, session number, direction, message type, size in bytes (header and payload), and its times.
-2. **Three times for a sent message:** queued by its sender, taken off the queue by the writer, and written (the write of its last byte returned). The first needs a stamp carried with the queue item in a measurement build. **One time for a received message:** when its last byte arrived.
-3. **Message type, not class — RULED 2026-11-20.** The line names the command. This reverses the existing record's choice to keep the class only, and it is needed: piece size is derived from the sizes of particular message types. A transaction message's line does not say stem or broadcast: the record reads message headers only, and that flag is in the payload.
-4. **Nothing that identifies a transaction or a peer.** No transaction identifier, no address, no content. The session number is local to the node and to the run.
-5. **Fragments are recorded as they are sent,** one line per fragment, typed as a fragment, so a later run with pieces on reads the same way.
-6. **Where it runs.** Nodes with no Tor relay, on every connector in use: clearnet under the record layer, and Tor. Each run's host load is recorded beside it. The Tor node is paired with TRC-1's guard-connection sampler for the same hours, so the daemon's written times and the watcher's view of the guard connections are read together.
-7. **Output.** A reducer turns the lines into the figures below, per connector and per link. Its sizes are plaintext, before the record layer's overhead, and it says so in its output.
-   - bytes per window at 0.1 s, 1 s and 10 s, by the written time, in the layout of TRC-1's table (`trc1_guard_connection_20261112.md` §5), so the two line up;
-   - the size distribution by message type;
-   - the distribution of gaps between sends, by type and overall;
-   - the lag from queued to written.
-8. **It stays a measurement build, with no wire change.** The feature gate and its CI check are extended to the new owner. A release build's behaviour is unchanged and its record stays zero-sized.
-9. **It is its own PR, aimed at alpha.12.** If it is not merged when the cut is ready, the cut goes without it. #1431 and `CBS-E2`–`CBS-E7` are not in alpha.12.
+- Three alpha.12 release nodes with no Tor relay: one clearnet under the record layer, one Tor only, one both. Rick names the hosts.
+- 72 hours. Recording starts with the run, and the record notes when the fleet reports synced.
+- TRC-1's wallet send loop runs on one node and logs each send's time, with some hours at a higher rate.
 
-**Limits, stated before measuring.**
+#### The reducer's output, per connector and per link
 
-- "Written" is when the operating system accepted the bytes, not when they left the host. On Tor it is when the local Tor client accepted them; what a watcher sees on the guard connections is later and is Tor's to schedule. TRC-1's guard-connection counters stay the watcher's view on Tor.
-- A test network's traffic is thinner than a live network's. The texture read here is a lower bound on how busy a link is.
+- Bytes per window at 0.1 s, 1 s and 10 s, in the layout of TRC-1's table ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md) §5).
+- Burst sizes and the gaps between bursts. The record states how a burst is defined, and reports at two gap thresholds.
+- The watcher's test on the logged sends: own-send windows against all others. This is the "before" reading for the pass mark (`CBS-E5`).
+- Quiet hours and busy hours, reported separately.
 
-**The run — PROPOSED 2026-11-20 (Rick may change it).**
+#### Rules
 
-- 72 hours on three test-fleet nodes with no Tor relay: one clearnet under the record layer, one Tor only, one both.
-- Recording starts with the node, and the record notes when the fleet reports synced after the wipe.
-- TRC-1's wallet send loop runs on one node, with some hours at a higher send rate.
+- **Bytes over time, not packet sizes.** A host capture sees frames before the network card splits them, so a packet's size in the capture is not its size on the wire.
+- **Raw captures never leave the host and are never committed:** they hold peer addresses. The reduced output names connections by a local index only. The captures are deleted once Rick accepts the record.
+- **Register before reading.** The record under `docs/benchmarks/` fixes its definitions before any figure is read, as TRC-1's did.
+- **The reducer has a test that can fail:** a fixture capture with known bursts.
+
+#### The in-daemon record — DEFERRED 2026-11-20 (Rick)
+
+A record written by the daemon, one line per message with its command, is built only if the host capture leaves a question that needs message names. Reopening criterion: the record of the run names such a question. No code symbol exists for it. If it is built, two answers are already ruled:
+
+- **Its own feature switch.** The existing measurement build also lifts the Tor silence gap to 120 s and puts transaction identifiers on the relay's debug lines, so a node on it does not behave like a release node.
+- **A small crate that the connectors depend on only under that switch.**
+
+What was read for it stands as fact (dev `ac63d95d`):
+
+- The existing message-size record is on clearnet sessions only (`shekyl-clearnet`, `sizes.rs`) and keeps a command's class, not its name. Ruled for a future record: each line names the command, and a transaction message's line does not say stem or broadcast.
+- Its time stamp for a sent message is taken when the writer takes the message off the session's queue (`shekyl-capped-stream`, `copy.rs`), which is neither the time it was queued nor the time the write returned. A future record carries all three.
 
 ### `CBS-E2` — does a relay wait for the whole transaction? — OPEN
 
