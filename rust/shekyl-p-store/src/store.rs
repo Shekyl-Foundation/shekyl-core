@@ -341,6 +341,36 @@ impl BodyStore {
     }
 }
 
+#[cfg(feature = "test-tamper")]
+impl BodyStore {
+    /// Flip one bit of `shard_id`'s sealed chunk `index`, as a failing disk
+    /// would: the chunk then fails authentication when it is read. Test-only
+    /// (`test-tamper`): a shipped store writes only chunks it sealed.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if the shard holds no such chunk;
+    /// [`StoreError::Backend`] on I/O.
+    pub fn test_tamper_chunk(&self, shard_id: ShardId, index: u32) -> Result<(), StoreError> {
+        let ck = chunk_key(&slot_key(self.key.as_bytes(), shard_id), u64::from(index));
+        let txn = self.db.begin_write()?;
+        {
+            let mut chunks = txn.open_table(CHUNKS)?;
+            let mut sealed = chunks
+                .get(&ck)?
+                .ok_or_else(|| StoreError::Corrupt {
+                    detail: "no such chunk to tamper with".to_owned(),
+                })?
+                .value()
+                .to_vec();
+            sealed[0] ^= 1;
+            chunks.insert(&ck, sealed.as_slice())?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod read_frame_tests {
     use super::*;

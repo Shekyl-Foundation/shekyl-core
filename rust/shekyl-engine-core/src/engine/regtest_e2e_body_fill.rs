@@ -21,13 +21,15 @@
 
 #![cfg(test)]
 
+use std::collections::BTreeSet;
+
 use super::*;
 
 use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_engine_state::pscan_state::PScanState;
 use shekyl_p_loopback::{
-    client_through, fetch_target, DiscardTxs, ExpectedShard, FetchError, PServeEndpoint,
-    RequestHeader, Timeouts,
+    client_through, fetch_target, DiscardTxs, ExpectedShard, FetchError, PFetchClient,
+    PServeEndpoint, RequestHeader, Timeouts, VerifiedShard,
 };
 use shekyl_types::{shard_of, ArchivalLength};
 use shekyl_wire::shard_frame::frame_rows_digest;
@@ -163,18 +165,37 @@ async fn scan_to_the_horizon(daemon: &RegtestDaemon, arc: &Shared, pscan_seal: &
     .await;
 }
 
-/// One reconcile pass, as the body-store leg runs it, at the daemon's
-/// height, which it returns.
+/// One reconcile pass on a chain advance, as the body-store leg runs it,
+/// at the daemon's height, which it returns.
 async fn reconcile(
     daemon: &RegtestDaemon,
     arc: &Shared,
     state: &mut ReconcileState,
     alarms: &ShardAlarms,
 ) -> u64 {
+    reconcile_suspects(daemon, arc, &BTreeSet::new(), state, alarms).await
+}
+
+/// One reconcile pass with the shards the serving path reported, as the
+/// body-store leg runs it on a serve fault.
+async fn reconcile_suspects(
+    daemon: &RegtestDaemon,
+    arc: &Shared,
+    suspects: &BTreeSet<ShardId>,
+    state: &mut ReconcileState,
+    alarms: &ShardAlarms,
+) -> u64 {
     let tip = daemon.height().await;
-    super::super::Engine::reconcile_bodies(arc.clone(), &daemon.target(), tip, state, alarms)
-        .await
-        .unwrap_or_else(|e| daemon.panic_with_log("reconcile the persona body store", e));
+    super::super::Engine::reconcile_bodies(
+        arc.clone(),
+        &daemon.target(),
+        tip,
+        suspects,
+        state,
+        alarms,
+    )
+    .await
+    .unwrap_or_else(|e| daemon.panic_with_log("reconcile the persona body store", e));
     tip
 }
 
@@ -209,72 +230,151 @@ async fn draw_and_check(
     close_height: u64,
     unheld: ShardId,
 ) {
-    use shekyl_crypto_pq::account::{normalize_seed, Network};
-    use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
-
     let expected = expected_shard(arc, target, close_height).await;
-    let stake = arc.read().await.stake_handle().expect("a staker");
-    let key: Arc<dyn shekyl_p_host::PassKey> =
-        ResidentReceiptKey::new(&stake, PSlot::from_raw(SLOT));
-    let depth = shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
-    let count = daemon.height().await;
-    if count <= depth.to_raw() {
-        daemon.generate_blocks(depth.to_raw() + 1 - count).await;
-    }
-    let top = shekyl_types::BlockHeight::from_raw(daemon.height().await - 1);
-    let signer = shekyl_p_host::signer_at_synced_tip(key, top, Duration::from_secs(600));
-    let provider = Arc::new(shekyl_p_serve::StoreShardProvider::new(Arc::new(
-        stake.bodies.reads(),
-    )));
-    let endpoint = PServeEndpoint::bind(provider, signer)
-        .await
-        .expect("bind the serving endpoint");
-    let client = client_through(endpoint.addr(), proving_timeouts()).await;
-    let receipt_key = derive_archival_p_keys(&normalize_seed(seed), Network::Regtest, SLOT)
-        .expect("derive persona keys")
-        .receipt_sign_pk;
-    let anchor = top
-        .checked_sub_count(depth)
-        .expect("the chain was mined past the anchor depth");
-    let anchor_hash = arc
-        .read()
-        .await
-        .daemon()
-        .clone()
-        .fetch_scannable_block(usize::try_from(anchor.to_raw()).expect("fits"))
-        .await
-        .expect("the anchor block")
-        .block
-        .hash();
-    let header = || RequestHeader::fresh(anchor, anchor_hash).expect("entropy for the nonce");
-    let served = client
-        .fetch(
-            &fetch_target(receipt_key.clone()),
-            &header(),
-            &expected,
-            Arc::new(DiscardTxs),
-        )
+    let draws = Draws::open(daemon, arc, seed).await;
+    let served = draws
+        .fetch(&expected)
         .await
         .unwrap_or_else(|e| panic!("a draw on held shard {target:?} must answer 200: {e}"));
     assert_eq!(served.shard_id(), target);
-    assert_eq!(endpoint.served_count(), 1);
-    assert_eq!(endpoint.not_held_count(), 0);
+    assert_eq!(draws.endpoint.served_count(), 1);
+    assert_eq!(draws.endpoint.not_held_count(), 0);
 
-    let refused = client
-        .fetch(
-            &fetch_target(receipt_key),
-            &header(),
-            &shekyl_p_loopback::fixture_expectation(unheld.to_raw()),
-            Arc::new(DiscardTxs),
-        )
+    let refused = draws
+        .fetch(&shekyl_p_loopback::fixture_expectation(unheld.to_raw()))
         .await
         .expect_err("a shard the store does not hold is not served");
     assert!(matches!(refused, FetchError::Miss), "{refused}");
     assert_eq!(
-        endpoint.not_held_count(),
+        draws.endpoint.not_held_count(),
         1,
         "the 404 moves the not-held count (WSS-Q17's backstop)"
     );
+}
+
+/// A draw on held `target` after a chunk of it rotted in the store: the
+/// serve ends short of its signature, counts a lookup failure, and reports
+/// the shard to the body store's reconcile, whose queue this returns.
+async fn draw_on_a_damaged_shard(
+    daemon: &RegtestDaemon,
+    arc: &Shared,
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    target: ShardId,
+    close_height: u64,
+) -> BTreeSet<ShardId> {
+    let expected = expected_shard(arc, target, close_height).await;
+    let draws = Draws::open(daemon, arc, seed).await;
+    let failed = draws
+        .fetch(&expected)
+        .await
+        .expect_err("a body that does not read back is not served whole");
+    eprintln!("the draw on the damaged shard failed as it must: {failed}");
+    let faults = arc
+        .read()
+        .await
+        .stake_handle()
+        .expect("a staker")
+        .bodies
+        .serve_faults();
+    // The endpoint counts and reports after it closes the stream, which
+    // is when the requester's fetch returned.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let reported = loop {
+        let reported = faults.take();
+        if !reported.is_empty() {
+            break reported;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the serve reported no fault in 30 s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(draws.endpoint.lookup_failure_count(), 1);
+    assert_eq!(draws.endpoint.served_count(), 0);
+    reported
+}
+
+/// The production serving endpoint over this persona's body store, and a
+/// requester anchored where one is: [`PASS_ANCHOR_DEPTH_BLOCKS`] below the
+/// tip, on that block's hash, with a fresh nonce per request. The depth is
+/// the genesis reorg cap, not the regtest lever, and P's pre-sign gate
+/// refuses every anchor (400) while its own height is below it, so the
+/// chain is first mined past the depth.
+///
+/// [`PASS_ANCHOR_DEPTH_BLOCKS`]: shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS
+struct Draws {
+    endpoint: PServeEndpoint,
+    client: PFetchClient,
+    receipt_key: shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey,
+    anchor: shekyl_types::BlockHeight,
+    anchor_hash: shekyl_types::BlockHash,
+}
+
+impl Draws {
+    async fn open(
+        daemon: &RegtestDaemon,
+        arc: &Shared,
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    ) -> Self {
+        use shekyl_crypto_pq::account::{normalize_seed, Network};
+        use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
+
+        let stake = arc.read().await.stake_handle().expect("a staker");
+        let key: Arc<dyn shekyl_p_host::PassKey> =
+            ResidentReceiptKey::new(&stake, PSlot::from_raw(SLOT));
+        let depth = shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
+        let count = daemon.height().await;
+        if count <= depth.to_raw() {
+            daemon.generate_blocks(depth.to_raw() + 1 - count).await;
+        }
+        let top = shekyl_types::BlockHeight::from_raw(daemon.height().await - 1);
+        let signer = shekyl_p_host::signer_at_synced_tip(key, top, Duration::from_secs(600));
+        let provider = Arc::new(shekyl_p_serve::StoreShardProvider::new(Arc::new(
+            stake.bodies.reads(),
+        )));
+        let endpoint = PServeEndpoint::bind(provider, signer)
+            .await
+            .expect("bind the serving endpoint");
+        let client = client_through(endpoint.addr(), proving_timeouts()).await;
+        let receipt_key = derive_archival_p_keys(&normalize_seed(seed), Network::Regtest, SLOT)
+            .expect("derive persona keys")
+            .receipt_sign_pk;
+        let anchor = top
+            .checked_sub_count(depth)
+            .expect("the chain was mined past the anchor depth");
+        let anchor_hash = arc
+            .read()
+            .await
+            .daemon()
+            .clone()
+            .fetch_scannable_block(usize::try_from(anchor.to_raw()).expect("fits"))
+            .await
+            .expect("the anchor block")
+            .block
+            .hash();
+        Self {
+            endpoint,
+            client,
+            receipt_key,
+            anchor,
+            anchor_hash,
+        }
+    }
+
+    /// One draw, under a fresh request header.
+    async fn fetch(&self, expected: &ExpectedShard) -> Result<VerifiedShard, FetchError> {
+        let header =
+            RequestHeader::fresh(self.anchor, self.anchor_hash).expect("entropy for the nonce");
+        self.client
+            .fetch(
+                &fetch_target(self.receipt_key.clone()),
+                &header,
+                expected,
+                Arc::new(DiscardTxs),
+            )
+            .await
+    }
 }
 
 /// A `CompleteTree` bond, end to end on one chain (`WSS-Q15`, `WSS-Q17`):
@@ -288,7 +388,10 @@ async fn draw_and_check(
 ///    opens: an already-joined tree is drawn on it from that open (§6.5.9).
 ///    A draw on it once the epoch has opened answers 200.
 /// 4. A body that does not verify (shard 1's frame written as shard 0's)
-///    raises `corrupt` and is refilled.
+///    raises `corrupt` and is refilled. Then a chunk of it rots on disk: a
+///    draw on it ends short and reports the shard, and the pass that report
+///    wakes checks that shard between sweeps, raises `corrupt` and refills
+///    it, and the next draw answers 200.
 /// 5. The store file deleted and the wallet reopened: every owed shard
 ///    raises `missing` and is refilled inside the window.
 /// 6. Past the boundary that discards the shards' bodies, a fill that fails
@@ -412,7 +515,8 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
         .expect("write the wrong body");
     assert!(!holds_verified(&arc, shard(0)).await);
     let alarms = ShardAlarms::default();
-    reconcile(&daemon, &arc, &mut ReconcileState::default(), &alarms).await;
+    let mut swept = ReconcileState::default();
+    let sweep = reconcile(&daemon, &arc, &mut swept, &alarms).await;
     assert_eq!(
         alarms.report().alarms,
         [ShardAlarm {
@@ -425,6 +529,37 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
         holds_verified(&arc, shard(0)).await,
         "refilled from the node"
     );
+
+    // (4b) A chunk of shard 0 rots on disk. A draw on it ends short and the
+    // serve reports the shard; the pass that report wakes, between sweeps,
+    // checks that shard and refills it, and records no full check.
+    stake.bodies.tamper_chunk_for_test(shard(0), 0).await;
+    let suspects = draw_on_a_damaged_shard(&daemon, &arc, &seed, shard(0), zero.close_height).await;
+    assert_eq!(suspects, [shard(0)].into_iter().collect());
+    let alarms = ShardAlarms::default();
+    let woke = reconcile_suspects(&daemon, &arc, &suspects, &mut swept, &alarms).await;
+    assert_eq!(
+        shekyl_archival_retention::settlement_epoch_at_height(woke),
+        shekyl_archival_retention::settlement_epoch_at_height(sweep),
+        "the fault's pass runs in the epoch the last sweep did, so it is not a sweep"
+    );
+    assert_eq!(
+        alarms.report(),
+        ShardAlarmReport {
+            last_check: None,
+            alarms: vec![ShardAlarm {
+                shard: 0,
+                alarm: ShardAlarmCause::Corrupt,
+                refill: ShardRefill::Refilled,
+            }],
+        },
+        "the reported shard is checked and refilled at once"
+    );
+    assert!(
+        holds_verified(&arc, shard(0)).await,
+        "refilled from the node after the serve fault"
+    );
+    draw_and_check(&daemon, &arc, &seed, shard(0), zero.close_height, shard(7)).await;
 
     // (5) The store file deleted, the wallet reopened.
     drop(stake);

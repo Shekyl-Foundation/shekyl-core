@@ -292,6 +292,9 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 # (TEST_ONLY, check_test_only_features.py). Dev edge only: the
 # `test-helpers` lib surface binds through the scanner's `bound` instead.
 shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
+# `BodyStore::test_tamper_chunk` (TEST_ONLY): the body-fill walk damages a
+# stored chunk to serve a fault and see its reconcile.
+shekyl-p-store = { path = "../shekyl-p-store", features = ["test-tamper"] }
 # The serving-task lifecycle tests bind a host to `RefusingKey` (a key that
 # says no), which lives on `shekyl-p-host`'s dev-only `test-signer` edge with
 # `TestReceiptKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every

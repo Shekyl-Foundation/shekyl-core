@@ -415,15 +415,13 @@ where
             alarms: Arc::clone(alarms),
             state: Arc::default(),
         }),
-        // Last: its pass runs on a task of its own, so its place in the
+        // Last: its passes run on its own runner task, so its place in the
         // order costs the legs before it nothing.
-        Box::new(BodyStoreLeg {
+        Box::new(BodyStoreLeg::new(
             engine,
-            daemon: daemon.clone(),
-            alarms: shard_alarms.clone(),
-            state: Arc::default(),
-            pass: Arc::default(),
-        }),
+            daemon.clone(),
+            shard_alarms.clone(),
+        )),
     ]
 }
 

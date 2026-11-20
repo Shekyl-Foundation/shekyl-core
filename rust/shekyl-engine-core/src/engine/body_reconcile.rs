@@ -171,6 +171,23 @@ impl ShardAlarms {
         }
     }
 
+    /// Whether a report of `shard` from the serving path should wake a
+    /// pass. Not when this session's alarm on it is still unanswered: a
+    /// `failed` refill is retried by the pass at the next chain advance, and
+    /// a `discarded` shard waits for the recovery fetch. A requester drawing
+    /// on it again must not make the wallet ask its node again.
+    #[must_use]
+    pub(crate) fn wakes_for(&self, shard: ShardId) -> bool {
+        self.0
+            .lock()
+            .expect("shard alarms lock")
+            .alarms
+            .get(&shard.to_raw())
+            .is_none_or(|alarm| {
+                !matches!(alarm.refill, ShardRefill::Failed | ShardRefill::Discarded)
+            })
+    }
+
     /// The shards whose refill failed, for the next pass to retry.
     fn failed_refills(&self) -> BTreeSet<ShardId> {
         self.0
@@ -243,8 +260,9 @@ where
     /// One pass at chain height `tip`: pull what became owed, then — at a
     /// session's first pass, at the first pass of each settlement epoch, and
     /// after a pull that filled — check every owed shard, refill what is
-    /// lost, and record the check. Between those, check again each owed
-    /// shard whose refill failed, and refill it.
+    /// lost, and record the check. Between those, check each owed shard in
+    /// `suspects` (what the serving path reported) and each owed shard whose
+    /// refill failed, and refill what is lost.
     ///
     /// # Errors
     ///
@@ -254,6 +272,7 @@ where
         self_arc: Arc<RwLock<Self>>,
         daemon: &DaemonTarget,
         tip: u64,
+        suspects: &BTreeSet<ShardId>,
         state: &mut ReconcileState,
         alarms: &ShardAlarms,
     ) -> Result<(), ReconcileError> {
@@ -331,16 +350,15 @@ where
         let first = state.owed.is_none();
         let new_epoch = state.swept_in_epoch != Some(epoch);
         let sweep = first || new_epoch || !pulled.is_empty();
-        // A sweep checks every owed shard. Between sweeps a pass still
-        // retries each refill that failed, as its alarm says it will.
+        // A sweep checks every owed shard. Between sweeps a pass checks the
+        // shards the serving path reported and retries each refill that
+        // failed, as its alarm says it will: the owed ones, and no other.
         let checking: Vec<ShardId> = if sweep {
             owed.difference(&pulled).copied().collect()
         } else {
-            alarms
-                .failed_refills()
-                .intersection(&owed)
-                .copied()
-                .collect()
+            let mut checking = alarms.failed_refills();
+            checking.extend(suspects);
+            checking.intersection(&owed).copied().collect()
         };
         for shard in checking {
             let cause = match ctx
@@ -499,6 +517,25 @@ mod tests {
             4,
             "repairing a shard with no alarm raises none"
         );
+    }
+
+    #[test]
+    fn a_serve_fault_wakes_a_pass_unless_the_alarm_is_unanswered() {
+        let alarms = ShardAlarms::default();
+        assert!(alarms.wakes_for(shard(1)), "no alarm: check it");
+        alarms.raise(shard(1), ShardAlarmCause::Corrupt);
+        alarms.settle(shard(1), ShardRefill::Refilled);
+        assert!(
+            alarms.wakes_for(shard(1)),
+            "refilled, and failing again: fresh damage to check"
+        );
+        for refill in [ShardRefill::Failed, ShardRefill::Discarded] {
+            alarms.settle(shard(1), refill);
+            assert!(
+                !alarms.wakes_for(shard(1)),
+                "{refill:?}: the alarm already says so, and the scheduled pass owns the retry"
+            );
+        }
     }
 
     #[test]

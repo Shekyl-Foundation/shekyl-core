@@ -192,9 +192,9 @@ impl PassSigner for CountingSigner {
 /// A requester, as a writer: accepts `cap` bytes and then refuses every
 /// write, the way a socket does once its peer has gone and the buffers
 /// between them are full.
-struct Requester {
-    taken: usize,
-    cap: usize,
+pub(super) struct Requester {
+    pub(super) taken: usize,
+    pub(super) cap: usize,
 }
 
 impl AsyncWrite for Requester {

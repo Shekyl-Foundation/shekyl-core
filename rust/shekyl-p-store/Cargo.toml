@@ -27,5 +27,12 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 [dev-dependencies]
 tempfile = "3"
 
+[features]
+# `BodyStore::test_tamper_chunk`: flips a bit of a sealed chunk, as a failing
+# disk would, for the wallet's serve-fault tests (`shekyl-engine-core`'s dev
+# edge). A shipped store never writes a chunk it did not seal, so this is
+# TEST_ONLY in `check_test_only_features.py`.
+test-tamper = []
+
 [lints]
 workspace = true
