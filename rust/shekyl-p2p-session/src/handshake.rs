@@ -16,8 +16,8 @@
 //! discloses in the response's list.
 
 use shekyl_levin::{
-    invoke, response, BasicNodeData, Command, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    PeerlistEntry, PortableMap, TimedSyncRequest, TimedSyncResponse,
+    invoke, response, BasicNodeData, Command, CoreSyncData, Error as LevinError, HandshakeRequest,
+    HandshakeResponse, PeerlistEntry, PortableMap, TimedSyncRequest, TimedSyncResponse,
 };
 use shekyl_transport_layer::{
     CloseCause, CloseKind, ConnectorId, DialEnd, DialFailure, Reached, Retry,
@@ -57,6 +57,31 @@ pub(crate) const fn handshake_refused(connector: ConnectorId) -> DialEnd {
         DialFailure::refused_by_peer(connector, Reached::StreamOpened),
         CloseCause::new(CloseKind::LevinHandshakeRejected),
     )
+}
+
+/// The D12 kind a Levin framing error closes with, when it has one of
+/// its own: the three fragment-train refusals (PWD-B12). `None` for every
+/// other framing error, which closes as the session's form end
+/// ([`form_failure`], or [`handshake_refused`] on this node's own dial).
+///
+/// Every variant is named, with no catch-all: a framing error added to
+/// `shekyl-levin` does not build here until it has an arm, so a new
+/// refusal cannot fall into `SessionRefused` unseen.
+pub(crate) const fn framing_kind(error: &LevinError) -> Option<CloseKind> {
+    match error {
+        LevinError::InnerOversize { .. } => Some(CloseKind::InnerMessageOversize),
+        LevinError::FragmentOverrun { .. } => Some(CloseKind::FragmentTrainOverrun),
+        LevinError::InnerNotDispatch { .. } => Some(CloseKind::InnerMessageNotDispatch),
+        LevinError::BadSignature
+        | LevinError::OversizePacket { .. }
+        | LevinError::BufferLimit { .. }
+        | LevinError::FragmentTooSmall
+        | LevinError::InnerLengthTruncated { .. }
+        | LevinError::Poisoned
+        | LevinError::NoiseTooSmall { .. }
+        | LevinError::UnknownFlags { .. }
+        | LevinError::UnknownCommand { .. } => None,
+    }
 }
 
 /// A request this node sent got no response within the invoke deadline.
@@ -229,6 +254,52 @@ mod tests {
             assert!(matches!(end.failure().evidence(), Evidence::Destination(_)));
             assert_eq!(end.failure().proves_misbehaviour(), proves, "{connector:?}");
             assert_eq!(end.failure().retry(), Retry::Final);
+        }
+    }
+
+    /// Each fragment-train refusal has its own kind, and every other
+    /// framing error has none: it closes as the session's form end.
+    ///
+    /// Red edit: map one of the three to `None` (fold it back into
+    /// `SessionRefused`), or map two of them to one kind.
+    #[test]
+    fn each_fragment_train_refusal_has_a_kind_of_its_own() {
+        assert_eq!(
+            framing_kind(&LevinError::InnerOversize {
+                claimed: 2,
+                limit: 1
+            }),
+            Some(CloseKind::InnerMessageOversize)
+        );
+        assert_eq!(
+            framing_kind(&LevinError::FragmentOverrun { inner: 1, held: 1 }),
+            Some(CloseKind::FragmentTrainOverrun)
+        );
+        assert_eq!(
+            framing_kind(&LevinError::InnerNotDispatch { flags: 0 }),
+            Some(CloseKind::InnerMessageNotDispatch)
+        );
+        for other in [
+            LevinError::BadSignature,
+            LevinError::OversizePacket {
+                claimed: 2,
+                limit: 1,
+            },
+            LevinError::BufferLimit { limit: 1 },
+            LevinError::FragmentTooSmall,
+            LevinError::InnerLengthTruncated {
+                claimed: 2,
+                available: 1,
+            },
+            LevinError::Poisoned,
+            LevinError::NoiseTooSmall {
+                requested: 1,
+                minimum: 2,
+            },
+            LevinError::UnknownFlags { flags: 0x20 },
+            LevinError::UnknownCommand { command: 9 },
+        ] {
+            assert_eq!(framing_kind(&other), None, "{other:?}");
         }
     }
 
