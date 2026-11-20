@@ -75,22 +75,24 @@ jobs:
           # A push to dev and a manual dispatch compile every harness. A
           # pull request compiles the ones its change reaches; a classifier
           # that cannot answer fails closed to every one.
+          # The changed paths go through a file: a release pull request's
+          # diff against `main` passes the 128 KiB Linux allows one
+          # environment string (check_fuzz_inventory.py's `--matrix`).
+          changed_file=$(mktemp)
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
             head="${{ github.sha }}"
             out=$(mktemp)
             if GITHUB_OUTPUT="$out" python3 scripts/ci/change_scope.py --base "$base" --head "$head"; then
               rust_tests=$(sed -n 's/^rust_tests=//p' "$out")
-              changed=$(git diff --name-only "$base" "$head")
+              git diff --name-only "$base" "$head" > "$changed_file"
             else
               rust_tests=all
-              changed=
             fi
           else
             rust_tests=all
-            changed=
           fi
-          crates=$(RUST_TESTS="$rust_tests" CHANGED="$changed" python3 scripts/ci/check_fuzz_inventory.py --matrix)
+          crates=$(RUST_TESTS="$rust_tests" CHANGED_FILE="$changed_file" python3 scripts/ci/check_fuzz_inventory.py --matrix)
           echo "rust_tests=$rust_tests"
           echo "crates=$crates"
           echo "crates=$crates" >> "$GITHUB_OUTPUT"
