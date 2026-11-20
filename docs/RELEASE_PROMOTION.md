@@ -142,17 +142,12 @@ then tag** (avoids the "tag not on the default branch" trap that
          Tor bundle inside each unpacked package, and stops before
          publishing. Without that input the package job is skipped on a
          dispatch, and packaging is first exercised by the real tag.
-   - [ ] **Economics on the release branch:**
-         `gh workflow run economics-c2a-prime.yml --ref release-vX.Y.Z`. Its
-         concurrency group cancels the run a pull request into `main` starts,
-         so the dispatch is the run that counts.
    - [ ] **Commit statuses for every dispatched run.** A dispatched run is
          attached to no pull request, so the promotion pull request shows only
          its own checks and looks green while the dry run is still building.
          Post a pending status on the frozen SHA as each run starts, and its
          result when it ends:
-         `gh api -X POST repos/<owner>/<repo>/statuses/<frozen-SHA> -f state=pending -f context=release/gitian-dry-run -f target_url=<run URL>`
-         (and `release/economics`).
+         `gh api -X POST repos/<owner>/<repo>/statuses/<frozen-SHA> -f state=pending -f context=release/gitian-dry-run -f target_url=<run URL>`.
 3. **Cut `release-vX.Y.Z` at the frozen SHA and open the promotion pull
    request** from that branch to `main`, titled `Release: vX.Y.Z`. Never
    promote from `dev` itself: the pull request's head would be `dev`, so `dev`
