@@ -848,3 +848,168 @@ fn own_bodies_fill_the_penalty_free_room_and_no_more() {
         "nothing offered, nothing listed"
     );
 }
+
+/// An empty fill at the point the next block is judged, the template's own.
+fn empty_fill<'a>(space: &BlockSpace, run: &'a SimParams, point: &FeePoint<'a>) -> Fill<'a> {
+    let coinbase = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
+    Fill::empty(
+        space.medians(run.economic()).effective_median.to_raw(),
+        coinbase,
+        point.already_generated,
+        point.volume,
+        point.params,
+    )
+    .expect("the point is in the reward's domain")
+}
+
+/// Bodies in `listed` whose place ends past `free`, one body at a time.
+/// A weightless body does not move the block, so it is not past.
+fn ends_past_free(free: u64, listed: &[ListedBodies]) -> (u64, u64) {
+    let mut at = 0u64;
+    let mut bodies = 0u64;
+    let mut fees = 0u64;
+    for group in listed {
+        for _ in 0..group.count {
+            let end = at.checked_add(group.weight).expect("a listed weight fits");
+            if group.weight > 0 && end > free {
+                bodies += 1;
+                fees = fees.checked_add(group.fee).expect("a listed fee fits");
+            }
+            at = end;
+        }
+    }
+    (bodies, fees)
+}
+
+/// A weightless body does not leave the free prefix, even when the place it
+/// is listed at is already past `free`.
+#[test]
+fn a_weightless_body_is_not_past_the_free_weight() {
+    let listed = [
+        ListedBodies {
+            fee: 1,
+            weight: 10,
+            count: 2,
+        },
+        ListedBodies {
+            fee: 5,
+            weight: 0,
+            count: 4,
+        },
+    ];
+    // The first body ends on the ceiling. The second ends past it. The four
+    // weightless bodies stay there and are not past.
+    assert_eq!(ends_past_free(10, &listed), (1, 1));
+}
+
+/// The record agrees with the listing: the bodies past `free` are those
+/// whose place ends past it, and their fees cover the block's penalty.
+fn assert_past_is_the_listing(filled: &Filled, listed: &[ListedBodies], free: u64) {
+    let (bodies, fees) = ends_past_free(free, listed);
+    assert_eq!(filled.past_free.bodies, bodies);
+    assert_eq!(filled.past_free.fees_atomic, fees);
+    assert_eq!(
+        filled.past_free.surplus_atomic(),
+        fees - filled.past_free.penalty_atomic
+    );
+}
+
+/// §5.36's record of a fill. A pool the block empties stops `Drained` and
+/// lists nothing past the penalty-free weight. A pool deeper than the room
+/// stops at the marginal refusal: the penalty, while the next body's fee is
+/// under what it adds, and the limit once a fee covers the penalty all the
+/// way there. Two weights keep the last refusal. The bodies past the free
+/// weight are the ones whose place ends beyond it.
+#[test]
+fn the_fill_records_why_it_stopped_and_what_it_listed_past_the_free_weight() {
+    let run = SimParams::default();
+    let params = run.economic();
+    let point = at(&run);
+    let tx = baseline_tx();
+
+    let mut space = BlockSpace::default();
+    let small = space.fill(1_000, space.medians(params), &standard(5, tx), &point);
+    assert_eq!(small.stop, FillStop::Drained);
+    assert_eq!(small.past_free, PastFree::default());
+
+    let mut space = BlockSpace::default();
+    let free = empty_fill(&space, &run, &point).penalty_free_bodies();
+    let deep = space.fill(1_000, space.medians(params), &standard(3_000, tx), &point);
+    assert_eq!(
+        deep.stop,
+        FillStop::Penalty,
+        "the next body's fee is under its penalty"
+    );
+    assert!(
+        deep.past_free.bodies > 0,
+        "the pool crosses the free weight"
+    );
+    assert!(deep.past_free.penalty_atomic > 0);
+    assert_past_is_the_listing(&deep, space.listed(), free);
+
+    // A fee that covers the penalty to the limit: the block stops there.
+    let rich = OrdinaryTx {
+        fee_atomic: 1_000_000_000_000_000,
+        weight: tx.weight,
+    };
+    let mut space = BlockSpace::default();
+    let free = empty_fill(&space, &run, &point).penalty_free_bodies();
+    let full = space.fill(1_000, space.medians(params), &standard(3_000, rich), &point);
+    assert_eq!(
+        full.stop,
+        FillStop::Limit,
+        "the fee covers the penalty to the limit"
+    );
+    assert!(full.past_free.bodies > 0);
+    assert!(full.past_free.penalty_atomic > 0);
+    assert!(full.past_free.surplus_atomic() > 0);
+    assert_past_is_the_listing(&full, space.listed(), free);
+
+    // A heavier body that cannot fit is offered first and refused at the
+    // limit. The lighter bodies go on and stop at the penalty. The block's
+    // reason is that later refusal.
+    let mut space = BlockSpace::default();
+    let bound = empty_fill(&space, &run, &point).bodies_weight_bound();
+    let heavy_weight = bound + 1;
+    // Strictly richer per weight than the light body, so the template
+    // offers it first: `fee·weight` compared in `u128`, one atomic over.
+    let heavy_fee = u64::try_from(
+        u128::from(tx.fee_atomic) * u128::from(heavy_weight) / u128::from(tx.weight) + 1,
+    )
+    .expect("the heavy fee fits");
+    let free = empty_fill(&space, &run, &point).penalty_free_bodies();
+    let mixed = space.fill(
+        1_000,
+        space.medians(params),
+        &[
+            Arrival {
+                rung: FeePriority::High,
+                count: 1,
+                tx: OrdinaryTx {
+                    fee_atomic: heavy_fee,
+                    weight: heavy_weight,
+                },
+            },
+            Arrival {
+                rung: FeePriority::Standard,
+                count: 3_000,
+                tx,
+            },
+        ],
+        &point,
+    );
+    assert_eq!(
+        mixed.stop,
+        FillStop::Penalty,
+        "the marginal body is the lighter one"
+    );
+    assert!(
+        space
+            .listed()
+            .iter()
+            .all(|group| group.weight != heavy_weight),
+        "the heavy body was not listed"
+    );
+    assert!(mixed.past_free.bodies > 0);
+    assert_past_is_the_listing(&mixed, space.listed(), free);
+}
