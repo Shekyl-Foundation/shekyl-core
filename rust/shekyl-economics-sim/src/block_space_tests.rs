@@ -1024,8 +1024,9 @@ fn flat_medians(median: u64) -> EffectiveMedian {
 
 /// The reward's domain edge (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37.1)
 /// is the first median at which production's fill refuses a body as
-/// unpriced. One byte of median below it, the same offer is priced and
-/// ends at the penalty. At genesis on the shipped set the edge lies between
+/// unpriced. One byte of median below it, the same offer is priced all the
+/// way to the block's limit: at a median of terabytes one atomic unit
+/// covers each byte's share of the penalty. At genesis on the shipped set the edge lies between
 /// one and twenty terabytes, inside the bound `apply_weight_penalty` states
 /// (`e = 1` is safe below about 1.2·10¹³ bytes).
 #[test]
@@ -1056,5 +1057,5 @@ fn the_reward_domain_edge_is_where_the_fill_first_refuses_unpriced() {
         fill.admit_up_to(1, 1, u64::MAX).refusal
     };
     assert_eq!(refusal(unpriced), Some(Refusal::Unpriced));
-    assert_eq!(refusal(priced), Some(Refusal::Penalty));
+    assert_eq!(refusal(priced), Some(Refusal::Limit));
 }
