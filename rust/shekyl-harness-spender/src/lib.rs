@@ -64,7 +64,6 @@
 #![forbid(unsafe_code)]
 
 pub mod bond;
-pub mod captured;
 mod draw;
 #[cfg(feature = "seeded-rng")]
 mod drawn;

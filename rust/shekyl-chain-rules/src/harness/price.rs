@@ -42,8 +42,23 @@ pub fn priced<'id, V: ChainView<'id>>(
     view: &V,
     candidate: Candidate,
 ) -> Result<Candidate, ViewRead<V::Fault>> {
+    priced_paying(view, candidate, MinerWallet::harness())
+}
+
+/// [`priced`] for a chain whose coinbases pay `miner`: a chain that
+/// carries a network's identity pays that network's harness miner
+/// ([`MinerWallet::harness_regtest`]), not the harness id's.
+///
+/// # Errors
+///
+/// As [`priced`].
+pub fn priced_paying<'id, V: ChainView<'id>>(
+    view: &V,
+    candidate: Candidate,
+    miner: &MinerWallet,
+) -> Result<Candidate, ViewRead<V::Fault>> {
     let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
-    priced_at(view, connecting, candidate)
+    priced_at_paying(view, connecting, candidate, miner)
 }
 
 /// `candidate` with its coinbase paying what CEN-F18 requires on `view` at
@@ -68,7 +83,21 @@ pub fn priced<'id, V: ChainView<'id>>(
 pub fn priced_at<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
+    candidate: Candidate,
+) -> Result<Candidate, ViewRead<V::Fault>> {
+    priced_at_paying(view, connecting, candidate, MinerWallet::harness())
+}
+
+/// [`priced_at`] re-paying `miner` ([`priced_paying`]).
+///
+/// # Errors
+///
+/// As [`priced_at`].
+pub fn priced_at_paying<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
     mut candidate: Candidate,
+    miner: &MinerWallet,
 ) -> Result<Candidate, ViewRead<V::Fault>> {
     // Genesis: the configured coinbase stands (F11). Quote once so a
     // corrupt parent read is still a fault, and do not rewrite the amount.
@@ -81,7 +110,7 @@ pub fn priced_at<'id, V: ChainView<'id>>(
         }
     }
     for _ in 0..REPRICING_PASSES {
-        if !settle_one(view, connecting, &mut candidate)? {
+        if !settle_one(view, connecting, &mut candidate, miner)? {
             return Ok(candidate);
         }
     }
@@ -155,6 +184,7 @@ fn settle_one<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
     candidate: &mut Candidate,
+    miner: &MinerWallet,
 ) -> Result<bool, ViewRead<V::Fault>> {
     let Ok(paid) = quote_emission(view, connecting, candidate)? else {
         return Ok(false);
@@ -164,7 +194,7 @@ fn settle_one<'id, V: ChainView<'id>>(
     }
     Ok(repay(
         &mut candidate.block.miner_transaction,
-        MinerWallet::harness().recipient(),
+        miner.recipient(),
         paid.owed.to_raw(),
     ))
 }

@@ -159,7 +159,7 @@ fn verdict_under<'b, 'id>(
             references: &references,
             network: shekyl_chain_rules::HARNESS_NETWORK_ID,
         },
-        &FixtureSubstrate,
+        &FixtureSubstrate::HARNESS,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

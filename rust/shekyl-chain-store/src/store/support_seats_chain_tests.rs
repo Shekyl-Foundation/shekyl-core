@@ -4,14 +4,14 @@
 //! The support schedule on a store chain (`SO-D12` 4b §5.1 item 3; S1).
 //!
 //! The chain is the slash witness's: its four joins are complete trees, and
-//! shard 0 closes before they join (height 131, the captured shard fill),
+//! shard 0 closes before they join (the forged shard fill's close),
 //! so the trees are support members of every epoch whose open sees the
 //! shard closed and final. The seats are the transition's, written by the
 //! store's connect, and read back through the store's own view.
 //!
 //! Every epoch numbered in this file's prose is counted from the personas'
 //! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
-//! loads the captured shard-fill prefix first and the personas join after it.
+//! loads the forged shard-fill prefix first and the personas join after it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -203,14 +203,23 @@ fn unfiled_seats(persona: &PCanonicalId) -> (BTreeSet<u64>, Vec<u32>) {
 /// count moves).
 #[test]
 fn a_trees_seats_over_an_epoch_are_its_c_slots_and_their_carry_at_each_width() {
-    // Under the bench pair shard 0 (closed at height 131) is final at 181,
-    // before the members' first open (height 200), so every epoch with
-    // members has a closed shard. The late-final pair puts that open before
-    // shard 0 is final (221): members at width 0, then width 1 at 300.
+    // Under the bench pair shard 0 is final fifty blocks after its close,
+    // before the members' first open (the epoch after the join's), so
+    // every epoch with members has a closed shard. The late-final pair puts
+    // that open before shard 0 is final: members at width 0, then width 1
+    // an epoch later. The pattern, from the manifest's close:
+    let closed = u64::try_from(super::super::prefix()).expect("small") - 1;
+    let first_open = h_open(shifted(1));
+    assert!(
+        closed + RULES.reorg_cap().to_raw() < first_open
+            && closed + Under::LATE_FINAL.rules.reorg_cap().to_raw() >= first_open,
+        "shard 0 (closed at {closed}) is final before the open at {first_open} under the bench \
+         pair and after it under the late-final pair"
+    );
     let through = h_open(shifted(4)) - 1;
     let seated = seated_under("support-seats-epochs", through, Under::LATE_FINAL);
     let trees: BTreeSet<PCanonicalId> = (0..WITNESS_PERSONAS)
-        .map(|slot| shekyl_harness_spender::Persona::at(u32::try_from(slot).expect("small")).id())
+        .map(|slot| super::super::persona(u32::try_from(slot).expect("small")).id())
         .collect();
     let mut widths = BTreeSet::new();
     let mut with_members = 0;
@@ -395,7 +404,7 @@ fn a_support_row_that_is_not_one_step_of_the_carry_is_si_43() {
     type Plant = dyn Fn(&SupportRow) -> (SupportRow, PCanonicalId);
     let stranger = PCanonicalId::from_bytes([0xEE; 32]);
     let members: Vec<PCanonicalId> = (0..WITNESS_PERSONAS)
-        .map(|slot| shekyl_harness_spender::Persona::at(u32::try_from(slot).expect("small")).id())
+        .map(|slot| super::super::persona(u32::try_from(slot).expect("small")).id())
         .collect();
     let with_seats = |row: &SupportRow, seats: Vec<PCanonicalId>| SupportRow {
         seats: SupportSeats::new(seats).expect("ascending"),
@@ -590,7 +599,8 @@ fn the_producers_support_draws_are_the_verifiers_observations() {
         connect_plain(&mut chain, Some(&mut memo));
     }
     let anchor_hash: BlockHash = chain.grown.tip();
-    let mut world = BundleWorld::with(h, BundleWorld::SEED, 0, &RULES);
+    let mut world = BundleWorld::with(h, BundleWorld::SEED, 0, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let commitment =
         DrawCommitment::from_bytes(draw_commit(&world.witness_public_key, &world.seed));
     let linked = connect_committed(&mut chain, &mut memo, commitment);
@@ -636,7 +646,7 @@ fn the_producers_support_draws_are_the_verifiers_observations() {
             h_incl,
             &bundle_view,
             &RULES,
-            &shekyl_network::HARNESS_NETWORK_ID,
+            &super::super::IDENTITY.network_id(),
         )
         .expect("the store view admits the clear-bit bundle");
         let observed = &admitted[0].support;
