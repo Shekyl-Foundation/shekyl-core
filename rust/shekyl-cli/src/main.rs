@@ -514,15 +514,14 @@ fn build_session(
             let wallet_dir = cli.resolved_wallet_dir(*network)?;
             // The per-account root is made first, as the daemon makes it,
             // so whatever is made in it after has the root's protections.
-            // The per-network default is created on demand; an explicit
-            // --wallet-dir is also created rather than failing on a path the
-            // operator clearly intends to use.
+            // The wallet directory, the per-network default or an explicit
+            // --wallet-dir, is made only when a wallet is created or
+            // restored in it (`RpcSession::make_wallet_dir`): a word that
+            // makes no wallet makes no folder.
             if let Some(root) = shekyl_os_account::per_account_root() {
                 shekyl_os_account::ensure_per_account_root(&root)
                     .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
             }
-            std::fs::create_dir_all(&wallet_dir)
-                .map_err(|e| format!("cannot create wallet dir {}: {e}", wallet_dir.display()))?;
             Ok(rpc_client::RpcSession::host_in_process(
                 wallet_dir,
                 *network,

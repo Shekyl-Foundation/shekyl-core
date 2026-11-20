@@ -100,6 +100,10 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> CommandResult<CreatedW
     // removed on the error path below.
     let mut seed_file = open_seed_out(&args.seed_out).map_err(local)?;
 
+    if let Err(e) = rpc.make_wallet_dir() {
+        drop(std::fs::remove_file(&args.seed_out));
+        return Err(e);
+    }
     let result = rpc.call(
         "create_wallet",
         params::NamedPassword {
@@ -167,6 +171,7 @@ fn post_restore(rpc: &RpcSession, args: &RestoreArgs) -> CommandResult<()> {
         ))
     })?);
 
+    rpc.make_wallet_dir()?;
     let result = rpc.call(
         "restore_wallet",
         params::Restore {
