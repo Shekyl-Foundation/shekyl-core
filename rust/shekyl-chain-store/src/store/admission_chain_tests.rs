@@ -11,7 +11,7 @@
 //!
 //! Every epoch numbered in this file's prose is counted from the personas'
 //! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
-//! loads the captured shard-fill prefix first and the personas join after it.
+//! loads the forged shard-fill prefix first and the personas join after it.
 
 use shekyl_archival_retention::{
     challenge_nonce, draw_commit, section_root, select_draw, BundleBody, BundleRef, DrawableEpoch,
@@ -87,7 +87,8 @@ fn prepare(label: &str) -> Prepared {
         }
         anchor_hash = linked.hash;
     }
-    let world = BundleWorld::with(drawing_height(), BundleWorld::SEED, 1, &RULES);
+    let world = BundleWorld::with(drawing_height(), BundleWorld::SEED, 1, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let commitment =
         DrawCommitment::from_bytes(draw_commit(&world.witness_public_key, &world.seed));
     let linked = connect_committed(&mut chain, &mut memo, commitment);
@@ -186,7 +187,8 @@ fn drawable(prepared: &Prepared) -> &DrawableEpoch {
 fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
     let h = drawing_height();
     let anchor = h - BlockCount::ONE;
-    let mut world = BundleWorld::with(h, BundleWorld::SEED, prepared.count, &RULES);
+    let mut world = BundleWorld::with(h, BundleWorld::SEED, prepared.count, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     world.view.hashes.insert(h, prepared.hash);
     world.view.hashes.insert(anchor, prepared.anchor_hash);
     let drawable = drawable(prepared);
@@ -196,7 +198,7 @@ fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
     .expect("a short read does not fail")
     .expect("the planted set selects");
     let pair = drawable.pair(selected.index).expect("the index is in D");
-    let signers: Vec<Persona> = witness_shard_slots().map(Persona::at).collect();
+    let signers: Vec<Persona> = witness_shard_slots().map(super::super::persona).collect();
     let signer = signers
         .iter()
         .find(|persona| {
@@ -542,7 +544,8 @@ fn a_bundle_for_genesis_is_refused_at_j33() {
         no_draws,
     );
     let mut memo = DrawableMemo::new();
-    let world = BundleWorld::with(BlockHeight::ZERO, BundleWorld::SEED, 0, &RULES);
+    let world = BundleWorld::with(BlockHeight::ZERO, BundleWorld::SEED, 0, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let (reference, body) = world.bundle(&[]);
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
@@ -569,7 +572,7 @@ fn a_bundle_for_genesis_is_refused_at_j33() {
             BlockHeight::from_raw(2),
             &bundle_view,
             &RULES,
-            &shekyl_network::HARNESS_NETWORK_ID,
+            &super::super::IDENTITY.network_id(),
         )
         .expect_err("genesis does not open");
         assert!(
@@ -718,7 +721,8 @@ fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
     while chain.grown.height() < h {
         connect_plain(&mut chain, Some(&mut warm));
     }
-    let world = BundleWorld::with(h, BundleWorld::SEED, 0, &RULES);
+    let world = BundleWorld::with(h, BundleWorld::SEED, 0, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let commitment =
         DrawCommitment::from_bytes(draw_commit(&world.witness_public_key, &world.seed));
     connect_committed(&mut chain, &mut warm, commitment);
@@ -740,7 +744,8 @@ fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
     )
     .expect("a block seats fewer than 2^32 trees");
     drop(read);
-    let world = BundleWorld::with(h, BundleWorld::SEED, count, &RULES);
+    let world = BundleWorld::with(h, BundleWorld::SEED, count, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let (reference, body) = world.assemble_support(
         PassBitmap::from_passes(count, []).expect("no pass"),
         PassBitmap::from_passes(support, []).expect("no support pass"),

@@ -14,16 +14,19 @@
 //! one, whatever the epoch is.
 //!
 //! The chain, under `RuleSet::GENESIS.with_levers(fixed 7, SEB 100 / cap 50)`:
-//! the captured shard-fill chain's prefix closes shard 0 with real spends
-//! (`store/shard_fill.rs`, height 131, in epoch 1), so the scan's universe
-//! is one shard; then `P` complete-tree personas join in the same epoch,
-//! [`JOIN_EPOCH`] — one **real** bond post per block from the block after
-//! the close, each spending the lowest coinbase matured and unspent
-//! (CEN-J27: a bond post is judged by I13/I15 over its `ToKey` inputs, so a
-//! listed join is a proof over a coinbase the chain mined, built by the
-//! harness spender over [`Grown`]'s tree). Every epoch below is counted
-//! from the join's ([`shifted`]): real spends close shard 0 no sooner than
-//! height 131, in epoch 1, so no persona can join a closed shard in epoch 0.
+//! the forged shard-fill chain's prefix closes shard 0 with real spends
+//! (`store/forged_fill.rs`, at the manifest's close height), so the scan's
+//! universe is one shard; then `P` complete-tree personas join in the same
+//! epoch, the join epoch ([`join_epoch`]) — one **real** bond post per
+//! block from the block after the close, each spending the lowest coinbase
+//! matured and unspent (CEN-J27: a bond post is judged by I13/I15 over its
+//! `ToKey` inputs, so a listed join is a proof over a coinbase the chain
+//! mined, built by the harness spender over [`Grown`]'s tree). The chain
+//! carries regtest's identity ([`IDENTITY`]): its personas derive under
+//! regtest's name and its bundles are assembled under regtest's id. Every
+//! epoch below is counted from the join's ([`shifted`]): real spends close
+//! shard 0 no sooner than the manifest says, so no persona can join a
+//! closed shard before the join epoch.
 //! Each pair on shard 0 is planted three draws in every epoch from the
 //! join's plus one
 //! (`store_tests::plant_issued_draws`), none passed — which is how every
@@ -36,8 +39,8 @@
 //! `slash_applied`, the emptied records, the burn (SI-8).
 //!
 //! One join per block is the rate the chain sustains, not a choice: a
-//! join spends the lowest matured coinbase, and past the ten the captured
-//! chain leaves unspent one coinbase matures per block. With the joins
+//! join spends the lowest matured coinbase, and once the coinbases the
+//! forged fill leaves unspent are taken, one coinbase matures per block. With the joins
 //! inside epoch 0, the personas a chain admits are [`max_personas`] — the
 //! bench's default. *Records-was:* until CEN-J27 the joins were fixture
 //! bodies over a 1-byte height, four per block from height 10 and
@@ -73,18 +76,20 @@
 //! `tip − ((k + n)·SEB + reorg_cap)` at every boundary (`prune.rs`), so a
 //! retiring node's `0x04` `slash_log` family is *rows at or above the
 //! floor*, and a reader of the log hands A2 the floor (SI-26). The
-//! witness runs to [`WITNESS_TIP`], `slash_deadline_height(SLASHING_EPOCH)`
-//! = `(SLASHING_EPOCH + 2)·SEB − 1`, which sits under [`WINDOW`], `(k + n)·SEB + cap`
-//! under the same pair ([`SlashLogFloor::window`]) — a relation asserted
-//! at compile time where both are declared, not a header claim: the floor
-//! is `None` and the family is the whole log. Nothing here assumes that:
-//! every read of the log starts from the floor at the snapshot's tip
-//! ([`whole_log_from`]), so a witness that grows past the window reads
-//! from the floor, not from `0`, and the snapshot pin spells rows at the
-//! slashing height, above any floor. The two accidental passes this file
-//! has carried — the ignored bench's sixty-four joins overrunning epoch 0,
-//! and a from-`0` read sound only because the chain was short — are the
-//! reason both lengths are derived and the read is not a literal.
+//! witness runs to [`witness_tip`], `slash_deadline_height(slashing_epoch)`
+//! = `(slashing_epoch + 2)·SEB − 1`, which sits past [`WINDOW`],
+//! `(k + n)·SEB + cap` under the same pair ([`SlashLogFloor::window`]),
+//! because the forged prefix closes shard 0 late in the chain — a relation
+//! the witness asserts before it reads anything
+//! ([`assert_the_witness_is_past_the_window`]), not a header claim: the
+//! floor at the tip is `Some`, and every log row below it is retired.
+//! Every read of the log starts from the floor at the snapshot's tip
+//! ([`whole_log_from`]), and the snapshot pin spells the rows at the
+//! slashing height, above the floor, so the family the pin holds is the
+//! whole of what the floor keeps. The two accidental passes this file has
+//! carried — the ignored bench's sixty-four joins overrunning epoch 0, and
+//! a from-`0` read sound only because the chain was short — are the reason
+//! both lengths are derived and the read is not a literal.
 //!
 //! **`slash_scan_bench`** (`#[ignore]`) is the measurement §3.1 owes for
 //! "the scan runs once per epoch on the floor": [`max_personas`] personas
@@ -133,9 +138,9 @@ use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, Shard
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    connect_chain_anchored, spend, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
+    connect_chain_anchored, spend, spendable_prefix, Grown, Identity, Listed, FIRST_SPEND_HEIGHT,
 };
-use super::shard_fill;
+use super::forged_fill::{self, forged};
 use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
@@ -149,14 +154,11 @@ const RETENTION: u64 = 50;
 /// spacing LWMA would floor the difficulty, and the fixture's zero longhash
 /// passes any fixed target.
 const RULES: RuleSet = RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, RETENTION));
-/// The rule set and undo retention a bench chain is built under, and the
-/// name its captured-prefix snapshots go by (`shard_fill::store_with_prefix`:
-/// one name, one pair).
+/// The rule set and undo retention a bench chain is built under.
 #[derive(Clone, Copy)]
 struct Under {
     rules: RuleSet,
     retention: u64,
-    schedule_key: &'static str,
 }
 
 impl Under {
@@ -164,19 +166,28 @@ impl Under {
     const BENCH: Self = Self {
         rules: RULES,
         retention: RETENTION,
-        schedule_key: "d7-seb100-cap50",
     };
 
     /// The bench pair with a 90-block reorg cap and retention: a shard is
-    /// final 90 blocks after it closes, so shard 0 (closed at height 131)
-    /// is final only at 221, after epoch 2 opens. A test that needs an
-    /// epoch whose members exist while its archive is still width 0 runs
-    /// here.
+    /// final 90 blocks after it closes, so shard 0, closing in the second
+    /// half of the join epoch, is final only after the next epoch opens. A
+    /// test that needs an epoch whose members exist while its archive is
+    /// still width 0 runs here, and asserts that pattern from the
+    /// manifest's close.
     const LATE_FINAL: Self = Self {
         rules: RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, 90)),
         retention: 90,
-        schedule_key: "d7-seb100-cap90",
     };
+}
+
+/// The identity every chain here carries: the forged prefix's. Its
+/// personas derive under regtest's name ([`persona`]), and a bundle a test
+/// assembles for it is assembled under regtest's id.
+const IDENTITY: Identity = Identity::Regtest;
+
+/// The persona at `slot`, as the chain derives it.
+fn persona(slot: u32) -> Persona {
+    IDENTITY.persona(slot)
 }
 
 /// The witness's persona count: enough that the per-persona loop is a loop,
@@ -193,26 +204,31 @@ const fn pair(seb: u64, cap: u64) -> CappedEpoch {
     }
 }
 
-/// The epoch the personas join in: the one the captured prefix closes
-/// shard 0 in, which `SlashedChain::build_with` asserts against the chain.
-const JOIN_EPOCH: u64 = 1;
-
-/// Epoch `n` of the layout these tests were written against, where the
-/// personas joined in epoch 0: the chain's epoch `JOIN_EPOCH + n`.
-const fn shifted(n: u64) -> u64 {
-    JOIN_EPOCH + n
+/// The epoch the personas join in: the one the forged prefix closes shard
+/// 0 in, by the manifest's close height.
+fn join_epoch() -> u64 {
+    forged().close_height(0).to_raw() / SEB
 }
 
-/// The slashing epoch: the `M`-th after the join's (`u64::from` is not
-/// `const`).
-#[allow(clippy::cast_lossless)]
-const SLASHING_EPOCH: u64 = shifted(FAILURE_WINDOW_M as u64);
+/// Epoch `n` of the layout these tests were written against, where the
+/// personas joined in epoch 0: the chain's epoch `join_epoch() + n`.
+fn shifted(n: u64) -> u64 {
+    join_epoch() + n
+}
 
-/// The witness's tip: the slashing connect, `(SLASHING_EPOCH + 2)·SEB − 1`
+/// The slashing epoch: the `M`-th after the join's.
+fn slashing_epoch() -> u64 {
+    shifted(u64::from(FAILURE_WINDOW_M))
+}
+
+/// The witness's tip: the slashing connect, `(slashing_epoch + 2)·SEB − 1`
 /// under the schedule — the schedule's expression, not a literal.
-const WITNESS_TIP: u64 = RULES
-    .settlement_schedule()
-    .slash_deadline_height(SLASHING_EPOCH);
+fn witness_tip() -> u64 {
+    RULES
+        .settlement_schedule()
+        .slash_deadline_height(slashing_epoch())
+}
+
 /// The slash log's window under the same pair, `(k + n)·SEB + cap`
 /// ([`SlashLogFloor::window`], `SLK-5`).
 const WINDOW: u64 =
@@ -220,25 +236,30 @@ const WINDOW: u64 =
         Some(window) => window.to_raw(),
         None => panic!("the window fits"),
     };
-/// Where the witness sits against the window, stated where both are
-/// declared rather than in a header a reader has to recompute: under it,
-/// so the floor at the tip is `None` and the `0x04` family pinned below is
-/// the whole log. If a constant moves this past the window, every read
-/// here already starts from the floor ([`whole_log_from`]) and the pin's
-/// rows sit at the slashing height, above any floor — re-read the header's
-/// claim and this assertion's message, then move the assertion to the
-/// side the witness is now on.
-const _: () = assert!(
-    WITNESS_TIP < WINDOW,
-    "the witness has crossed the slash log's window: its tip's floor is Some, and the header's \
-     'the floor is None' claim is false"
-);
 
-/// The personas a chain admits with every join inside [`JOIN_EPOCH`]: one
+/// Where the witness sits against the window, asserted before the witness
+/// reads the log rather than claimed in a header a reader has to
+/// recompute: past it, so the floor at the tip is `Some` and the `0x04`
+/// family the pin spells is the rows at and above it, the slashing
+/// height's among them. If the prefix moves the witness back under the
+/// window, the floor is `None` and the family is the whole log — every
+/// read here starts from the floor either way ([`whole_log_from`]); re-read
+/// the header's claim and this assertion's message, then move the
+/// assertion to the side the witness is now on.
+fn assert_the_witness_is_past_the_window() {
+    let tip = witness_tip();
+    assert!(
+        tip >= WINDOW,
+        "the witness's tip {tip} is under the slash log's window {WINDOW}: its tip's floor is \
+         None, and the header's 'the floor is Some' claim is false"
+    );
+}
+
+/// The personas a chain admits with every join inside the join epoch: one
 /// join per block from the block after shard 0's close. The bench's
 /// default, and its ceiling.
 fn max_personas() -> u64 {
-    (JOIN_EPOCH + 1) * SEB - u64::try_from(prefix()).expect("small")
+    (join_epoch() + 1) * SEB - u64::try_from(prefix()).expect("small")
 }
 
 /// Blocks per `store.write`: the bench measures the judge and the connect,
@@ -252,21 +273,21 @@ fn personas() -> u64 {
         .unwrap_or_else(max_personas)
 }
 
-/// The `i`-th bench persona is the harness persona at slot `i`
-/// ([`Persona::at`] derives the keys and the id), the one [`Grown::join`]
-/// posts the bond for.
+/// The `i`-th bench persona is the persona at slot `i` ([`persona`]
+/// derives the keys and the id), the one [`Grown::join`] posts the bond
+/// for.
 fn slot(i: u64) -> u32 {
     u32::try_from(i).expect("a persona slot")
 }
 
-/// The captured prefix the chain starts from: through the block that
-/// closes shard 0.
+/// The forged prefix the chain starts from: through the block that closes
+/// shard 0.
 fn prefix() -> usize {
-    shard_fill::blocks_closing(shard_fill::shard_fill(), 0)
+    forged().blocks_closing(0)
 }
 
 /// The height the `i`-th persona's join connects at: one per block from
-/// the block after the captured prefix, in slot order.
+/// the block after the forged prefix, in slot order.
 fn join_height(i: u64) -> BlockHeight {
     BlockHeight::from_raw(u64::try_from(prefix()).expect("small") + i)
 }
@@ -303,12 +324,12 @@ fn whole_log_from(floor: SlashLogFloor) -> BlockHeight {
 /// until E6 slice 8 row 4 the tag *was* the id, and `i` order was table
 /// order.
 fn ids_in_table_order(personas: u64) -> Vec<PCanonicalId> {
-    let mut ids: Vec<PCanonicalId> = (0..personas).map(|i| Persona::at(slot(i)).id()).collect();
+    let mut ids: Vec<PCanonicalId> = (0..personas).map(|i| persona(slot(i)).id()).collect();
     ids.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
     ids
 }
 
-/// What block `h` lists past the captured prefix: the `i`-th persona's
+/// What block `h` lists past the forged prefix: the `i`-th persona's
 /// join at [`join_height`]`(i)`, and nothing else.
 fn listing(h: u64, personas: u64) -> Vec<Listed> {
     let k = h - join_height(0).to_raw();
@@ -341,7 +362,7 @@ fn planned_draws(epoch: u64, personas: u64, plan: Plan) -> Vec<IndexedDraw> {
     let mut draws = Vec::new();
     for id in ids_in_table_order(personas) {
         let i = (0..personas)
-            .find(|i| Persona::at(slot(*i)).id() == id)
+            .find(|i| persona(slot(*i)).id() == id)
             .expect("an id of the list");
         let Some(passes) = plan(epoch, i) else {
             continue;
@@ -415,9 +436,9 @@ struct SlashedChain {
     /// The store's directory, removed when this drops (after the store).
     _path: TestPath,
     personas: u64,
-    /// The slashing epoch's raw value, [`SLASHING_EPOCH`].
+    /// The slashing epoch's raw value, [`slashing_epoch`].
     m: u64,
-    /// What the captured prefix burned: its spends' fees.
+    /// What the forged prefix burned: its spends' fees.
     prefix_burned: AtomicUnits,
     /// `last_block(M + SLASH_GRACE_EPOCHS)`: the connect that slashes.
     slashing_height: u64,
@@ -467,7 +488,7 @@ impl SlashedChain {
     /// The witness's chain: every pair misses every epoch from 1, built to
     /// the epoch-`M` slashing connect.
     fn build(label: &str, personas: u64) -> Self {
-        Self::build_with(label, personas, WITNESS_TIP, every_epoch_missed)
+        Self::build_with(label, personas, witness_tip(), every_epoch_missed)
     }
 
     /// A chain through height `through`, each epoch's draws issued by
@@ -482,11 +503,7 @@ impl SlashedChain {
     /// plus the cap, `closed_and_final`) states its own pair. The epoch is
     /// [`SEB`] whatever the pair.
     fn build_under(label: &str, personas: u64, through: u64, plan: Plan, under: Under) -> Self {
-        let Under {
-            rules,
-            retention,
-            schedule_key,
-        } = under;
+        let Under { rules, retention } = under;
         assert_eq!(rules.settlement_schedule().blocks().get(), SEB);
         assert!(
             SEB.is_multiple_of(PER_BATCH),
@@ -498,7 +515,7 @@ impl SlashedChain {
             "{personas} personas: the joins must land inside the join epoch (at most {max})"
         );
         let schedule = rules.settlement_schedule();
-        let m = SLASHING_EPOCH;
+        let m = slashing_epoch();
         let slashing_height = schedule.slash_deadline_height(m);
         let total = through + 1;
 
@@ -509,20 +526,22 @@ impl SlashedChain {
             rules.reorg_cap(),
         )
         .expect("cap ≤ retention < epoch");
-        // The captured prefix closes shard 0 (`shard_fill`); it is loaded,
+        // The forged prefix closes shard 0 (`forged_fill`); it is loaded,
         // not timed, and its slots in `timings` are zero.
-        let (store, mut grown) =
-            shard_fill::store_with_prefix(&path, schedule_key, rules, horizons, prefix());
+        let (store, mut grown) = forged_fill::store_with_prefix(&path, rules, horizons, prefix());
+        assert_eq!(grown.identity(), IDENTITY);
         let shard_closed = u64::try_from(prefix()).expect("small") - 1;
+        let last_join = join_height(personas - 1).to_raw();
         assert_eq!(
             (
                 schedule.epoch_at_height(shard_closed),
-                schedule.epoch_at_height(join_height(0).to_raw())
+                schedule.epoch_at_height(join_height(0).to_raw()),
+                schedule.epoch_at_height(last_join),
             ),
-            (JOIN_EPOCH, JOIN_EPOCH),
-            "shard 0 closes, and the personas join, in the join epoch"
+            (join_epoch(), join_epoch(), join_epoch()),
+            "shard 0 closes, and every persona joins, in the join epoch"
         );
-        // The captured spends pay fees, and fees burn (CEN-F17): what the
+        // The forged spends pay fees, and fees burn (CEN-F17): what the
         // prefix burned is the baseline the slash's burns fold onto.
         let prefix_burned = store
             .begin_read()
@@ -798,15 +817,15 @@ impl SlashedChain {
 }
 
 /// `keccak256(body)` of the `0x04` body at the witness's slashing tip
-/// under `RULES`, `WITNESS_PERSONAS` personas: 24 896 bytes, 40 rows — four
-/// bonds, fourteen closed epochs' budget rows and the thirteen settled
+/// under `RULES`, `WITNESS_PERSONAS` personas: 25 216 bytes, 56 rows — four
+/// bonds, twenty-two closed epochs' budget rows and the twenty-one settled
 /// epochs' Σwork rows, and the slash families above. A fingerprint of bytes,
 /// not a domain: the plain hash, so the pin registers nothing in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin.
 ///
-/// The chain starts from the captured shard fill and the four harness
-/// personas (`Persona::at(0..4)`) join in epoch [`JOIN_EPOCH`] by real bond
-/// posts. Each bond record carries its persona's receipt key (1 837 bytes,
+/// The chain starts from the forged shard fill and the four personas
+/// (`persona(0..4)`, derived under regtest's name) join in the join epoch
+/// ([`join_epoch`]) by real bond posts. Each bond record carries its persona's receipt key (1 837 bytes,
 /// fixed width, `FN_DSA_HYBRID.md` `FND-17`). An epoch's Σwork row is
 /// written by its slash pass, an epoch after its close, so the tip holds
 /// one more budget row than Σwork rows. The slash families are spelled and
@@ -835,9 +854,12 @@ impl SlashedChain {
 /// `2a73b959226a3ad761c596d21355b090e4ad39ab7d5cdc6c00657d6da181f5c8`
 /// (26 184 bytes, 60 rows, until the switch's C7, 2026-11-11, which
 /// deleted the serve-credit family and started the chain from the captured
-/// shard fill).
+/// shard fill);
+/// `88fdad5b8f041428de75c0583f9a3e85f4de2f3c11001c4472c618ea155626c8`
+/// (24 896 bytes, 40 rows, until `CF-4a`, 2026-11-20, which started the
+/// chain from the forged shard fill under regtest's identity).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "88fdad5b8f041428de75c0583f9a3e85f4de2f3c11001c4472c618ea155626c8";
+    "8599229fdd92c1470f338585e10c7d4e4513e858ca59c3db214650d3c740c2b2";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own
@@ -861,15 +883,14 @@ fn body_sections(body: &[u8]) -> Vec<std::ops::Range<usize>> {
 }
 
 /// A chain replayed from blocks it did not build knows which coinbases
-/// those blocks spent (#1381). `shard_fill::regrown` replays the captured
-/// prefix that way; a replay that learned only the spends it built offered
-/// the capture's spent coinbases again, so the bench's joins past the
-/// capture's reserved coinbases spent one the chain had spent, and CEN-I7
-/// refused the block. The witness's four joins stayed inside the reserved
-/// ones and never saw it. The chain here is built in the test, not read
-/// from the frozen shard-fill chain (`CHAIN_FORGE.md` `CF-R17`): three
-/// blocks that each spend a coinbase, connected by a `Grown` that built
-/// them, then replayed block by block into one that built nothing.
+/// those blocks spent (#1381). The forged prefix is replayed that way
+/// (`forged_fill`); a replay that learned only the spends it built would
+/// offer the forged fill's spent coinbases again, so the bench's joins
+/// past the coinbases the fill leaves unspent would spend one the chain
+/// had spent, and CEN-I7 would refuse the block. The chain here is built in
+/// the test: three blocks that each spend a coinbase, connected by a
+/// `Grown` that built them, then replayed block by block into one that
+/// built nothing.
 #[test]
 fn a_replayed_chain_offers_only_coinbases_its_blocks_have_not_spent() {
     let path = tmp("replayed-chain-coinbases");
@@ -913,6 +934,7 @@ fn a_replayed_chain_offers_only_coinbases_its_blocks_have_not_spent() {
 /// connect slashes every persona on the shard — nothing before it does.
 #[test]
 fn slash_writes_land_at_the_m_epoch_deadline() {
+    assert_the_witness_is_past_the_window();
     let chain = SlashedChain::build("slash-writes-witness", WITNESS_PERSONAS);
     assert_eq!(
         chain.slashing_height,

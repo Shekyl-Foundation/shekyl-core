@@ -9,14 +9,15 @@
 //! compares the two.
 //!
 //! The chain is the slash-scan harness's (the parent module) under
-//! `SEB 100 / cap 50`: the captured shard fill closes shard 0 at height
-//! 131, and four complete-tree personas join after it, in epoch
-//! [`JOIN_EPOCH`]. Shard 0 is closed and final from height `131 + 50`. A
+//! `SEB 100 / cap 50`: the forged shard fill closes shard 0 at the
+//! manifest's height, and four complete-tree personas join after it, in
+//! the join epoch ([`join_epoch`]). Shard 0 is closed and final fifty
+//! blocks after its close, before the next epoch opens. A
 //! complete tree is not in `D` (`ARCHIVAL_SUPPORT_DRAW.md`), so
 //! `D(shifted(1))` and `D(shifted(2))` are empty. Two of the personas
 //! release:
 //!
-//! - slot 3 at [`FIRST_RELEASE`], inside epoch `shifted(2)` — above
+//! - slot 3 at [`first_release`], inside epoch `shifted(2)` — above
 //!   `h_open(shifted(2))`, so the walk for that epoch undoes it, and below
 //!   `h_open(shifted(3))`, so the next does not hold the pair;
 //! - slot 2 at `h_open(shifted(3))` itself — undone for `shifted(2)`, and
@@ -61,8 +62,10 @@ use crate::codec::BondRecord;
 use super::*;
 
 /// The first Release: slot 3, half way through epoch `shifted(2)`.
-const FIRST_RELEASE: u64 = shifted(2) * super::SEB + super::SEB / 2;
-/// The persona released at [`FIRST_RELEASE`].
+fn first_release() -> u64 {
+    shifted(2) * super::SEB + super::SEB / 2
+}
+/// The persona released at [`first_release`].
 const FIRST: u32 = 3;
 /// The persona released in epoch `shifted(3)`'s open block.
 const SECOND: u32 = 2;
@@ -77,7 +80,7 @@ const BONDED: u64 = ARCHIVAL_BOND_FLOOR_ATOMIC;
 /// What block `h` lists after the harness's own join listing: the two
 /// Releases, and nothing else.
 fn releases_at(h: u64) -> Vec<Listed> {
-    if h == FIRST_RELEASE {
+    if h == first_release() {
         vec![Listed::Release {
             slot: FIRST,
             bonded_total: BONDED,
@@ -112,8 +115,9 @@ fn connect(chain: &mut SlashedChain, listed: &[Listed]) {
 /// The chain through `through`, with the two Releases connected where
 /// [`releases_at`] puts them.
 fn released_chain(label: &str, through: u64) -> SlashedChain {
-    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, FIRST_RELEASE - 1, no_draws);
-    for h in FIRST_RELEASE..=through {
+    let mut chain =
+        SlashedChain::build_with(label, WITNESS_PERSONAS, first_release() - 1, no_draws);
+    for h in first_release()..=through {
         connect(&mut chain, &releases_at(h));
     }
     chain
@@ -293,8 +297,8 @@ fn a_release_journals_the_record_it_replaced() {
     assert_eq!(
         heights,
         [
-            (FIRST_RELEASE, Persona::at(FIRST).id()),
-            (h_open(shifted(3)), Persona::at(SECOND).id()),
+            (first_release(), persona(FIRST).id()),
+            (h_open(shifted(3)), persona(SECOND).id()),
         ]
     );
     for ReleasedRecord {
@@ -345,13 +349,13 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
 
     fn pre_image(batch: &WriteBatch<'_, '_>) -> Result<BondRecord, StoreError> {
         let key = crate::ids::ReleaseJournalKey::new(
-            BlockHeight::from_raw(FIRST_RELEASE),
-            Persona::at(FIRST).id(),
+            BlockHeight::from_raw(first_release()),
+            persona(FIRST).id(),
         );
         Ok(batch
             .chain_view()
             .release_journal_after(
-                BlockHeight::from_raw(FIRST_RELEASE - 1),
+                BlockHeight::from_raw(first_release() - 1),
                 ReleaseJournalFloor::NONE,
             )?
             .into_iter()
@@ -361,8 +365,8 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
     }
     fn rewrite(batch: &WriteBatch<'_, '_>, record: &BondRecord) -> Result<(), StoreError> {
         let key = crate::ids::ReleaseJournalKey::new(
-            BlockHeight::from_raw(FIRST_RELEASE),
-            Persona::at(FIRST).id(),
+            BlockHeight::from_raw(first_release()),
+            persona(FIRST).id(),
         );
         batch
             .open_upsert_table(crate::schema::ARCHIVAL_RELEASE_JOURNAL)?
@@ -389,7 +393,7 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
     }
     fn slash_planted(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
         let entry = SlashLogEntry {
-            persona: Persona::at(0).id(),
+            persona: persona(0).id(),
             shard: ShardId::from_raw(0),
             epoch: SettlementEpoch::from_raw(shifted(1)),
             holding: SlashedHolding::CompleteTree,
@@ -397,7 +401,7 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
         batch
             .open_upsert_table(crate::schema::ARCHIVAL_SLASH_LOG)?
             .upsert(
-                crate::ids::SlashLogKey::new(BlockHeight::from_raw(FIRST_RELEASE + 1), 0).key(),
+                crate::ids::SlashLogKey::new(BlockHeight::from_raw(first_release() + 1), 0).key(),
                 entry.encoded().as_encoded(),
             )?;
         Ok(())
@@ -451,7 +455,7 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
             Corrupt::DrawableEpoch {
                 epoch,
                 why: DrawableEpochFault::SlashNotUndoable {
-                    persona: Persona::at(0).id(),
+                    persona: persona(0).id(),
                     shard: ShardId::from_raw(0),
                 },
             },
@@ -541,7 +545,7 @@ fn popping_an_open_removes_its_digest_and_reconnecting_writes_it_again() {
 /// either check.
 #[test]
 fn a_walk_below_the_floor_is_refused_and_so_is_the_read() {
-    let chain = released_chain("drawable-floor", FIRST_RELEASE);
+    let chain = released_chain("drawable-floor", first_release());
     let schedule = RULES.settlement_schedule();
     let slash = SlashLogFloor::under(
         BlockHeight::from_raw(
@@ -632,8 +636,8 @@ fn witness_shard_slots() -> impl Iterator<Item = u32> {
 /// a drawable set rebuilt from the journals agrees with the one written at
 /// each open (SI-30). A record planted outside every journal would not: a
 /// rebuild of an epoch opened before the plant reads it as a member. The
-/// join is admissible here (CEN-J15) because the captured shard fill closes
-/// shard 0 at height 131.
+/// join is admissible here (CEN-J15) because the forged shard fill closes
+/// shard 0 before the join epoch ends.
 fn join_compact_bond(chain: &mut SlashedChain) {
     connect(
         chain,
@@ -689,7 +693,7 @@ fn compact_holdings(shards: &[u64]) -> shekyl_types::archival::Holdings {
 /// what the row names. The count of that connecting block walks the same
 /// range, so the row has to sit above that open too.
 fn slash_compact_bond(batch: &WriteBatch<'_, '_>, shard: u64) -> Result<(), StoreError> {
-    let persona = Persona::at(COMPACT).id();
+    let persona = persona(COMPACT).id();
     let mut record = batch
         .chain_view()
         .bond_record(&persona)?
@@ -737,7 +741,7 @@ fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
         .settlement_schedule()
         .slash_deadline_height(shifted(2));
     let chain = compact_bond_chain("drawable-compact", settles - 1);
-    let compact = Persona::at(COMPACT).id();
+    let compact = persona(COMPACT).id();
     // The settling block, one above this tip, is the walk's reader.
     let held = walked(&chain.store, shifted(2), BlockHeight::from_raw(settles)).expect("opened");
     assert!(

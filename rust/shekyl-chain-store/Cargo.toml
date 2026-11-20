@@ -84,11 +84,11 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # consensus-visible from either.
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet", features = ["seeded-rng"] }
-# The decision-citation guard (`test_support::regen_decision_or_refuse`)
-# the shard-fill capture is written under (`store/shard_fill.rs`), the one
-# every armed regenerator in the workspace calls. Already a normal
-# dependency of shekyl-chain-rules (rule 17); test-only here.
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+# The key image the grown-chain fixture reads off a coinbase the miner
+# holds, and the error that read returns (`store/grown.rs`): how a replayed
+# chain knows which coinbases its blocks spent. Already a normal dependency
+# of shekyl-chain-rules (rule 17); test-only here.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # The release-admission tests open under `GenesisPin::for_network`.
 # The store admits a table and does not know which networks exist (rule
 # 71); the test needs the type that selects the production tables. Already
@@ -106,6 +106,14 @@ shekyl-economics = { path = "../shekyl-economics" }
 # dependency of shekyl-chain-rules (rule 17); test-only here, for the same
 # reason as `shekyl-economics`.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# The forged shard-fill chain the boundary, prune and slash tests start
+# from (`store/forged_fill.rs`, `CHAIN_FORGE.md` `CF-4a`): the forge's
+# library opens the hosted chain against its pin and reads the manifest's
+# closes, and the corpus codec decodes its blocks. Neither depends on the
+# store (the forge's executor, which does, is its test and example targets
+# only), and both are workspace crates; test-only here.
+shekyl-chain-forge = { path = "../shekyl-chain-forge" }
+shekyl-corpus = { path = "../shekyl-corpus" }
 # Each test store's own directory (`test_paths.rs`), which takes the
 # store's sidecar files with it when the test ends, and the RT-W10
 # harness's scratch output (`store/rt_w10_cost.rs`).

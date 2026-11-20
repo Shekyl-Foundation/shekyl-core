@@ -15,7 +15,7 @@
 //!
 //! Every epoch numbered in this file's prose is counted from the personas'
 //! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
-//! loads the captured shard-fill prefix first and the personas join after it.
+//! loads the forged shard-fill prefix first and the personas join after it.
 
 use std::collections::BTreeMap;
 
@@ -24,7 +24,6 @@ use shekyl_chain_rules::{
     admission_plan, Admitted, BlockDrawsFloor, ChainView as _, DerivedDraw, DrawableMemo,
     EpochFloor, ReleaseJournalFloor, Settling,
 };
-use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{BlockDraws, IssuedDigest, COUNTED_DRAWS};
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 
@@ -521,7 +520,7 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
 }
 
 fn late_bundle(h: u64) -> Vec<Admitted> {
-    let persona = Persona::at(0).id();
+    let persona = super::super::persona(0).id();
     let pair = DrawablePair {
         persona,
         shard: ShardId::from_raw(0),
@@ -569,7 +568,7 @@ fn connect_admitting(chain: &mut SlashedChain, admitted: &[Admitted]) {
 }
 
 fn journaled(batch: &WriteBatch<'_, '_>) -> Result<BondRecord, StoreError> {
-    let persona = Persona::at(FIRST).id();
+    let persona = super::super::persona(FIRST).id();
     Ok(batch
         .chain_view()
         .release_journal_after(
@@ -585,7 +584,7 @@ fn journaled(batch: &WriteBatch<'_, '_>) -> Result<BondRecord, StoreError> {
 fn rewrite_journal(batch: &WriteBatch<'_, '_>, record: &BondRecord) -> Result<(), StoreError> {
     let key = crate::ids::ReleaseJournalKey::new(
         BlockHeight::from_raw(h_open(shifted(2)) + 1),
-        Persona::at(FIRST).id(),
+        super::super::persona(FIRST).id(),
     );
     batch
         .open_upsert_table(crate::schema::ARCHIVAL_RELEASE_JOURNAL)?

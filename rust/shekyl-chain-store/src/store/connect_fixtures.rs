@@ -22,9 +22,11 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::target_claim;
 use shekyl_chain_rules::{
     form, validate, validate_with_memo, AtHeight, Candidate, ChainValid, ChainView, Corrupt,
-    DrawableMemo, Fault, FormAttempt, FormClaims, HeaderView, PaidEmission, ReferenceClaims,
-    RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
+    DrawableMemo, Fault, FormAttempt, FormClaims, GenesisPin, HeaderView, PaidEmission,
+    ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
 };
+use shekyl_harness_spender::{MinerWallet, Persona};
+use shekyl_network::{Network, NetworkId};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, SectionRoot, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
@@ -42,6 +44,70 @@ pub(super) use grown::{
     grown_over, height_maturing, key_images, output_of, prefix_to, spend, spend_paying,
     spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
+
+/// The identity a fixture chain carries (`CHAIN_FORGE.md` §6, `CF-R15`):
+/// what its spends and posts sign under, which miner its coinbases pay,
+/// and the genesis `validate` holds height 0 to. One chain carries one;
+/// [`Grown`] holds it and every block it builds or judges uses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Identity {
+    /// A chain that mines its own genesis, under the harness id
+    /// (`Trust::UNPINNED`): every chain a test builds from nothing. The
+    /// harness id ends in `CF-5` (`CF-R15`).
+    Harness,
+    /// A chain over regtest's table genesis, under regtest's id: a forged
+    /// chain a test starts from ([`super::forged_fill`]), and the blocks the
+    /// test connects on top of it.
+    Regtest,
+}
+
+impl Identity {
+    /// What `validate` takes on the release's word: no pin for a chain
+    /// that mines its own genesis, regtest's table genesis otherwise.
+    pub(super) const fn trust(self) -> Trust {
+        match self {
+            Self::Harness => Trust::UNPINNED,
+            Self::Regtest => Trust::full(GenesisPin::for_network(Network::Regtest)),
+        }
+    }
+
+    /// The id every spend and post on the chain signs under: the one its
+    /// [`trust`](Self::trust) derives (`NI-R10`).
+    pub(super) fn network_id(self) -> NetworkId {
+        self.trust().network_id()
+    }
+
+    /// The miner every coinbase the fixtures build pays, and the wallet a
+    /// spend of one is made from.
+    pub(super) fn miner(self) -> &'static MinerWallet {
+        match self {
+            Self::Harness => MinerWallet::harness(),
+            Self::Regtest => MinerWallet::harness_regtest(),
+        }
+    }
+
+    /// The persona at `slot`, derived under the chain's network name.
+    pub(super) fn persona(self, slot: u32) -> Persona {
+        match self {
+            Self::Harness => Persona::at(slot),
+            Self::Regtest => Persona::on(Network::Regtest, slot),
+        }
+    }
+
+    /// The lowest height whose coinbase the miner holds: genesis's on a
+    /// harness chain ([`endow_genesis`] pays it), block 1's on regtest's,
+    /// whose genesis is the table's.
+    pub(super) const fn first_held_coinbase(self) -> u64 {
+        match self {
+            Self::Harness => 0,
+            Self::Regtest => 1,
+        }
+    }
+}
+
+/// The seconds between the blocks a test connects on top of a regtest
+/// chain: the fixtures' spacing ([`candidate`] stamps `1_000 + 60·h`).
+const REGTEST_SPACING: u64 = 60;
 
 /// The coinbase for `height`: the rules harness's, which satisfies every
 /// landed 4.F row (a sole `Input::Gen(height)`, `Null` ct, one output with
@@ -92,6 +158,40 @@ pub(super) fn candidate_over(
     Candidate::new(block, listed)
 }
 
+/// The candidate connecting at `height` on a regtest chain whose tip is
+/// `parent`, listing `listed`, carrying `root`: the header's version is
+/// `rules`', its timestamp [`REGTEST_SPACING`] past the parent's, and its
+/// coinbase pays the regtest miner (priced at judge, as [`candidate_over`]'s
+/// is).
+pub(super) fn regtest_candidate_over(
+    root: CurveTreeRoot,
+    height: u64,
+    parent: &Block,
+    listed: Vec<Transaction>,
+    rules: &RuleSet,
+) -> Candidate {
+    let unlock_time = height + rules.mined_money_unlock_window().to_raw();
+    let block = Block {
+        header: BlockHeader {
+            major_version: rules.header_major_version(),
+            minor_version: 0,
+            timestamp: parent.header.timestamp + REGTEST_SPACING,
+            previous: parent.hash(),
+            nonce: 7,
+            curve_tree_root: root,
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
+        },
+        miner_transaction: shekyl_harness_wallet::coinbase::paying(
+            Identity::Regtest.miner().recipient(),
+            height,
+            unlock_time,
+            0,
+        ),
+        transaction_hashes: listed.iter().map(Transaction::hash).collect(),
+    };
+    Candidate::new(block, listed)
+}
+
 /// `root_at(height)` as the root a header connecting there must carry
 /// (CEN-B5). `AboveTip` is a fixture bug: height 0 is the seal's empty
 /// tree, and every later height is the row the previous connect wrote.
@@ -133,6 +233,32 @@ impl FixtureSubstrate {
 }
 
 impl Substrate for FixtureSubstrate {
+    type Fault = Infallible;
+
+    fn local_clock(&self) -> Result<Timestamp, Infallible> {
+        Ok(Self::CLOCK)
+    }
+
+    fn longhash(&self, _: &[u8], _: &BlockHash) -> Result<PowHash, Infallible> {
+        Ok(PowHash::from_bytes([0; 32]))
+    }
+}
+
+/// [`FixtureSubstrate`] for a chain over regtest's genesis: the same
+/// longhash, and a clock past every timestamp a forged chain and a test's
+/// blocks on top of it carry (regtest's genesis was minted after the
+/// fixtures' epoch, so [`FixtureSubstrate::CLOCK`] is behind it).
+pub(super) struct RegtestSubstrate;
+
+impl RegtestSubstrate {
+    /// Regtest's mint plus ten million seconds: past a forged chain
+    /// stamped one second apart and over a hundred thousand fixture blocks
+    /// at [`REGTEST_SPACING`] on top of it.
+    pub(super) const CLOCK: Timestamp =
+        Timestamp::from_raw(Network::Regtest.genesis().timestamp().get() + 10_000_000);
+}
+
+impl Substrate for RegtestSubstrate {
     type Fault = Infallible;
 
     fn local_clock(&self) -> Result<Timestamp, Infallible> {
@@ -191,6 +317,19 @@ pub(super) fn priced<'b, 'id>(
     }
 }
 
+/// [`priced`] paying `identity`'s miner.
+pub(super) fn priced_as<'b, 'id>(
+    identity: Identity,
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+) -> Result<Candidate, StoreError> {
+    match fixture::priced_paying(view, candidate, identity.miner()) {
+        Ok(candidate) => Ok(candidate),
+        Err(ViewRead::View(fault)) => Err(fault),
+        Err(ViewRead::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt:?}"),
+    }
+}
+
 /// [`priced`] against the **committed** store — for a test that needs a
 /// block's identity (to build its child, to read it back) before the batch
 /// that connects it. Opens a batch that only reads.
@@ -220,27 +359,36 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     candidate: Candidate,
     rules: &RuleSet,
 ) -> Result<StructurallyValid, V::Fault> {
+    formed_as(Identity::Harness, view, candidate, rules)
+}
+
+/// [`formed_under`] claiming `identity`'s network, judged in its world
+/// ([`FixtureSubstrate`], [`RegtestSubstrate`]).
+pub(super) fn formed_as<'id, V: HeaderView<'id>>(
+    identity: Identity,
+    view: &V,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<StructurallyValid, V::Fault> {
     let seed = expected_seed(view)?;
     let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
     let references = ReferenceClaims::from_headers(view, connecting, &candidate)?;
-    Ok(
-        match form(
-            candidate,
-            &FormClaims {
-                rule_set: rules,
-                seed,
-                target: expected_target(view, rules)?,
-                references: &references,
-                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
-            },
-            &FixtureSubstrate,
-            FormAttempt::FIRST,
-        ) {
-            Ok(Ok(formed)) => formed,
-            Ok(Err(refused)) => panic!("the fixtures satisfy every stateless rule: {refused}"),
-            Err(never) => match never {},
-        },
-    )
+    let claims = FormClaims {
+        rule_set: rules,
+        seed,
+        target: expected_target(view, rules)?,
+        references: &references,
+        network: identity.network_id(),
+    };
+    let formed = match identity {
+        Identity::Harness => form(candidate, &claims, &FixtureSubstrate, FormAttempt::FIRST),
+        Identity::Regtest => form(candidate, &claims, &RegtestSubstrate, FormAttempt::FIRST),
+    };
+    Ok(match formed {
+        Ok(Ok(formed)) => formed,
+        Ok(Err(refused)) => panic!("the fixtures satisfy every stateless rule: {refused}"),
+        Err(never) => match never {},
+    })
 }
 
 /// Both stages; the store's own fault is the only one the fixtures expect
@@ -306,12 +454,37 @@ pub(super) fn judge_with_memo<'b, 'id>(
     rules: &RuleSet,
     memo: Option<&mut DrawableMemo>,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    let candidate = priced(view, candidate)?;
+    judge_with_memo_as(Identity::Harness, view, candidate, rules, memo)
+}
+
+/// [`judge_with_memo`] on a chain carrying `identity`: the coinbase priced
+/// to its miner, the network claimed and the genesis pinned as it says.
+pub(super) fn judge_with_memo_as<'b, 'id>(
+    identity: Identity,
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+    memo: Option<&mut DrawableMemo>,
+) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+    let candidate = priced_as(identity, view, candidate)?;
+    judge_as_built(identity, view, candidate, rules, memo)
+}
+
+/// Both stages over `candidate` exactly as it came: nothing priced, nothing
+/// rebuilt. A forged block is judged this way, so the block connected is
+/// the one the forge wrote, or the judge refuses it.
+pub(super) fn judge_as_built<'b, 'id>(
+    identity: Identity,
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+    memo: Option<&mut DrawableMemo>,
+) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
     match validate_with_memo(
-        formed_under(view, candidate, rules)?,
+        formed_as(identity, view, candidate, rules)?,
         view,
         rules,
-        &Trust::UNPINNED,
+        &identity.trust(),
         memo,
     ) {
         Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
