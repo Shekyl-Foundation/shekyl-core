@@ -15,7 +15,7 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 - **`CBS-R1` — the goal is shape, and shape is count-agnostic.** Count-denial is a volume metric and is not a requirement here. This supersedes the goal #1431 states in its `TOR_COVER_POSTURE.md` §1, "a watcher must never be able to tell that a stem was sent", and [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §31.2's reading of count-denial as a free win.
 - **`CBS-R2` — what is protected is who originates a transaction, not the transaction.** Every node carries every transaction eventually. The originator is the one node that sends it before receiving it.
 - **`CBS-R3` — universal.** The mechanism works on Tor, encrypted clearnet, I2P and possibly Nym. The relay shapes; connectors carry; nothing is derived from one transport's framing.
-- **`CBS-R4` — no slowing the network.** Volume cover slowed the network and capped how much could stem, which made each movement more distinct. Real traffic is the cover.
+- **`CBS-R4` — no slowing the network.** Volume cover slowed the network and capped how much could stem, which made each movement more distinct. Real traffic is the cover. **A stem leaves at once** (Rick, 2026-11-20): it is never held for a timer or a slot, and its pieces start leaving when it arrives.
 - **`CBS-R5` — break the big package up; do not pad the small ones.** No padding unit.
 - **`CBS-R6` — cover is best effort under an operator's upload cap** (ruled earlier the same day, on #1431).
 
@@ -55,13 +55,13 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 
 ## 6. Open decisions — OPEN, not ruled
 
-### `CBS-E1` — measure the texture first — OPEN
+### `CBS-E1` — measure the texture first — RULED 2026-11-20 (Rick): measure first, built as its own PR
 
 - **Problem.** "Ordinary size" and "ordinary pace" are not known numbers.
 - **Recommendation.** Before any build, record per session, by message type, each send's size and time, on the test fleet, on every connector in use. The daemon knows its own messages, so this needs no packet capture. Piece size and pace are derived from it.
 - **Universality.** "Ordinary" is defined by Shekyl's own message set, which is the same on every connector, not by one transport's traffic.
 
-#### The measurement proposal — DRAFT 2026-11-20, not ruled
+#### The measurement — RULED 2026-11-20 (Rick); the run is proposed
 
 **What exists** (read at dev `ac63d95d`):
 
@@ -74,27 +74,28 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 
 1. **One line per message, both directions, on every connector.** The record moves from `shekyl-clearnet` to where both connector drives can use it, and the Tor drive feeds it as the clearnet drive does. A line carries: connector, session number, direction, message type, size in bytes (header and payload), and its times.
 2. **Three times for a sent message:** queued by its sender, taken off the queue by the writer, and written (the write of its last byte returned). The first needs a stamp carried with the queue item in a measurement build. **One time for a received message:** when its last byte arrived.
-3. **Message type, not class.** The line names the command. This reverses the existing record's choice to keep the class only, and it is needed: piece size is derived from the sizes of particular message types.
+3. **Message type, not class — RULED 2026-11-20.** The line names the command. This reverses the existing record's choice to keep the class only, and it is needed: piece size is derived from the sizes of particular message types. A transaction message's line does not say stem or broadcast: the record reads message headers only, and that flag is in the payload.
 4. **Nothing that identifies a transaction or a peer.** No transaction identifier, no address, no content. The session number is local to the node and to the run.
 5. **Fragments are recorded as they are sent,** one line per fragment, typed as a fragment, so a later run with pieces on reads the same way.
-6. **Where it runs.** Nodes with no Tor relay, on every connector in use: clearnet under the record layer, and Tor. Each run's host load is recorded beside it.
-7. **Output.** A reducer turns the lines into, per connector and per link:
+6. **Where it runs.** Nodes with no Tor relay, on every connector in use: clearnet under the record layer, and Tor. Each run's host load is recorded beside it. The Tor node is paired with TRC-1's guard-connection sampler for the same hours, so the daemon's written times and the watcher's view of the guard connections are read together.
+7. **Output.** A reducer turns the lines into the figures below, per connector and per link. Its sizes are plaintext, before the record layer's overhead, and it says so in its output.
    - bytes per window at 0.1 s, 1 s and 10 s, by the written time, in the layout of TRC-1's table (`trc1_guard_connection_20261112.md` §5), so the two line up;
    - the size distribution by message type;
    - the distribution of gaps between sends, by type and overall;
    - the lag from queued to written.
-8. **It stays a measurement build.** The feature gate and its CI check are extended to the new owner; a release build's record stays zero-sized.
+8. **It stays a measurement build, with no wire change.** The feature gate and its CI check are extended to the new owner. A release build's behaviour is unchanged and its record stays zero-sized.
+9. **It is its own PR, aimed at alpha.12.** If it is not merged when the cut is ready, the cut goes without it. #1431 and `CBS-E2`–`CBS-E7` are not in alpha.12.
 
 **Limits, stated before measuring.**
 
 - "Written" is when the operating system accepted the bytes, not when they left the host. On Tor it is when the local Tor client accepted them; what a watcher sees on the guard connections is later and is Tor's to schedule. TRC-1's guard-connection counters stay the watcher's view on Tor.
 - A test network's traffic is thinner than a live network's. The texture read here is a lower bound on how busy a link is.
 
-**For Rick to rule with the proposal.**
+**The run — PROPOSED 2026-11-20 (Rick may change it).**
 
-- Whether the line may name the command (item 3).
-- Whether a transaction message's line says stem or broadcast. Recommended: no. The record reads message headers only, and that flag is in the payload; this design also treats both alike.
-- The run length, and which test-fleet nodes carry the measurement build.
+- 72 hours on three test-fleet nodes with no Tor relay: one clearnet under the record layer, one Tor only, one both.
+- Recording starts with the node, and the record notes when the fleet reports synced after the wipe.
+- TRC-1's wallet send loop runs on one node, with some hours at a higher send rate.
 
 ### `CBS-E2` — does a relay wait for the whole transaction? — OPEN
 
