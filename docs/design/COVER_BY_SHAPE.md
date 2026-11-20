@@ -32,6 +32,13 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 9. **Clearnet's record layer encrypts record lengths** ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md), the record layer).
 10. **Each second of per-hop wait cost about four minutes of embargo** in #1431's derivation. Dev's figure is about 8.5 minutes a fire; #1431's is about 27.
 11. **Block notices and timed syncs are regular and small** (about every 120 s and 60 s per link). Their sizes, and the texture of a link generally, are not measured.
+12. **How fragments reassemble today** (`shekyl-levin`, `fragment.rs` and `reader.rs`, read at dev `ac63d95d`):
+    - The builder cuts one message into fragments of one equal size and zero-pads the last. Unequal or unpadded pieces need a builder change (`CBS-R5`).
+    - The reader takes a fragment body of any length, so it needs no change for unequal pieces.
+    - Each session has one reassembly buffer. A begin flag restarts it, so two fragmented messages cannot interleave on one session, and a second begin discards the first message's pieces.
+    - Ordinary messages can arrive between fragments: the buffer is kept across them.
+    - The buffer is bounded only by the session's packet limit, 100 MB after the handshake, and by no time limit. Nothing bounds how long an incomplete message is held (the "junk fragments" row of §7).
+    - A fragment's header carries flags and a length, and no message identifier.
 
 ## 4. The design in outline
 
@@ -93,4 +100,4 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 
 ## 8. Not yet read
 
-Message sizes by type; the embargo derivation re-run at a one-second hop spread; I2P's and Nym's current specifications; how `fragmented_notify` reassembles and what it bounds.
+Message sizes by type; the embargo derivation re-run at a one-second hop spread; I2P's and Nym's current specifications.
