@@ -161,9 +161,63 @@ pub fn sustained_within_conditioned<F>(
     tolerance_pct: f64,
     max_wall_seconds: f64,
     min_conditioning_seconds: f64,
+    f: F,
+) -> Series
+where
+    F: FnMut(),
+{
+    sustained_on(
+        &MonotonicClock::default(),
+        warmup,
+        tolerance_pct,
+        max_wall_seconds,
+        min_conditioning_seconds,
+        f,
+    )
+}
+
+/// Where a series reads time: a duration since the clock's own origin.
+///
+/// The loop's rules (the disjoint windows, the conditioning floor, the two
+/// caps) are arithmetic over the durations a clock returns, and a test of
+/// those rules needs durations it chose. Read from the monotonic clock around
+/// a sleeping workload, a sample is the sleep plus whatever the scheduler
+/// added: on a loaded machine the two windows of a workload slowing 6 % per
+/// sample came within the 5 % tolerance and the series read converged
+/// (`a_never_settling_workload_is_reported_unconverged_not_looped_forever`, at
+/// load average 7 to 9). The tests therefore drive a clock the workload
+/// advances by exact amounts; the shipped entry points read
+/// [`MonotonicClock`].
+trait Clock {
+    fn now(&self) -> Duration;
+}
+
+/// The monotonic clock, from the moment it was made.
+struct MonotonicClock(Instant);
+
+impl Default for MonotonicClock {
+    fn default() -> Self {
+        Self(Instant::now())
+    }
+}
+
+impl Clock for MonotonicClock {
+    fn now(&self) -> Duration {
+        self.0.elapsed()
+    }
+}
+
+/// The loop itself, on any [`Clock`].
+fn sustained_on<C, F>(
+    clock: &C,
+    warmup: usize,
+    tolerance_pct: f64,
+    max_wall_seconds: f64,
+    min_conditioning_seconds: f64,
     mut f: F,
 ) -> Series
 where
+    C: Clock,
     F: FnMut(),
 {
     for _ in 0..warmup {
@@ -174,7 +228,8 @@ where
     // Names the NORMAL exit — the guard below going false with both limits
     // met. Every other exit assigns over it before breaking.
     let mut stopped_because = "limits met, unconverged";
-    let began = Instant::now();
+    let began = clock.now();
+    let elapsed_s = || duration_s(clock.now() - began);
     // The ITERATION cap must not preempt the CONDITIONING floor. A fast series
     // reaches 60 samples long before 60 seconds, and stopping there would mean
     // convergence could never be declared for it — the two limits would cancel
@@ -189,16 +244,15 @@ where
     // guard, so it was reachable only if the clock crossed the floor between
     // the guard's read and its own, and it is deleted rather than kept as a
     // belt that cannot buckle.
-    while samples.len() < MAX_ITERATIONS || duration_s(began.elapsed()) < min_conditioning_seconds {
-        if duration_s(began.elapsed()) >= max_wall_seconds {
+    while samples.len() < MAX_ITERATIONS || elapsed_s() < min_conditioning_seconds {
+        if elapsed_s() >= max_wall_seconds {
             stopped_because = "wall-clock cap";
             break;
         }
-        let start = Instant::now();
+        let start = clock.now();
         f();
-        samples.push(duration_s(start.elapsed()));
-        if samples.len() < MIN_ITERATIONS || duration_s(began.elapsed()) < min_conditioning_seconds
-        {
+        samples.push(duration_s(clock.now() - start));
+        if samples.len() < MIN_ITERATIONS || elapsed_s() < min_conditioning_seconds {
             continue;
         }
         // Two DISJOINT windows: the most recent `CONVERGENCE_WINDOW` samples
