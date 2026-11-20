@@ -3,7 +3,7 @@
   "chain": "small",
   "plan": {
     "path": "rust/shekyl-chain-forge/plans/small.toml",
-    "sha256": "567b5b351bd8b5ca6a8d609ac1bc0168c5eb5ecd1b5f716d852d69eb7744f2dc"
+    "sha256": "9556de216ed9f49270d3d8189fa048212063e953a0e641195bc1f7ae06e443f7"
   },
   "seed": "4caafe22ad997dbcdf53d5a74394c7d9f594482231d080f2e43bb364170cdf9d",
   "network": "regtest",
@@ -14,11 +14,11 @@
     "fixed_difficulty": 1,
     "block_seconds": 1
   },
-  "corpus_format_version": 4,
+  "corpus_format_version": 5,
   "blocks": 1507,
   "tip_height": 1504,
   "transactions": 292,
-  "corpus_sha256": "241beb8e57896cbd5b989da42365b8150982b840c86e79298280cf816db4bc72",
+  "corpus_sha256": "fead3202df8e561314fea0dc7346819a9918275bbce4f12fded6942b8b740fc5",
   "trace_sha256": "04bd05cb99c8165464943fa5341aefaa4e2357c97f1bd9a7000f125aa15f6939",
   "events": [
     {
@@ -52,11 +52,17 @@
       "record": 1500
     },
     {
-      "name": "rewound-depth-2",
+      "name": "reorg-shallow",
       "height": 1504,
-      "branch": "main",
-      "record": 1507
+      "branch": "alt:1",
+      "record": 1506
     }
   ],
-  "switches": []
+  "switches": [
+    {
+      "at_record": 1506,
+      "fork_height": 1501,
+      "depth": 2
+    }
+  ]
 }
