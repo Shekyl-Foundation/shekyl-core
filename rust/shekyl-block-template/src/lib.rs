@@ -116,7 +116,7 @@ use shekyl_wire::tx_extra::{self, CoinbaseBuildError, DrawCommitment, COINBASE_N
 
 mod fill;
 
-pub use fill::Fill;
+pub use fill::{Admission, Fill, Refusal};
 
 /// The keys a coinbase output is paid to: the miner's Edwards spend key
 /// and the two halves of the hybrid KEM encapsulation target.
