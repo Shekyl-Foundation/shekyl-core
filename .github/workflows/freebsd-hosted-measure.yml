@@ -13,10 +13,11 @@
 # (scripts/ci/rust_scoped_tests.sh with RUST_TESTS=all: the nextest `ci`
 # profile, `--locked`, the same exclusion), on the pinned toolchain.
 #
-# The VM image's disk is about 6 GB with no resize input, and a debug test
-# target is larger than that, so the workspace (and the target inside it)
-# is the runner's disk shared into the VM over NFS. Timings are stamped
-# per phase into fbsd-results/timings.txt and uploaded with the logs.
+# The workspace is copied into the VM (rsync) and the target lives on the
+# VM's own disk, outside the workspace, so only fbsd-results/ comes back.
+# An NFS-shared workspace does not work: cargo cannot take its lock on
+# Cargo.lock there ("No locks available"). Timings are stamped per phase
+# into fbsd-results/timings.txt and uploaded with the logs.
 
 name: FreeBSD hosted measurement (scratch)
 
@@ -42,11 +43,6 @@ jobs:
           df -h /
           date -u +"runner-start %Y-%m-%dT%H:%M:%SZ %s"
 
-      - name: free runner disk for the shared target
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-
       - uses: actions/checkout@v5
         with:
           submodules: recursive
@@ -55,7 +51,7 @@ jobs:
       - name: the forged test chain, fetched on the runner
         # scripts/ci/fetch_test_chain.py maps only Linux and macOS, and the
         # oras pin has no freebsd_amd64 checksum, so inside the VM it
-        # refuses. It writes into the tree, which the VM shares over NFS.
+        # refuses. It writes into the tree, which is copied into the VM.
         run: python3 scripts/ci/fetch_test_chain.py shard-fill
 
       - name: stamp before the VM
@@ -69,7 +65,8 @@ jobs:
         with:
           release: '14.4'
           mem: 12288
-          sync: nfs
+          sync: rsync
+          copyback: true
           sync-time: true
           disable-cache: true
           prepare: |
@@ -92,15 +89,8 @@ jobs:
             sampler=$!
 
             git config --global --add safe.directory '*'
-            export CARGO_TARGET_DIR="$W/.fbsd-target"
-            avail_kb=$(df -k "$HOME" | awk 'NR==2 { print $4 }')
-            if [ "$avail_kb" -lt 4000000 ]; then
-              export CARGO_HOME="$W/.fbsd-cargo" RUSTUP_HOME="$W/.fbsd-rustup"
-              echo "toolchain home: shared workspace ($avail_kb KB free on the VM disk)" >> "$R/vm-facts.txt"
-            else
-              export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
-              echo "toolchain home: VM disk ($avail_kb KB free)" >> "$R/vm-facts.txt"
-            fi
+            export CARGO_TARGET_DIR="$HOME/fbsd-target"
+            export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
             export PATH="$CARGO_HOME/bin:$PATH"
 
             stamp toolchain-start
