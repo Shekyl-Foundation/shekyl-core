@@ -125,10 +125,10 @@ fn the_writer_refuses_a_pruned_sources_shortfall_by_height() {
         matches!(
             refused,
             CorpusFault::IncompleteBodies {
-                height,
+                at,
                 listed: 2,
                 present: 1
-            } if height == BlockHeight::from_raw(1)
+            } if at == RecordAt::Height(BlockHeight::from_raw(1))
         ),
         "{refused}"
     );
@@ -225,10 +225,17 @@ fn the_reader_refuses_a_foreign_magic_a_foreign_version_and_an_unknown_net() {
         Some(CorpusFault::BadMagic)
     ));
     let mut wrong_version = bytes.clone();
-    wrong_version[8..12].copy_from_slice(&(CORPUS_FORMAT_VERSION + 1).to_le_bytes());
+    wrong_version[VERSION_AT..NET_AT].copy_from_slice(&(CORPUS_FORMAT_VERSION + 1).to_le_bytes());
     assert!(matches!(
         CorpusReader::open(Cursor::new(wrong_version)).err(),
         Some(CorpusFault::UnsupportedVersion { found }) if found == CORPUS_FORMAT_VERSION + 1
+    ));
+    // Layout 4 is the one older layout read (`CF-R7`); the one before it is
+    // refused.
+    let older = as_layout(bytes.clone(), LAYOUT_4 - 1);
+    assert!(matches!(
+        CorpusReader::open(Cursor::new(older)).err(),
+        Some(CorpusFault::UnsupportedVersion { found }) if found == LAYOUT_4 - 1
     ));
     let mut wrong_net = bytes;
     wrong_net[12] = 0xff;
@@ -524,18 +531,155 @@ fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
         ),
         "a rewind to the tip"
     );
-    // An unknown tag is refused as such, and `0x03` (version 3's
-    // out-of-band serve-credit record) is unknown to version 4.
-    for unknown in [0x03, 0x7f] {
-        let mut junk = write(&[(b0.clone(), t0.clone())]);
-        junk[HEADER_LEN] = unknown;
-        let mut reader = CorpusReader::open(Cursor::new(junk)).expect("open");
-        let refused = reader.next_record().expect_err("tag");
-        assert!(
-            matches!(refused, CorpusFault::UnknownTag(t) if t == unknown),
-            "{unknown:#04x}: {refused:?}"
-        );
+    // An unknown tag is refused as such, in layout 5 and in layout 4:
+    // `0x03` (version 3's out-of-band serve-credit record) is unknown to
+    // both.
+    for layout in [CORPUS_FORMAT_VERSION, LAYOUT_4] {
+        for unknown in [0x03, 0x7f] {
+            let mut junk = as_layout(write(&[(b0.clone(), t0.clone())]), layout);
+            junk[HEADER_LEN] = unknown;
+            let mut reader = CorpusReader::open(Cursor::new(junk)).expect("open");
+            let refused = reader.next_record().expect_err("tag");
+            assert!(
+                matches!(refused, CorpusFault::UnknownTag(t) if t == unknown),
+                "layout {layout}, {unknown:#04x}: {refused:?}"
+            );
+        }
     }
+}
+
+/// `bytes` with its header's layout version set to `layout`.
+fn as_layout(mut bytes: Vec<u8>, layout: u32) -> Vec<u8> {
+    bytes[VERSION_AT..NET_AT].copy_from_slice(&layout.to_le_bytes());
+    bytes
+}
+
+/// An alternative to the block [`blobs`] builds at `height`: the same
+/// bodies under another nonce, so another block at that height.
+fn alternative(height: BlockHeight, n: u64) -> (Offer, Vec<u8>, Vec<Vec<u8>>) {
+    let (extend, _, tx_blobs) = blobs(height, n);
+    let mut block = extend.block;
+    block.header.nonce = block.header.nonce.wrapping_add(1);
+    let block_blob = block.serialize();
+    let offer = Offer {
+        block,
+        transactions: extend.transactions,
+        bundle_references: None,
+        bundle_bodies: Vec::new(),
+    };
+    (offer, block_blob, tx_blobs)
+}
+
+#[test]
+fn an_offer_round_trips_between_extends_and_does_not_move_the_height_law() {
+    let (r0, b0, t0) = blobs(BlockHeight::from_raw(0), 0);
+    let (r1, b1, t1) = blobs(BlockHeight::from_raw(1), 2);
+    let (o1, ob1, ot1) = alternative(BlockHeight::from_raw(1), 2);
+    let (r2, b2, t2) = blobs(BlockHeight::from_raw(2), 1);
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
+    w.append(&b0, &t0).expect("0");
+    w.append(&b1, &t1).expect("1");
+    w.offer(&ob1, &ot1, &[], &[]).expect("the offer");
+    // The offer did not move the tip: the next extend is still height 2.
+    w.append(&b2, &t2).expect("2");
+    let bytes = w.finish().expect("finish").into_inner();
+
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    assert_eq!(reader.layout(), CORPUS_FORMAT_VERSION);
+    assert_eq!(reader.declared(), 4, "an offer is a record");
+    assert_eq!(extend(reader.next_record().expect("0")), r0);
+    assert_eq!(extend(reader.next_record().expect("1")), r1);
+    match reader.next_record().expect("the offer") {
+        Some(Record::Offer(offer)) => assert_eq!(*offer, o1),
+        other => panic!("an offer record, not {other:?}"),
+    }
+    assert_eq!(extend(reader.next_record().expect("2")), r2);
+    assert!(reader.next_record().expect("clean end").is_none());
+}
+
+#[test]
+fn an_offers_bodies_are_verified_on_both_sides_naming_its_record() {
+    // RD-F15 holds for an offer as for an extend: the writer refuses a
+    // shortfall and writes nothing, and the reader refuses a tampered body;
+    // each names the offer by its place among the records.
+    let (_, b0, t0) = blobs(BlockHeight::from_raw(0), 0);
+    let (_, b1, t1) = blobs(BlockHeight::from_raw(1), 2);
+    let (_, ob1, ot1) = alternative(BlockHeight::from_raw(1), 2);
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
+    w.append(&b0, &t0).expect("0");
+    w.append(&b1, &t1).expect("1");
+    let short = &ot1[..1];
+    let refused = w.offer(&ob1, short, &[], &[]).expect_err("one body short");
+    assert!(
+        matches!(
+            refused,
+            CorpusFault::IncompleteBodies {
+                at: RecordAt::Offer { record: 2 },
+                listed: 2,
+                present: 1
+            }
+        ),
+        "{refused}"
+    );
+    w.offer(&ob1, &ot1, &[], &[]).expect("the whole offer");
+    let mut bytes = w.finish().expect("finish").into_inner();
+
+    // The offer's last body's last byte, flipped: it no longer hashes to
+    // what the header lists.
+    let last = bytes.len() - LEN_PREFIX - 1;
+    bytes[last] ^= 0x01;
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    reader.next_record().expect("0");
+    reader.next_record().expect("1");
+    let refused = reader.next_record().expect_err("a tampered body");
+    assert!(
+        matches!(
+            refused,
+            CorpusFault::BodyMismatch {
+                at: RecordAt::Offer { record: 2 },
+                index: 1,
+                ..
+            } | CorpusFault::Malformed {
+                at: RecordAt::Offer { record: 2 },
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_layout_4_corpus_is_read_and_an_offer_in_it_is_an_unknown_tag() {
+    // CF-R7: the reader reads layout 4 until the last layout-4 corpus is
+    // gone. Layout 4 has no `offer`, so a layout-4 corpus carrying tag
+    // 0x04 is refused as an unknown tag.
+    let (r0, b0, t0) = blobs(BlockHeight::from_raw(0), 0);
+    let (r1, b1, t1) = blobs(BlockHeight::from_raw(1), 2);
+    let old = as_layout(
+        write(&[(b0.clone(), t0.clone()), (b1.clone(), t1.clone())]),
+        LAYOUT_4,
+    );
+    let mut reader = CorpusReader::open(Cursor::new(old)).expect("a layout-4 corpus opens");
+    assert_eq!(reader.layout(), LAYOUT_4);
+    assert_eq!(extend(reader.next_record().expect("0")), r0);
+    assert_eq!(extend(reader.next_record().expect("1")), r1);
+    assert!(reader.next_record().expect("clean end").is_none());
+
+    let (_, ob1, ot1) = alternative(BlockHeight::from_raw(1), 2);
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
+    w.append(&b0, &t0).expect("0");
+    w.offer(&ob1, &ot1, &[], &[]).expect("the offer");
+    let carrying = as_layout(w.finish().expect("finish").into_inner(), LAYOUT_4);
+    let mut reader = CorpusReader::open(Cursor::new(carrying)).expect("open");
+    reader.next_record().expect("0");
+    let refused = reader.next_record().expect_err("no offer in layout 4");
+    assert!(
+        matches!(refused, CorpusFault::UnknownTag(t) if t == tag::OFFER),
+        "{refused:?}"
+    );
 }
 
 #[test]

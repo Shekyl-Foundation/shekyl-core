@@ -28,8 +28,10 @@
 //!
 //! - [`source`] — the [`Source`] trait and its event model: an **ordered
 //!   event stream**, not a height-ordered block stream. A reorg is a
-//!   [`IngestEvent::Rewind`] followed by [`IngestEvent::Extend`]s; a source
-//!   that cannot say *rewind* cannot express a fork (RD-Q13).
+//!   [`IngestEvent::Rewind`] followed by [`IngestEvent::Extend`]s, or, as
+//!   a network meets it, [`IngestEvent::Offer`]s of the competing branch
+//!   that the fork choice switches to; a source that can say neither
+//!   cannot express a fork (RD-Q13, `CHAIN_FORGE.md` §7.1).
 //! - [`corpus`] — the replay driver's first [`Source`]: [`CorpusSource`]
 //!   turns `shekyl-corpus` records into sequenced [`IngestEvent`]s. The
 //!   artifact's format, and the one writer and reader that verify each
@@ -301,7 +303,7 @@ pub use metrics::{Concurrency, Derives, Metrics, MetricsArtifact};
 pub use mutation::{Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable};
 #[cfg(feature = "pipeline")]
 pub use pipeline::{
-    run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,
+    run, Checkpoint, Disagreement, OfferStop, PipelineConfig, PipelineFault, Pop, RunReport, Switch,
 };
 #[cfg(feature = "pipeline")]
 pub use pow::ProductionPow;

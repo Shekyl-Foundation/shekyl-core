@@ -12,7 +12,31 @@ use std::io;
 
 use shekyl_types::{BlockHeight, TxHash};
 
-use crate::CORPUS_FORMAT_VERSION;
+use crate::{CORPUS_FORMAT_VERSION, LAYOUT_4};
+
+/// Where a refused record sits. An `extend` carries its height; an
+/// `offer` carries none (it does not extend the tip), so it is named by its
+/// place among the corpus's records, counted from 0, the place a forged
+/// chain's manifest names it by (`CHAIN_FORGE.md` §7.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordAt {
+    /// The `extend` at this height.
+    Height(BlockHeight),
+    /// The `offer` that is this record of the corpus.
+    Offer {
+        /// The record's place, counted from 0.
+        record: u64,
+    },
+}
+
+impl core::fmt::Display for RecordAt {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Height(height) => write!(f, "block {height}"),
+            Self::Offer { record } => write!(f, "the offer at record {record}"),
+        }
+    }
+}
 
 /// Why a corpus could not be written or read.
 #[derive(Debug)]
@@ -22,8 +46,8 @@ pub enum CorpusFault {
     /// A block's bundle section is not one: its references do not form a
     /// section, or a body is missing or is not its reference's.
     BadSection {
-        /// The block's height.
-        height: BlockHeight,
+        /// The record.
+        at: RecordAt,
     },
     /// The header names a layout this crate does not read.
     UnsupportedVersion {
@@ -36,8 +60,8 @@ pub enum CorpusFault {
     /// **The pruned-source signature** (RD-F15): a pruned node drops bodies
     /// silently, so this is how it is caught.
     IncompleteBodies {
-        /// The block's height.
-        height: BlockHeight,
+        /// The record.
+        at: RecordAt,
         /// How many the header lists.
         listed: usize,
         /// How many bodies were present.
@@ -46,8 +70,8 @@ pub enum CorpusFault {
     /// The body at `index` does not hash to the header's `index`th listed
     /// transaction — wrong order, wrong transaction, or a tampered record.
     BodyMismatch {
-        /// The block's height.
-        height: BlockHeight,
+        /// The record.
+        at: RecordAt,
         /// Position in the header's list.
         index: usize,
         /// What the header lists there.
@@ -82,14 +106,15 @@ pub enum CorpusFault {
     },
     /// A block or transaction blob did not parse under `shekyl-wire`.
     Malformed {
-        /// The record's height.
-        height: BlockHeight,
+        /// The record.
+        at: RecordAt,
         /// What failed to parse.
         what: &'static str,
         /// The parser's error.
         cause: io::Error,
     },
-    /// A record tag neither `extend` nor `rewind`.
+    /// A record tag the corpus's layout does not have: neither `extend`,
+    /// `rewind` nor, from layout 5, `offer`.
     UnknownTag(u8),
     /// A `rewind` to the tip or above it: nothing to pop.
     RewindNotBackward {
@@ -123,34 +148,33 @@ pub enum CorpusFault {
 impl core::fmt::Display for CorpusFault {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::BadSection { height } => write!(
+            Self::BadSection { at } => write!(
                 f,
-                "the bundle section at height {} is not one: its references or a body do not hold",
-                height.to_raw()
+                "the bundle section of {at} is not one: its references or a body do not hold"
             ),
             Self::BadMagic => f.write_str("not a Shekyl corpus (bad magic)"),
             Self::UnsupportedVersion { found } => write!(
                 f,
-                "corpus layout version {found} is not {CORPUS_FORMAT_VERSION}; rebuild the artifact"
+                "corpus layout version {found} is neither {CORPUS_FORMAT_VERSION} nor {LAYOUT_4}; rebuild the artifact"
             ),
             Self::UnknownNet(tag) => write!(f, "corpus network tag {tag} is not a known chain"),
             Self::IncompleteBodies {
-                height,
+                at,
                 listed,
                 present,
             } => write!(
                 f,
-                "block {height}: header lists {listed} transactions, {present} bodies present — \
+                "{at}: header lists {listed} transactions, {present} bodies present — \
                  a pruned source, or a truncated record"
             ),
             Self::BodyMismatch {
-                height,
+                at,
                 index,
                 listed,
                 present,
             } => write!(
                 f,
-                "block {height}: body {index} hashes to {present:?}, header lists {listed:?}"
+                "{at}: body {index} hashes to {present:?}, header lists {listed:?}"
             ),
             Self::HeightExhausted { after } => write!(
                 f,
@@ -165,11 +189,7 @@ impl core::fmt::Display for CorpusFault {
             Self::Oversized { what, len } => {
                 write!(f, "{what} length {len} exceeds the wire cap; not a {what}")
             }
-            Self::Malformed {
-                height,
-                what,
-                cause,
-            } => write!(f, "block {height}: {what} does not parse: {cause}"),
+            Self::Malformed { at, what, cause } => write!(f, "{at}: {what} does not parse: {cause}"),
             Self::UnknownTag(t) => write!(f, "unknown record tag {t:#04x}"),
             Self::RewindNotBackward { to, tip } => {
                 write!(f, "rewind to {to} is not backward from tip {tip}")

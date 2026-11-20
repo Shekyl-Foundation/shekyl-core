@@ -17,12 +17,25 @@
 //! Re-encoding from the parsed values, not from the blobs read, is the
 //! point: it shows the reader kept everything the writer wrote, and that
 //! the wire types' serializers reproduce each blob exactly.
+//!
+//! The writer writes the current layout only, and the committed corpora
+//! stay at layout 4 until `CF-5` deletes them (`CF-R7`, `LAYOUT_4`). Layout
+//! 5 is layout 4 plus `offer`, so a layout-4 corpus re-encodes to the same
+//! bytes in every record and differs in one field, the header's layout
+//! version: the test holds every other byte equal and that field to the
+//! current layout.
 
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use shekyl_corpus::{CorpusReader, CorpusWriter, Record};
+use shekyl_corpus::{
+    CorpusReader, CorpusWriter, Record, CORPUS_FORMAT_VERSION, CORPUS_MAGIC, LAYOUT_4,
+};
+
+/// Where the header's layout version sits: after the magic, a `u32`.
+const VERSION_FIELD: std::ops::Range<usize> =
+    CORPUS_MAGIC.len()..CORPUS_MAGIC.len() + core::mem::size_of::<u32>();
 
 /// This crate, where the committed corpora live.
 fn ingest() -> PathBuf {
@@ -86,6 +99,26 @@ fn re_encoded(bytes: &[u8]) -> (Vec<u8>, u64) {
                     .expect("the record verifies again");
             }
             Record::Rewind { to } => writer.rewind(to).expect("the rewind holds again"),
+            Record::Offer(offer) => {
+                let txs: Vec<Vec<u8>> = offer
+                    .transactions
+                    .iter()
+                    .map(shekyl_wire::Transaction::serialize)
+                    .collect();
+                let references = offer
+                    .bundle_references
+                    .as_ref()
+                    .map(|section| section.as_slice().to_vec())
+                    .unwrap_or_default();
+                let bodies: Vec<Vec<u8>> = offer
+                    .bundle_bodies
+                    .iter()
+                    .map(|body| body.as_bytes().to_vec())
+                    .collect();
+                writer
+                    .offer(&offer.block.serialize(), &txs, &references, &bodies)
+                    .expect("the offer verifies again");
+            }
         }
         records += 1;
     }
@@ -105,9 +138,21 @@ fn every_committed_corpus_round_trips_byte_for_byte() {
     );
     let mut total = 0u64;
     for path in &corpora {
-        let bytes = fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mut bytes = fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let (again, records) = re_encoded(&bytes);
         assert!(records > 0, "{} holds no record", path.display());
+        let layout = u32::from_le_bytes(
+            bytes[VERSION_FIELD]
+                .try_into()
+                .expect("the version field is four bytes"),
+        );
+        assert!(
+            layout == LAYOUT_4 || layout == CORPUS_FORMAT_VERSION,
+            "{} is layout {layout}",
+            path.display()
+        );
+        // The one field the current writer writes differently.
+        bytes[VERSION_FIELD].copy_from_slice(&CORPUS_FORMAT_VERSION.to_le_bytes());
         assert!(
             again == bytes,
             "{} does not round-trip: {} bytes read, {} written, first difference at {:?}",

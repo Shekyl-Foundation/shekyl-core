@@ -30,18 +30,22 @@
 //! this file: a fixed magic, a version constant, little-endian fixed-width
 //! lengths, and one serializer shared by writer and reader. Changing the
 //! layout bumps [`CORPUS_FORMAT_VERSION`] and the reader refuses the old
-//! number — rebuild the artifact, never migrate it (rule 15).
+//! number — rebuild the artifact, never migrate it (rule 15) — with one
+//! named exception, [`LAYOUT_4`] (`CF-R7`).
 //!
 //! ```text
 //! header  = MAGIC(8) ‖ version u32 ‖ net u8 ‖ first_height u64 ‖ count u64
 //! extend  = 0x01 ‖ height u64 ‖ block_len u32 ‖ block ‖ tx_count u32 ‖ (tx_len u32 ‖ tx)*
 //!           ‖ ref_count u32 ‖ (ref_len u32 ‖ ref)* ‖ (body_len u32 ‖ body)^ref_count
 //! rewind  = 0x02 ‖ to u64
+//! offer   = 0x04 ‖ block_len u32 ‖ block ‖ tx_count u32 ‖ (tx_len u32 ‖ tx)*
+//!           ‖ ref_count u32 ‖ (ref_len u32 ‖ ref)* ‖ (body_len u32 ‖ body)^ref_count
 //! ```
 //!
-//! Tag `0x03` was version 3's out-of-band serve-credit `inject`. Version 4
-//! carries no out-of-band write, and the reader refuses `0x03` as it
-//! refuses any other unknown tag.
+//! Tag `0x03` was version 3's out-of-band serve-credit `inject`. No layout
+//! since carries an out-of-band write, and the reader refuses `0x03` as it
+//! refuses any other unknown tag. Tag `0x04` is layout 5's: a layout-4
+//! corpus that carries it is refused as an unknown tag.
 //!
 //! `count` counts records of every kind — a `rewind` occupies no height,
 //! so it is a record count, not a height span — and is written at
@@ -67,6 +71,16 @@
 //! and reader both hold each body to its reference (length and hash,
 //! §7.5) before the record is kept.
 //!
+//! # Offer — a block that arrived and does not extend the tip (layout 5)
+//!
+//! `offer` is [`Record::Offer`]: a block whose parent its own header names
+//! (`prev_id`), a block of the chain or an earlier offer, carrying what an
+//! `extend` carries. No record says *switch*: whether the chain switches
+//! to an offered branch, and where, is the replay's fork choice, derived
+//! and recorded in its trace, never declared here (`CHAIN_FORGE.md` §7.1).
+//! An offer carries no height, so a fault in one names its place among the
+//! records ([`RecordAt::Offer`]).
+//!
 //! # Verified, not declared (RD-F15)
 //!
 //! The writer does not record what the source *said* about its bodies —
@@ -74,7 +88,7 @@
 //! and the fetch refuses that before it reaches the writer — it parses the
 //! block and requires the bodies to match `block.transaction_hashes` in
 //! **count, order and hash** before a height is written; a shortfall is
-//! [`CorpusFault::IncompleteBodies`] naming the height. The reader
+//! [`CorpusFault::IncompleteBodies`] naming the record. The reader
 //! re-derives the same check on every record it yields, so an artifact
 //! edited after writing is refused for the same reason. Completeness is a
 //! property the artifact demonstrates on read, never a byte it asserts.
@@ -101,9 +115,9 @@ mod record;
 mod verify;
 mod writer;
 
-pub use fault::CorpusFault;
+pub use fault::{CorpusFault, RecordAt};
 pub use reader::CorpusReader;
-pub use record::{Extend, Record};
+pub use record::{Extend, Offer, Record};
 pub use writer::CorpusWriter;
 
 /// Record tags (crate docs). A new layout adds a constant here and a
@@ -113,14 +127,25 @@ pub(crate) mod tag {
     pub const EXTEND: u8 = 0x01;
     /// `rewind`: pop to the height that follows.
     pub const REWIND: u8 = 0x02;
+    /// `offer`: a block that does not extend the tip (layout 5).
+    pub const OFFER: u8 = 0x04;
 }
 
 /// The artifact's magic: eight bytes no other Shekyl artifact starts with.
 pub const CORPUS_MAGIC: [u8; 8] = *b"SHKCORPS";
 
-/// The layout version this crate writes and the only one it reads.
-/// A layout change bumps it; the reader refuses every other value.
-pub const CORPUS_FORMAT_VERSION: u32 = 4;
+/// The layout version this crate writes. A layout change bumps it; the
+/// reader refuses every other value but [`LAYOUT_4`].
+pub const CORPUS_FORMAT_VERSION: u32 = 5;
+
+/// The one older layout the reader still reads: layout 4, which is layout 5
+/// without `offer` (`CF-R7`). Migration code under rule 15's lifecycle.
+/// **Deletion trigger:** the last layout-4 corpus is gone, the five
+/// committed corpora under `shekyl-chain-ingest/tests/vectors/`, deleted by
+/// `CF-5` when their last consumer has moved to a forged chain
+/// (`CHAIN_FORGE.md` §12.1). That change deletes this constant and the
+/// reader's arm for it.
+pub const LAYOUT_4: u32 = 4;
 
 /// Header and record field widths. Each is the width of the integer written,
 /// so a change of integer width moves the offset with it.

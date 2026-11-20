@@ -399,7 +399,7 @@ mod fetch {
     use shekyl_types::{BlockHeight, TxHash};
 
     use super::three_blocks;
-    use shekyl_corpus::{CorpusFault, CorpusWriter};
+    use shekyl_corpus::{CorpusFault, CorpusWriter, RecordAt};
 
     use crate::corpus::CorpusSource;
     use crate::fetch::{fetch_corpus, FetchFault};
@@ -621,10 +621,10 @@ mod fetch {
             .expect_err("pruned");
         match err {
             FetchFault::Corpus(CorpusFault::IncompleteBodies {
-                height,
+                at,
                 listed: 2,
                 present: 1,
-            }) => assert_eq!(height, BlockHeight::from_raw(2)),
+            }) => assert_eq!(at, RecordAt::Height(BlockHeight::from_raw(2))),
             other => panic!("{other}"),
         }
     }

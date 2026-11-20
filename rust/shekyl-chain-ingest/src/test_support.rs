@@ -442,6 +442,23 @@ pub fn corpus_of_reorg(r: &Reorg) -> Vec<u8> {
     w.finish().expect("count").into_inner()
 }
 
+/// The corpus of `r` as a network meets it (layout 5): every main block
+/// as an `extend`, then each fork block as an `offer` after the blocks it
+/// competes with. No rewind and no switch: the fork choice derives it.
+pub fn corpus_of_offers(r: &Reorg) -> Vec<u8> {
+    let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), Network::Regtest, h(0))
+        .expect("header");
+    for (b, txs) in &r.main {
+        let (bytes, bodies) = wire(b, txs);
+        w.append(&bytes, &bodies).expect("append");
+    }
+    for (b, txs) in &r.after[usize::try_from(r.to).expect("small") + 1..] {
+        let (bytes, bodies) = wire(b, txs);
+        w.offer(&bytes, &bodies, &[], &[]).expect("offer fork");
+    }
+    w.finish().expect("count").into_inner()
+}
+
 pub fn wire(b: &Block, txs: &[Transaction]) -> (Vec<u8>, Vec<Vec<u8>>) {
     let bodies = txs
         .iter()

@@ -105,7 +105,7 @@ fn a_corpus_round_trips_as_an_extend_only_source_in_height_order() {
         );
         match event {
             IngestEvent::Extend(cand) => seen.push((seq, *cand)),
-            IngestEvent::Rewind { .. } => {
+            IngestEvent::Rewind { .. } | IngestEvent::Offer(_) => {
                 unreachable!("this corpus is Extend-only")
             }
         }
@@ -168,6 +168,7 @@ fn a_corpus_with_a_rewind_round_trips_as_events() {
         kinds.push(match ev.event {
             IngestEvent::Extend(c) => format!("E{}", c.block.transaction_hashes.len()),
             IngestEvent::Rewind { to } => format!("R{}", to.to_raw()),
+            IngestEvent::Offer(c) => format!("O{}", c.block.transaction_hashes.len()),
         });
     }
     // main: nothing listed below the floor, one spend at the floor and the

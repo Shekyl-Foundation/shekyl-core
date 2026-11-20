@@ -33,9 +33,9 @@ use crate::schedule::ChainRules;
 use crate::sequencer::SequenceError;
 use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{
-    at, bare_chain, block_with_nonce, chain, corpus_from, corpus_of, corpus_of_reorg,
-    expected_state, h, key_image, open_store, reorg, reorg_of, spent_keys_of, tmp, trace_of,
-    Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
+    at, bare_chain, block_with_nonce, chain, corpus_from, corpus_of, corpus_of_offers,
+    corpus_of_reorg, expected_state, h, key_image, open_store, reorg, reorg_of, spent_keys_of, tmp,
+    trace_of, Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
@@ -991,10 +991,10 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
     )
     .await
     .expect("the rewind across the epoch step replays");
-    assert_eq!(report.switches.len(), 1);
+    assert_eq!(report.rewinds.len(), 1);
     // Main's tip was `boundary`; the rewind is to `boundary − 2`: two popped.
     assert_eq!(
-        (report.switches[0].to, report.switches[0].popped),
+        (report.rewinds[0].to, report.rewinds[0].popped),
         (h(boundary - 2), 2)
     );
     // Every main block connected once, then the fork's three.
@@ -1131,6 +1131,67 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offers_of_a_heavier_fork_switch_through_the_fork_choice_and_land_where_a_rewind_does() {
+    // CF-3 through the real Source: the reorg family's chain again, with
+    // the fork written as offers after main's blocks, as a network meets
+    // it. No record says switch. The fork choice holds the fork while it
+    // is no heavier (`f + 1'..=f + 3'` against main's three), switches at
+    // the fourth offer, and the run ends where the rewind's replay ends:
+    // the fork's tip, its state and its archival rows, each promoted
+    // height's facts compared with the trace's.
+    let path = tmp("pipeline-offers");
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 4);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_of_offers(&r);
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        cfg(2),
+    )
+    .await
+    .expect("the offers replay");
+    assert!(report.rewinds.is_empty(), "no rewind was read");
+    // One switch, at the fourth offer: records `0..=f + 3` are main's
+    // extends, `f + 4..=f + 7` the four offers.
+    assert_eq!(report.switches.len(), 1, "{:?}", report.switches);
+    let switch = &report.switches[0];
+    assert_eq!(
+        switch.record.to_raw(),
+        f + 7,
+        "the offer that made the fork heavier"
+    );
+    assert_eq!((switch.fork, switch.depth, switch.tip), (h(f), 3, h(f + 4)));
+    assert_eq!(switch.digest, expected_state(&r.after));
+    assert_eq!(report.popped(), 3);
+    // Every main block, then the fork's four, promoted together.
+    let connected: Vec<u64> = report.connected.iter().map(|(hh, _)| hh.to_raw()).collect();
+    let expected: Vec<u64> = (0..=f + 3).chain(f + 1..=f + 4).collect();
+    assert_eq!(connected, expected);
+    // The promoted heights are compared, not skipped: every height of the
+    // fork's chain is, once.
+    assert_eq!(report.disagreements().count(), 0);
+    assert_eq!(report.roots.compared(), f + 5, "every height 0..={}", f + 4);
+    let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
+    assert_eq!(at, h(f + 4));
+    assert_eq!(ours, theirs, "the fork's tip matches its own trace");
+    let archival = report
+        .archival
+        .as_ref()
+        .expect("archival rows at the checkpoint");
+    assert!(
+        archival.identical(),
+        "{:?}",
+        archival.diff.diverged().collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_the_switch() {
     // §3.8 / RD-Q13 through the real Source, over blocks that spend. With
     // `f` the first spend height: main `0..=f + 3`, rewind to `f`, fork
@@ -1159,8 +1220,8 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     .expect("the reorg replays");
     // Main's tip was `f + 3`; the rewind is to `f`: `f + 1..=f + 3` popped.
     assert_eq!(report.popped(), 3, "blocks {}..={} popped", f + 1, f + 3);
-    assert_eq!(report.switches.len(), 1);
-    let sw = &report.switches[0];
+    assert_eq!(report.rewinds.len(), 1);
+    let sw = &report.rewinds[0];
     assert_eq!((sw.to, sw.popped), (h(f), 3));
     assert_eq!(
         sw.digest,

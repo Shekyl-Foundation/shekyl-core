@@ -8,7 +8,8 @@
 //! [`CorpusReader::open`] refuses a foreign magic, version or network tag.
 //! [`CorpusReader::next_record`] re-verifies each record and refuses a
 //! count that does not match the header, including a file that ends inside
-//! a record.
+//! a record. A layout-4 corpus ([`crate::LAYOUT_4`]) is read with layout 4's
+//! tags: an `offer` in it is an unknown tag.
 
 use std::io::{BufRead, Read};
 
@@ -19,14 +20,16 @@ use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::transaction::MAX_TX_SIZE;
 
 use crate::cursor::HeightCursor;
-use crate::fault::CorpusFault;
-use crate::record::{note_one_more, Extend, Record};
-use crate::verify::{parse_block, verified_section, verified_tx};
-use crate::{header, tag, HEADER_LEN, LEN_PREFIX, MAX_SECTION_BLOB};
+use crate::fault::{CorpusFault, RecordAt};
+use crate::record::{note_one_more, Record};
+use crate::verify::{parse_block, verified_section, verified_tx, Verified};
+use crate::{header, tag, CORPUS_FORMAT_VERSION, HEADER_LEN, LEN_PREFIX, MAX_SECTION_BLOB};
 
 /// Reads a corpus, re-verifying every record.
 pub struct CorpusReader<R: BufRead> {
     input: R,
+    /// The header's layout: [`CORPUS_FORMAT_VERSION`] or [`crate::LAYOUT_4`].
+    layout: u32,
     net: Network,
     cursor: HeightCursor,
     declared: u64,
@@ -49,17 +52,26 @@ impl<R: BufRead> CorpusReader<R> {
         // `next_record` refuses an `extend` that would need a height past
         // `u64::MAX` once its tag is read, before its height.
         let header::Decoded {
+            layout,
             net,
             first,
             declared,
         } = header::decode(&bytes)?;
         Ok(Self {
             input,
+            layout,
             net,
             cursor: HeightCursor::starting_at(first),
             declared,
             read: 0,
         })
+    }
+
+    /// The header's layout version: [`CORPUS_FORMAT_VERSION`], or
+    /// [`crate::LAYOUT_4`] for a corpus written before `offer`.
+    #[must_use]
+    pub const fn layout(&self) -> u32 {
+        self.layout
     }
 
     /// The chain the corpus was taken from.
@@ -127,6 +139,14 @@ impl<R: BufRead> CorpusReader<R> {
                 self.read = note_one_more(self.read);
                 return Ok(Record::Rewind { to });
             }
+            tag::OFFER if self.layout == CORPUS_FORMAT_VERSION => {
+                // An offer does not extend the tip: it carries no height,
+                // and the cursor does not move.
+                let at = RecordAt::Offer { record: self.read };
+                let offer = self.block_and_bodies(at)?.into_offer();
+                self.read = note_one_more(self.read);
+                return Ok(Record::Offer(Box::new(offer)));
+            }
             other => return Err(CorpusFault::UnknownTag(other)),
         }
         // The tag named an extend. There is no height past the last one, so
@@ -140,17 +160,29 @@ impl<R: BufRead> CorpusReader<R> {
                 found: height,
             });
         }
+        let extend = self
+            .block_and_bodies(RecordAt::Height(height))?
+            .into_extend(height);
+        self.cursor.advance_past(height);
+        self.read = note_one_more(self.read);
+        Ok(Record::Extend(Box::new(extend)))
+    }
+
+    /// A block, its listed bodies and its bundle section, read and
+    /// re-verified: what an `extend` (after its height) and an `offer`
+    /// carry.
+    fn block_and_bodies(&mut self, at: RecordAt) -> Result<Verified, CorpusFault> {
         let block_blob = read_blob(&mut self.input, "block", MAX_BLOCK_BLOB_SIZE)?;
         // The header is the bound: parse it before trusting the file's
         // `tx_count`. `Block::read` caps the hash list at `READ_LEN_CAP`
         // and does not pre-allocate against it; a crafted `tx_count =
         // u32::MAX` must not `Vec::with_capacity` before this check.
-        let block = parse_block(height, &block_blob)?;
+        let block = parse_block(at, &block_blob)?;
         let listed = block.transaction_hashes.len();
         let claimed = read_count(&mut self.input, "transaction count")?;
         if claimed != listed {
             return Err(CorpusFault::IncompleteBodies {
-                height,
+                at,
                 listed,
                 present: claimed,
             });
@@ -158,11 +190,11 @@ impl<R: BufRead> CorpusReader<R> {
         let mut transactions = Vec::with_capacity(listed);
         for (index, want) in block.transaction_hashes.iter().enumerate() {
             let blob = read_blob(&mut self.input, "transaction", MAX_TX_SIZE)?;
-            transactions.push(verified_tx(height, index, *want, &blob)?);
+            transactions.push(verified_tx(at, index, *want, &blob)?);
         }
         let ref_count = read_count(&mut self.input, "bundle reference count")?;
         if ref_count > MAX_SECTION_REFERENCES {
-            return Err(CorpusFault::BadSection { height });
+            return Err(CorpusFault::BadSection { at });
         }
         let mut references = Vec::with_capacity(ref_count);
         for _ in 0..ref_count {
@@ -176,16 +208,13 @@ impl<R: BufRead> CorpusReader<R> {
         for _ in 0..ref_count {
             bodies.push(read_blob(&mut self.input, "bundle body", MAX_SECTION_BLOB)?);
         }
-        let (bundle_references, bundle_bodies) = verified_section(height, &references, &bodies)?;
-        self.cursor.advance_past(height);
-        self.read = note_one_more(self.read);
-        Ok(Record::Extend(Box::new(Extend {
-            height,
+        let (bundle_references, bundle_bodies) = verified_section(at, &references, &bodies)?;
+        Ok(Verified {
             block,
             transactions,
             bundle_references,
             bundle_bodies,
-        })))
+        })
     }
 }
 
