@@ -102,10 +102,13 @@ logging each send's times. The record states which nodes ran a loop.
   output after 10, so the loops begin some hours after mining starts.
 
 **The load (Rick, 2026-11-20).** The stressnet transaction generator
-(`shekyl-dev` `stressnet/`, `config/cbs_e1_load.yaml`, transfers only),
-one instance on each load host, against that host's own daemon. The
+(`shekyl-dev` `stressnet/`, `config/cbs_e1_load.yaml`), one instance on
+each load host, against that host's own daemon. The
 measuring hosts do not run it; the measured transactors keep TRC-1's send
-loop.
+loop. Of the generator's exercisers only the one that sends transactions
+runs, with the mix below, stakes included. The exercisers that partition
+hosts, degrade links or submit tampered transactions are not enabled on
+any host.
 
 - **The cycle.** Eight hours, nine times in the 72, starting at the first
   accepted logged send. Every load host changes segment at the same moment:
@@ -115,11 +118,18 @@ loop.
   | `idle` | 120 min | none: only the measured transactors send |
   | `low` | 120 min | 6 transactions an hour per load host |
   | `typical` | 120 min | 30 an hour per load host |
-  | `high` | 120 min | 716 an hour over the whole network, shared between the load hosts |
+  | `high` | 120 min | 716 an hour from the load hosts together, shared between them |
 
 - **`idle` is captured on purpose:** the quiet network is the hardest case
   for the design.
-- **`high` is the design load:** `DESIGN_NETWORK_MILLI_TX_PER_SEC` = 199.
+- **The rates in the table are the generator's alone.** The two measured
+  transactors send in every segment as well, about 12 an hour each at
+  their registered gap. So the planned rate over the whole network is
+  about 24 an hour in `idle`, and the table's rate plus about 24 in the
+  others.
+- **`high` is set at the design load,** `DESIGN_NETWORK_MILLI_TX_PER_SEC`
+  = 199, or 716 an hour, for the generator: with the transactors the
+  network's planned rate in `high` is about 740 an hour, 3 % over it.
 - The low and typical rates and the 120-minute length are confirmed
   (Rick, 2026-11-20).
 - **Stakes** are 1 SKL each.
@@ -199,9 +209,11 @@ host. Its definitions:
    each link and for the connector's sum.
 3. Burst sizes and gaps at both thresholds.
 4. The send groups, and the candidate runs per matched send.
-5. For each segment: the number of load hosts, the planned network rate,
-   and the achieved one from the generator's own record of attempts
-   (submitted, failed, skipped for want of funds).
+5. For each segment: the number of load hosts; the generator's planned
+   rate and its achieved one, from its own record of attempts (submitted,
+   failed, skipped for want of funds); the measured transactors' accepted
+   sends an hour, from their send logs; and the whole network's achieved
+   rate, the two together.
 6. The watcher's test at 0.1 s, 1 s and 10 s, in the layout of TRC-1's
    table, pooled over links and on the connector's sum. On the Tor nodes,
    TRC-1's own test on the guard connections for the same hours, beside
