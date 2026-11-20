@@ -1,0 +1,151 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The `merge-ready` commit status: the owning lane's "done", enforced, and a
+# re-test of the head against the newest `dev` (ruled 2026-11-19;
+# scripts/ci/merge_ready.py has the whole contract).
+#
+# The owning lane applies the `merge-ready` label when every check on the
+# current head has concluded (not only the required ones), its fleet and
+# local runs for that head are done, and its review threads are resolved.
+# This workflow keeps the `merge-ready` status, the required check, true to
+# it:
+#   label-check  without the label the status is pending (`waiting`),
+#                never red and never skipped. A push takes the label off
+#                with a comment, so a label never vouches for a head it did
+#                not see. The label going on is checked against every check
+#                run and status on the head (this flow's own and
+#                merge_ready.py's EXCLUDED, by name, aside); a check still
+#                running or red, an open review thread or a draft takes it
+#                off again, with a comment naming each.
+#   plan         after a label that passed: the tests the head shares with
+#                everything merged to `dev` since its merge base. None:
+#                `ready` at once. Some: `re-testing`, and
+#   re-test      merge-ready-retest.yml runs them on the head merged with
+#                the newest `dev`: `ready`, or `red` with the label off and
+#                the failing tests named.
+# A later merge that reaches a labelled pull request re-tests it again
+# (merge-ready-dev.yml).
+#
+# The status, not a job, is the required check: a skipped job counts as a
+# pass to protection (06-branching.mdc), and a head with no status at all is
+# blocked as "expected". Every head gets one from its own `opened`,
+# `reopened` or `synchronize` run, which no condition skips; a label or an
+# unlabel of another label runs nothing and leaves the status as it is, so
+# it neither cancels a label check in progress nor restarts a re-test.
+# `pull_request`, not `pull_request_target`: the latter takes its workflow
+# from the default branch, which is `main`. A fork's run holds no write
+# token and posts nothing, so a fork's pull request stays blocked; this
+# repository has none.
+#
+# Runs per event: seconds (API calls), up to SETTLE_SECONDS more when the
+# labelling itself started a check; the plan about a minute; the re-test
+# the shared tests' own time.
+
+name: ci/merge-ready
+
+on:
+  # Every event that changes the head, the draft state or the labels. No
+  # base filter (scripts/ci/check_pr_event_triggers.py).
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # Not named `merge-ready`: a ruleset's required check matches a check run
+  # and a commit status by name alike, and this job always ends green.
+  label-check:
+    name: merge-ready label check
+    if: >-
+      (github.event.action != 'labeled' && github.event.action != 'unlabeled')
+      || github.event.label.name == 'merge-ready'
+    # The newest event decides: an older label check of the same pull
+    # request is cancelled. On the job, so the re-test (its own group) is
+    # not cancelled by an event that leaves the label on.
+    concurrency:
+      group: merge-ready-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5  # API calls, and at most SETTLE_SECONDS of waiting
+    permissions:
+      checks: read
+      contents: read
+      pull-requests: write
+      statuses: write
+    outputs:
+      judged: ${{ steps.run.outputs.judged }}
+    steps:
+      # The script alone, from the commit under test.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/ci/merge_ready.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event.action }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          LABEL: ${{ github.event.label.name }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'merge-ready') }}
+          # The label event's time: a check that was already running then
+          # refuses the label at once, without the settle wait.
+          LABELLED_AT: ${{ github.event.pull_request.updated_at }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 scripts/ci/merge_ready.py run
+
+  plan:
+    name: merge-ready re-test plan
+    needs: label-check
+    if: needs.label-check.outputs.judged == 'ok'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API calls, one fetch, one dependency graph read
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      leg: ${{ steps.plan.outputs.leg }}
+    steps:
+      # The pull request's merge with `dev`, every branch's history: the
+      # head, the merge base and `dev`, which the plan fetches again now.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.base_ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 scripts/ci/merge_ready.py plan
+
+  retest:
+    # Named by the pull request: the report finds its re-test job as
+    # `#<pr> / re-test`, and the label check knows it as this flow's own.
+    name: '#${{ github.event.pull_request.number }}'
+    needs: plan
+    if: needs.plan.outputs.leg != ''
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      statuses: write
+    uses: ./.github/workflows/merge-ready-retest.yml
+    with:
+      pr: ${{ github.event.pull_request.number }}
+      head: ${{ fromJSON(needs.plan.outputs.leg).head }}
+      base: ${{ github.base_ref }}
+      dev: ${{ fromJSON(needs.plan.outputs.leg).dev }}
+      since: ${{ fromJSON(needs.plan.outputs.leg).since }}
+      merged: ${{ fromJSON(needs.plan.outputs.leg).merged }}
