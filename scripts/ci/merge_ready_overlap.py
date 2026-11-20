@@ -304,7 +304,7 @@ def plan(base_ref, before):
         context_error = None
     except Exception as e:  # fail closed: every labelled pull request is re-tested on its whole scope
         ctx, merged_push, context_error = None, ALL, str(e)
-    legs = []
+    legs, tested = [], []
     for number, head in prs:
         sts = mr.statuses(head)
         current = mr.parse(mr.newest(sts))
@@ -318,6 +318,7 @@ def plan(base_ref, before):
             row = push_row(number, head, current, dev, before, ctx, merged_push)
         except Exception as e:
             row = fail_closed(number, head, e, current["since"] if kind == "re-testing" else mr.UNKNOWN)
+            print(f"::warning::#{number}: {row['why']}; re-testing its whole scope")
         if row is None:
             skipped.append((number, "shares no test with the push: untouched"))
             continue
@@ -327,9 +328,8 @@ def plan(base_ref, before):
         mr.post_kind(head, "re-testing", f"after {row['merged']}: {', '.join(row['crates']) or 'see the run'}",
                      dev, row["since"])
         legs.append({k: row[k] for k in ("pr", "head", "since", "merged")})
-        print(f"- #{number} {head[:10]}: re-test ({row['why']})")
-    lines = [f"merge-ready after {merged_prs(before, dev)} (dev {dev[:10]}): {len(legs)} re-test(s)", ""]
-    lines += [f"- #{r['pr']} {r['head'][:10]}: re-test since {r['since'][:10]}" for r in legs]
+        tested.append(f"- #{number} {head[:10]}: re-test since {row['since'][:10]} ({row['why']})")
+    lines = [f"merge-ready after {merged_prs(before, dev)} (dev {dev[:10]}): {len(legs)} re-test(s)", "", *tested]
     lines += [f"- #{n}: {why}" for n, why in skipped]
     print("\n".join(lines))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -353,6 +353,7 @@ def scope(head, dev, since):
         merged, crates = merged_prs(since, dev), ", ".join(crates_named(merged_side, pr, ws))
     except Exception as e:  # fail closed: every test
         tests, docs, merged, crates = "all", "", f"dev up to {dev[:10]}", f"(scope unread: {e})"
+        print(f"::warning::the scope could not be read ({e}); re-testing every test")
     print(f"scope: {tests} (docs: {docs or 'none'}); merged {merged}; crates {crates or 'none'}")
     for key, value in (("rust_tests", tests), ("rust_doc_pkgs", docs), ("merged", merged), ("crates", crates)):
         mr.output(key, value)
