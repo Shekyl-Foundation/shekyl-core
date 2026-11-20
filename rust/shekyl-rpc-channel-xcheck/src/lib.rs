@@ -1,3 +1,4 @@
+// DEMO ONLY (merge-ready): scratch PR C touches a crate that shares no test with the demo value.
 // Copyright (c) 2026, The Shekyl Foundation
 //
 // All rights reserved.
