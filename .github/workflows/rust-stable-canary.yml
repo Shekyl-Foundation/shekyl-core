@@ -1,0 +1,52 @@
+name: rust stable canary
+
+# Non-blocking forward-compatibility canary. The dev toolchain is pinned to the
+# MSRV (1.94.0) via rust/rust-toolchain.toml; this job runs the fmt + clippy gates
+# on the current `@stable` toolchain instead, to surface — ahead of a deliberate
+# toolchain bump — any new clippy lints or rustfmt layout changes the next stable
+# would introduce. It is scheduled (never on push/PR), so it cannot block a merge:
+# a red run is an early warning, not a gate. `@stable` only — no `@beta`/nightly
+# for a cryptocurrency.
+
+# DEMO BASE ONLY (merge-ready): kept for change_scope.py to read; never runs here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fmt-clippy-on-stable:
+    name: fmt + clippy on @stable (advisory)
+    runs-on: ubuntu-latest
+    # Dispatch-only and never timed: a stable-toolchain workspace build
+    # plus clippy, bounded well above what that takes in the Rust job.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Match rust-audit-test.yml: `ledger_iai` enables gungraun
+      # `client_requests`, which needs Valgrind headers plus libclang
+      # (bindgen of `valgrind-requests`) to compile under clippy
+      # `--all-targets`.
+      - name: install valgrind headers + libclang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind libclang-dev clang
+      # `cargo +stable` overrides the 1.94.0 pin in rust/rust-toolchain.toml for
+      # this advisory run. Vendored crypto stays out of scope because those
+      # crates are WORKSPACE-EXCLUDED (the `exclude` list in rust/Cargo.toml),
+      # so `cargo fmt --all` never visits them — same as the pinned gate. (An
+      # earlier version of this comment credited a rustfmt.toml `ignore` that
+      # has never existed; rustfmt.toml pins only the edition.)
+      - name: cargo fmt --check (@stable)
+        working-directory: rust
+        run: cargo +stable fmt --all -- --check
+      - name: cargo clippy -D warnings (@stable)
+        working-directory: rust
+        # Mirror the real gate (build.yml's clippy step) exactly, so this advisory
+        # signal matches what a toolchain bump would actually face: same scope
+        # (--workspace --all-targets) and --keep-going.
+        run: cargo +stable clippy --workspace --all-targets --keep-going -- -D warnings
