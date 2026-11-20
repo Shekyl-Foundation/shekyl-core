@@ -20,7 +20,7 @@ fee-share verdict in
 
 ## Reading-pass finding 1: the production default carries 22 of 50 (re-measured 2026-10-17; the 2026-10-03 run is §5.7)
 
-*Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The daemon runs Monero's pre-v5 rule until the fill moves to Rust, so this finding is the design's behaviour once the fill lands, not what the daemon does today. The fill prices the block with the coinbase reserve (#1152, §5.23), as the node's template does since #1165.
+*Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The node's template admits through the same fill (`shekyl-chain-ingest`'s template calls `shekyl_block_template::Fill::admit`), so this finding is what the daemon does. The fill prices the block with the coinbase reserve (#1152, §5.23), as the node's template does since #1165.
 
 **What the run says.** On the baseline schedule, 50 ordinary transactions a
 block, at the production Standard rung and under the production
@@ -4665,6 +4665,281 @@ given where it differs.
 This fits a pool that carries one block's overflow into the next, so that
 blocks run above their median and the long-term median climbs. It was not
 traced further.
+
+### 5.36 Blocks grow under standard traffic: the growth traced, predicted before it is built (2026-11-19)
+
+§5.35.1 found, unpredicted, that where blocks may grow, standard traffic grows
+them and the fee falls. On the inherited baseline at year 20 the long-term
+median is 953 K against `steady`'s 733 K, and the fee per block is 5.86 SKL
+against 8.85. It is the second sighting: §5.34.1's JG-10 was the first.
+Neither was traced. Rick ruled on 2026-11-19 that this PR traces it before
+EUP-4 prep, which must predict miner income and fees and cannot without the
+mechanism. The trace answers four questions:
+1. Is the growth paid for (fees covering the penalty on the bursty blocks), or
+   free?
+2. Does it stop, and where?
+3. Is it how production's template would behave, or an artefact of the sim's
+   pool and miner model?
+4. Whom does it reach: the three economies, and the zone decision?
+
+The family is `GRW-1`…`GRW-6`. Nothing below is a result. A prediction is
+**blind** when it is derived from the rules below without a reading of this
+effect, and **informed** when §5.35.1 or §5.34.1 already showed its figure.
+
+**What production does, read from the code (not a prediction).**
+- **The fill.** `shekyl_block_template::Fill::admit` lists a body when the
+  block stays under its limit (twice the effective median) and the body's fee
+  is at least the penalty it adds. The node's template calls it
+  (`shekyl-chain-ingest`, `template.rs`), and so does the sim's pool
+  (`block_space.rs`).
+- **The medians.** The effective median is the median of the last 100 blocks'
+  weights, clamped to [LTEM, 3·LTEM]. The long-term effective median (LTEM) is
+  the median of the last 100 000 blocks' long-term weights, each clamped to
+  [LTEM/1.7, 1.7·LTEM], and floored at the zone. The sim keeps them with
+  production's selection rules, held equal to `medians_over` by test.
+- **The pool's policy** is `shekyl-mempool`'s, called.
+- **What only the sim supplies:**
+  - the arrivals, which do not answer the fee;
+  - one weight per cohort;
+  - every miner running the template;
+  - no cost for propagating a larger block.
+
+**The mechanism, derived (blind).**
+- **The fill stops near the median.** At y20 a Standard body pays about
+  0.18 SKL against a reward near 380 SKL, at a median near 50 bodies of
+  14.7 KB. Its fee covers the marginal penalty for less than one body past the
+  effective median. So a block with bodies waiting lists about as many as the
+  median allows, and at most a body more.
+- **Each body past the median pays its own penalty.** That holds by
+  construction: the fill lists it only if its fee covers what it costs.
+- **The short-term median ratchets.** It moves up once more than half of the
+  last 100 blocks list past it. That needs more than half the blocks to end
+  with bodies still waiting.
+- **`steady` cannot ratchet.** It offers exactly the demand every block, so
+  the pool empties and no block passes 50.
+- **Standard traffic ratchets.** Its count is geometric (median 35, mean 50),
+  so a backlog forms. Once the growth gate admits a body past the median
+  (y19 on the inherited baseline), the median climbs a body at a time.
+- **It stops at a fixed share.** It stops where half the blocks end at their
+  stop and half empty the pool. A design-mode queue fixes that point. Its
+  arrivals are the geometric count at mean 50, and a block lists at most `c`.
+  Half the blocks list `c` at about `c` = 70: 49.5 % at 70, 51.1 % at 69.
+- **The rest point is the traffic's, not the zone's.** A zone whose
+  penalty-free room is below it grows to it, once the fee admits a body past
+  the median. A zone at or above it never grows.
+- **The long-term median follows.** It follows within one long window, about
+  100 000 blocks (0.38 years), because every block's long-term weight is
+  within 1.7× of it.
+
+**What is built.** It is read-only: no fold changes, and every narration
+and steady pin passes unregenerated.
+- **The fill's record.** `Fill::admit_up_to` returns what one offer listed:
+  how many bodies end within the penalty-free weight, and why the next body
+  was refused, by the same checks as `admit`. `block_space` keeps that
+  record. The reason on a block is the marginal refusal, the last cohort
+  the template did not finish; on one weight that is the only refusal. It
+  is one of:
+  - the pool emptied;
+  - the marginal body's fee fell under the penalty it adds;
+  - the marginal body would pass the block's limit.
+
+  The bodies past the penalty-free weight are that offer's own complement.
+  The penalty is `Fill::reward_at` of an empty block less the reward the
+  block paid, and each such body's surplus is its fee less the penalty it
+  added.
+- **The trace.** `--growth-trace` folds the baseline scenario to y40, at
+  seed 1, on standard traffic and on `steady`, in the inherited zone and the
+  re-derived zone. It refuses every other mode, control flag and instrument
+  before those folds. It prints by quarter from y18 to y23, then by year:
+  - the LTEM and the effective median;
+  - the share of blocks with the effective median at its upper clamp;
+  - the share of blocks past the effective median;
+  - the share of each stop reason;
+  - the bodies past the penalty-free weight per block;
+  - the penalty, those bodies' fees and their surplus, per year;
+  - the pool's waiting, expired and refused counts;
+  - the carried count's median;
+  - the reward minted per year and the penalty's share of it;
+  - every listed fee per block;
+  - the Standard body's mean weight and fee.
+- **Its pin.** Its fixture is pinned on demand and listed in the sim's
+  ignored-set census.
+
+**GRW-1. Why the fill stops (blind).**
+- **Inherited zone, standard traffic, at rest (y25–y40):** 45–55 % of
+  blocks stop at the penalty, the rest at an empty pool, none at the limit.
+- **On `steady` after the crossing:** every block stops at an empty pool.
+- **Before the crossing (y1–y18), on both:** nearly every block stops at
+  the penalty (22 listed, the pool holding the rest).
+
+**GRW-2. Where it stops (blind for the rule; informed for the inherited
+figure).**
+- **The rest point.** The carried count's median rests where half the
+  blocks stop at the penalty: 65–70 ordinary bodies. The pure queue says
+  70; the pool's expiries and refusals carry fewer than 50 a block, which
+  lowers it. §5.35.1's 953 K at y20 is 65 bodies of 14.7 KB.
+- **It holds as the body grows.** At rest the count holds from y21 to y40,
+  while the median's bytes grow with the body's weight at depth.
+- **The clamp.** The effective median is never at its 3·LTEM clamp, and
+  sits within 3 % of the LTEM.
+
+**GRW-3. Paid or free (blind).**
+- **Per body, paid by construction.** Every body past the penalty-free
+  weight pays at least the penalty it adds.
+- **In total, nearly free.** At rest fewer than one body a block is listed
+  past it. The year's penalty is under 1 % of the year's fees, and under
+  0.05 % of the year's emission.
+- **The room is bought once.** During the climb (y19–y21), the penalty
+  paid buys room that every later block uses free.
+
+**GRW-4. When (blind).**
+- **The start.** The effective median leaves the zone's floor in y19, the
+  year the growth gate admits.
+- **The rest.** It reaches the rest count within a year. The LTEM reaches it
+  within one long window after that, by y21.
+
+**GRW-5. Whom it reaches (blind).**
+- **Zones whose room is under the rest count grow.** The inherited zone
+  (22 bodies) grows from y19.
+- **The re-derived zone does not grow.** It has room for 85–92 bodies in
+  year 1 (§5.35.1's grid). There the queue puts about 30 % of blocks at
+  their stop, and the grid reads 28 % leaving a backlog (informed). That is
+  under half, so the effective median stays on the LTEM, and the LTEM on
+  the zone's floor, through y40.
+- **The economies.** The three economies share the fill and the medians.
+  Only the fee's level differs between them (its `C` reads volume on
+  production, the baseline when decoupled), which moves the stop by a
+  fraction of a body. So the rest count is the same in each to within one
+  body. This PR runs production only: EUP-4 prep reads the others.
+- **The zone decision.** Below the rest count, the penalty-free weight sets
+  where blocks sit only until the gate admits. After that the traffic's
+  burstiness sets it.
+
+**GRW-6. Read-only (blind; it holds or the instrument is wrong).** Every
+narration pin and every steady pin passes unregenerated at this PR's head.
+
+#### 5.36.1 What the trace read (2026-11-19)
+
+Measures, not verdicts. Every figure is seed 1's, from
+`growth_trace_narration.txt`. A quarter's per-year figures are that
+quarter's rate over a year.
+
+**The runs.** A fleet host ran these steps at `nice 10` on eight threads,
+beside its testnet node.
+- **At `a78cd1e627`:**
+  1. the sim's unit tests (255 passed);
+  2. the ignored-set census;
+  3. the nightly narration lane, unregenerated: 10 of 10 passed in
+     11 790 s;
+  4. the trace's regeneration and its pin.
+- **At `8e9534d64f`:** the same unit tests, census, regeneration and pin.
+  This commit adds five columns: the reward minted, the penalty's share of
+  it, every listed fee per block, and the Standard body's weight and fee.
+  The first reading could
+  grade GRW-3's emission clause, GRW-2's body, and §5.35.1's fee only from
+  figures borrowed from other narrations. The committed fixture is this
+  second reading, written under
+  `SHEKYL_PINNED_REGEN_DECISION="2026-11-19 the growth under standard
+  traffic, traced: the fill records why it stopped and what it listed past
+  the penalty-free weight, and --growth-trace reads it with the reward
+  minted, the block's fee and the Standard body (four 40-year folds);
+  predicted in ECONOMICS_SIM_PRODUCTION_REBASE.md §5.36 (GRW-1 to GRW-6)
+  and read in §5.36.1"`. Every column of the first reading is byte for
+  byte the same in it.
+
+| Prediction | Outcome |
+| --- | --- |
+| **GRW-1.** Inherited, standard, at rest (y25–y40): 45–55 % of blocks stop at the penalty, the rest drained, none at the limit. `steady` after the crossing: every block drained. Before the crossing, on both: nearly every block at the penalty, 22 listed | **Held, but for one quarter on `steady`.** At rest 48.8–49.2 % stop at the penalty, the rest drain, none hit the limit. Before the crossing, 100 % stop at the penalty on both traffics, 22 carried. On `steady` every block drains from y19 q3, except y23 q2: there 0.4 % stop at the penalty. That quarter the Standard body steps from 14.64 to 15.28 KB, and 50 bodies of the new weight do not fit the 733 K LTEM until it follows to 765 K |
+| **GRW-2.** The carried count's median rests at 65–70, lowered from the queue's 70 by the pool's expiries and refusals; it holds from y21 to y40 while the median's bytes grow with the body; the effective median never at its 3·LTEM clamp, and within 3 % of the LTEM | **The rest point held; its stated reason, the clamp and the start of the hold missed.** The count rests at 68–69 from y21 q4 to y40, except 67 in y23 q2–q3 while the body steps. y21's first three quarters read 66–67. That is the queue's own point (49.5 % at 70, 51.1 % at 69). The pool drops nothing at rest (0.00 a block), so expiries and refusals do not lower it. §5.35.1's 65 was read mid-climb, at y20. The bytes step once, 997 K to 1 041–1 056 K, with the body's step in y23. At rest the effective median is within 2 % of the LTEM and never at the clamp. **It is at the clamp during the crossing:** in y19 q2, 14.8 % of blocks are judged at 3·LTEM, and 0.4 % in y19 q3. The rest weight is above 3 × 324 K, so the clamp binds until the LTEM, the median of 100 000 blocks, moves. It moves from 324 K to 616 K by the quarter's end |
+| **GRW-3.** Every body past the penalty-free weight pays its penalty. In total nearly free: at rest under one body a block past it, the year's penalty under 1 % of the year's fees and under 0.05 % of its emission. The room is bought once, during the climb (y19–y21) | **Paid per body and nearly free at rest held; "bought once" missed.** The surplus is positive in every period of every run. At rest: 0.49–0.50 bodies a block past the free weight, the penalty 0.67–0.79 % of every listed fee and 0.0101–0.0102 % of the reward minted. The crossing year costs more: y19's penalty is 84 329 SKL, 0.085 % of its emission, and 2.36 % of fees in y19 q2. The penalty never stops. y19–y21 costs 109 009 SKL, and y22–y40 another 102 962. At rest each block that stops at the penalty lists exactly one body past the free weight (1.00–1.02), and the penalty it adds is 68–80 % of its fee. The room under the risen median is used free. The burst above it pays on half the blocks, every year |
+| **GRW-4.** The effective median leaves the floor in y19; the rest count within a year; the LTEM at it by y21 | **The start and the LTEM held; the year to rest missed.** It leaves in y19 q2. The carried count goes 22 → 54 in that one quarter, then 58 (y19 q4), 65 (y20 q4) and 68 (y21 q4): about two and a half years, closing more slowly as the share of blocks stopping at the penalty nears half (63.2 % in y20 q1, 50.4 % in y21 q4). The LTEM reaches 997 K, 68 bodies of 14.64 KB, at y21 q4 |
+| **GRW-5.** The inherited zone grows from y19. The re-derived zone does not: about 30 % of blocks at their stop, under half, so the LTEM stays on the floor to y40. The economies' rest count within a body of each other. For the zone decision, the traffic's burstiness sets where blocks sit after the gate | **The zones held; the economies were not run.** The inherited zone grows from y19 q2. The re-derived zone's LTEM is 1 260 K in every period to y40, with 29.1–31.8 % of blocks at the penalty, and its carried count 49–51. This PR runs production only, so the economies are not graded here: EUP-4 prep reads them. The zone decision's clause held, and the fee rides on it (below) |
+| **GRW-6.** Every narration and steady pin passes unregenerated at this PR's head | **Held at `a78cd1e627`, and carried to the head by what changed since.** The nightly lane passed 10 of 10 unregenerated: stage 2 standard, flat control and steady; ESR-10, EUP-4 and the grid's nightly scopes; ESR-10's and EUP-4's steady scopes; the baseline's reader test; the ESR-11 timing set. After it, only `growth_trace.rs` changed among the sim's sources, and no other fold reads that file. The merge of `dev` (`d4187e6e9f`) touched one crate in the sim's dependency tree, `shekyl-chain-store`, with two lint allowances and no code. It moved no external crate's version. The per-PR narration pins and the trace's pin passed in a fresh clone at `e76cdaab48`. The three steady pins, the reader test and the timing set last ran at `a78cd1e627` |
+
+**The four questions.**
+1. **Paid or free.** Each body past the penalty-free weight pays its own
+   penalty. That holds by construction, and the surplus is positive in
+   every period. In total the growth is nearly free:
+   - at rest the penalty is 0.010 % of the reward minted and under 1 % of
+     the fees;
+   - the crossing year costs 0.085 %.
+
+   It is not a one-time purchase. Half the blocks keep listing one body
+   past the free weight, every year. That body raises the block's gross
+   coinbase by 20–32 % of its fee, and the rest of its fee covers the
+   reward withheld, which stays unminted. `Fill::admit` compares gross
+   figures: a body is listed when it does not lower the penalised reward
+   plus every fee. The fee's three-way split (burn, stakers, miner) and
+   the reward's miner and staker legs come after, so what the miner
+   itself nets from that body is not traced here. EUP-4 prep measures it
+   as a miner's-net arm beside the production rule, and the fee design
+   rules which comparison the default template makes (`FOLLOWUPS.md`).
+2. **Whether it stops, and where.** It stops at a carried median of 68–69
+   ordinary bodies (1 041–1 056 K), where half the blocks stop at the
+   penalty. That is 3.2 times the inherited zone's room, and under the
+   re-derived zone's 1 260 K. The mean block still lists 50 bodies, the
+   demand. The growth moves the median, not the throughput.
+3. **Production, or the sim's model.**
+   - **The mechanism is production's.** The stop is `Fill::admit`, the
+     node template's own call. The ratchet is the medians, kept with
+     production's selection rules. The fee's fall is the relay floor's
+     `F = R·C·w_ref/M²`, with M the LTEM (`shekyl-economics`,
+     `fee/floor.rs`).
+   - **The rest point is the traffic's.** It is where half the blocks find
+     a backlog. The sim's geometric count sets 68, and real traffic's
+     burstiness would set its own.
+   - **The crossing's burst is the sim's.** For 18 years the pool holds
+     about 4 084 bodies and drops 28 of 50 a block, because the sim's
+     arrivals never answer the fee. In y19 q2 that backlog drains:
+     - fees per block jump from 14.9 to 42.2 SKL;
+     - the count jumps from 22 to 54 in a quarter;
+     - one block in seven is judged at the surge clamp.
+
+     The clamp also needs the ratchet. `steady` drains the same backlog
+     into 50 a block, 733 K, under 3 × 324 K, and never reaches it.
+     Users who leave or bid up would leave a smaller backlog.
+   - **Two other sim inputs matter at rest:**
+     - **No propagation cost.** A miner who weighed orphan risk against
+       what one body past the free weight nets could decline it, and the
+       median would ratchet less. EUP-4 prep's inclusion column measures that
+       range.
+     - **Every miner runs the template.** A miner listing less slows the
+       ratchet.
+4. **Whom it reaches.**
+   - **The inherited zone** grows. Its fee per byte falls with the
+     square of the LTEM's rise.
+   - **The re-derived zone** does not grow, and its fee is `steady`'s to
+     within 1 %. It pays a standing penalty about three times the
+     inherited rest's: 0.032–0.034 % of the reward every year from y18,
+     and 0.018 % over y1–y17. About 31 % of its
+     blocks stop at the penalty, each listing about three bodies past the
+     free weight. The penalty they add is 39–49 % of their fees.
+   - **The economies** were not run. Every fee that reads the LTEM
+     inherits the M² term, which bears on B's and C's fee predictions.
+   - **The zone decision.** In a zone under the rest point, once the gate
+     admits, the traffic sets the block's size, and through M² the fee. A
+     zone above it keeps both and pays the standing penalty.
+
+**Not predicted.**
+- **The fee falls with the square of the growth, and this is
+  §5.35.1's.** The Standard body's fee at y20 q4 is 0.1053 SKL against
+  `steady`'s 0.1742, a ratio of 0.60. (733/953)² is 0.59. At y30 the
+  ratio is 0.536, against (765/1 041)² = 0.540, and the same holds at
+  y40. The mean block lists 50 bodies on both traffics, so the fee per
+  block falls the same way: 5.25 against 8.71 SKL at y20 q4, and 2.81
+  against 5.25 at y30. §5.35.1's year-20 means, 5.86 against 8.85, are
+  this. The `C` factor reads the same demand on both traffics. For a
+  fixed demand, the growth alone cuts the miner's fee income and the fee
+  pool by 40–46 % from the crossing on.
+- **The crossing is a burst, not a climb a body at a time.** Covered under
+  question 3. On `steady` the same backlog drains in y19 q2 (fees per
+  block 39.7 SKL), into 50 a block.
+- **The re-derived zone's standing penalty.** It pays one every year from
+  y1: 534 675 SKL over y1–y18. Under half its blocks stop, so the median
+  never moves, and the room is never bought.
+- **The body's step.** The Standard body is 14.64 KB to y23 q1, then
+  15.28 KB, in both inherited runs. It is 15.28 KB from y18 in the
+  re-derived zone. The bytes step there, and the count does not.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
