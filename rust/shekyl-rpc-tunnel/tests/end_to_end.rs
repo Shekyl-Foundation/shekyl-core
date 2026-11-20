@@ -320,8 +320,9 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
     assert!(body.contains("\"result\""), "{body}");
 
     // A service manager's stop: a second tunnel, as the unit and the rc.d
-    // script stop one, ends cleanly on SIGTERM.
-    let second_listen = format!("127.0.0.1:{}", free_port());
+    // script stop one, ends cleanly on SIGTERM sent the moment it says it
+    // listens, and removes its socket.
+    let second_socket = socket_dir(dir.path()).join("t2.sock");
     let mut second = {
         let mut command = Command::new(tunnel);
         command
@@ -331,7 +332,9 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
             .arg(&bundle_file)
             .arg("--rpc-key-file")
             .arg(&key_file)
-            .args(["--listen", &second_listen, "--log-file"])
+            .arg("--listen-socket-file")
+            .arg(&second_socket)
+            .arg("--log-file")
             .arg(dir.path().join("tunnel2.log"))
             .stdout(Stdio::piped());
         spawn("second tunnel", command, dir.path().join("tunnel2.stderr"))
@@ -362,6 +365,11 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
         std::thread::sleep(POLL);
     };
     assert!(stopped.success(), "a SIGTERM is a clean stop: {stopped}");
+    assert!(
+        !second_socket.exists(),
+        "a clean stop removes the socket {}",
+        second_socket.display()
+    );
 
     // Revoke.
     enroll::run(
