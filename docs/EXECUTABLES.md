@@ -82,7 +82,7 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 | `p2p-closed-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | The only peers to connect to; non-empty declares a closed network. |
 | `p2p-disclose-early` | switch | — | both | no | Disclose known peers and this node's address below the white-diversity floor, for bootstrapping a small network. |
 | `p2p-ban-file` | absolute path | — | both | no | A file of addresses to refuse, one per line. |
-| `p2p-upload-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The upload rate limit, or `unlimited`. With `relay-cover on` it is at least the cover rate. |
+| `p2p-upload-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The upload rate limit, or `unlimited`. With `relay-cover on` it is at least 16KiB/s, twice the cover budget. |
 | `p2p-download-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The download rate limit, or `unlimited`. |
 | `relay-cover` | `on` / `off` | `on` | both | no | Cover traffic on the connections this node stems transactions over. `off` also stops it relaying stems, and sends its own transactions without cover. |
 | `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |

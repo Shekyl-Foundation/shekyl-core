@@ -16068,6 +16068,46 @@ guard-connection reading measured that the volume is not cover
 and the cell went with the ruling rather than being re-valued
 (rules 21 and 23).
 
+### 93.2a Cover is best effort under the upload limit (Rick, 2026-11-19)
+
+**The budget counts plaintext.** `PER_NODE_BUDGET_BYTES_PER_SEC` is the
+bytes the carrier hands to its sessions. A connector's framing is that
+connector's cost: clearnet under Noise adds 34 bytes a window on the wire,
+and Tor adds none at the seam this node writes to. The cadence stays an
+exact 5,000 ms on every connector.
+
+**The upload floor is twice the budget, 16 KiB/s**
+(`UPLOAD_FLOOR_BYTES_PER_SEC`). With `relay-cover on`, a `p2p-upload-max`
+below it is refused at start and at runtime. It is a stated rule, not a
+derivation, taken from the budget constant alone, and it reopens before
+genesis beside the budget ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)
+§8).
+
+**Windows are not exempt from the limiter, and no send class is reserved
+for them.** A reserved share would show the node's load more plainly than
+best effort does: with a share held back for cover, what the rest of the
+link carries is the node's other traffic and nothing else, while a
+best-effort window's delay depends on too many things outside the node to
+be read. `shekyl-capped-stream` and the link budget are unchanged.
+
+**The failure mode (rule 82).**
+
+- The carrier queues a window on its schedule. "Written" in the carrier,
+  and in its `a carrier window was written` log line, means queued on the
+  session, not sent on the wire.
+- A queued window waits for the limiter's turn, and behind anything already
+  queued on its session.
+- Under a low limit with sustained uploads, cover falls behind its
+  schedule. The lag is bounded only by the session's send queue; that
+  queue's overflow closes the session, and the channel restarts on its next
+  peer (CV-1).
+- The delay does not depend on what a window carries: a real window and a
+  dummy wait alike.
+
+**Owed by the measurement change (`CVR-R7`), not built here:** each
+window's wire time recorded beside its queue time. The pass mark matches on
+emission times, and with only the queue time it would drift under any lag.
+
 ### 93.3 On the vocabulary itself
 
 **"Covert" is retired as a term of art.** It describes neither the network, nor

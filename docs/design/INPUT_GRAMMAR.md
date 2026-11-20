@@ -257,7 +257,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `ban-list` | `p2p-ban-file` | path | unset | both |  | peers | R; read in Rust at parse |
 | `out-peers` | — | | | |  |  | X (the outbound degree is a protocol constant) |
 | `in-peers` | — | | | |  |  | X (no operator inbound cap: the descriptor safety bound is the only inbound bound, and the rate rows bound what an operator pays; reopens as a byte quota for metered links, IG-Q40) |
-| `limit-rate-up` | `p2p-upload-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | status | R; runtime `set_limit` shares the constructor; `0` refused on both surfaces; below the cover rate refused on both while `relay-cover` is `on` (`CVR-R5`) |
+| `limit-rate-up` | `p2p-upload-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | status | R; runtime `set_limit` shares the constructor; `0` refused on both surfaces; below twice the cover budget (16 KiB/s) refused on both while `relay-cover` is `on` (`CVR-R5`; Rick, 2026-11-19) |
 | `limit-rate-down` | `p2p-download-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | status | R |
 | `limit-rate` | — | | | |  |  | R (one option per value) |
 | `tos-flag` | — | | | |  |  | X (a traffic-class marking is a label any on-path observer can classify Shekyl traffic by) |
@@ -265,7 +265,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `pad-transactions` | — | | | |  |  | L relay |
 | `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both |  |  | R; testnet, stagenet, regtest, a staging flag their rows stage (`NETWORK_IDENTITY.md` NI-R9; IG-8: never mainnet); deleted at the Noise flip |
 | `no-sync` | `dev-sync` | one-of `on` `off` | `on` | both |  |  | R; regtest; the chain-sync lane owns it |
-| `carrier-development` | `relay-cover` | one-of `on`/`off` | `on` | both |  |  | R; cover traffic on the relay's stem connections, on by default on every network with an operator opt-out (`CVR-R1`, Rick 2026-11-15; IG-4: a capability on by default is a closed set). `off` also stops the node relaying stems. With it on, `p2p-upload-max` is at least the cover rate |
+| `carrier-development` | `relay-cover` | one-of `on`/`off` | `on` | both |  |  | R; cover traffic on the relay's stem connections, on by default on every network with an operator opt-out (`CVR-R1`, Rick 2026-11-15; IG-4: a capability on by default is a closed set). `off` also stops the node relaying stems. With it on, `p2p-upload-max` is at least twice the cover budget |
 
 ### Core, pool, notify, mine
 

@@ -140,7 +140,35 @@ pub const EPOCH_TAIL_WINDOWS: u32 = MAX_FRAGMENTS - 1;
 /// It is a mean. The cadence is memoryless, so over a short span the rate
 /// sits either side of it and has no peak to state; over a day it is this
 /// figure times the seconds the carrier runs.
+///
+/// **It counts plaintext** (Rick, 2026-11-19): the bytes the carrier hands
+/// to its sessions, [`WINDOW_BYTES`] a window. What a connector adds to
+/// frame a window is that connector's cost and is not in this figure:
+/// clearnet under Noise adds 34 bytes a window on the wire, and Tor adds
+/// none at the seam this node writes to. So the cadence is an exact
+/// 5 000 ms on every connector, and a node's cover on the wire is this
+/// figure plus its connectors' framing.
 pub const PER_NODE_BUDGET_BYTES_PER_SEC: u32 = 8 * 1024;
+
+/// How many cover budgets the smallest upload limit is.
+///
+/// **Stated, not derived** (Rick, 2026-11-19). One budget is the cover;
+/// the second is room for the connectors' framing of it and for everything
+/// else the node uploads. No measurement stands behind the 2, and it
+/// reopens before genesis with the budget (`TOR_COVER_POSTURE.md` §8).
+pub const UPLOAD_FLOOR_BUDGETS: u32 = 2;
+
+/// The smallest `p2p-upload-max` a node running cover may set, in bytes per
+/// second: [`UPLOAD_FLOOR_BUDGETS`] × the budget, 16 KiB/s.
+///
+/// A limit below it is refused at start and at runtime while `relay-cover`
+/// is on (`shekyl-daemon-config`, `read_rates`). It is taken from the
+/// budget alone: no connector's framing is read into it.
+///
+/// It does not reserve anything. Under any limit a window takes its turn
+/// at the link's limiter with the node's other writes, so cover is best
+/// effort under the cap (`DAEMON_RELAY_PRIVACY.md` §93.2a).
+pub const UPLOAD_FLOOR_BYTES_PER_SEC: u32 = UPLOAD_FLOOR_BUDGETS * PER_NODE_BUDGET_BYTES_PER_SEC;
 
 /// Mean time between one channel's windows, in milliseconds: channels ×
 /// window ÷ budget (`CVR-R5`), 5 000 ms.
@@ -198,9 +226,8 @@ pub const MEAN_CADENCE_TICKS: u32 = {
 ///
 /// The figure a single connection carries: a channel rides one session, so
 /// a Tor circuit or a clearnet connection carrying a channel is sized
-/// against this, not against the node budget. The upload floor
-/// (`p2p-upload-max` against the cover rate) and the design-load floor
-/// check (`tests/carrier_window.rs`) read it.
+/// against this, not against the node budget. The design-load floor check
+/// (`tests/carrier_window.rs`) reads it.
 pub const PER_CHANNEL_BYTES_PER_SEC: u32 = {
     let raw = (WINDOW_BYTES as u64) * 1_000 / (MEAN_CADENCE_MS as u64);
     assert!(raw <= u32::MAX as u64, "the channel rate fits u32");

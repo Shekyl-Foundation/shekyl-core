@@ -75,8 +75,13 @@ indistinguishable from the sends around it, on each such link.
   (`MAX_FRAGMENTS` windows). The embargo is derived with every stem hop
   carrier-paced, at a channel's expected occupancy on a network of at least
   100 nodes (an Assumption): 1638 s on Tor and 1320 s on clearnet, inside
-  the 30-minute limit. A `p2p-upload-max` below the cover rate refuses the
-  start.
+  the 30-minute limit. The budget counts plaintext: a connector's framing
+  is that connector's cost, and the cadence is the same on every connector
+  (Rick, 2026-11-19). A `p2p-upload-max` below twice the budget, 16 KiB/s,
+  refuses the start and a runtime change; the factor is a stated rule, not a
+  derivation. Cover is best effort under the limit: a window takes its turn
+  at the link's limiter and nothing is reserved for it
+  (`DAEMON_RELAY_PRIVACY.md` §93.2a).
 - **`CVR-R6` — in the stem phase, a transaction leaves a covered session
   only inside a window.** Before its first send, a node's own transaction
   waits for its window; it is not broadcast as a fallback and not sent bare
@@ -233,6 +238,11 @@ Stated here and in the user documents.
   cover.** The embargo is sized for carrier-paced hops, and a node's own
   transaction waits out the same embargo as a relayed one: a mean of
   1638 s on Tor to the reshape, and a second draw to the broadcast.
+- **Under a low upload limit with sustained uploads, cover falls behind its
+  schedule.** A window waits for the limiter and behind what its session
+  already has queued. The delay does not depend on what the window carries.
+  The lag ends when the session's send queue overflows, which closes the
+  session (`DAEMON_RELAY_PRIVACY.md` §93.2a).
 - **An opted-out node's own sends are visible to a watcher**, and it gives
   no stem privacy to others.
 
@@ -261,6 +271,9 @@ Stated here and in the user documents.
 - Real and dummy windows produce the same Tor cell count.
 
 The instrument and its record are their own change after the mechanism.
+It records each window's wire time beside its queue time: the carrier's own
+line is the queue time, and a window can wait at the link's limiter after it
+(`DAEMON_RELAY_PRIVACY.md` §93.2a).
 `PM-3` stays a check under its own row, not the acceptance test
 (`CVR-R8`). `DAEMON_RELAY_PRIVACY.md` §96 item 4's test is this pass mark.
 
@@ -274,7 +287,8 @@ the measurement in hand:
 - a hold before a broadcast, to blur the last stem hop on clearnet
   (`CVR-R10`, ruled and removed on 2026-11-18 when the build was cut back to
   its core);
-- the budget and cadence;
+- the budget and cadence, and the upload floor stated beside the budget
+  (twice it, 2026-11-19);
 - the 30-minute embargo limit;
 - what replaces cover, if the pass mark fails and it is dropped.
 

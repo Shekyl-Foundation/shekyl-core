@@ -256,7 +256,7 @@ const ROWS: &[Row] = &[
         visibility: Visibility::Public,
         help: "A file of addresses to refuse, one per line.",
     },
-    runtime("p2p-upload-max", RATE, "unlimited", "The upload rate limit, or `unlimited`. With `relay-cover on` it is at least the cover rate."),
+    runtime("p2p-upload-max", RATE, "unlimited", "The upload rate limit, or `unlimited`. With `relay-cover on` it is at least 16KiB/s, twice the cover budget."),
     runtime("p2p-download-max", RATE, "unlimited", "The download rate limit, or `unlimited`."),
     public("relay-cover", Kind::OneOf(&["on", "off"]), Default::Value("on"), Surface::Both, "Cover traffic on the connections this node stems transactions over. `off` also stops it relaying stems, and sends its own transactions without cover."),
     rejected("upnp", "no UPnP: an attack surface the managed onion makes unnecessary for inbound (DAEMON_CONFIG_CUTOVER.md §8)"),

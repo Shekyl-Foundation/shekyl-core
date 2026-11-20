@@ -160,7 +160,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> CarrierTask<C> {
                         // Timestamp and size only: the realised cadence is
                         // read from these lines (`DAEMON_RELAY_PRIVACY.md`
                         // §97); whether a window carried a stem or a dummy
-                        // is not written down.
+                        // is not written down. The time is when the window
+                        // was queued on its session; it can wait at the
+                        // link's limiter before it reaches the wire (§93.2a).
                         tracing::debug!(
                             channel,
                             ?peer,

@@ -595,24 +595,32 @@ fn read_relay_cover(r: &mut Reader<'_>) -> bool {
 }
 
 /// The two link rates, through the same reader the section uses, with the
-/// cover floor: while `relay-cover` is on, an upload limit below the cover
-/// rate is refused (`CVR-R5`, rule 82). The carrier sends at that rate
-/// whatever the node has to say, so a lower limit would starve everything
-/// else the node uploads, and then the cover itself.
+/// upload floor: while `relay-cover` is on, an upload limit below
+/// [`carrier::UPLOAD_FLOOR_BYTES_PER_SEC`], twice the cover budget, is
+/// refused (`CVR-R5`, rule 82; Rick, 2026-11-19).
+///
+/// The floor is a stated rule, not a derivation: one budget for the cover,
+/// which the carrier sends whatever the node has to say, and one for its
+/// framing on the wire and the node's other uploads. It is read from the
+/// budget alone; no connector's overhead enters this crate. It reserves
+/// nothing: a window still takes its turn at the limiter, so at any limit
+/// sustained uploads can put cover behind its schedule
+/// (`DAEMON_RELAY_PRIVACY.md` §93.2a).
 fn read_rates(r: &mut Reader<'_>) -> Rates {
     let upload = rate_cap(r.rate("p2p-upload-max"));
     let download = rate_cap(r.rate("p2p-download-max"));
     let relay_cover = read_relay_cover(r);
-    let cover_rate = u64::from(carrier::PER_NODE_BUDGET_BYTES_PER_SEC);
-    if let Some(limit) = upload.filter(|limit| relay_cover && *limit < cover_rate) {
+    let floor = u64::from(carrier::UPLOAD_FLOOR_BYTES_PER_SEC);
+    if let Some(limit) = upload.filter(|limit| relay_cover && *limit < floor) {
         r.range(
             "p2p-upload-max",
             &Value::Rate(limit).render(),
             &format!(
-                "with `relay-cover on` the upload limit is at least the cover rate, {}; \
-                 raise it, or set `relay-cover off`, which also stops this node relaying \
-                 stems and sends its own transactions without cover",
-                Value::Rate(cover_rate).render()
+                "with `relay-cover on` the upload limit is at least {}, twice the cover \
+                 budget of {}; raise it, or set `relay-cover off`, which also stops this \
+                 node relaying stems and sends its own transactions without cover",
+                Value::Rate(floor).render(),
+                Value::Rate(u64::from(carrier::PER_NODE_BUDGET_BYTES_PER_SEC)).render()
             ),
         );
     }
@@ -628,7 +636,7 @@ fn read_rates(r: &mut Reader<'_>) -> Rates {
 ///
 /// # Errors
 /// A rate row absent where the table fills it, or of the wrong arm; or an
-/// upload limit below the cover rate while `relay-cover` is on. An
+/// upload limit below the cover floor while `relay-cover` is on. An
 /// unreadable row is not treated as unlimited.
 pub fn link_limits(resolved: &Resolved) -> Result<(Option<u64>, Option<u64>), Vec<Diagnostic>> {
     let mut r = Reader::new(resolved);

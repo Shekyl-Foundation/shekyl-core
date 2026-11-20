@@ -162,7 +162,7 @@ impl OptionsFacts for DaemonOptions {
         }
 
         // Cross-row rules, on the values as they would stand: an upload
-        // limit below the cover rate while `relay-cover` is on is refused
+        // limit below the upload floor while `relay-cover` is on is refused
         // here as it is at start (`CVR-R5`), and nothing is applied.
         let mut candidate = live.clone();
         for (row, value) in &built {
@@ -294,7 +294,7 @@ mod tests {
         recording(args).0
     }
 
-    /// A runtime upload limit below the cover rate is refused while
+    /// A runtime upload limit below the upload floor is refused while
     /// `relay-cover` is on, as at start (`CVR-R5`), and nothing is applied:
     /// the link owner hears nothing and the row keeps its value.
     ///
