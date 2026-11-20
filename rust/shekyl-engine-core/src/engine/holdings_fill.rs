@@ -66,8 +66,8 @@ const FILL_RPC_TIMEOUT: Duration = Duration::from_secs(60);
 /// Holdings whose every owed shard the persona body store holds: the only
 /// holdings a bond post is assembled from.
 ///
-/// Minted only by [`Engine::fill_complete_tree`] and [`Engine::fill_market`]
-/// after their fill completes. Deliberately **not** `Clone`: one completed
+/// Minted only by [`Engine::fill_complete_tree`] and the test-built
+/// `Engine::fill_market` after their fill completes. Deliberately **not** `Clone`: one completed
 /// fill authorizes one assembly; a retry fills again (held shards are
 /// skipped, so a second fill costs a held check per shard).
 pub(crate) struct FilledHoldings(HoldingsDescriptor);
@@ -176,7 +176,7 @@ pub enum CompleteTreeFillError {
 /// Why a market fill did not complete. Only the market path reaches these;
 /// a `CompleteTree` fill never names a shard.
 ///
-/// Test-built with [`Engine::fill_market`]: the market posture refuses
+/// Test-built with `Engine::fill_market`: the market posture refuses
 /// before any fill (`FirstStakeError::NoShardsAvailable`) until shard
 /// selection exists (`COMPLETETREE_ACTIVATION.md` §10 item 1), whose entry
 /// is this function's production caller. The emission walk's market-bond

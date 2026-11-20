@@ -8,8 +8,9 @@
 //!
 //! The persona scan has already verified the chain and sealed, for each
 //! closed shard, where it closed and the digest of its in-domain
-//! transactions' rows ([`ShardClose`]). The fill re-reads the shard's blocks
-//! from the wallet's own daemon, pins both ends of that walk to the seal,
+//! transactions' rows
+//! ([`ShardClose`](shekyl_engine_state::pscan_cursor::ShardClose)). The
+//! fill re-reads the shard's blocks from the wallet's own daemon, pins both ends of that walk to the seal,
 //! asks for each member transaction's whole body (`tx_list` without
 //! `prune`), checks every body against the txid-bound parts the walk
 //! placed, frames the shard, checks the frame's rows digest against the
