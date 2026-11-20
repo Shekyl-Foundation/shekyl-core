@@ -118,9 +118,9 @@ impl Identity {
     /// When `self` is [`Self::Regtest`] and `parent_timestamp` is [`None`]:
     /// a regtest chain starts from its replayed genesis, so the parent is
     /// known.
-    pub(super) fn timestamp(self, height: u64, parent_timestamp: Option<u64>) -> u64 {
+    pub(super) fn timestamp(self, height: BlockHeight, parent_timestamp: Option<u64>) -> u64 {
         match self {
-            Self::Harness => HARNESS_GENESIS_STAMP + height * FIXTURE_SPACING,
+            Self::Harness => HARNESS_GENESIS_STAMP + height.to_raw() * FIXTURE_SPACING,
             Self::Regtest => {
                 parent_timestamp.expect("a regtest block stamps its time after its parent")
                     + FIXTURE_SPACING
@@ -219,13 +219,14 @@ pub(super) fn candidate_carrying(
     parent_timestamp: Option<u64>,
     listed: Vec<Transaction>,
 ) -> Candidate {
+    let timestamp = identity.timestamp(height, parent_timestamp);
     let height = height.to_raw();
     let unlock_time = height.saturating_add(rules.mined_money_unlock_window().to_raw());
     let block = Block {
         header: BlockHeader {
             major_version: rules.header_major_version(),
             minor_version: HEADER_MINOR_VERSION,
-            timestamp: identity.timestamp(height, parent_timestamp),
+            timestamp,
             previous,
             nonce: FIXTURE_NONCE,
             curve_tree_root: root,

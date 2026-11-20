@@ -60,7 +60,6 @@ rust/shekyl-chain-store/src/store/chain_reads.rs	1	pub(super) fn class_of(tip: O
 rust/shekyl-chain-store/src/store/connect.rs	1	height: u64,
 rust/shekyl-chain-store/src/store/connect_fixtures.rs	3	height: u64,
 rust/shekyl-chain-store/src/store/connect_fixtures.rs	1	pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
-rust/shekyl-chain-store/src/store/connect_fixtures.rs	1	pub(super) fn coinbase(height: u64) -> Transaction {
 rust/shekyl-chain-store/src/store/connect_fixtures.rs	1	pub(super) fn root_going_into(store: &ChainStore, height: u64) -> CurveTreeRoot {
 rust/shekyl-chain-store/src/store/error.rs	1	at_height: u64,
 rust/shekyl-chain-store/src/store/error.rs	2	height: u64,
