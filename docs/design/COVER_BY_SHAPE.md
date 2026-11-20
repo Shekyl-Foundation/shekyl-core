@@ -1,8 +1,8 @@
 # Round 0: cover by shape — 2026-11-19
 
-**Status: OPEN — Round 0 (Rick, 2026-11-19). The direction in §2 is ruled; the decisions in §6 are open.** Nothing here is built. Read at PR #1431 head `88864d06` and dev `d86ef32f`; the file and line citations in §3 are at those trees. This is a second approach to wire-observer cover, beside the volume build of #1431, which is held unmerged (`CBS-E4`).
+**Status: OPEN — Round 0 (Rick). The direction in §2 was ruled on 2026-11-19 and `CBS-E1` on 2026-11-20; `CBS-E2`–`CBS-E7` in §6 are open. Last ruling recorded: 2026-11-20.** Nothing here is built. Read at two commits of this repository: `88864d06`, the head of PR #1431's branch on 2026-11-19, and `d86ef32f` on `dev`; the file and line citations in §3 are at those commits unless an item names another. This is a second approach to wire-observer cover, beside the volume build of #1431, which is held unmerged (`CBS-E4`).
 
-**Identifier family:** `CBS-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. `CBS-R1`–`CBS-R6` are the rulings of §2; `CBS-E1`–`CBS-E7` are the open decisions of §6.
+**Identifier family:** `CBS-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. `CBS-R1`–`CBS-R6` are the rulings of §2; `CBS-E1`–`CBS-E7` are the decisions of §6, of which `CBS-E1` is ruled and `CBS-E2`–`CBS-E7` are open.
 
 ## 1. The idea (Rick)
 
@@ -53,7 +53,7 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 - Its cost was fixed and its benefit unmeasured.
 - It coupled cover rate to stem delay, and stem delay to the embargo.
 
-## 6. Open decisions — OPEN, not ruled
+## 6. Decisions — `CBS-E1` RULED 2026-11-20; `CBS-E2`–`CBS-E7` OPEN
 
 ### `CBS-E1` — measure the texture first — RULED 2026-11-20 (Rick): from outside the daemon
 
