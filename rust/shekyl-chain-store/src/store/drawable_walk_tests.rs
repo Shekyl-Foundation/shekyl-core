@@ -431,6 +431,7 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
         epoch,
         check: SettlementCheck::DrawableDrift,
     };
+    let missing = format!("holds no digest for epoch {}", epoch.to_raw());
     // Slot 3's Release is a complete tree's. A complete tree holds no pair
     // of `D`, but it is a support member of the epoch with its receipt key,
     // under the same digest (`SO-D12` S1, ruled 2026-11-01). So rewriting
@@ -474,7 +475,7 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
                 epoch,
                 check: SettlementCheck::DrawableDigestMissing,
             },
-            "holds no digest for epoch 3",
+            &missing,
         ),
     ];
     for (label, tamper, expected, message) in cases {
