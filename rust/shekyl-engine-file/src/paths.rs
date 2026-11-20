@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Companion-path helpers for the two-file wallet envelope.
+//! Path rules for wallet files: companion names, and the default directory.
 //!
 //! A Shekyl v1 wallet is always a pair of files sharing a base name:
 //!
@@ -43,6 +43,14 @@
 //! so users migrating from pre-V3 builds have one less thing to
 //! learn; the migration discontinuity is in the file *format*, not in
 //! the file *naming*.
+//!
+//! # The default wallet directory
+//!
+//! [`wallet_dir_in`] names the directory a wallet binary uses when the
+//! person names none: `wallets/<network>` in the per-account root, the
+//! network's name from its row, mainnet included. In this tree
+//! `shekyl-cli` is the caller. The GUI wallet takes the same function
+//! up in its own repository.
 //!
 //! # What this module does not do
 //!
