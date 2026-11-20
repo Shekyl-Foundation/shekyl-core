@@ -311,8 +311,24 @@ pub(crate) struct ServeFaults(Arc<FaultQueue>);
 
 #[derive(Default)]
 struct FaultQueue {
-    shards: std::sync::Mutex<BTreeSet<ShardId>>,
+    shards: std::sync::Mutex<Queued>,
     reported: tokio::sync::Notify,
+}
+
+/// The queue's two kinds of shard: reported since the last take, and kept
+/// by a pass that could not check them.
+#[derive(Default)]
+struct Queued {
+    fresh: BTreeSet<ShardId>,
+    kept: BTreeSet<ShardId>,
+}
+
+/// What a take found: the shards reported since the last take, and those
+/// a pass that could not run kept for the next.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct TakenFaults {
+    pub(crate) fresh: BTreeSet<ShardId>,
+    pub(crate) kept: BTreeSet<ShardId>,
 }
 
 impl ServeFaults {
@@ -323,29 +339,36 @@ impl ServeFaults {
             .shards
             .lock()
             .expect("serve faults lock")
+            .fresh
             .insert(shard);
         self.0.reported.notify_one();
     }
 
     /// Wait for a report. One made while nothing waits is kept, so a
-    /// report is never missed between two waits.
+    /// report is never missed between two waits; so a wake can also find
+    /// that a pass since has taken what it was for.
     pub(crate) async fn reported(&self) {
         self.0.reported.notified().await;
     }
 
-    /// Every shard reported since the last take.
-    pub(crate) fn take(&self) -> BTreeSet<ShardId> {
-        std::mem::take(&mut *self.0.shards.lock().expect("serve faults lock"))
+    /// Everything queued.
+    pub(crate) fn take(&self) -> TakenFaults {
+        let mut queued = self.0.shards.lock().expect("serve faults lock");
+        TakenFaults {
+            fresh: std::mem::take(&mut queued.fresh),
+            kept: std::mem::take(&mut queued.kept),
+        }
     }
 
-    /// Put back `shards` a pass could not check, for the next pass. Does
-    /// not wake one: a pass that could not run is not retried until
-    /// something else wakes the reconcile.
+    /// Put back `shards` a pass could not check, for the next pass. They
+    /// wake none: a pass that could not run is retried at the next chain
+    /// advance or the next fresh report, not at once.
     pub(crate) fn keep(&self, shards: BTreeSet<ShardId>) {
         self.0
             .shards
             .lock()
             .expect("serve faults lock")
+            .kept
             .extend(shards);
     }
 }

@@ -280,7 +280,7 @@ async fn draw_on_a_damaged_shard(
     // is when the requester's fetch returned.
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let reported = loop {
-        let reported = faults.take();
+        let reported = faults.take().fresh;
         if !reported.is_empty() {
             break reported;
         }

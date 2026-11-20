@@ -191,16 +191,20 @@ async fn run<Admits, Pass, PassFut>(
         let Some(tip) = *tips.borrow_and_update() else {
             continue;
         };
-        let suspects: BTreeSet<ShardId> = faults
-            .as_ref()
-            .map(ServeFaults::take)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|shard| admits(*shard))
-            .collect();
-        if !advanced && suspects.is_empty() {
+        let taken = faults.as_ref().map(ServeFaults::take).unwrap_or_default();
+        let fresh: BTreeSet<ShardId> = taken.fresh.into_iter().filter(|s| admits(*s)).collect();
+        let kept: BTreeSet<ShardId> = taken.kept.into_iter().filter(|s| admits(*s)).collect();
+        // A report's wake runs a pass only for a fresh report. The wake of
+        // a report an advance's pass already took finds none, and shards a
+        // pass could not check wait for the next advance or fresh report.
+        if !advanced && fresh.is_empty() {
+            if let Some(faults) = &faults {
+                faults.keep(kept);
+            }
             continue;
         }
+        let mut suspects = fresh;
+        suspects.extend(kept);
         match pass(tip, suspects.clone()).await {
             PassEnd::Ran => {}
             PassEnd::CouldNotRun => {
@@ -401,6 +405,34 @@ mod tests {
             probe.next_pass().await,
             (11, shards(&[3])),
             "the next pass checks the shard the last could not"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_report_taken_by_an_advance_does_not_retry_a_pass_that_could_not_run() {
+        // The report and the advance land before the runner looks, so the
+        // advance's pass takes the report, and the report's wake is still
+        // pending when that pass ends.
+        let mut probe = Probe::start(|nth| {
+            if nth == 0 {
+                PassEnd::CouldNotRun
+            } else {
+                PassEnd::Ran
+            }
+        });
+        probe.finish_passes(Semaphore::MAX_PERMITS);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        probe.faults.report(ShardId::from_raw(3));
+        probe.advance(10);
+        assert_eq!(probe.next_pass().await, (10, shards(&[3])));
+        probe.no_pass().await;
+        probe.faults.report(ShardId::from_raw(5));
+        assert_eq!(
+            probe.next_pass().await,
+            (10, shards(&[3, 5])),
+            "a fresh report runs a pass, and it carries the kept shard"
         );
     }
 
