@@ -190,13 +190,16 @@ where
     P: PendingTxEngine,
     Engine<S, D, LocalLedger, E, LocalRefresh, P, WalletFile>: Send + Sync,
 {
-    /// First-stake bond assemble (W2 resume / first call).
+    /// First-stake bond assemble (W2 resume / first call). `node` is the
+    /// wallet's daemon target: the fill reads the shards the bond owes from
+    /// it on loopback before anything is posted (`WSS-Q4`).
     pub async fn first_stake(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, LocalRefresh, P, WalletFile>>>,
+        node: &shekyl_rpc_transport::DaemonTarget,
         slot: u32,
         posture: StakePosture,
     ) -> Result<FirstStakeOutcome, FirstStakeError> {
-        Engine::first_stake(engine, slot, posture).await
+        Engine::first_stake(engine, node, slot, posture).await
     }
 }
 

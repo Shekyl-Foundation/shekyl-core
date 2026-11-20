@@ -186,10 +186,21 @@ async fn a_persona_with_no_key_answers_503_and_sends_no_shard() {
     assert_eq!(ep.late_sign_failure_count(), 0, "no shard was sent");
     assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
+    assert_eq!(
+        ep.not_held_count(),
+        0,
+        "a held shard is never counted as not held"
+    );
 
     assert_eq!(
         fetch(ep.addr(), "/shard/9").await,
         render_not_found().as_bytes()
     );
     assert_eq!(ep.sign_failure_count(), 1, "an unheld shard asks no key");
+    assert_eq!(
+        ep.not_held_count(),
+        1,
+        "the 404 moves its own count (WSS-Q17's backstop) and no other"
+    );
+    assert_eq!(ep.lookup_failure_count(), 0);
 }

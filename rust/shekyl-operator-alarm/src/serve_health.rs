@@ -147,6 +147,7 @@ mod tests {
         ServeCounters {
             served: 3,
             refused: 0,
+            not_held: 0,
             lookup_failures: lookup,
             sign_failures: sign,
             late_sign_failures: late,
@@ -240,6 +241,20 @@ mod tests {
         let alarms = OperatorAlarms::new();
         let mut w = window(0, 0, 0);
         w.refused = 40;
+        apply(&alarms, ServeHealthObservation::Tick(w));
+        let s = state(&alarms);
+        assert_eq!(s.arming(), Arming::Armed);
+        assert!(s.live().is_none());
+    }
+
+    /// A storm of 404s is not a fault of this persona: anyone can ask for a
+    /// shard it does not hold, and the reconcile, not this row, is what
+    /// says a bonded shard is missing (`WSS-Q17`). The row stays clear.
+    #[test]
+    fn not_held_answers_are_not_an_alarm() {
+        let alarms = OperatorAlarms::new();
+        let mut w = window(0, 0, 0);
+        w.not_held = 500;
         apply(&alarms, ServeHealthObservation::Tick(w));
         let s = state(&alarms);
         assert_eq!(s.arming(), Arming::Armed);

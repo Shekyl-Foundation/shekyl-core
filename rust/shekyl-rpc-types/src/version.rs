@@ -97,7 +97,15 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// `grant`, and under the five methods 4.6 added. Grant keywords are a
 /// closed set, so a 4.7 daemon refuses a ceiling or a configuration that
 /// names `enrol`, and a 4.6 reader refuses a reply that lists `enroll`.
-pub const CORE_RPC_VERSION_MINOR: u32 = 7;
+///
+/// 4.8: a block carries `archival_cumulative`, the chain's cumulative
+/// archival length through it (`WALLET_SIDE_STORE.md` `WSS-Q16`, IG-Q112;
+/// Rick, 2026-11-18): the offset a wallet needs to place a shard's
+/// transactions, read on the block read every wallet already makes, so no
+/// shard-specific query names the shards it means to bond. `null` for an
+/// alternative block. A 4.7 reader refuses a 4.8 block after the version
+/// read reports the daemon newer.
+pub const CORE_RPC_VERSION_MINOR: u32 = 8;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -111,15 +119,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 7)` is `(4 << 16) | 7` = 262151. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 8)` is `(4 << 16) | 8` = 262152. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_151);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 7);
+        assert_eq!(CORE_RPC_VERSION, 262_152);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 8);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 7);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.7");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 8);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.8");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

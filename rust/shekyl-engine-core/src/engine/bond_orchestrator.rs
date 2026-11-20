@@ -22,6 +22,7 @@ use shekyl_curve_tree::{
 };
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
+use shekyl_rpc_transport::DaemonTarget;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
@@ -409,6 +410,12 @@ pub enum FirstStakeError {
          is not built yet: no shards are available to bond. Nothing was written"
     )]
     NoShardsAvailable,
+    /// The persona body store could not be filled with every shard this
+    /// bond owes (`WSS-Q4`, `WSS-Q15`; `WALLET_SIDE_STORE.md` §6.5.3).
+    /// Fill comes before the durable point, so this is W1-clean: nothing
+    /// was written and nothing was posted. Each arm names its remedy.
+    #[error("{0}; nothing was posted")]
+    Fill(CompleteTreeFillError),
 }
 
 impl StakePosture {
@@ -437,6 +444,7 @@ impl StakePosture {
     }
 }
 
+use super::holdings_fill::{CompleteTreeFillError, FilledHoldings};
 use super::signer::EngineSignerKind;
 use super::stake_engine::{AssembledBondPost, PersonaHandle, StakeEngineError};
 use super::stake_persist::PersistedBondTicket;
@@ -512,7 +520,7 @@ where
         self_arc: Arc<RwLock<Self>>,
         handle: PersonaHandle,
         ticket: PersistedBondTicket,
-        holdings: HoldingsDescriptor,
+        holdings: FilledHoldings,
         fee: AtomicUnits,
         pruning_landed: &SpentRecordsDurablyPruned,
     ) -> Result<AssembledBondPost, StakeEngineError> {
@@ -574,7 +582,7 @@ where
             chain_tip,
             tip_hash_at,
             p_slot,
-            &holdings,
+            holdings.descriptor(),
             fee,
             pruning_landed,
         )
@@ -812,7 +820,10 @@ where
 {
     /// The first-stake continuation (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`
     /// §5.0 steps 4–6, SA-R1-b typestate-forced order): idempotency/W2 split
-    /// → **preflight sweep** (funding validated before any durable staker
+    /// → **preflight sweep** → **the fill** (every shard the bond owes is
+    /// fetched from `node`, verified and written to the persona body store,
+    /// `WSS-Q4`; the assembly takes only what a completed fill returns) →
+    /// both before any durable staker
     /// state — a failure here is W1-clean, nothing to reconcile) →
     /// `persist_bond_record` (the durable point: mints the ticket, flips
     /// `staking_enabled`, writes `bonded_slots[slot]`) → sign + assemble →
@@ -851,6 +862,7 @@ where
     /// passes the posture again, exactly as the first call did.
     pub async fn first_stake(
         self_arc: Arc<RwLock<Self>>,
+        node: &DaemonTarget,
         slot: u32,
         posture: StakePosture,
     ) -> Result<FirstStakeOutcome, FirstStakeError> {
@@ -1002,6 +1014,15 @@ where
         .map(drop)
         .map_err(|e| preflight_error(&e))?;
 
+        // Fill first, then post (WSS-Q4, WSS-Q15): the persona body store
+        // holds every shard this bond owes before anything durable is
+        // written. After the preflight sweep, so an underfunded persona hears
+        // that before a fill runs; before the durable point, so a fill
+        // refusal leaves a non-staker (W1-clean).
+        let filled = Self::fill_complete_tree(self_arc.clone(), node, holdings)
+            .await
+            .map_err(FirstStakeError::Fill)?;
+
         // The durable point (W1 above it, W2 below it). Re-entrant for the
         // resume path: the slot-set push is idempotent and a fresh ticket is
         // minted regardless (§5.7 W2).
@@ -1018,7 +1039,7 @@ where
         // the assemble path re-runs the funding sweep, and its refusals
         // must not leak the persona figures the preflight arm withholds.
         let assembled =
-            Self::assemble_bond_post(self_arc.clone(), handle, ticket, holdings, fee, &witness)
+            Self::assemble_bond_post(self_arc.clone(), handle, ticket, filled, fee, &witness)
                 .await
                 .map_err(|e| match e {
                     StakeEngineError::Assembly(BondAssemblyError::SealNotSaved(error)) => {

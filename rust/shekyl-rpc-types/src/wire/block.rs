@@ -207,6 +207,13 @@ crate::wire_object! {
         /// row: an alternative block, or a height below the draw rows' floor
         /// (4.5).
         pub draws: Nullable<Count>,
+        /// The chain's cumulative archival length through this block, in
+        /// bytes: the running total of every transaction's archival length,
+        /// the coinbase's included (`SHT-Q2`). Public chain data, the same on
+        /// every node; a wallet checks each block's increment against the
+        /// txid-bound lengths of its transactions (`WSS-Q16`, IG-Q112).
+        /// `null` for an alternative block (4.8).
+        pub archival_cumulative: Nullable<Size>,
     }
 }
 

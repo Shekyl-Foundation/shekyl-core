@@ -256,4 +256,11 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// session, actor pending reopen" (rule 82). Same class-**a**
     /// synchronous-read semantics as [`Self::synced_height`].
     fn staking_enabled(&self) -> bool;
+
+    /// The persona slots the wallet's staking record holds as bonded — the
+    /// `StakingBlock`'s `bonded_slots`. Read by the body-store reconcile
+    /// (`WSS-Q17`): what a bond owes is its persona's whether or not that
+    /// persona is active this session. Same class-**a** synchronous-read
+    /// semantics as [`Self::synced_height`].
+    fn bonded_slots(&self) -> Vec<u32>;
 }

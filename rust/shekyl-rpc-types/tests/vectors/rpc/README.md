@@ -41,6 +41,9 @@ files admits a bundle), and no `complete_tree` on an `archival_claim_show`
 bond.
 At 4.5 each block in `block_show` and `block_list` carries `draws`, its draw
 count (IG-Q107); every file shows a count, `1`.
+At 4.8 each block in `block_show` and `block_list` carries
+`archival_cumulative`, the chain's cumulative archival length through it
+(IG-Q112); every file shows `3141592`.
 
 At 4.4 `daemon_status.reply.json` gained `randomx_cache_places` in its Status
 part, by hand from the grammar's field census: the places the node's

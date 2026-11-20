@@ -800,6 +800,32 @@ hash32! {
 }
 
 hash32! {
+    /// The **rows digest** of a closed archival shard (`WSS-Q16`,
+    /// `WALLET_SIDE_STORE.md` §6.4.4): a cSHAKE256 chain over the three
+    /// retained rows of each in-domain transaction, in storage order — its
+    /// `pqc_auth_hash` (or none), its `prunable_hash` and its archival
+    /// length — which are exactly what a shard frame entry is checked
+    /// against. The persona scan derives it from txid-bound rows as it
+    /// verifies the chain; a body store derives it from a frame's bytes.
+    /// Equal digests mean the stored frame is the shard's.
+    ///
+    /// A *name* for a value `shekyl-wire`'s `shard_frame` computes; this
+    /// crate holds the word. Distinct from [`ShardViewHash`], which folds
+    /// the bytes themselves and so cannot be derived from skeleton rows.
+    /// Local to a wallet: never consensus, never on a wire. The chain
+    /// starts at [`ShardRowsDigest::EMPTY`] (all zeros), which is also the
+    /// digest of a shard with no in-domain transaction. Public; full-hex
+    /// `Debug`.
+    ShardRowsDigest
+}
+
+impl ShardRowsDigest {
+    /// The start of every shard's chain, and the digest of a shard with no
+    /// in-domain transaction.
+    pub const EMPTY: Self = Self::from_bytes([0u8; 32]);
+}
+
+hash32! {
     /// The block-header **section root** (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
     /// §7.3, `SCS-P34`): `cSHAKE256_32` over the references of the bundles
     /// the block admits, in ascending `h`. Not a [`CurveTreeRoot`] and not a

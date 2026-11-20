@@ -440,22 +440,6 @@ impl PinnedServeSet {
         self.store
     }
 
-    /// The ingest tip of this witness's store now, read through `pinner`,
-    /// which must be the one this witness was minted through.
-    ///
-    /// # Errors
-    ///
-    /// [`PinError::Pinner`] if the store could not be read, and
-    /// [`PinError::PinnerStoreMismatch`] if the reading names another store.
-    pub async fn ingested_tip<P: ServeSetPinner>(
-        &self,
-        pinner: &P,
-    ) -> Result<BlockHeight, PinError> {
-        Ok(read_facts(pinner, self.store, Vec::new())
-            .await?
-            .sync_tip_height)
-    }
-
     /// The members this witness asserts are pinned: the reported list minus
     /// the terminally pruned ones.
     ///

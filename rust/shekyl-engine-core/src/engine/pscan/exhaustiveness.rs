@@ -38,12 +38,24 @@
 //!   at this index. The miner tx is covered automatically — its body is inline
 //!   and its hash is the first Merkle leaf in [`Block::hash`](shekyl_wire::block::Block::hash).
 //!
-//! A height gap, a continuity break, a body mismatch, or a missing/extra body is an
+//! - **Archival step (`WSS-Q16`):** each block's reported running total
+//!   (`archival_cumulative`) equals the previous block's checked total plus the
+//!   block's own archival length, summed from the lengths its txids bind
+//!   (`archival_step`). Each shard the block closes takes the rows digest of
+//!   its in-domain transactions' bound rows. The batch starts from the fold
+//!   sealed with the cursor, which starts at zero at genesis, so after the batch
+//!   the fold is the wallet's own sum and no daemon's word.
+//!
+//! A height gap, a continuity break, a body mismatch, a missing/extra body or a
+//! running total that disagrees with the bound lengths is an
 //! [`ExhaustivenessError`] — never a silent skip (and the `BlockSource` already
 //! refuses to fabricate a `None`).
 
+use shekyl_engine_state::pscan_cursor::{ArchivalFold, BlockStep};
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{shard_of, ArchivalLength, BlockHash, BlockHeight, ShardId, ShardRowsDigest};
+use shekyl_wire::shard_frame::{rows_digest_step, rows_of_parts};
+use shekyl_wire::{carries_archival_good, TxidParts};
 
 /// A height range `[low, high)` `P` AFFIRMATIVELY, EXHAUSTIVELY verified on the
 /// chain it was served (recompute-and-chain continuity + per-body tx-hash).
@@ -152,11 +164,14 @@ impl VerifiedRange {
 /// the caller never recomputes the anchor separately — a re-derived anchor would be
 /// the resume-splice the verified frontier exists to forbid (and re-hashing the last
 /// block duplicates the most expensive part of the gate). `frontier_hash` equals the
-/// `anchor` for an empty batch — the frontier does not move.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `anchor` for an empty batch — the frontier does not move. The batch also
+/// carries the checked archival fold through its last block (`WSS-Q16`), which
+/// the cursor seals beside the hash.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VerifiedBatch {
     range: VerifiedRange,
     frontier_hash: [u8; 32],
+    fold: ArchivalFold,
 }
 
 impl VerifiedBatch {
@@ -173,10 +188,16 @@ impl VerifiedBatch {
         self.frontier_hash
     }
 
+    /// The checked archival fold through the batch's last block.
+    pub(crate) fn fold(&self) -> &ArchivalFold {
+        &self.fold
+    }
+
     /// Test-only constructor: a `VerifiedBatch` for `[low, high)` with `frontier_hash`,
     /// without running `verify_exhaustive`. Lets accrual/sweep tests drive `ingest`
     /// (which takes a `VerifiedBatch`) without building a synthetic chain per call.
-    /// `#[cfg(test)]`, so the verification gate stays intact in production.
+    /// `#[cfg(test)]`, so the verification gate stays intact in production. The
+    /// fold is the genesis fold: these tests drive no archival good.
     #[cfg(test)]
     pub(crate) fn for_test(low: u64, high: u64, frontier_hash: [u8; 32]) -> Self {
         // A real `VerifiedRange` always has `low <= high` (verify_exhaustive returns
@@ -193,6 +214,7 @@ impl VerifiedBatch {
                 high: BlockHeight::from_raw(high),
             },
             frontier_hash,
+            fold: ArchivalFold::genesis(),
         }
     }
 }
@@ -229,6 +251,69 @@ pub(crate) enum ExhaustivenessError {
     /// rather than wrap `high` below `low` and mint a backwards range.
     #[error("height overflow verifying a batch at first_height {first} with {len} blocks")]
     HeightOverflow { first: u64, len: usize },
+    /// The block's reported running archival total is not the previous checked
+    /// total plus the archival lengths its own txids bind (`WSS-Q16`). The daemon
+    /// reported a total the chain it served does not add up to.
+    #[error(
+        "archival total mismatch at block {height}: the daemon reported {reported} bytes, \
+         the bound lengths add up to {checked}"
+    )]
+    ArchivalStepMismatch {
+        height: u64,
+        reported: ArchivalLength,
+        checked: ArchivalLength,
+    },
+    /// Adding the block's bound archival lengths to the checked total overflows
+    /// `u64`, or the closes it adds do not fit this platform's `usize`. No honest
+    /// chain reaches either.
+    #[error("the archival fold overflows at block {height}")]
+    ArchivalOverflow { height: u64 },
+}
+
+/// One block's archival step, from its txid-bound rows: the running total
+/// through it, the rows digest of each shard it closes, and the running digest
+/// of the shard left open.
+struct ArchivalStep {
+    total: ArchivalLength,
+    closed: Vec<ShardRowsDigest>,
+    open_rows: ShardRowsDigest,
+}
+
+/// The shard a placed transaction belongs to, if it is in the archival
+/// partition's domain (`SHT-Q1`, `SHT-Q2`): the shard of the total before it,
+/// for a transaction that carries archival good. The daemon's shard reads use
+/// the same predicate (`shekyl-chain-store` `shard_reads.rs`); this is the
+/// wallet's one copy, shared by the scan's fold and the body fill's walk.
+pub(crate) fn domain_shard(cum_before: ArchivalLength, parts: &TxidParts) -> Option<ShardId> {
+    carries_archival_good(parts.pqc_auth_hash, parts.prunable_hash).then(|| shard_of(cum_before))
+}
+
+/// Fold one block into the archival partition, transaction by transaction in
+/// the chain's order ([`ScannableBlock::archival_placements`]: the coinbase,
+/// which carries no archival good, then each listed transaction). An in-domain
+/// transaction's rows extend its shard's digest ([`domain_shard`]); when the
+/// total after a transaction reaches a shard's end, the shard closes with its
+/// digest and the next one opens empty. `None` on overflow.
+fn archival_step(fold: &ArchivalFold, sb: &ScannableBlock) -> Option<ArchivalStep> {
+    let mut open = fold.closed_count();
+    let mut open_rows = fold.open_rows();
+    let mut closed = Vec::new();
+    for (cum_before, parts) in sb.archival_placements(fold.total())? {
+        if let Some(shard) = domain_shard(cum_before, &parts) {
+            open_rows = rows_digest_step(shard, open_rows, rows_of_parts(&parts));
+        }
+        let after = cum_before.checked_add(parts.archival_len)?;
+        while shard_of(after).to_raw() > open {
+            closed.push(open_rows);
+            open_rows = ShardRowsDigest::EMPTY;
+            open = open.checked_add(1)?;
+        }
+    }
+    Some(ArchivalStep {
+        total: fold.total().checked_add(sb.archival_increment()?)?,
+        closed,
+        open_rows,
+    })
 }
 
 /// Verify that `blocks` — a contiguous batch starting at `first_height`, in height
@@ -256,6 +341,7 @@ pub(crate) enum ExhaustivenessError {
 pub(crate) fn verify_exhaustive(
     first_height: BlockHeight,
     anchor: BlockHash,
+    anchor_fold: &ArchivalFold,
     blocks: &[ScannableBlock],
 ) -> Result<VerifiedBatch, ExhaustivenessError> {
     let first = first_height.to_raw();
@@ -278,6 +364,7 @@ pub(crate) fn verify_exhaustive(
             len: blocks.len(),
         })?;
     let mut expected_previous = anchor;
+    let mut fold = anchor_fold.clone();
 
     for (offset, sb) in blocks.iter().enumerate() {
         // `offset < blocks.len()`, which fit in `u64` above, so this `try_from` cannot
@@ -314,9 +401,31 @@ pub(crate) fn verify_exhaustive(
             }
         }
 
+        // Archival step (WSS-Q16): the reported running total must be the checked
+        // total so far plus this block's bound lengths, and every shard the block
+        // closes takes the rows digest its in-domain transactions folded. Only
+        // after the bodies are bound to the committed hashes do their rows mean
+        // anything.
+        let step =
+            archival_step(&fold, sb).ok_or(ExhaustivenessError::ArchivalOverflow { height })?;
+        if sb.archival_cumulative != step.total {
+            return Err(ExhaustivenessError::ArchivalStepMismatch {
+                height,
+                reported: sb.archival_cumulative,
+                checked: step.total,
+            });
+        }
         // Advance: recompute this block's hash (from received material) as the
-        // anchor for the next block.
+        // anchor for the next block, and record it in any close this block makes.
         expected_previous = sb.block.hash();
+        fold.advance(BlockStep {
+            height: BlockHeight::from_raw(height),
+            hash: expected_previous.to_bytes(),
+            total: step.total,
+            closed: &step.closed,
+            open_rows: step.open_rows,
+        })
+        .ok_or(ExhaustivenessError::ArchivalOverflow { height })?;
     }
 
     Ok(VerifiedBatch {
@@ -331,6 +440,7 @@ pub(crate) fn verify_exhaustive(
         // The verified frontier feeds the pscan cursor, whose persisted form
         // is still bytes (RAW_TYPE PR C).
         frontier_hash: expected_previous.to_bytes(),
+        fold,
     })
 }
 
@@ -358,8 +468,13 @@ mod tests {
     #[test]
     fn accepts_a_correctly_chained_batch() {
         let blocks = chain(100, 4);
-        let verified = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &blocks)
-            .expect("a correctly chained, body-consistent batch verifies");
+        let verified = verify_exhaustive(
+            BlockHeight::from_raw(100),
+            ANCHOR,
+            &ArchivalFold::genesis(),
+            &blocks,
+        )
+        .expect("a correctly chained, body-consistent batch verifies");
         assert_eq!(verified.range().low(), BlockHeight::from_raw(100));
         assert_eq!(verified.range().high(), BlockHeight::from_raw(104));
         assert!(!verified.range().is_empty());
@@ -374,7 +489,13 @@ mod tests {
 
     #[test]
     fn empty_batch_is_an_empty_range() {
-        let verified = verify_exhaustive(BlockHeight::from_raw(7), ANCHOR, &[]).expect("empty");
+        let verified = verify_exhaustive(
+            BlockHeight::from_raw(7),
+            ANCHOR,
+            &ArchivalFold::genesis(),
+            &[],
+        )
+        .expect("empty");
         assert!(verified.range().is_empty());
         assert_eq!(verified.range().low(), verified.range().high());
         assert_eq!(
@@ -407,8 +528,13 @@ mod tests {
         // this is the gate for adversarial input. The overflow guard fires before the loop,
         // so the (mismatched) chain contents are irrelevant.
         let blocks = chain(0, 2);
-        let err = verify_exhaustive(BlockHeight::from_raw(u64::MAX), BlockHash::NULL, &blocks)
-            .expect_err("first_height near u64::MAX must fail closed, not wrap");
+        let err = verify_exhaustive(
+            BlockHeight::from_raw(u64::MAX),
+            BlockHash::NULL,
+            &ArchivalFold::genesis(),
+            &blocks,
+        )
+        .expect_err("first_height near u64::MAX must fail closed, not wrap");
         assert!(
             matches!(err, ExhaustivenessError::HeightOverflow { .. }),
             "got {err:?}"
@@ -422,6 +548,7 @@ mod tests {
         let err = verify_exhaustive(
             BlockHeight::from_raw(100),
             BlockHash::from_bytes([0xFF; 32]),
+            &ArchivalFold::genesis(),
             &blocks,
         )
         .expect_err("a batch that doesn't chain to the anchor must fail");
@@ -434,8 +561,13 @@ mod tests {
         // block[100] (compare-to-claimed would miss this; recompute catches it).
         let mut blocks = chain(100, 3);
         blocks[1] = make_synthetic_block(101, BlockHash::from_bytes([0xBB; 32])); // wrong `previous`
-        let err = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &blocks)
-            .expect_err("a broken link must fail");
+        let err = verify_exhaustive(
+            BlockHeight::from_raw(100),
+            ANCHOR,
+            &ArchivalFold::genesis(),
+            &blocks,
+        )
+        .expect_err("a broken link must fail");
         assert_eq!(err, ExhaustivenessError::ContinuityBreak { height: 101 });
     }
 
@@ -447,8 +579,13 @@ mod tests {
         let body = sb.block.miner_transaction.clone();
         sb.transactions = vec![shekyl_wire::BoundTx::whole(body)];
         sb.block.transaction_hashes = vec![shekyl_types::TxHash::from_bytes([0x77; 32])]; // != body.hash()
-        let err = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
-            .expect_err("a tampered body must fail");
+        let err = verify_exhaustive(
+            BlockHeight::from_raw(100),
+            ANCHOR,
+            &ArchivalFold::genesis(),
+            &[sb],
+        )
+        .expect_err("a tampered body must fail");
         assert_eq!(
             err,
             ExhaustivenessError::BodyMismatch {
@@ -464,9 +601,75 @@ mod tests {
         let body = sb.block.miner_transaction.clone();
         sb.block.transaction_hashes = vec![body.hash()];
         sb.transactions = vec![shekyl_wire::BoundTx::whole(body)];
-        let verified = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
-            .expect("a body matching its committed hash verifies");
+        let verified = verify_exhaustive(
+            BlockHeight::from_raw(100),
+            ANCHOR,
+            &ArchivalFold::genesis(),
+            &[sb],
+        )
+        .expect("a body matching its committed hash verifies");
         assert_eq!(verified.range().high(), BlockHeight::from_raw(101));
+    }
+
+    #[test]
+    fn rejects_a_reported_total_the_bound_lengths_do_not_add_up_to() {
+        // WSS-Q16: a block with no archival good whose reported running total
+        // moved anyway. The bound lengths sum to zero, so the step must be zero.
+        let mut sb = make_synthetic_block(100, ANCHOR);
+        sb.archival_cumulative = ArchivalLength::from_raw(1);
+        let err = verify_exhaustive(
+            BlockHeight::from_raw(100),
+            ANCHOR,
+            &ArchivalFold::genesis(),
+            &[sb],
+        )
+        .expect_err("a total the bodies do not add up to must fail");
+        assert_eq!(
+            err,
+            ExhaustivenessError::ArchivalStepMismatch {
+                height: 100,
+                reported: ArchivalLength::from_raw(1),
+                checked: ArchivalLength::ZERO,
+            }
+        );
+    }
+
+    #[test]
+    fn the_fold_carries_through_a_batch_from_its_anchor() {
+        // A batch anchored at a fold that has already passed one shard: blocks with
+        // no archival good report the same total, and the batch hands the fold back
+        // unchanged, close included.
+        let mut anchor_fold = ArchivalFold::genesis();
+        anchor_fold
+            .advance(BlockStep {
+                height: BlockHeight::from_raw(42),
+                hash: [0x42; 32],
+                total: shekyl_types::SHARD_LENGTH,
+                closed: &[ShardRowsDigest::from_bytes([0x43; 32])],
+                open_rows: ShardRowsDigest::EMPTY,
+            })
+            .expect("advances");
+        let mut blocks = chain(100, 3);
+        for sb in &mut blocks {
+            sb.archival_cumulative = shekyl_types::SHARD_LENGTH;
+        }
+        let verified = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &anchor_fold, &blocks)
+            .expect("an unchanged total verifies");
+        assert_eq!(verified.fold(), &anchor_fold);
+        let err = verify_exhaustive(
+            BlockHeight::from_raw(100),
+            ANCHOR,
+            &ArchivalFold::genesis(),
+            &blocks,
+        )
+        .expect_err("the same blocks from the wrong base do not add up");
+        assert!(
+            matches!(
+                err,
+                ExhaustivenessError::ArchivalStepMismatch { height: 100, .. }
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -475,8 +678,13 @@ mod tests {
         let mut sb = make_synthetic_block(100, ANCHOR);
         sb.block.transaction_hashes = vec![shekyl_types::TxHash::from_bytes([0x11; 32])];
         sb.transactions = vec![];
-        let err = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
-            .expect_err("a missing body must fail");
+        let err = verify_exhaustive(
+            BlockHeight::from_raw(100),
+            ANCHOR,
+            &ArchivalFold::genesis(),
+            &[sb],
+        )
+        .expect_err("a missing body must fail");
         assert_eq!(
             err,
             ExhaustivenessError::BodyCountMismatch {

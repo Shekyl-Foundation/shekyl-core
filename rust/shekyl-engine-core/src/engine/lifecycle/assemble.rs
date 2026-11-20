@@ -566,7 +566,7 @@ struct PreparedStakeEngine {
 /// `rt-multi-thread` ambient runtime; conformance tests must use
 /// `#[tokio::test(flavor = "multi_thread")]`.
 #[cfg(feature = "conformance")]
-pub(super) fn observe_stake_self_cert(
+fn observe_stake_self_cert(
     handle: &StakeEngineHandle,
     curve_tree: &crate::engine::curve_tree_actor::CurveTreeHandle,
 ) -> Result<(), OpenError> {
@@ -639,3 +639,7 @@ fn load_open_staking_evidence(
         retired_slots,
     }))
 }
+
+#[cfg(all(test, feature = "conformance"))]
+#[path = "assemble_tests.rs"]
+mod tests;

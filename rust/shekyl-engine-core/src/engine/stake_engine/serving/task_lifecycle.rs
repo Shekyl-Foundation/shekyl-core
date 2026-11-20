@@ -217,6 +217,15 @@ fn store_path() -> PathBuf {
     std::env::temp_dir()
 }
 
+/// Where the fixture wallet was opened: `store_fs_path`, synced at height 0.
+/// The fixture pinner's record is read at height 0, so it counts as caught up.
+fn site(store_fs_path: PathBuf) -> ServingSite {
+    ServingSite {
+        store_fs_path,
+        synced_height: Arc::new(|| shekyl_types::BlockHeight::ZERO),
+    }
+}
+
 fn claim() -> SlotGuard {
     RefreshSlot::new()
         .try_claim()
@@ -252,7 +261,7 @@ async fn the_board_stops_saying_not_serving_as_soon_as_the_host_is_up() {
         pinner(false),
         Arc::clone(&alarms),
         immediate(),
-        store_path(),
+        site(store_path()),
         claim(),
     );
 
@@ -294,7 +303,7 @@ async fn the_posture_snapshot_tracks_the_host_and_clears_on_shutdown() {
         pinner(false),
         Arc::clone(&alarms),
         immediate(),
-        store_path(),
+        site(store_path()),
         claim(),
     );
 
@@ -357,7 +366,7 @@ async fn shutdown_completes_while_a_refresh_is_wedged_on_the_actor() {
             refresh_cadence: CADENCE,
             ..immediate()
         },
-        store_path(),
+        site(store_path()),
         claim(),
     );
 
@@ -410,7 +419,7 @@ async fn shutdown_completes_while_the_post_start_read_is_wedged() {
         },
         Arc::clone(&alarms),
         immediate(),
-        store_path(),
+        site(store_path()),
         claim(),
     );
 
@@ -455,7 +464,7 @@ async fn a_started_host_observes_disk_headroom() {
         pinner(false),
         Arc::clone(&alarms),
         immediate(),
-        store_path(),
+        site(store_path()),
         claim(),
     );
 
@@ -506,7 +515,7 @@ async fn a_started_host_watches_its_serve_health() {
         pinner(false),
         Arc::clone(&alarms),
         immediate(),
-        store_path(),
+        site(store_path()),
         claim(),
     );
 
@@ -553,7 +562,7 @@ async fn an_unreadable_disk_path_disarms_without_killing_the_task() {
         pinner(false),
         Arc::clone(&alarms),
         immediate(),
-        dir.path().join("no-such-directory"),
+        site(dir.path().join("no-such-directory")),
         claim(),
     );
 
@@ -592,7 +601,7 @@ async fn the_handle_exposes_the_board_it_reports_through() {
         pinner(false),
         Arc::clone(&alarms),
         immediate(),
-        store_path(),
+        site(store_path()),
         claim(),
     );
 
@@ -623,7 +632,7 @@ async fn a_failed_start_lands_on_the_board_reachable_from_the_handle() {
         pinner(true),
         Arc::clone(&alarms),
         immediate(),
-        store_path(),
+        site(store_path()),
         claim(),
     );
 

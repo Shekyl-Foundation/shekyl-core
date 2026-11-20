@@ -26,6 +26,7 @@
 //! is served, and erase is asked from the engine side. The serving host's
 //! threads only wait. The key stays in this actor.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -219,16 +220,13 @@ impl Message<EraseShards> for BodyStoreActor {
     }
 }
 
-/// Write a shard's frame. No production caller yet: fill (`WSS-Q4`) is not
-/// built; tests fill through this so they reach the store the way the
-/// serving path does.
-#[cfg(test)]
+/// Write a shard's frame (`WSS-Q4`): the fill's one write. The store writes
+/// it in one redb transaction, so a shard is held whole or not at all.
 pub(crate) struct PutShard {
     pub shard_id: ShardId,
     pub frame: Vec<u8>,
 }
 
-#[cfg(test)]
 impl Message<PutShard> for BodyStoreActor {
     type Reply = Result<(), StoreError>;
 
@@ -241,6 +239,140 @@ impl Message<PutShard> for BodyStoreActor {
     }
 }
 
+/// Whether the store holds a shard's row (`WSS-Q17`'s held check).
+pub(crate) struct HoldsShard {
+    pub shard_id: ShardId,
+}
+
+impl Message<HoldsShard> for BodyStoreActor {
+    type Reply = Result<bool, StoreError>;
+
+    async fn handle(
+        &mut self,
+        msg: HoldsShard,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.store().holds(msg.shard_id)
+    }
+}
+
+/// A shard's whole stored frame, every chunk opened under the store key
+/// (`WSS-Q17`'s body check). One message, so the reconcile's read of a
+/// shard is one turn of the actor rather than one per chunk.
+pub(crate) struct ReadShardFrame {
+    pub shard_id: ShardId,
+}
+
+/// What a whole-frame read found.
+#[derive(Debug)]
+pub(crate) enum StoredFrame {
+    /// The store holds no row for the shard.
+    NotHeld,
+    /// The frame, every chunk authenticated.
+    Frame(Vec<u8>),
+    /// The row is there and a chunk is missing or fails authentication, or
+    /// the chunks do not add up to the row's length: the bytes on disk are
+    /// not the ones written.
+    Unreadable,
+}
+
+impl Message<ReadShardFrame> for BodyStoreActor {
+    type Reply = Result<StoredFrame, StoreError>;
+
+    async fn handle(
+        &mut self,
+        msg: ReadShardFrame,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let store = self.store();
+        let Some(held) = store.open_shard(msg.shard_id)? else {
+            return Ok(StoredFrame::NotHeld);
+        };
+        match store.read_frame(&held) {
+            Ok(frame) => Ok(StoredFrame::Frame(frame)),
+            Err(StoreError::Corrupt { .. }) => Ok(StoredFrame::Unreadable),
+            Err(other) => Err(other),
+        }
+    }
+}
+
+/// The shards the serving path reported (`HeldShardSource::report_fault`):
+/// a held body that did not read back as it was opened, waiting for the
+/// reconcile, which checks each one the bond owes at once (`WSS-Q17`;
+/// `WALLET_SIDE_STORE.md` §6.7.1).
+///
+/// A set, so a shard that fails every request waits once. Only an opened
+/// body can be reported, so a requester cannot name a shard into it, and it
+/// holds at most the shards the store does. It holds no store and no
+/// engine: the serving path and the body-store leg each keep a clone
+/// without keeping either alive.
+#[derive(Clone, Default)]
+pub(crate) struct ServeFaults(Arc<FaultQueue>);
+
+#[derive(Default)]
+struct FaultQueue {
+    shards: std::sync::Mutex<Queued>,
+    reported: tokio::sync::Notify,
+}
+
+/// The queue's two kinds of shard: reported since the last take, and kept
+/// by a pass that could not check them.
+#[derive(Default)]
+struct Queued {
+    fresh: BTreeSet<ShardId>,
+    kept: BTreeSet<ShardId>,
+}
+
+/// What a take found: the shards reported since the last take, and those
+/// a pass that could not run kept for the next.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct TakenFaults {
+    pub(crate) fresh: BTreeSet<ShardId>,
+    pub(crate) kept: BTreeSet<ShardId>,
+}
+
+impl ServeFaults {
+    /// Queue `shard` and wake the reconcile. Never blocks: the serving
+    /// runtime calls this once a response has failed.
+    pub(crate) fn report(&self, shard: ShardId) {
+        self.0
+            .shards
+            .lock()
+            .expect("serve faults lock")
+            .fresh
+            .insert(shard);
+        self.0.reported.notify_one();
+    }
+
+    /// Wait for a report. One made while nothing waits is kept, so a
+    /// report is never missed between two waits; so a wake can also find
+    /// that a pass since has taken what it was for.
+    pub(crate) async fn reported(&self) {
+        self.0.reported.notified().await;
+    }
+
+    /// Everything queued.
+    pub(crate) fn take(&self) -> TakenFaults {
+        let mut queued = self.0.shards.lock().expect("serve faults lock");
+        TakenFaults {
+            fresh: std::mem::take(&mut queued.fresh),
+            kept: std::mem::take(&mut queued.kept),
+        }
+    }
+
+    /// Put back `shards` a pass could not check, for the next pass. They
+    /// wake none: a pass that could not run is retried at the next chain
+    /// advance or the next fresh report, not at once.
+    pub(crate) fn keep(&self, shards: BTreeSet<ShardId>) {
+        self.0
+            .shards
+            .lock()
+            .expect("serve faults lock")
+            .kept
+            .extend(shards);
+    }
+}
+
 /// `Clone` handle on the body-store actor: a mailbox address, not a share of
 /// the store. The stake engine's handle carries one and erases through it;
 /// the serving path gets [`Self::reads`], which does not keep the actor
@@ -250,6 +382,8 @@ pub(crate) struct BodyStoreHandle {
     actor: ActorRef<BodyStoreActor>,
     /// Keeps the owner's runtime alive for as long as a handle does.
     home: Arc<BodyStoreHome>,
+    /// What the serving path reports about the bodies it reads.
+    faults: ServeFaults,
 }
 
 impl BodyStoreHandle {
@@ -268,7 +402,14 @@ impl BodyStoreHandle {
         Self {
             actor,
             home: Arc::new(home),
+            faults: ServeFaults::default(),
         }
+    }
+
+    /// What the serving path reports about the bodies it reads, for the
+    /// reconcile to take.
+    pub(crate) fn serve_faults(&self) -> ServeFaults {
+        self.faults.clone()
     }
 
     /// Erase `shard_ids` (`WSS-Q8`). A missing row is success.
@@ -283,19 +424,59 @@ impl BodyStoreHandle {
             .map_err(|e| format!("persona body store erase failed: {e:?}"))
     }
 
+    /// Write `frame` as `shard_id`'s body (`WSS-Q4`), whole or not at all.
+    ///
+    /// # Errors
+    ///
+    /// A store fault, or an owner that has stopped, as a diagnostic.
+    pub(crate) async fn put(&self, shard_id: ShardId, frame: Vec<u8>) -> Result<(), String> {
+        self.actor
+            .ask(PutShard { shard_id, frame })
+            .await
+            .map_err(|e| format!("persona body store write failed: {e:?}"))
+    }
+
+    /// Whether the store holds `shard_id`'s row.
+    ///
+    /// # Errors
+    ///
+    /// A store fault, or an owner that has stopped, as a diagnostic.
+    pub(crate) async fn holds(&self, shard_id: ShardId) -> Result<bool, String> {
+        self.actor
+            .ask(HoldsShard { shard_id })
+            .await
+            .map_err(|e| format!("persona body store read failed: {e:?}"))
+    }
+
+    /// `shard_id`'s whole frame, every chunk authenticated.
+    ///
+    /// # Errors
+    ///
+    /// A store fault other than an unreadable chunk (I/O), or an owner that
+    /// has stopped, as a diagnostic.
+    pub(crate) async fn read_frame(&self, shard_id: ShardId) -> Result<StoredFrame, String> {
+        self.actor
+            .ask(ReadShardFrame { shard_id })
+            .await
+            .map_err(|e| format!("persona body store read failed: {e:?}"))
+    }
+
     /// The non-owning form, for a weak stake-engine handle.
     pub(crate) fn downgrade(&self) -> WeakBodyStoreHandle {
         WeakBodyStoreHandle {
             actor: self.actor.downgrade(),
             home: Arc::downgrade(&self.home),
+            faults: self.faults.clone(),
         }
     }
 
     /// The serving path's reads: open and read-chunk, by message, through a
-    /// weak reference that never keeps the owner alive.
+    /// weak reference that never keeps the owner alive; and its fault
+    /// reports, into [`Self::serve_faults`].
     pub(crate) fn reads(&self) -> BodyReads {
         BodyReads {
             actor: self.actor.downgrade(),
+            faults: self.faults.clone(),
         }
     }
 
@@ -310,16 +491,20 @@ impl BodyStoreHandle {
         }
     }
 
+    /// Flip a bit of `shard_id`'s sealed chunk `index`, as a failing disk
+    /// would: the chunk then fails authentication when it is read.
+    #[cfg(test)]
+    pub(crate) async fn tamper_chunk_for_test(&self, shard_id: ShardId, index: u32) {
+        self.actor
+            .ask(TamperChunk { shard_id, index })
+            .await
+            .expect("tamper with a chunk");
+    }
+
     /// Fill a shard, as a test would before serving it.
     #[cfg(test)]
     pub(crate) async fn put_for_test(&self, shard_id: ShardId, frame: &[u8]) {
-        self.actor
-            .ask(PutShard {
-                shard_id,
-                frame: frame.to_vec(),
-            })
-            .await
-            .expect("put shard");
+        self.put(shard_id, frame.to_vec()).await.expect("put shard");
     }
 
     /// Open a shard the way the serving path does, awaited rather than
@@ -346,6 +531,7 @@ impl BodyStoreHandle {
 pub(crate) struct WeakBodyStoreHandle {
     actor: WeakActorRef<BodyStoreActor>,
     home: std::sync::Weak<BodyStoreHome>,
+    faults: ServeFaults,
 }
 
 impl WeakBodyStoreHandle {
@@ -353,7 +539,11 @@ impl WeakBodyStoreHandle {
     pub(crate) fn upgrade(&self) -> Option<BodyStoreHandle> {
         let actor = self.actor.upgrade()?;
         let home = self.home.upgrade()?;
-        actor.is_alive().then_some(BodyStoreHandle { actor, home })
+        actor.is_alive().then(|| BodyStoreHandle {
+            actor,
+            home,
+            faults: self.faults.clone(),
+        })
     }
 }
 
@@ -366,6 +556,7 @@ impl WeakBodyStoreHandle {
 /// store fault, which the endpoint renders as its bare 503.
 pub(crate) struct BodyReads {
     actor: WeakActorRef<BodyStoreActor>,
+    faults: ServeFaults,
 }
 
 impl BodyReads {
@@ -393,6 +584,32 @@ impl HeldShardSource for BodyReads {
             })
             .blocking_send()
             .map_err(|e| ProviderError::other(format!("persona body store read failed: {e:?}")))
+    }
+
+    /// Queued for the reconcile, which checks the shard at once if the
+    /// bond owes it. No message to the owner, and no wait.
+    fn report_fault(&self, held: &HeldShard) {
+        self.faults.report(held.shard_id());
+    }
+}
+
+/// Flip a bit of a sealed chunk (`tamper_chunk_for_test`).
+#[cfg(test)]
+pub(crate) struct TamperChunk {
+    shard_id: ShardId,
+    index: u32,
+}
+
+#[cfg(test)]
+impl Message<TamperChunk> for BodyStoreActor {
+    type Reply = Result<(), StoreError>;
+
+    async fn handle(
+        &mut self,
+        msg: TamperChunk,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.store().test_tamper_chunk(msg.shard_id, msg.index)
     }
 }
 

@@ -3,6 +3,9 @@
 **Status: OPEN — reopened 2026-11-15 (Rick). Relay volume is not cover on
 Tor.** The redesign was ruled the same day in the cover-traffic lane's
 Round 0; this document records those rulings with the lane's build.
+**That build (#1431) is on hold, unmerged (Rick, 2026-11-19): a second
+approach, cover by shape, is in Round 0 in
+[`COVER_BY_SHAPE.md`](COVER_BY_SHAPE.md).**
 §8 step 3 is met. TRC-1's guard-connection reading
 ([`trc1_guard_connection_20261112.md`](../benchmarks/trc1_guard_connection_20261112.md),
 #1388) watched the relay's three
