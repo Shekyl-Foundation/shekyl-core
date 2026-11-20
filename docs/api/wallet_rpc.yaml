@@ -2546,7 +2546,10 @@ components:
         what its refill from the wallet's own node did. Re-derived by each
         open's reconcile passes (at open, at each settlement epoch, and
         after a fill); nothing about the alarm is stored. A shard the bond
-        no longer owes leaves the list. Empty when nothing was lost.
+        no longer owes leaves the list. Empty when no pass this session has
+        found a loss, which includes before the first pass and while a pass
+        cannot run (the node unreachable, the scan state unreadable): an
+        empty list is not evidence that any shard was checked.
       items:
         $ref: "#/components/schemas/ShardAlarmEntry"
 

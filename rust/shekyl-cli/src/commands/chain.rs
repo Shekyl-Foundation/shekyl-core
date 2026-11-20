@@ -145,18 +145,36 @@ pub fn cmd_shard_alarm(rpc: &RpcSession) -> CommandResult {
     }
 }
 
+/// What `shard alarm` says when the session has recorded none. An empty list
+/// is also what the wallet reports before its first check and while a check
+/// cannot run, so this says only what is known: no alarm, and when the wallet
+/// looks.
+const NO_SHARD_ALARMS: &str =
+    "No shard alarms this session. The wallet checks that its body store \
+     holds every shard your bond owes when the chain advances after it opens, at each settlement \
+     epoch and after it fills a shard; a check that finds a shard missing or damaged is listed \
+     here.";
+
 pub(crate) fn show_shard_alarm(val: &Value) {
+    for line in shard_alarm_lines(val) {
+        println!("{line}");
+    }
+}
+
+/// `shard alarm`'s lines for the wallet's reply.
+fn shard_alarm_lines(val: &Value) -> Vec<String> {
     let Some(alarms) = val.as_array() else {
-        println!("(the wallet's answer was not a list)");
-        return;
+        return vec!["(the wallet's answer was not a list)".to_owned()];
     };
     if alarms.is_empty() {
-        println!("Every shard your bond owes is held and checks out.");
-        return;
+        return vec![NO_SHARD_ALARMS.to_owned()];
     }
-    println!("Shards your bond owes that needed attention:");
+    let mut lines = vec!["Shards your bond owes that needed attention:".to_owned()];
     for alarm in alarms {
-        let shard = alarm.get("shard").and_then(Value::as_u64).unwrap_or(0);
+        let shard = alarm.get("shard").and_then(Value::as_u64).map_or_else(
+            || "(a shard the answer did not name)".to_owned(),
+            |shard| format!("Shard {shard}"),
+        );
         let what = match alarm.get("alarm").and_then(Value::as_str).unwrap_or("") {
             "missing" => "was not in the body store",
             "corrupt" => "did not check out in the body store",
@@ -172,8 +190,9 @@ pub(crate) fn show_shard_alarm(val: &Value) {
             "failed" => "the refill failed; the wallet tries again as the chain advances",
             _ => "(an outcome this version does not know)",
         };
-        println!("  Shard {shard} {what}: {refill}.");
+        lines.push(format!("  {shard} {what}: {refill}."));
     }
+    lines
 }
 
 /// `shard show <id>` — one row of the daemon's `shard_coverage` reply,
@@ -297,7 +316,10 @@ fn coverage_row_line(row: &CoverageShard) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{connections_line, coverage_row_line, difficulty_line, sync_line, tx_count_line};
+    use super::{
+        connections_line, coverage_row_line, difficulty_line, shard_alarm_lines, sync_line,
+        tx_count_line, NO_SHARD_ALARMS,
+    };
     use serde_json::{json, Value};
     use shekyl_rpc_client::{wire, RpcMethod};
     use shekyl_rpc_types::wire::archival::CoverageShard;
@@ -513,5 +535,37 @@ mod tests {
             coverage_row_line(&row(Value::Null))
         );
         assert!(!coverage_row_line(&row(json!("5000000000"))).contains("unavailable"));
+    }
+
+    #[test]
+    fn no_shard_alarm_claims_nothing_was_checked() {
+        let lines = shard_alarm_lines(&json!([]));
+        assert_eq!(lines, [NO_SHARD_ALARMS]);
+        // Empty is also the answer before the first check and while a check
+        // cannot run: the line may not say a shard is held or checks out.
+        assert!(!lines[0].contains("is held"));
+        assert!(!lines[0].contains("checks out"));
+    }
+
+    #[test]
+    fn each_shard_alarm_names_its_shard_its_loss_and_its_refill() {
+        let lines = shard_alarm_lines(&json!([
+            {"shard": 3, "alarm": "missing", "refill": "refilled"},
+            {"shard": 7, "alarm": "corrupt", "refill": "discarded"},
+        ]));
+        assert_eq!(lines.len(), 3);
+        assert_eq!(
+            lines[1],
+            "  Shard 3 was not in the body store: refilled from your node and checked."
+        );
+        assert!(lines[2].starts_with("  Shard 7 did not check out in the body store: "));
+        assert!(lines[2].contains("recovery fetch"));
+    }
+
+    #[test]
+    fn a_shard_alarm_without_its_shard_is_not_shard_zero() {
+        let lines = shard_alarm_lines(&json!([{"alarm": "missing", "refill": "pending"}]));
+        assert!(!lines[1].contains("Shard 0"));
+        assert!(lines[1].contains("(a shard the answer did not name)"));
     }
 }

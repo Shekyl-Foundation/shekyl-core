@@ -688,8 +688,9 @@ pub enum ShardRefillView {
     Pending,
     /// Refilled from the node; held and verified.
     Refilled,
-    /// The node has discarded the shard and does not yet read below its
-    /// horizon, so it cannot be refilled.
+    /// The node has discarded the shard's bodies, which come back only
+    /// through the node's recovery fetch; that does not exist yet, so the
+    /// shard cannot be refilled until it does.
     Discarded,
     /// Failed for another reason; the next pass retries.
     Failed,
