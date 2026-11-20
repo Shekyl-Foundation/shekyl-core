@@ -15,10 +15,11 @@
 //! # Read-only, structurally, and keyless
 //!
 //! [`StoreShardProvider`] is built from a [`HeldShardSource`], which can
-//! only open a held shard and hand back its chunks. Fill and erase live on
-//! the store's owner, and so does the store key: the source returns
-//! plaintext copies, so nothing in this module can write to the store or
-//! decrypt it (`WALLET_SIDE_STORE.md` `WSS-Q13`). In the wallet the source
+//! only open a held shard, hand back its chunks, and be told that a body it
+//! opened did not read back as opened. Fill and erase live on the store's
+//! owner, and so does the store key: the source returns plaintext copies,
+//! so nothing in this module can write to the store or decrypt it
+//! (`WALLET_SIDE_STORE.md` `WSS-Q13`). In the wallet the source
 //! is a message to the body-store actor (`CURVE_TREE_CLIENT.md` §11.1).
 //! *Records-was (until 2026-11-02):* the provider held a `BodyStoreReader`,
 //! a shared handle on the store that carried the key.
@@ -307,6 +308,20 @@ impl ShardBody {
     }
 }
 
+impl ShardBody {
+    /// Tell the store this body came from that it did not read back as it
+    /// was opened ([`HeldShardSource::report_fault`]). A body held in
+    /// memory has no store behind it, and nothing to tell.
+    pub(crate) fn report_fault(&self) {
+        match &self.source {
+            Source::Held(body) => body.source.report_fault(&body.held),
+            Source::Flat { .. } => {}
+            #[cfg(test)]
+            Source::Counted { .. } => {}
+        }
+    }
+}
+
 /// Serve-side shard lookup.
 ///
 /// `Ok(None)` is the *unservable* case — unknown id, or a segment that has
@@ -332,7 +347,8 @@ pub trait ShardProvider: Send + Sync + 'static {
 }
 
 /// The reads a serving loop may make of `P`'s body store: open a held shard,
-/// and fetch its chunks. Nothing else — no write, no key.
+/// and fetch its chunks; and the one thing it may say back, that a body it
+/// opened did not read back as opened. Nothing else — no write, no key.
 ///
 /// Called on the blocking pool (the endpoint's `spawn_blocking` hops), so an
 /// implementor may block. The wallet's implementor asks the body-store actor,
@@ -354,6 +370,20 @@ pub trait HeldShardSource: Send + Sync + 'static {
     /// [`ProviderError`] on store failure, a chunk that fails
     /// authentication, or an owner that cannot be reached.
     fn read_chunk(&self, held: &HeldShard, index: u32) -> Result<Vec<u8>, ProviderError>;
+
+    /// `held`'s body did not read back as it was opened: a chunk failed, or
+    /// the chunks ran past or short of the length it was opened at. The
+    /// serving loop says so once per failed response and goes on. What it
+    /// means is the owner's to decide: the wallet's reconcile checks the
+    /// shard at once if the bond owes it, and refills it
+    /// (`WALLET_SIDE_STORE.md` §6.7.1). The loop does not know which shards
+    /// are owed and is not told (§6.2.6).
+    ///
+    /// Only an opened body can be reported, so a requester cannot name the
+    /// shard: an open that fails, or a shard not held, reports nothing.
+    /// Called on the serving runtime once the response has failed, so an
+    /// implementor must not block.
+    fn report_fault(&self, held: &HeldShard);
 }
 
 impl HeldShardSource for BodyStore {
@@ -364,6 +394,10 @@ impl HeldShardSource for BodyStore {
     fn read_chunk(&self, held: &HeldShard, index: u32) -> Result<Vec<u8>, ProviderError> {
         BodyStore::read_chunk(self, held, index).map_err(|e| ProviderError::from_store(&e))
     }
+
+    /// A store held in-process (tests, harnesses) has no reconcile behind
+    /// it. The endpoint's lookup-failure count is the record.
+    fn report_fault(&self, _held: &HeldShard) {}
 }
 
 /// The production provider: shard reads out of `P`'s body store through a

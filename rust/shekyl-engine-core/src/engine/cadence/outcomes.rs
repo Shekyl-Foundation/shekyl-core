@@ -364,6 +364,7 @@ mod tests {
                 shekyl_engine_state::pscan_cursor::PScanCursor::at(
                     BlockHeight::from_raw(195),
                     [0; 32],
+                    shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
                 ),
                 Default::default(),
                 Default::default(),

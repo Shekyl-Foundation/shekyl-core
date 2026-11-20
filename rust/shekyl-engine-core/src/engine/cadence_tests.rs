@@ -116,6 +116,7 @@ fn drive(
         Arc::new(OperatorAlarms::new()),
         stall_horizon,
         ServingSlot::default(),
+        crate::engine::body_reconcile::ShardAlarms::default(),
     )
 }
 
@@ -154,6 +155,7 @@ async fn watchdog_raises_on_stall_and_clears_on_resume() {
         Arc::new(OperatorAlarms::new()),
         Duration::from_secs(120),
         ServingSlot::default(),
+        crate::engine::body_reconcile::ShardAlarms::default(),
     );
     let alarms = handle.alarms();
     let mut handle = handle;
@@ -193,6 +195,7 @@ async fn stall_alarm_carries_last_height_and_duration() {
         Arc::new(OperatorAlarms::new()),
         Duration::from_secs(120),
         ServingSlot::default(),
+        crate::engine::body_reconcile::ShardAlarms::default(),
     );
     let alarms = handle.alarms();
     let mut handle = handle;
@@ -294,6 +297,7 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
         &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
         &ServingSlot::default(),
         &Arc::new(OperatorAlarms::new()),
+        &crate::engine::body_reconcile::ShardAlarms::default(),
     )
     .into_iter()
     .map(|inner| {
@@ -317,6 +321,7 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
         "terminal-reject",
         "pending-outcomes",
         "epoch-claim",
+        "body-store",
     ] {
         assert!(
             fired.contains(&(leg, 1)) && fired.contains(&(leg, 2)),
@@ -325,13 +330,14 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
     }
     // Fire order is the §3 retire-before-assemble registration order.
     assert_eq!(
-        fired[..5],
+        fired[..6],
         [
             ("submit-lifecycle", 1),
             ("serving-liveness", 1),
             ("terminal-reject", 1),
             ("pending-outcomes", 1),
-            ("epoch-claim", 1)
+            ("epoch-claim", 1),
+            ("body-store", 1)
         ],
         "registration order must be preserved per tick"
     );
@@ -355,6 +361,7 @@ async fn handle_drop_cancels_the_task() {
         Arc::new(OperatorAlarms::new()),
         CHAIN_STALL_HORIZON,
         ServingSlot::default(),
+        crate::engine::body_reconcile::ShardAlarms::default(),
     );
     let cancel_probe = handle.cancel_token.clone();
     drop(handle);
@@ -370,6 +377,7 @@ async fn shutdown_awaits_task_exit() {
         Arc::new(OperatorAlarms::new()),
         CHAIN_STALL_HORIZON,
         ServingSlot::default(),
+        crate::engine::body_reconcile::ShardAlarms::default(),
     );
     handle.shutdown().await;
 }
@@ -412,6 +420,7 @@ async fn leg_teardown_runs_before_shutdown_returns() {
         Arc::new(OperatorAlarms::new()),
         CHAIN_STALL_HORIZON,
         ServingSlot::default(),
+        crate::engine::body_reconcile::ShardAlarms::default(),
     );
     handle.shutdown().await;
     assert_eq!(*log.lock().expect("probe log"), vec!["torn-down"]);
@@ -480,6 +489,7 @@ async fn serving_liveness_leg_starts_and_restarts_a_dead_serving_task() {
         &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
         &slot,
         &alarms,
+        &crate::engine::body_reconcile::ShardAlarms::default(),
     );
     let (tick, rx) = tokio::sync::mpsc::unbounded_channel();
     let heights = std::sync::atomic::AtomicU64::new(0);
@@ -493,6 +503,7 @@ async fn serving_liveness_leg_starts_and_restarts_a_dead_serving_task() {
         alarms,
         CHAIN_STALL_HORIZON,
         Arc::clone(&slot),
+        crate::engine::body_reconcile::ShardAlarms::default(),
     );
 
     // Tick 1: the slot is empty, the predicate holds, the leg starts

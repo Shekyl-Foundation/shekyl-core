@@ -73,7 +73,8 @@
 //! ```
 
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, SectionRoot, TxHash,
+    ArchivalLength, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, SectionRoot,
+    TxHash,
 };
 
 use crate::core::{ConnectionsSnapshot, P2pRead, PeerEntry};
@@ -311,6 +312,14 @@ pub struct BlockFacts {
     /// (SI-34), or one the rule has not run for. A bundle filed for the
     /// block carries the same count in its reference (`SCS-P39`).
     pub draws: Option<u32>,
+    /// The chain's cumulative archival length through this block: the
+    /// running total of every transaction's archival length, the coinbase's
+    /// included, after this block (`block_info.cumulative_archival_len`,
+    /// `SHT-Q2`). Public chain data, the same on every node. `None` for an
+    /// alternative block, which has no such row. A wallet checks each
+    /// block's increment against its transactions' txid-bound lengths
+    /// (`WALLET_SIDE_STORE.md` `WSS-Q16`).
+    pub archival_cumulative: Option<ArchivalLength>,
 }
 
 /// The facts the p2p handlers consume (`sync_status`, `p2p_stats`,

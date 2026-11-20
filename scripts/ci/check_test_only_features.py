@@ -199,6 +199,13 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "by ruling, so its clear path must not exist in shipped code; enabled "
     "from the p-host and engine-core dev edges only",
     (
+        "shekyl-p-store",
+        "test-tamper",
+    ): "BodyStore::test_tamper_chunk: flips a bit of a sealed chunk, as a "
+    "failing disk would, so the body-fill walk can serve a fault and see the "
+    "reconcile it starts (WSS-Q17, 2026-11-20). A shipped store writes only "
+    "chunks it sealed; enabled from the engine-core dev edge only",
+    (
         "shekyl-curve-tree",
         "test-paths",
     ): "AssembledPaths::from_parts_unchecked: a batch of membership paths "
@@ -589,6 +596,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-fcmp` joined 2026-11-13 (multisig slice 3 PR-B), the commit whose
 # move of the end-to-end spend test into shekyl-multisig first enabled its
 # `multisig` from another crate. Both its features are PERMANENT.
+# `shekyl-p-store` joined 2026-11-20, the commit that declared `test-tamper`
+# for shekyl-engine-core's serve-fault walk. That is its only feature, and
+# it is test-only.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -628,6 +638,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-harness-spender",
         "shekyl-harness-wallet",
         "shekyl-ct-balance",
+        "shekyl-p-store",
     }
 )
 

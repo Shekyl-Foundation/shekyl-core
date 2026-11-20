@@ -39,7 +39,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::consensus_state::{epoch_close_height, settlement_epoch_at_height};
-use shekyl_engine_state::pscan_cursor::PScanCursor;
+use shekyl_engine_state::pscan_cursor::{ArchivalFold, PScanCursor};
 use shekyl_engine_state::pscan_state::{
     BondPostRecord, PFundingOutputRecord, PScanState, RetiredPersonaRecord,
 };
@@ -190,6 +190,11 @@ pub(crate) struct PScanAccrual {
     /// exhaustiveness). Advances together with `synced_height` (the verified
     /// `(height, hash)` frontier); mirrors [`PScanCursor::frontier_hash`].
     frontier_hash: [u8; 32],
+    /// The checked archival fold through `block[synced_height − 1]` (`WSS-Q16`):
+    /// the running total the next batch's first step is checked from, and each
+    /// passed shard's close height. Advances with the frontier, only through a
+    /// [`VerifiedBatch`]; mirrors [`PScanCursor::archival`].
+    fold: ArchivalFold,
     /// The cumulative **verified-covered** range `[0, synced_height)` — the range half
     /// of the SP-6 reconcile evidence. It is a [`VerifiedRange`] *token*, deliberately
     /// **not** derived from `synced_height`: it grows only through
@@ -255,6 +260,7 @@ impl std::fmt::Debug for PScanAccrual {
         f.debug_struct("PScanAccrual")
             .field("synced_height", &self.synced_height)
             .field("frontier_hash", &self.frontier_hash)
+            .field("fold", &self.fold)
             .field("covered", &self.covered)
             .field("accruals", &self.accruals)
             .field("pending_releases", &self.pending_releases)
@@ -275,6 +281,7 @@ impl PScanAccrual {
         Self {
             synced_height: BlockHeight::ZERO,
             frontier_hash: [0u8; 32],
+            fold: ArchivalFold::genesis(),
             covered: VerifiedRange::genesis_empty(),
             accruals: BTreeMap::new(),
             pending_releases: BTreeMap::new(),
@@ -301,6 +308,7 @@ impl PScanAccrual {
         Self {
             synced_height: state.synced_height(),
             frontier_hash: state.cursor().frontier_hash(),
+            fold: state.cursor().archival().clone(),
             covered: VerifiedRange::reconstruct_from_sealed_frontier(state.synced_height()),
             accruals: state.accruals().clone(),
             pending_releases: state.pending_releases().clone(),
@@ -338,10 +346,17 @@ impl PScanAccrual {
         self.frontier_hash
     }
 
+    /// The checked archival fold at the frontier — the base the next batch's
+    /// running totals are checked from (`WSS-Q16`).
+    pub(crate) fn fold(&self) -> &ArchivalFold {
+        &self.fold
+    }
+
     /// Ingest one scan-step result against its [`VerifiedBatch`]: accumulate the
     /// confirmed per-epoch funding deltas and the matched bond-posts, and advance the
     /// frontier — height, `frontier_hash`, **and** the verified-`covered` range — to the
-    /// step's end. `synced_height`, `frontier_hash`, and `covered` advance **together**.
+    /// step's end. `synced_height`, `frontier_hash`, the archival `fold` and `covered`
+    /// advance **together**.
     ///
     /// Takes the `verified` batch **by reference, not a bare frontier hash**, on
     /// purpose: it is the only thing that extends `covered`, and a `VerifiedBatch` exists
@@ -433,6 +448,7 @@ impl PScanAccrual {
         }
         self.synced_height = result.range.end();
         self.frontier_hash = verified.frontier_hash();
+        self.fold = verified.fold().clone();
         self.covered = new_covered;
         Ok(())
     }
@@ -508,7 +524,7 @@ impl PScanAccrual {
     /// `[0, synced_height)` and `from_state` reconstructs it from the sealed frontier.
     pub(crate) fn to_state(&self) -> PScanState {
         PScanState::new(
-            PScanCursor::at(self.synced_height, self.frontier_hash),
+            PScanCursor::at(self.synced_height, self.frontier_hash, self.fold.clone()),
             self.accruals.clone(),
             self.pending_releases.clone(),
             self.bond_post_matches

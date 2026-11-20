@@ -110,11 +110,19 @@ pub(crate) async fn default_fetch_scannable_block<R: Rpc>(
         .await?;
     let block = parse_block_blob(&reply.body.0, number)?;
     let transactions = bind_block_txs(&block.transaction_hashes, &reply.tx)?;
+    // A main-chain block always has a total (RPC 4.8); a `null` here is a
+    // daemon that does not answer the read it advertises.
+    let Some(Size(archival_cumulative)) = reply.archival_cumulative.0 else {
+        return Err(RpcError::InvalidNode(format!(
+            "daemon returned no archival_cumulative for main-chain block {number}"
+        )));
+    };
 
     Ok(ScannableBlock {
         block,
         transactions,
         first_output_index: Some(reply.output_index.0),
+        archival_cumulative: ArchivalLength::from_raw(archival_cumulative),
     })
 }
 

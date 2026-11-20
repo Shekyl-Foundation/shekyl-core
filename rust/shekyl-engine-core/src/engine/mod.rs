@@ -205,6 +205,7 @@ pub mod balance_view;
 // affordability check only — a guarded module the M1 import-check arm keeps
 // blind to the per-output reward vector.
 pub(crate) mod block_fetch;
+pub(crate) mod body_reconcile;
 // WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
 // `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
 // funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
@@ -280,6 +281,7 @@ pub(crate) mod drain_read;
 // lineage tag and the persisted funding record.
 pub(crate) mod drain_select;
 pub mod held_sends;
+pub(crate) mod holdings_fill;
 // SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
 // posture is named, never defaulted; no-choice + local-unreachable *refuses*,
 // never falls back to a remote/third-party node). §2b build invariant 3.
@@ -492,7 +494,9 @@ pub use submit::SubmitReceipt;
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
+pub use body_reconcile::{ShardAlarm, ShardAlarmCause, ShardAlarmReport, ShardCheck, ShardRefill};
 pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome, StakePosture};
+pub use holdings_fill::{CompleteTreeFillError, FillFailure};
 // F-D2 aggregate drain-balance read error: two-armed (transient "syncing" vs.
 // non-transient state fault), re-exported flat so the wallet/GUI can match on
 // the arm across the command boundary without reaching into the `pub(crate)`

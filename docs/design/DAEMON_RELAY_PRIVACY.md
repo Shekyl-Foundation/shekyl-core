@@ -7333,7 +7333,15 @@ about **assembly** rather than observation:
 
 > **The adversary may hold observations it cannot turn into a list.**
 
-### 31.2 §6.8 is already this analysis, and the composition argument gets stronger
+### 31.2 §6.8 is already this analysis, and the composition argument gets stronger — wire-observer row SUPERSEDED 2026-11-19 (`CBS-R1`)
+
+> **SUPERSEDED 2026-11-19 (Rick; `CBS-R1`,
+> [`COVER_BY_SHAPE.md`](COVER_BY_SHAPE.md)):** the wire-observer row below,
+> and the "free win" it concludes, set count-denial as the goal against a
+> wire observer. The goal is now shape: a transaction's pieces are
+> indistinguishable from the link's other traffic. Count-denial is a volume
+> metric and is not required. The peer row stands. The text is kept as the
+> record of the argument.
 
 §6.8's `detection = L × labelable × linkable`, with FCMP++ shutting the linker
 and the intersection attack needing **≥ 2 leaks in distinct epochs**, is

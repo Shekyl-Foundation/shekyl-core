@@ -442,6 +442,10 @@ pub fn block_show(
         section: found.bundle_references.into_iter().map(Bytes).collect(),
         section_body: found.bundle_bodies.into_iter().map(Bytes).collect(),
         draws: found.draws.map(|count| Count(u64::from(count))).into(),
+        archival_cumulative: found
+            .archival_cumulative
+            .map(|len| Size(len.to_raw()))
+            .into(),
     })
 }
 
@@ -499,6 +503,7 @@ pub fn block_list(
                 section: body.bundle_references.into_iter().map(Bytes).collect(),
                 section_body: body.bundle_bodies.into_iter().map(Bytes).collect(),
                 draws: body.draws.map(|count| Count(u64::from(count))).into(),
+                archival_cumulative: Some(Size(body.archival_cumulative.to_raw())).into(),
             }))
         })
         .collect()

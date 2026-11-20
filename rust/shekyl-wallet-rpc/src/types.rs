@@ -669,6 +669,67 @@ pub struct TxAlarmView {
     pub sent_height: i64,
 }
 
+/// What the reconcile found wrong with a shard the bond owes (`shard_alarm`,
+/// `WSS-Q17`). Keywords per IG-Q86.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShardAlarmCauseView {
+    /// The body store does not hold it.
+    Missing,
+    /// The body store holds it, and its body does not verify.
+    Corrupt,
+}
+
+/// What the refill an alarm started did (`shard_alarm`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShardRefillView {
+    /// Not finished yet.
+    Pending,
+    /// Refilled from the node, or found held by a later pass; held and
+    /// verified.
+    Refilled,
+    /// The node has discarded the shard's bodies, which come back only
+    /// through the node's recovery fetch; that does not exist yet, so the
+    /// shard cannot be refilled until it does.
+    Discarded,
+    /// Failed for another reason; the next pass retries.
+    Failed,
+}
+
+/// One shard the bond owes that needs the operator (`shard_alarm`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShardAlarmView {
+    /// The shard's id.
+    pub shard: u64,
+    /// What was wrong.
+    pub alarm: ShardAlarmCauseView,
+    /// What the refill did about it.
+    pub refill: ShardRefillView,
+}
+
+/// The last check of the body store that completed this session
+/// (`shard_alarm`): every shard the bond owed, read and verified.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShardCheckView {
+    /// The chain height the check ran at.
+    pub height: u64,
+    /// How many shards the bond owed, every one of them read.
+    pub shards: u64,
+}
+
+/// `shard_alarm` result (`WSS-Q17`): the last completed check and the
+/// session's alarms. An empty `alarms` says nothing on its own; `last_check`
+/// says whether a check has completed and when.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShardAlarmResult {
+    /// Absent until a check completes this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_check: Option<ShardCheckView>,
+    /// The alarms, ascending by shard.
+    pub alarms: Vec<ShardAlarmView>,
+}
+
 /// `discard_pending_tx` result (empty object).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DiscardPendingTxResult {}

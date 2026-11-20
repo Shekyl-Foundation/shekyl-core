@@ -432,6 +432,7 @@ mod tests {
             block,
             transactions: vec![shekyl_wire::BoundTx::whole(non_miner)],
             first_output_index: None,
+            archival_cumulative: shekyl_types::ArchivalLength::ZERO,
         };
 
         let decoded = decode_block_leaves(&scannable).expect("decodes");

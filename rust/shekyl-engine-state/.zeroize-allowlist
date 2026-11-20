@@ -97,6 +97,14 @@ rust/shekyl-engine-state/src/pending_post_block/mod.rs|bytes: [u8; CenRowName::C
 # chain to (SP-6 exhaustiveness). A block hash is published chain state;
 # no secret material.
 rust/shekyl-engine-state/src/pscan_cursor.rs|frontier_hash: [u8; 32]
+#
+# `ShardClose::hash` (sealed in the v3 cursor's archival fold) and
+# `BlockStep::hash` (one verified block's step, never persisted) are the
+# recomputed 32-byte hash of a verified block: a shard's closing block,
+# and the block a fold step advances over. Published chain state; no
+# secret material. The two declarations share one spelling, so this one
+# entry covers both.
+rust/shekyl-engine-state/src/pscan_cursor.rs|pub hash: [u8; 32]
 
 # ── pscan_state.rs ────────────────────────────────────────────────────
 #
