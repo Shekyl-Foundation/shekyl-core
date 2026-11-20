@@ -219,6 +219,10 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
 
     // (ii) P-scan: the exhaustiveness check over a range holding the
     // block, anchored on the block before it, passes; a changed body fails.
+    // Nothing before the first fill block carries archival good, so the
+    // check starts from the genesis fold, and every reported running total
+    // in the range is checked against the bound lengths of the real spends
+    // (`WSS-Q16`).
     let first = fill.height.to_raw() - 1;
     let anchor = mined[usize::try_from(first - 1).expect("fits")].hash;
     let mut batch = Vec::new();

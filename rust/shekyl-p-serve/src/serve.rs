@@ -90,15 +90,31 @@
 //! persona refused. A relay can cut a stream at a byte of its choosing and
 //! cannot write into it.
 //!
+//! # A held shard that does not read back is reported to the store
+//!
+//! Three faults end a 200 short of its signature: the store fails
+//! mid-body, it yields a byte past the length the body was opened at, or
+//! the body ends before that length. Each is counted in
+//! [`ServeCounterReader::lookup_failure_count`], and each is also reported
+//! to the store the body came from
+//! ([`HeldShardSource::report_fault`](crate::HeldShardSource::report_fault)),
+//! so the wallet's reconcile checks that shard now rather than at its next
+//! scheduled pass (`WALLET_SIDE_STORE.md` §6.7.1). The report carries the
+//! opened body and nothing of the request. A requester that stops reading
+//! is not a fault of the store, and reports nothing.
+//!
 //! # No request logging, at any level
 //!
 //! Not the path, not the peer, not the timing. The only observables are
-//! six aggregate monotone counters with no per-request structure:
+//! seven aggregate monotone counters with no per-request structure:
 //! [`ServeCounterReader::served_count`], [`ServeCounterReader::refused_count`],
+//! [`ServeCounterReader::not_held_count`],
 //! [`ServeCounterReader::lookup_failure_count`],
 //! [`ServeCounterReader::sign_failure_count`],
 //! [`ServeCounterReader::late_sign_failure_count`],
-//! [`ServeCounterReader::accept_error_count`].
+//! [`ServeCounterReader::accept_error_count`]. The fault report above
+//! is not one: it goes to the store's owner in this process, names the
+//! opened shard and nothing of the request, and is not logged.
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -395,6 +411,12 @@ impl PServeEndpoint {
         self.counters.refused_count()
     }
 
+    /// See [`ServeCounterReader::not_held_count`].
+    #[must_use]
+    pub fn not_held_count(&self) -> u64 {
+        self.counters.not_held_count()
+    }
+
     /// See [`ServeCounterReader::lookup_failure_count`].
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
@@ -674,7 +696,10 @@ async fn resolve(
     .await;
     match looked_up {
         Ok(Lookup::OutOfGate) => Resolved::Invalid,
-        Ok(Lookup::NotHeld) => Resolved::NotHeld,
+        Ok(Lookup::NotHeld) => {
+            counters.record_not_held();
+            Resolved::NotHeld
+        }
         Ok(Lookup::Held(body)) => Resolved::Held(Held {
             body,
             shard_id,
@@ -706,7 +731,9 @@ async fn resolve(
 ///
 /// * the store fails mid-body, or yields a body that is not the length it
 ///   was opened at — the response ends there, short, counted in
-///   [`PServeEndpoint::lookup_failure_count`];
+///   [`PServeEndpoint::lookup_failure_count`], and the body is reported to
+///   its store
+///   ([`HeldShardSource::report_fault`](crate::HeldShardSource::report_fault));
 /// * the body completes and the signer refuses, or returns an envelope of
 ///   the wrong length — the envelope is written as the **refusal trailer**
 ///   ([`REFUSAL_TRAILER_BYTE`] at the envelope's width), so the response
@@ -773,18 +800,21 @@ async fn write_response<S: AsyncWrite + Unpin>(
                 // Do not write a byte the head did not declare, and sign
                 // nothing.
                 counters.record_lookup_failure();
+                body.report_fault();
                 return Err(io::Error::other("shard body longer than declared"));
             }
             Folded::StoreFault => {
-                // The head is already out; all that is left is to close.
-                // The counter is the only place this is visible.
+                // The head is already out; all that is left is to close,
+                // count it, and tell the store.
                 counters.record_lookup_failure();
+                body.report_fault();
                 return Err(io::Error::other("shard body read failed mid-stream"));
             }
         }
     }
     let Some(digest) = running.finish() else {
         counters.record_lookup_failure();
+        body.report_fault();
         return Err(io::Error::other("shard body shorter than declared"));
     };
     // Every body byte is written and hashed. Sign for exactly those bytes.
@@ -895,10 +925,14 @@ pub fn serve_one_in_memory(
         match folded {
             Folded::Bytes(bytes) => out.extend_from_slice(&bytes),
             Folded::End => break,
-            Folded::PastLength | Folded::StoreFault => return InMemoryServe::Truncated,
+            Folded::PastLength | Folded::StoreFault => {
+                body.report_fault();
+                return InMemoryServe::Truncated;
+            }
         }
     }
     let Some(digest) = running.finish() else {
+        body.report_fault();
         return InMemoryServe::Truncated;
     };
     match sign_envelope(signer, &fields.transcript(shard_id, digest)) {

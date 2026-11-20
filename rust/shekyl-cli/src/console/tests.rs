@@ -691,6 +691,7 @@ fn block_show_asks_for_the_block_with_its_pow() {
         "section": [],
         "section_body": [],
         "draws": 1,
+        "archival_cumulative": 3141592,
     });
     let (addr, log) = route_server_recording(vec![(rpc::<wire::BlockShow>(), rpc_result(block))]);
     let out = run(&["block", "show", "5"], Some(&addr)).expect("renders");

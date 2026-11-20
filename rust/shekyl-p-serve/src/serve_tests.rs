@@ -959,3 +959,6 @@ mod stall;
 
 #[path = "serve_receipt_width_tests.rs"]
 mod receipt_width;
+
+#[path = "serve_fault_report_tests.rs"]
+mod fault_report;

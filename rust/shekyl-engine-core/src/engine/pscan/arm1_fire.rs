@@ -110,16 +110,25 @@ fn funding_block(keys: &ArchivalPKeys) -> ScannableBlock {
     scannable_block_for_recipient(1, &kem, keys.spend_pk.as_canonical_bytes(), &fresh_tx_key())
 }
 
-/// Recompute a block's committed tx hashes and set its `previous` pointer —
-/// the chaining `verify_exhaustive` (the production exhaustiveness gate)
-/// checks for real.
-fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
-    block.block.header.previous = previous;
+/// Recompute a block's committed tx hashes, set its `previous` pointer to
+/// `parent`'s hash (the genesis anchor without one), and stamp the running
+/// archival total its parent's plus its own bound lengths — the chaining and
+/// the archival step `verify_exhaustive` (the production exhaustiveness gate)
+/// check for real.
+fn chain(mut block: ScannableBlock, parent: Option<&ScannableBlock>) -> ScannableBlock {
+    block.block.header.previous = parent.map_or(BlockHash::NULL, |p| p.block.hash());
     block.block.transaction_hashes = block
         .transactions
         .iter()
         .map(shekyl_wire::BoundTx::txid)
         .collect();
+    let before = parent.map_or(shekyl_types::ArchivalLength::ZERO, |p| {
+        p.archival_cumulative
+    });
+    block.archival_cumulative = block
+        .archival_increment()
+        .and_then(|step| before.checked_add(step))
+        .expect("a fixture's archival total fits u64");
     block
 }
 
@@ -191,6 +200,7 @@ async fn step(
     let verified = verify_exhaustive(
         BlockHeight::from_raw(start),
         BlockHash::from_bytes(accrual.frontier_hash()),
+        accrual.fold(),
         &blocks,
     )
     .map_err(|e| format!("exhaustiveness: {e}"))?;
@@ -212,11 +222,8 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
 
     // Shared chain: filler (h0), funding (h1) — chained for the real
     // exhaustiveness gate from the genesis anchor.
-    let b0 = chain(
-        build_typical_case_scannable_block(1, &fresh_tx_key()),
-        BlockHash::NULL,
-    );
-    let b1 = chain(funding_block(&keys), b0.block.hash());
+    let b0 = chain(build_typical_case_scannable_block(1, &fresh_tx_key()), None);
+    let b1 = chain(funding_block(&keys), Some(&b0));
 
     // ---- Scenario A: cross-step (watch-cache path). --------------------
     let handle = spawn_actor()?;
@@ -229,7 +236,7 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
         ));
     }
     let key_image = expected_key_image(&keys, &accrual.funding_outputs()[0])?;
-    let b2 = chain(spend_block(key_image), b1.block.hash());
+    let b2 = chain(spend_block(key_image), Some(&b1));
     step(&handle, &mut accrual, 2, vec![b2.clone()]).await?;
     let cross_step_pruned = accrual.spent_pruned_total();
     let records_after_a = accrual.funding_outputs().len();
@@ -383,17 +390,19 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
         .map_err(|e| format!("derive wallet persona: {e}"))?;
     let scanner = crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona(&keys)
         .map_err(|e| format!("scanner: {e}"))?;
-    let b0 = chain(
-        build_typical_case_scannable_block(1, &fresh_tx_key()),
-        BlockHash::NULL,
-    );
+    let b0 = chain(build_typical_case_scannable_block(1, &fresh_tx_key()), None);
     let b1 = chain(
         build_typical_case_scannable_block(1, &fresh_tx_key()),
-        b0.block.hash(),
+        Some(&b0),
     );
     let blocks = vec![b0, b1];
-    let verified = verify_exhaustive(BlockHeight::from_raw(0), BlockHash::NULL, &blocks)
-        .map_err(|e| format!("exhaustiveness: {e}"))?;
+    let verified = verify_exhaustive(
+        BlockHeight::from_raw(0),
+        BlockHash::NULL,
+        &shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        &blocks,
+    )
+    .map_err(|e| format!("exhaustiveness: {e}"))?;
     let range =
         BlockRange::new(BlockHeight::from_raw(0), BlockHeight::from_raw(2)).ok_or("range")?;
     // The persona rides BOTH extractor inputs, as `bonded_scan_inputs`

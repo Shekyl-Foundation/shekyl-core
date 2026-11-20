@@ -43,7 +43,8 @@
 
 use std::io::{self, Write};
 
-use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
+use shekyl_crypto_hash::cshake256_32;
+use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash, ShardId, ShardRowsDigest};
 
 use crate::transaction::{pqc_auth_hash_of, prunable_hash_of, TxidParts};
 use crate::varint::write_varint;
@@ -340,6 +341,155 @@ pub fn rows_of(tx: &FrameTx<'_>) -> (Option<PqcAuthHash>, PrunableHash, Archival
     (pqc_auth_hash, prunable_hash_of(tx.prunable), archival_len)
 }
 
+/// cSHAKE256 customization of a shard's rows digest ([`ShardRowsDigest`],
+/// `WSS-Q16`). A local check: never consensus and never on a wire
+/// (`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv`, `local:store-codec`).
+pub const SHARD_ROWS_DIGEST_CUSTOMIZATION: &[u8] = b"shekyl/shard-rows-digest-v1";
+
+/// One step of a shard's rows digest: `prev` extended by one in-domain
+/// transaction's retained rows.
+///
+/// `cSHAKE256(SHARD_ROWS_DIGEST_CUSTOMIZATION, shard_le8 ‖ prev ‖ tag ‖
+/// [pqc_auth_hash] ‖ prunable_hash ‖ archival_len_le8)[..32]`, where `tag`
+/// is `0x00` for a transaction whose txid has no `pqc_auths` component and
+/// `0x01` followed by the 32-byte digest for one that has. Every step mixes
+/// the shard id, so the chain needs no seeded start: each shard begins at
+/// [`ShardRowsDigest::EMPTY`].
+///
+/// The two sides that compare a digest reach the rows differently and must
+/// land on the same bytes: the persona scan takes them from txid-bound
+/// [`TxidParts`] ([`rows_of_parts`]), a body store from a frame entry
+/// ([`rows_of`]). A transaction carries a `pqc_auths` component exactly
+/// when its segment is non-empty, on both.
+#[must_use]
+pub fn rows_digest_step(
+    shard: ShardId,
+    prev: ShardRowsDigest,
+    rows: (Option<PqcAuthHash>, PrunableHash, ArchivalLength),
+) -> ShardRowsDigest {
+    let (pqc_auth_hash, prunable_hash, archival_len) = rows;
+    let mut input = Vec::with_capacity(8 + 32 + 1 + 32 + 32 + 8);
+    input.extend_from_slice(&shard.to_raw().to_le_bytes());
+    input.extend_from_slice(prev.as_bytes());
+    match pqc_auth_hash {
+        None => input.push(0x00),
+        Some(digest) => {
+            input.push(0x01);
+            input.extend_from_slice(digest.as_bytes());
+        }
+    }
+    input.extend_from_slice(prunable_hash.as_bytes());
+    input.extend_from_slice(&archival_len.to_raw().to_le_bytes());
+    ShardRowsDigest::from_bytes(cshake256_32(SHARD_ROWS_DIGEST_CUSTOMIZATION, &input))
+}
+
+/// The retained rows a frame entry is checked against, from a transaction's
+/// txid-bound parts: the scan side of [`rows_digest_step`].
+#[must_use]
+pub fn rows_of_parts(parts: &TxidParts) -> (Option<PqcAuthHash>, PrunableHash, ArchivalLength) {
+    (parts.pqc_auth_hash, parts.prunable_hash, parts.archival_len)
+}
+
+/// A stored or freshly built frame that is not the grammar. Distinct from
+/// [`FrameError`], which the streaming fetch reader raises before it has the
+/// whole frame: here the whole frame is in hand, so it can also be short or
+/// carry bytes past its last entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameDecodeError {
+    /// The version byte or a varint failed.
+    Frame(FrameError),
+    /// The frame ends before its declared entries do.
+    Short,
+    /// Bytes follow the last declared entry.
+    Trailing,
+}
+
+impl std::fmt::Display for FrameDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Frame(e) => e.fmt(f),
+            Self::Short => f.write_str("frame ends before its declared entries"),
+            Self::Trailing => f.write_str("bytes follow the frame's last entry"),
+        }
+    }
+}
+
+impl std::error::Error for FrameDecodeError {}
+
+/// What a whole frame holds, as its rows digest sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameDigest {
+    /// Entries the frame declares.
+    pub tx_count: u64,
+    /// The rows digest of those entries under the shard the caller names.
+    pub rows: ShardRowsDigest,
+}
+
+/// Decode a whole frame and fold every entry's rows ([`rows_of`]) into the
+/// rows digest of `shard`.
+///
+/// The body store's check: a frame whose digest equals the one the persona
+/// scan sealed for `shard` carries exactly the shard's in-domain
+/// transactions' archival good, in order. A changed byte in any segment
+/// changes that entry's row digest, so it changes the result.
+///
+/// # Errors
+///
+/// [`FrameDecodeError`] when `frame` is not the grammar.
+pub fn frame_rows_digest(shard: ShardId, frame: &[u8]) -> Result<FrameDigest, FrameDecodeError> {
+    let mut rest = frame;
+    let (&version, tail) = rest.split_first().ok_or(FrameDecodeError::Short)?;
+    check_version(version).map_err(FrameDecodeError::Frame)?;
+    rest = tail;
+    let tx_count = take_varint(&mut rest)?;
+    let mut rows = ShardRowsDigest::EMPTY;
+    for _ in 0..tx_count {
+        let pqc_auth_count = take_varint(&mut rest)?;
+        let pqc_auths_len = take_len(&mut rest)?;
+        let prunable_len = take_len(&mut rest)?;
+        let pqc_auths = take_bytes(&mut rest, pqc_auths_len)?;
+        let prunable = take_bytes(&mut rest, prunable_len)?;
+        let entry = FrameTx {
+            pqc_auth_count,
+            pqc_auths,
+            prunable,
+        };
+        rows = rows_digest_step(shard, rows, rows_of(&entry));
+    }
+    if !rest.is_empty() {
+        return Err(FrameDecodeError::Trailing);
+    }
+    Ok(FrameDigest { tx_count, rows })
+}
+
+fn take_varint(rest: &mut &[u8]) -> Result<u64, FrameDecodeError> {
+    let mut decoder = VarintDecoder::new();
+    loop {
+        let (&byte, tail) = rest.split_first().ok_or(FrameDecodeError::Short)?;
+        *rest = tail;
+        if let Some(value) = decoder
+            .push(byte)
+            .map_err(|fault| FrameDecodeError::Frame(FrameError::Varint(fault)))?
+        {
+            return Ok(value);
+        }
+    }
+}
+
+fn take_len(rest: &mut &[u8]) -> Result<usize, FrameDecodeError> {
+    // A length that does not fit `usize` cannot fit the frame in hand.
+    usize::try_from(take_varint(rest)?).map_err(|_| FrameDecodeError::Short)
+}
+
+fn take_bytes<'a>(rest: &mut &'a [u8], len: usize) -> Result<&'a [u8], FrameDecodeError> {
+    if rest.len() < len {
+        return Err(FrameDecodeError::Short);
+    }
+    let (taken, tail) = rest.split_at(len);
+    *rest = tail;
+    Ok(taken)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,5 +711,167 @@ mod tests {
         let expected = parts(&bare, 6);
         assert_eq!(expected.prunable_hash, crate::empty_region_prunable_hash());
         assert_eq!(check_components(0, &expected, 0, &[], &[]), Ok(()));
+    }
+
+    fn hx(hex: &str) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex");
+        }
+        out
+    }
+
+    #[test]
+    fn the_rows_digest_step_is_pinned() {
+        // Computed independently of this crate (a pure-Python cSHAKE256 checked
+        // against NIST SP 800-185 sample 3), so a change to the preimage's
+        // layout, the customization or the tag bytes fails here.
+        let shard = ShardId::from_raw(7);
+        let first = rows_digest_step(
+            shard,
+            ShardRowsDigest::EMPTY,
+            (
+                Some(PqcAuthHash::from_bytes([0x11; 32])),
+                PrunableHash::from_bytes([0x22; 32]),
+                ArchivalLength::from_raw(1234),
+            ),
+        );
+        assert_eq!(
+            first.to_bytes(),
+            hx("9b5ce40004f0ea739b590ba783b7a816316c500ae7c1b217ae57f0931ff4ca3d")
+        );
+        let second = rows_digest_step(
+            shard,
+            first,
+            (
+                None,
+                PrunableHash::from_bytes([0x33; 32]),
+                ArchivalLength::from_raw(56),
+            ),
+        );
+        assert_eq!(
+            second.to_bytes(),
+            hx("7fb04b6fe8df92405becb1064f3ecd80adf77d9933be7bf48a6c1fe0fef577cb")
+        );
+    }
+
+    fn sample_entries() -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+        vec![
+            (2, vec![0xA1; 40], vec![0xB2; 300]),
+            (0, Vec::new(), vec![0xC3; 17]),
+            (1, vec![0xD4; 9], Vec::new()),
+        ]
+    }
+
+    fn frame_of(entries: &[(u64, Vec<u8>, Vec<u8>)]) -> Vec<u8> {
+        let txs: Vec<FrameTx<'_>> = entries
+            .iter()
+            .map(|(count, pqc_auths, prunable)| FrameTx {
+                pqc_auth_count: *count,
+                pqc_auths,
+                prunable,
+            })
+            .collect();
+        encode_frame(&txs)
+    }
+
+    #[test]
+    fn a_frames_digest_is_the_chain_over_its_entries_rows() {
+        let shard = ShardId::from_raw(3);
+        let entries = sample_entries();
+        let expected = entries.iter().fold(
+            ShardRowsDigest::EMPTY,
+            |digest, (count, pqc_auths, prunable)| {
+                rows_digest_step(
+                    shard,
+                    digest,
+                    rows_of(&FrameTx {
+                        pqc_auth_count: *count,
+                        pqc_auths,
+                        prunable,
+                    }),
+                )
+            },
+        );
+        let got = frame_rows_digest(shard, &frame_of(&entries)).expect("decodes");
+        assert_eq!(got.tx_count, 3);
+        assert_eq!(got.rows, expected);
+        assert_ne!(
+            frame_rows_digest(ShardId::from_raw(4), &frame_of(&entries))
+                .expect("decodes")
+                .rows,
+            expected,
+            "the shard id is in every step"
+        );
+    }
+
+    #[test]
+    fn the_scan_side_and_the_store_side_agree_on_an_entry_without_authorizations() {
+        // A transaction whose txid has no pqc_auths component carries an empty
+        // segment; the bound parts say `None`, and the frame entry's rows say
+        // `None` too. Both sides fold the same bytes.
+        let entry = FrameTx {
+            pqc_auth_count: 0,
+            pqc_auths: &[],
+            prunable: &[0x5E; 64],
+        };
+        let (pqc_auth_hash, prunable_hash, archival_len) = rows_of(&entry);
+        assert_eq!(pqc_auth_hash, None);
+        let bound = TxidParts {
+            hash: TxHash::from_bytes([0x01; 32]),
+            pqc_auth_hash: None,
+            prunable_hash,
+            archival_len,
+        };
+        let shard = ShardId::from_raw(0);
+        assert_eq!(
+            rows_digest_step(shard, ShardRowsDigest::EMPTY, rows_of_parts(&bound)),
+            rows_digest_step(shard, ShardRowsDigest::EMPTY, rows_of(&entry)),
+        );
+    }
+
+    #[test]
+    fn one_changed_byte_changes_the_digest() {
+        let shard = ShardId::from_raw(3);
+        let mut frame = frame_of(&sample_entries());
+        let honest = frame_rows_digest(shard, &frame).expect("decodes").rows;
+        let last = frame.len() - 1;
+        frame[last] ^= 0x01;
+        assert_ne!(
+            frame_rows_digest(shard, &frame)
+                .expect("still the grammar")
+                .rows,
+            honest
+        );
+    }
+
+    #[test]
+    fn an_empty_frame_is_the_empty_digest() {
+        let got = frame_rows_digest(ShardId::from_raw(9), &frame_of(&[])).expect("decodes");
+        assert_eq!(got.tx_count, 0);
+        assert_eq!(got.rows, ShardRowsDigest::EMPTY);
+    }
+
+    #[test]
+    fn a_short_or_overlong_frame_is_refused() {
+        let shard = ShardId::from_raw(3);
+        let frame = frame_of(&sample_entries());
+        assert_eq!(
+            frame_rows_digest(shard, &frame[..frame.len() - 1]),
+            Err(FrameDecodeError::Short)
+        );
+        let mut longer = frame.clone();
+        longer.push(0);
+        assert_eq!(
+            frame_rows_digest(shard, &longer),
+            Err(FrameDecodeError::Trailing)
+        );
+        assert_eq!(frame_rows_digest(shard, &[]), Err(FrameDecodeError::Short));
+        assert_eq!(
+            frame_rows_digest(shard, &[SHARD_FRAME_VERSION + 1, 0]),
+            Err(FrameDecodeError::Frame(FrameError::Version(
+                SHARD_FRAME_VERSION + 1
+            )))
+        );
     }
 }

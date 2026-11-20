@@ -97,8 +97,9 @@ impl fmt::Debug for PersonaServing {
 /// and the key refused its pre-flight" — the actor holding the secret is
 /// gone, decided before any shard byte is read. A persona whose key says no
 /// to everything accrues only the latter. An ordinary miss — a shard the
-/// persona simply does not hold — is the deliberate 404 and moves neither
-/// counter.
+/// persona simply does not hold — is the deliberate 404 and moves neither:
+/// it moves `not_held`, its own count, which the health probe does not
+/// alarm on (`WSS-Q17`).
 ///
 /// `late_sign_failures` is not a 503 at all: the pre-flight said yes, the
 /// whole shard went out, and the signer then refused, so the response
@@ -134,6 +135,11 @@ pub struct ServeCounters {
     pub served: u64,
     /// Connections refused over the in-flight cap.
     pub refused: u64,
+    /// Valid requests for a shard the store does not hold: the 404
+    /// (`WSS-Q17`). Noisy by design — a probe moves it as surely as a lost
+    /// bonded shard — so it is a backstop, not an alarm; the reconcile is
+    /// the alarm.
+    pub not_held: u64,
     /// Requests the serving store could not answer: its tip height for the
     /// gate, or the shard's bytes (I/O, pruned). Not misses.
     pub lookup_failures: u64,
@@ -148,11 +154,11 @@ pub struct ServeCounters {
 }
 
 impl ServeCounters {
-    /// One reading of the six totals through a detached reader.
+    /// One reading of the seven totals through a detached reader.
     ///
     /// The one place the endpoint's getters are gathered into this struct:
     /// [`PersonaServingHost::counters`] reads through it, and so does a
-    /// probe holding only the [`ServeCounterReader`]. The six loads are
+    /// probe holding only the [`ServeCounterReader`]. The seven loads are
     /// not one atomic snapshot; each total is monotone and the consumer
     /// windows them, so a request landing between two loads moves the
     /// next window rather than this one.
@@ -161,6 +167,7 @@ impl ServeCounters {
         Self {
             served: reader.served_count(),
             refused: reader.refused_count(),
+            not_held: reader.not_held_count(),
             lookup_failures: reader.lookup_failure_count(),
             sign_failures: reader.sign_failure_count(),
             late_sign_failures: reader.late_sign_failure_count(),
@@ -181,6 +188,7 @@ impl ServeCounters {
         Self {
             served: self.served.saturating_sub(earlier.served),
             refused: self.refused.saturating_sub(earlier.refused),
+            not_held: self.not_held.saturating_sub(earlier.not_held),
             lookup_failures: self.lookup_failures.saturating_sub(earlier.lookup_failures),
             sign_failures: self.sign_failures.saturating_sub(earlier.sign_failures),
             late_sign_failures: self
@@ -607,16 +615,6 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         }
         let pinned = self.pinned_serve_set();
         pinned.staleness(&self.pinner, bound).await
-    }
-
-    /// The served store's ingest tip, read through this host's pinner.
-    ///
-    /// # Errors
-    ///
-    /// [`PinError`] as [`PinnedServeSet::ingested_tip`].
-    pub async fn ingested_tip(&self) -> Result<shekyl_curve_tree::BlockHeight, PinError> {
-        let pinned = self.pinned_serve_set();
-        pinned.ingested_tip(&self.pinner).await
     }
 
     /// The bound loopback address the onion targets.

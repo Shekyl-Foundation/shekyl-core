@@ -64,7 +64,9 @@
 //! material — the signer is the host's object, and the serve loop sees
 //! only the signature it returns — and, since [`StoreShardProvider`] reads
 //! through a [`HeldShardSource`] that returns plaintext chunk copies, it can
-//! neither write to the store nor decrypt it.
+//! neither write to the store nor decrypt it. What it can say back is that
+//! a body it opened did not read back as opened
+//! ([`HeldShardSource::report_fault`]).
 //!
 //! **Is not:** a pass-record builder, a key holder, the *definition* of a
 //! wire format (the body is the provider's; `shekyl-wire` owns its frame),

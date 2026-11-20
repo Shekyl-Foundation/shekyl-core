@@ -198,9 +198,9 @@ length rows (S-CHAIN-W) and S-PRUNE's `b_*` forward pass, with
 `shard_of(cumulative_archival_len)` (`CHAIN_RULES_SLICE_8.md` §3.4). The
 wallet fill reads the cumulative archival length per block and checks it
 by the increment (`WALLET_SIDE_STORE.md` §6.4.3, `WSS-Q16`). `close_height(k)`
-is already readable as `shard_coverage`'s `freeze_height`. The field lands
-with the fill build. Admission reads the fold, the price, and the viability
-check above.
+is already readable as `shard_coverage`'s `freeze_height`. The field is
+`archival_cumulative` on the block read (RPC 4.8), built with the fill.
+Admission reads the fold, the price, and the viability check above.
 
 **Rule 94.** This document mints no family. The answer's family is `CEN-J15`
 (#983), stamped on this document's row in
@@ -215,8 +215,8 @@ at the lane, and the lane's row points back.
 - **`WSS-Q6` / `WSS-Q10`'s daemon-lane halves.** The admission rule those
   halves were waiting on is `CEN-J15` (§4), built. What remains for the
   wallet fill is the per-block cumulative length (`WSS-Q16`,
-  [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.4.3), landing with that
-  build. `close_height(k)` is already readable as `shard_coverage`'s
+  [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.4.3), built with the
+  fill (`archival_cumulative`, RPC 4.8). `close_height(k)` is readable as `shard_coverage`'s
   `freeze_height`. The A4 / S-PRUNE gate is dissolved (§4.1).
 - **`CompleteTree`'s *owed* set** is *"every closed, final shard"*
   (`WALLET_SIDE_STORE.md` `WSS-Q10`), the same predicate the admission guard

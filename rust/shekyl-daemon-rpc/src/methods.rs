@@ -656,6 +656,7 @@ pub(crate) mod tests {
                     bundle_references: Vec::new(),
                     bundle_bodies: Vec::new(),
                     draws: Some(2),
+                    archival_cumulative: Some(shekyl_types::ArchivalLength::from_raw(40_000)),
                 }),
                 chain_height,
             })

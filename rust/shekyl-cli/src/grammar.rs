@@ -209,6 +209,7 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         ShardListMine => bare(id, args, ResolvedCommand::ShardListMine),
         ShardShow => one_id(id, args, |shard_id| ResolvedCommand::ShardShow { shard_id }),
         ShardFetch => parse_shard_fetch(args),
+        ShardAlarm => bare(id, args, ResolvedCommand::ShardAlarm),
         MineStart => parse_mine_start(args),
         MineStop => bare(id, args, ResolvedCommand::MineStop),
         MineStatus => bare(id, args, ResolvedCommand::MineStatus),
@@ -1033,6 +1034,7 @@ mod tests {
     #[test]
     fn tx_alarm_and_tx_resend_parse() {
         assert!(matches!(parse("tx alarm"), ResolvedCommand::TxAlarm));
+        assert!(matches!(parse("shard alarm"), ResolvedCommand::ShardAlarm));
         match parse("tx resend abcdef") {
             ResolvedCommand::TxResend { txid } => assert_eq!(txid, "abcdef"),
             other => panic!("expected tx resend, got {other:?}"),

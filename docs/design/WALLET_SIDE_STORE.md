@@ -7,8 +7,9 @@ and the rows that hang off it are re-keyed to the freeze-epoch pull window
 questions it surfaced, `WSS-Q15`…`WSS-Q18` (§6's table), are **RULED 2026-11-18**. **Round opened 2026-09-18**, **Round 0 (pre-flight)
 executed** at `dev` = `8494f2a27` (the #779 merge). **Round 1 RULED 2026-09-19**
 (maintainer; §6's table, each ruling line-local): **every question through
-`WSS-Q18` is ruled**. What is unbuilt is the **fill** (§6.7.4's PR 3), which is
-where `WSS-Q16`'s per-block field lands. Admission is `CEN-J15`, built.
+`WSS-Q18` is ruled**. The **fill** (§6.7.4's PR 3) is **BUILT 2026-11-19**,
+with `WSS-Q16`'s per-block field (§6.5.10). What is unbuilt is PR 5's
+deletions and the `WSS-Q9` handoff. Admission is `CEN-J15`, built.
 `WSS-Q1`(b)'s four measurements are **gradable** bench work, not an open decision. **Substrate re-swept at
 `dev` = `306af9bae`** — `8494f2a27` is an ancestor; every file cited here is
 unchanged or cosmetically changed, so no finding moves, and the one substantive
@@ -455,8 +456,8 @@ is claimed by this lane that its owning doc does not assign here.**
 
 `WSS-Q1` is the axis; the rest inherit its answer. **`WSS-Q1`…`WSS-Q18` are
 RULED** — Q1–Q14 on 2026-09-19 (PR #790), Q15–Q18 on 2026-11-18. Each row's
-last column carries its disposition. What is unbuilt is the fill (§6.7.4's
-PR 3), where `WSS-Q16`'s per-block field lands. Admission is `CEN-J15`,
+last column carries its disposition. The fill (§6.7.4's PR 3) is built,
+with `WSS-Q16`'s per-block field (§6.5.10). Admission is `CEN-J15`,
 built. `WSS-Q1`(b)'s four measurements are bench work.
 
 | Q | Question | Input | Default proposed |
@@ -477,7 +478,7 @@ built. `WSS-Q1`(b)'s four measurements are bench work.
 | **WSS-Q11** | **What happens to the landed `SEGMENT_LEAF_COUNT` / `leaves_per_segment()` tie when the freeze deletes** (posed 2026-09-18 as "at E4"; the deletion is the cutover's, `DEL-008`) | `PDM-Q-F33` (ii); `WSS-9`; the FOLLOWUPS partition row | **RULED 2026-09-19.** **The tie is LANDED, not owed** — #780 put one home in `shekyl_fcmp::tree` with the consensus-side compile-time assert in `shekyl-archival-retention`'s production lib, red-checked at `segment_leaf_count = 26030`, and the CT-1 row closed with its dedup. What is open: it **dies at the cutover with the freeze** (`DEL-008`; *was* "at E4 / S-ARCH", corrected 2026-10-10) and is **not re-pointed at `SHARD_BYTES`** (`WSS-9`: one is a leaf count, the other a byte threshold). Its one possible survival is as the boundary of a proving-side subroot cache, which is `WSS-Q2`'s |
 | **WSS-Q15** | **Fill-then-post for `CompleteTree`** | `WSS-Q10`; `ClosedUniverse::final_before`; §6.5.3; §6.5.9 | **RULED 2026-11-18.** The owed set is the closed-and-final universe as consensus types it (`ClosedUniverse::final_before`, `shekyl-chain-rules/src/archival/close.rs:208`). The wallet takes that set from its daemon, or reads it off §6.4.3's checked cumulative length. It keeps no version of its own. A post is refused unless the store holds every shard in the set at assembly. After the post, each newly final shard uses the same fill as every other shard (§6.5.4). An already-joined tree holds a shard before the epoch open at which the shard enters `final_count` (§6.5.9) |
 | **WSS-Q16** | **The offset before shard `k`** | `SHT-Q2`; §6.4.3; the block read | **RULED 2026-11-18.** The cumulative archival length rides the block read every wallet already makes, so no shard-specific query tells a daemon which shards are about to be bonded. The check, the one trusted base, and shard 0's zero are §6.4.3. The field lands in the fill build with its daemon RPC wire bump and its `INPUT_GRAMMAR.md` Part C row |
-| **WSS-Q17** | **The missing-shard alarm** | §6.7.1; rule 82; §6.2.6 | **RULED 2026-11-18.** The alarm is the reconcile's, in the `tx_alarm` shape (§6.7.1): a read the operator sees, re-derived at open, no persisted alarm state. It starts the refill on the §6.5.4 path. A counter of 404s on shards the store does not hold is the backstop. The 404 means only "not held", and the serving path stays blind to the serve set |
+| **WSS-Q17** | **The missing-shard alarm** | §6.7.1; rule 82; §6.2.6 | **RULED 2026-11-18.** The alarm is the reconcile's, in the `tx_alarm` shape (§6.7.1): a read the operator sees, re-derived at open, no persisted alarm state. It starts the refill on the §6.5.4 path. A counter of 404s on shards the store does not hold is the backstop. The 404 means only "not held", and the serving path stays blind to the serve set. **A serve fault on a held shard starts its reconcile at once (RULED 2026-11-20):** the serving path reports the opened shard, and the reconcile checks it if the bond owes it, the alarm and then the refill; the shard row stays unsealed (§6.7.1). **The read carries the last completed check (RULED 2026-11-20):** beside the alarms, `shard_alarm` gives the chain height of the last pass that read every owed shard and how many it read, absent until one completes, because an empty list alone is also the answer before the first check and while none can run |
 | **WSS-Q18** | **The fill build's boundary** | §6.7.4; `WSS-Q8`; `WSS-Q13` | **RULED 2026-11-18.** The build is §6.7.4's PR 3: the fill, the refusal, the reconcile with its alarm and counter, and `caught_up` moved off the curve tree's ingest tip onto the synced daemon height. Today `caught_up` (`stake_engine/serving/task.rs:738-745`) still reads that tip (`serve_set_source.rs:472-484`). PR 4 has landed (`StoreShardProvider` reads the body store, #1261). The release gate already erases from the body store (`EraseShards`, `body_store_actor.rs:203`). The build deletes whatever it leaves without a reader; what `PinnedServeSet` still needs for another job is named with the PR that deletes it |
 
 ### 6.1 `WSS-Q1` — re-grounded on the firewall (steering review, 2026-09-18)
@@ -525,7 +526,7 @@ both now ruled:
 
 **What is still open after the ruling:** nothing on this axis — both sides are
 ruled (`WSS-Q1`(a) and (b)), and `WSS-Q3` with them. What remains is bench work
-(§6.3.4) and the fill build. The offset's shape is ruled (§6.4.3,
+(§6.3.4). The fill is built (§6.5.10), and the offset with it (§6.4.3,
 `WSS-Q16`). Admission is `CEN-J15`. **The mechanics
 findings are retained as supporting evidence, not as grounds** — `WSS-6` says
 the one-file arrangement was never chosen, and `WSS-5` says it cannot be made
@@ -969,9 +970,27 @@ cum(h) − cum(h − 1) = Σ archival lengths in the block
 
 A break is refused at fill, before anything is bonded, as a loud
 operator-facing error (rule 82). The only adopted word is `cum` at the
-wallet's restore height. Every later block is checked against it. The field
-lands in the fill build with its daemon RPC wire bump and its
-`INPUT_GRAMMAR.md` Part C row.
+wallet's restore height. Every later block is checked against it.
+
+**As built.** The field is `archival_cumulative` on `block_show` and
+`block_list` (RPC 4.8, `INPUT_GRAMMAR.md` `IG-Q112`), and the wallet refuses
+a main-chain block that lacks it (`block_fetch.rs`). The persona scan makes
+the check: each block's reported total must equal the previous checked total
+plus the lengths its own transactions' txids bind
+(`engine/pscan/exhaustiveness.rs`, `archival_step`), and a total that does
+not add up halts the scan (`ArchivalStepMismatch`). The persona scan verifies
+the chain from genesis, so its restore height is genesis and its base is
+shard 0's zero: no `cum` is adopted. The cursor seals what it checked, per
+closed shard: the closing block's height and hash, the checked total
+entering it, and the shard's rows digest (§6.4.5; `ShardClose`,
+`shekyl-engine-state` `pscan_cursor.rs`). The fill walks the shard's blocks
+pinned to those records by hash and by continuity, places the transactions
+from the sealed total, and must land on the sealed total at the close
+(`stake_engine/fill.rs`). A scan halted on a break leaves the fill without
+the final shards it needs, so the fill refuses (`-29538
+STAKE_SCAN_BEHIND`). A walk off the scanned chain, or totals that do not
+match the sealed ones, refuses `-29540 STAKE_DAEMON_MISMATCH`. Either way
+nothing is written and nothing is bonded.
 
 `c₀`, the cumulative length before shard `k`'s first transaction that carries
 archival good, is that checked series. It is not a second daemon word.
@@ -1012,6 +1031,23 @@ lied at the restore base.
    (`WSS-Q7`, §6.6).
 3. **Unwinding `WSS-13`** — the serve set and the posture move out of the
    curve-tree actor into the `StakeEngine`.
+
+#### 6.4.5 The rows digest — how the store checks what it holds (built 2026-11-19)
+
+A frame (`shekyl-wire` `shard_frame.rs`) carries each in-domain transaction's
+`pqc_auths` segment and prunable region and nothing else. So the three rows
+each entry is checked against — its `pqc_auth_hash` (or none), its
+`prunable_hash` and its archival length — can be derived from the frame's own
+bytes (`rows_of`), and independently from txid-bound skeleton rows. The
+**rows digest** (`ShardRowsDigest`) is a cSHAKE256 chain over those rows in
+storage order, under `shekyl/shard-rows-digest-v1` with the shard id in every
+step (`rows_digest_step`; registered, mechanism 1, `local:store-codec`). The
+persona scan folds it from bound rows as it verifies the chain, and seals it
+per closed shard. `frame_rows_digest` folds it from a frame. Equal digests
+mean the stored frame holds exactly the shard's archival good. The fill
+checks the frame it built against the sealed digest before writing. The
+reconcile (§6.7.1) opens every chunk of every stored frame under the store
+key and checks it against the same digest, with no daemon read.
 
 ### 6.5 When the fill runs — `WSS-Q4` (**RULED 2026-09-19; re-keyed 2026-11-19 to the freeze-epoch window**)
 
@@ -1136,8 +1172,10 @@ holds that set (`WSS-Q15`). The deadlines are §6.5.9.
   transaction read in its **full form** — `tx_list` without `prune`
   (`shekyl-daemon-rpc/src/reads.rs:624`; `PDM-Q10` as amended by `SB-Q2`).
   Every other wallet read asks for `prune` and binds the skeleton
-  (`block_fetch.rs`); the fill is the one full-form reader, and it rides
-  `P`'s transport. `SB-Q2` left this read to this round
+  (`block_fetch.rs`); the fill is the one full-form reader. As built it
+  rides the persona's loopback transport to the wallet's own node
+  (`LocalNodeRpc`); a daemon address that is not loopback refuses `-29541
+  STAKE_LOCAL_NODE_REQUIRED`. `SB-Q2` left this read to this round
   ([`DRS_SB_BELOW_HORIZON.md`](DRS_SB_BELOW_HORIZON.md), "Out of scope, by
   prior ruling").
 - **After the daemon has discarded the shard:** a full-form read answers
@@ -1146,7 +1184,11 @@ holds that set (`WSS-Q15`). The deadlines are §6.5.9.
   come from the **`WSS-Q9` handoff**: the daemon's episodic recovery fetch
   hands the shard across and retains nothing. The wallet has no recovery
   client. `CompleteTree` uses this same handoff. A second reader in the
-  wallet would be a second source for one event.
+  wallet would be a second source for one event. **The handoff is not
+  built.** As built, a fill that meets `archived` writes nothing and refuses
+  `-29539 STAKE_SHARD_DISCARDED`, whose message says the bodies come back
+  only through the node's recovery fetch, which does not exist yet. The
+  reconcile's alarm records the refill as `discarded`.
 
 Both verify against the txid identically (§6.4), **so which of the two
 delivered the bytes is not a correctness variable**, only a latency and
@@ -1188,16 +1230,20 @@ decision, at the bond post, over a set that cannot later change.
   persona, and the fetcher is a circuit, not an identity. The most it links
   is *"the new holder of `k` fetched `k`"*. **No mitigation warranted.**
 - **Losing a bonded shard** (disk failure, corruption) uses the **same path**:
-  refill, on the same path as a fill (§6.5.4), verified by txid. The slash
+  refill, on the same path as a fill (§6.5.4), verified by txid and against
+  the sealed rows digest (§6.4.5). The slash
   exposure in between is the operator's trade, which is how `PDM-Q9` frames
   archiver-store durability. Detecting the loss is the reconcile's
   (`WSS-Q17`, §6.7.1).
 
 #### 6.5.8 Where the fill driver lives
 
-**On the `StakeEngine` side, with `P`'s store.** It asks the daemon for full
-transactions through the engine's daemon client on `P`'s transport, verifies
-them, writes the shard frame
+**On the `StakeEngine` side, with `P`'s store.** As built: one shard's fill
+is `stake_engine/fill.rs`; what is owed, what is final and the fill-only token
+are `engine/holdings_fill.rs`; the reconcile is `engine/body_reconcile.rs`,
+run by the cadence driver's body-store leg (`engine/cadence/body_store.rs`).
+The fill asks the wallet's own node for full transactions on the persona's
+loopback transport, verifies them, writes the shard frame
 ([`shekyl-wire/src/shard_frame.rs`](../../rust/shekyl-wire/src/shard_frame.rs),
 `write_frame`) and hands **verified bytes** to the body-store actor, the
 store's one owner. **The store never talks to the daemon** (`R1`, `WSS-17`),
@@ -1250,6 +1296,38 @@ A market bond is first drawn in the epoch after its join, and the post is
 refused until the named shards are held, so fill-then-post is its deadline.
 The discard deadline is what forces a join-at-discard batch to be filled
 during the freeze epoch, before the post is admissible (§6.5.2).
+
+#### 6.5.10 As built (2026-11-19)
+
+- **Fill first, as a type.** `FilledHoldings` (`holdings_fill.rs`) follows
+  `DurableTxBytes`: a private field, no `Clone`, minted only by
+  `fill_complete_tree` and `fill_market` once every owed shard is held.
+  `Engine::assemble_bond_post` and the stake engine's `AssembleBond` and
+  `PlanBondPost` take it, so no vin is built from holdings a fill did not
+  return.
+- **Owed and final.** A shard is final when its close sits at least the
+  process's reorg cap below the claimed tip (`ClosedUniverse::final_before`
+  for the next block), read from the sealed fold. A `CompleteTree` bond owes
+  every final shard, and its fill needs the scan to have verified that far
+  (`-29538 STAKE_SCAN_BEHIND`). A market bond's named shards must each be
+  final. The P-scan's production horizon reads the same latched cap.
+- **Where it runs.** `first_stake` takes the wallet's daemon target and
+  fills after the preflight funding sweep and before the durable point, so
+  a fill refusal is W1-clean. Each refusal has its own code, `-29538…-29544`
+  (`wallet_rpc.yaml`).
+- **The support deadline.** The body-store leg runs a pass on every chain
+  advance, one pass at a time, on its own runner task. A newly final shard
+  is pulled at the first pass after the scan's fold shows it final, so a
+  shard final in its close epoch is held before its freeze epoch opens. The
+  one-block residual is §6.5.9's. A serve fault on a held shard wakes a
+  pass at once (§6.7.1). Closing the wallet stops the runner: the leg's
+  teardown aborts it and waits until it has dropped the engine and the
+  store handles a pass holds.
+- **The market posture** still refuses before any fill (`-29505`) until
+  shard selection exists. `fill_market` is test-built, used by the emission
+  walk's market-bond fixture. That fixture fills in the close epoch, before
+  the discard block, and posts at the first admissible join (§6.5.2), as the
+  selection round it stands in for must.
 
 ### 6.6 The serving read — `WSS-Q7` (**RULED 2026-09-19**)
 
@@ -1367,22 +1445,22 @@ future scheme that turns out to need it. **Nothing to mitigate.**
 `R-A` / `R-B` (§1.2), `WSS-Q14` and `WSS-Q8` are **ruled**. §6.7.4's PRs 1 and
 2 **landed 2026-09-20** (#791, #792). PR 4 **landed 2026-11-02** (#1261): the
 provider reads the body store, and `ServingReader` is deleted. **PR 3 is
-unbuilt**: the fill, the refusal, the reconcile, and `caught_up` moving off
-the curve tree. **PR 5's remainder is unbuilt**: the pin messages and the
-posture tables. The unwind table is the shape of what is left. Each unbuilt
-PR is separately authorized.
+BUILT 2026-11-19** (the `WSS-Q4` build): the fill, the refusal, the
+reconcile, and `caught_up` over the synced height. **PR 5's remainder is
+unbuilt**: the pin messages and the posture tables. The unwind table marks
+what is built; the rest is PR 5's, separately authorized.
 
 #### 6.7.1 The unwind, surface by surface
 
 | Today | After |
 | --- | --- |
-| `PinServeSet` on the curve-tree actor (`engine/curve_tree_actor.rs:362-389`) | A **reconcile** message on `P`'s store actor under `StakeEngine`. *Held but not owed* → the release gate, then erasure. *Owed but not held* is data loss, or a shard that has entered the owed set and not yet been filled (§6.5.9). The reconcile compares the two, raises the alarm in the `tx_alarm` shape — a read the operator sees, re-derived at open, no persisted alarm state (`WSS-Q17`) — and starts the refill on the §6.5.4 path. A counter of 404s for a shard the store does not hold is the backstop. The 404 means only "not held". The serving path stays blind to the serve set (§6.2.6) |
+| `PinServeSet` on the curve-tree actor (`engine/curve_tree_actor.rs:362-389`) | **Built (the reconcile):** a pass on every chain advance, on its own task (`engine/body_reconcile.rs`, the cadence body-store leg). It reads what every bonded persona's connected record owes. It pulls quietly what became owed since the session's last pass, the routine pull (§6.5.9). Then, at the session's first pass, at each settlement epoch and after a pull that filled, it opens every owed shard's frame, checks that the authenticated chunks add up to the length the store's unsealed row records, and checks the frame's rows digest (§6.4.5). Between those, each pass checks again every owed shard whose refill failed, and refills it. *Owed but not held*, or held and not verifying, is **data loss**: an alarm (`missing` / `corrupt`) and a refill on the §6.5.4 path, surfaced through `shard_alarm` in the `tx_alarm` shape, beside the last completed check: the height of the last pass that read every owed shard and how many it read (`WSS-Q17`; nothing stored). **A serve fault wakes a pass at once:** a held body that does not read back as it was opened (the store failing mid-body, a body longer or shorter than the length it was opened at) ends that serve short, moves `lookup_failure`, and reports the opened shard to the store's owner (`HeldShardSource::report_fault`). The pass it wakes checks each reported shard the bond owes, raises the alarm and refills what is lost, so a damaged shard is repaired at its first bad serve rather than at the next scheduled pass. A report of a shard whose alarm is unanswered (`failed`, `discarded`) wakes nothing, so a requester drawing on it again does not make the wallet ask its node again; only an opened body can be reported, so a requester cannot name a shard into the queue. The backstop is the serve path's `not_held` counter, which counts 404s for shards the store does not hold and means only "not held"; the serving path stays blind to the serve set (§6.2.6): it reports a fault on a shard it opened, and the reconcile decides what is owed. *Held but not owed* stays the release gate's, which already erases from the body store (`EraseShards`). The curve-tree pin message remains, read by the staleness witness, until PR 5 |
 | The `absent_since` ledger and the two-epoch gate (`serve_set_source.rs:79-190`, `:284`) | **Moves unchanged** — in memory, failing toward *retention* on restart. Becomes **safety-critical**, because release now deletes. **Takes `SyncedChainFacts`** (`WSS-25`, `WSS-Q14`) |
 | `PinCompleteTreePrefix` and the prune-disabled posture (`curve_tree_actor.rs:391-402`) | **Deleted.** The posture existed to stop a prune the new store does not have. `CompleteTree` becomes a reconcile whose *owed* set is **`ClosedUniverse::final_before`** (`WSS-Q15`), read from the daemon or from §6.4.3's checked cumulative length — keeping the `COMPLETETREE_ACTIVATION` D-1/D-5 split: the **store** does not care about holdings kind, only the **owed computation** does |
 | `ServingReader`, `same_store` | **Deleted.** They exist only because two actors shared one redb lock (`WSS-6`). `P`'s store gives the provider its own read handle. **DELETED 2026-11-02 (#1261)**, ahead of PR 5 below; *as landed* the provider reads `P`'s store by message to its owning actor, not through a handle (`WSS-Q13`) |
 | `pinned_segments`, `prune_disabled` in `.curvetree` | **Gone. `.curvetree` then carries no `P` state, which closes `WSS-18`** |
 | `HostSigner::own_height` (`shekyl-p-host/src/signer.rs:97-101`) | **Re-sourced** (§6.7.2) |
-| `caught_up` (`stake_engine/serving/task.rs:738-745`) | **Today** it compares the bond record's `as_of_height` with the curve tree's ingest tip: `host.ingested_tip()` reads `EngineServeSetPinner::store_facts`, which reads `curve_tree.store_facts` (`serve_set_source.rs:472-484`). The body store holds no chain position. **PR 3** moves the comparison to the synced daemon height (`WSS-Q14`, `WSS-Q18`). Whether the bonded shards are held is the reconcile's job, not this check. `568-572` was this function's old line |
+| `caught_up` (`stake_engine/serving/task.rs`) | **Built:** the bond record's `as_of_height` against the wallet's **synced height** (`WSS-Q14`, `WSS-Q18`). Whether the bonded shards are held is the reconcile's job, not this check. `PersonaServingHost::ingested_tip` and `PinnedServeSet::ingested_tip`, left without a reader, are deleted |
 
 **Unchanged constraints, restated because the unwind is where they would be
 lost:** §6.2.6 (the provider stays blind to the serve set; **the release gate
@@ -1435,12 +1513,18 @@ matters.
    delete on an unsynced view.
 3. **`P`'s store, the fill driver and reconcile**, with the release gate moved
    in and taking the synced type, and `caught_up` moved off the curve tree's
-   ingest tip (§6.7.1, `WSS-Q18`).
+   ingest tip (§6.7.1, `WSS-Q18`). **BUILT 2026-11-19** (the `WSS-Q4`
+   build): §6.5.10, §6.7.1. The release gate already erased from the body
+   store.
 4. **Switch the provider** (`shekyl-p-serve`) to `P`'s store. **LANDED**:
    `StoreShardProvider` reads the body store (#1261).
 5. **Delete** the pin messages, `ServingReader` and the posture tables from
    `shekyl-curve-tree`. *`ServingReader` deleted 2026-11-02 (#1261, the
-   close-race fix); the pin messages and posture tables remain.*
+   close-race fix). The pin messages and posture tables remain, read only by
+   the serving witness's staleness reading (`store_facts`,
+   `pruned_frozen_segments`), which PR 5 retires with them. Already
+   test-only: `LeafStore::open_frozen_segment_body`,
+   `LeafStore::prune_frozen`, `PinnedServeSet::dropped_pins`.*
 
 **Rule-22 note.** PRs 1 and 2 are **scoped as separate PRs with a named
 reason — they do not depend on this round** — and are **not deferrals**: PR 1
@@ -1704,6 +1788,7 @@ What must be true before genesis for this lane, in mission order.
 
 | Date | Decision |
 | --- | --- |
+| 2026-11-19 | **PR 3 BUILT (the `WSS-Q4` build, `WSS-Q15`…`WSS-Q18`).** The fill from the wallet's own node, verified by txid and against the sealed rows digest (§6.4.5); `FilledHoldings` as the only input `assemble_bond_post` takes; `archival_cumulative` on the block read, checked per block by the persona scan (§6.4.3); the reconcile, its `shard_alarm` read and the `not_held` counter (§6.7.1); `caught_up` over the synced height. Past discard the fill refuses `-29539` and names the recovery fetch, which is not built (§6.5.4). §6.5.10. |
 | 2026-11-19 | **Round 2 corrected in place.** One byte source (§6.5.4): the local full-form read while the daemon holds the shard, then `archived` and the `WSS-Q9` handoff. The below-horizon read returns no body (`SB-Q2`). The offset has one home (§6.4.3): the restore-height base, the per-block increment, shard 0's `c₀ = 0`, and the predecessor that carries archival good. Join timing follows `first_admissible_compact_join` from `w = 0`, so every shard that closed in epoch 0 joins at the discard block. An already-joined `CompleteTree` holds a shard before the epoch open at which it enters `final_count`; the open block where finality and drawability coincide is the named residual (§6.5.9). `caught_up` still reads the curve tree's ingest tip; PR 3 moves it. `WSS-Q15`…`WSS-Q18` are rows in §6's table. |
 | 2026-11-19 | **SUPERSEDED THE SAME DAY by the row above.** **Round 2 — `WSS-Q4` re-keyed to the freeze-epoch window and the `W`-byte partition (Rick's go on the fill, 2026-11-18).** §6.5 restated: the pull window is the freeze epoch (`PDM-Q9` amended 2026-09-22), every daemon discards at the first block of `close_epoch(k) + 2` (`PDM-Q2` re-ruled), and a post naming `k` connects no earlier than the window opens (`CEN-J15`'s pricing pass, §6.5.2), so the deadline that binds the fill is the end of the freeze epoch. §6.4.3 re-keyed to `SHT-Q2`: every boundary fact is checkable from txid-bound lengths except the offset before the shard. §5 rows 1, 2, 4 and 5, `WSS-15`'s premise, §5.1 items 1 and 3, `WSS-Q6`, and §6.6.2's body description re-keyed. `WSS-Q15`…`WSS-Q18` posed, then **RULED 2026-11-18** (Rick): `CompleteTree` fill-then-post over the consensus-typed closed-and-final universe; the offset as a per-block fact on the block read with a per-block increment check; the alarm in the reconcile in the `tx_alarm` shape, with a blind not-held 404 counter as backstop; the build is §6.7.4's PR 3 with `caught_up` over the synced height and the deletions it leaves without a reader. Selection inside the freeze window recorded in §6.5.2. |
 | 2026-09-20 | **`WSS-Q1`(b)'s first real measurements, and one more ruled row moved.** *Spend edge, x86 dev box:* the worst-case window (765 600 leaves over 725 blocks) replays in **73.9 s** on a quiet box, reproducing to 0.09 % across two runs and now **verified** — the graded depth-6 path checks against its own root, which no earlier run had established (§7.1) against a **1.105 s** denominator, so the **2 s absolute floor** binds (the 15 % arm is 0.17 s) and the delta misses by **~37×** on hardware far faster than the rig — the direction is settled even though the Cortex-A72 magnitude is not, so row 2's pre-registered *amortized replay first* is the landing, and (b) reopens only if the amortized form also fails. **The number that decides what that miss means:** the same replay amortized is **102 ms per block** against a 120 s cadence — under 0.1 %, ~1 % at a 10× A72 multiplier — so the refresh side is affordable and the amortized form's real costs are the deep-reorg recompute (rare, rule-82) and the state discipline. Now emitted as `per_block_advance_worst_case_s` rather than left to a reader's calculator. *First proving denominator for the project:* **1.105 s**, 2-in canonical, depth 6, x86; the rig run yields the A72 figure free. *Open edge, live against `shekyld --regtest`:* 224 µs round-trip floor, **0.19 s** projected over the 790-block buffer. **Its attribution is WITHDRAWN** (2026-09-20, second review pass): `round-trip bound` came from clamping `floor × round_trips` to the total, and at these figures the floor term *exceeds* the projection, so the clamp manufactured a 100 % round-trip share out of two instruments disagreeing. The harness now reports `Inconsistent` and names **no** remedy — **do not act on the companion-file-versus-pipelining choice from this run.** What is empirical is the **measured** half: `2.0` round trips per block, read from each block's shape (`get_transactions` never fires on coinbase-only blocks), which is the support §6.3.4 row 3's amendment actually needs. **Row 3's corpus density is amended above** as a consequence: grading at row 2's adversarial density would have pre-written the companion file, so this row grades at the full-reward zone and the adversarial window is an accepted rule-80 long-tail. The thin-corpus problem is **enforced away**, not noted: `open_edge` withholds its verdict below half the graded density, and the live run reads *"0.5 % — TOO THIN TO GRADE"*. |

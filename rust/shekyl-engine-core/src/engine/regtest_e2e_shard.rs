@@ -36,8 +36,41 @@ pub(super) struct ClosedShard {
     pub(super) archival_bytes: u64,
 }
 
-/// Close `shard` on the live daemon's chain and wait until a compact join
-/// onto it is admissible: CEN-J15's three post-genesis operands
+/// What [`close_shard`] left: the shard closed, final, and covered by the
+/// staker's P-scan, inside its freeze window.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Closed {
+    pub(super) shard: ShardId,
+    /// The coverage row's `freeze_height`: the block that closed the shard.
+    pub(super) close_height: u64,
+    pub(super) spends: usize,
+    pub(super) archival_bytes: u64,
+    /// The schedule's reorg cap: the shard's finality wait.
+    pub(super) cap: u64,
+    started: Instant,
+}
+
+/// [`close_shard`], [`fill_closed_shard`] and [`price_closed_shard`], in
+/// that order: the shard closed, final, scanned, held, and priced for a
+/// compact join. Mining through the pricing pass before the fill would, on
+/// a short epoch, cross the boundary that discards the shard's bodies
+/// before anything could fill it.
+pub(super) async fn close_shard_through_the_daemon(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::super::Engine<super::super::SoloSigner>>>,
+    address: &str,
+    pscan_seal: &std::path::Path,
+    shard: ShardId,
+    schedule: RegtestSchedule,
+) -> ClosedShard {
+    let closed = close_shard(daemon, arc, address, pscan_seal, shard, schedule).await;
+    fill_closed_shard(daemon, arc, &closed).await;
+    price_closed_shard(daemon, &closed, schedule).await
+}
+
+/// Close `shard` on the live daemon's chain, the first of the steps that
+/// make a compact join onto it admissible: CEN-J15's three post-genesis
+/// operands
 /// (`shekyl-chain-rules` `tx_bond.rs` `holding_admissible`), each read
 /// back from the daemon rather than assumed.
 ///
@@ -53,7 +86,13 @@ pub(super) struct ClosedShard {
 ///    the next connecting height, the predicate J15 applies at the
 ///    parent — lists the shard. That listing is the loop's exit, and its
 ///    `freeze_height` is held to the block the wallet's count crossed in.
-/// 3. **Priced.** The slash pass of the first epoch whose deadline sits at
+/// 3. **Filled.** Once the staker's P-scan has verified past the close,
+///    the shard is filled into the persona body store from this node,
+///    inside its freeze window (`WSS-Q4`), the way the selection round
+///    this helper stands in for must: a bond's own fill at post time then
+///    finds it held, however far the pricing pass below has carried the
+///    chain toward the boundary that discards its bodies.
+/// 4. **Priced.** The slash pass of the first epoch whose deadline sits at
 ///    or above `close + reorg_cap + 1` (`SO-D11f`: a pass prices every
 ///    shard final as of its parent) writes the shard's `r_market` row.
 ///    The chain is mined through that pass — the block at the deadline
@@ -93,14 +132,14 @@ pub(super) struct ClosedShard {
 /// the coinbases, which carry no archival good, are all that came before,
 /// and the daemon's `--mine-address` is the wallet's primary address, so
 /// its coinbases are the supply.
-pub(super) async fn close_shard_through_the_daemon(
+pub(super) async fn close_shard(
     daemon: &RegtestDaemon,
     arc: &Arc<RwLock<super::super::Engine<super::super::SoloSigner>>>,
     address: &str,
     pscan_seal: &std::path::Path,
     shard: ShardId,
     schedule: RegtestSchedule,
-) -> ClosedShard {
+) -> Closed {
     use super::super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use shekyl_archival_retention::{SettlementEpochBlocks, SettlementSchedule};
     use shekyl_types::archival::SHARD_LENGTH;
@@ -331,6 +370,62 @@ pub(super) async fn close_shard_through_the_daemon(
         started.elapsed()
     );
 
+    Closed {
+        shard,
+        close_height,
+        spends,
+        archival_bytes,
+        cap,
+        started,
+    }
+}
+
+/// Fill the closed shard into the staker's persona body store from the
+/// node, inside its freeze window (`WSS-Q4`; `WALLET_SIDE_STORE.md`
+/// §6.5.2): what the shard-selection round does before a market bond names
+/// a shard. The bond post's own fill then finds it held.
+pub(super) async fn fill_closed_shard(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::super::Engine<super::super::SoloSigner>>>,
+    closed: &Closed,
+) {
+    let shard = closed.shard;
+    let started = closed.started;
+    let holdings = shekyl_archival_retention::HoldingsDescriptor {
+        kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+        shard_ids: shekyl_archival_retention::ShardSet::new(vec![shard.to_raw()])
+            .expect("one-shard holdings"),
+    };
+    if let Err(e) = super::super::Engine::fill_market(arc.clone(), &daemon.target(), holdings).await
+    {
+        daemon.panic_with_log("fill the closed shard inside its freeze window", e);
+    }
+    eprintln!(
+        "shard {} filled into the persona body store inside its window ({:?} elapsed)",
+        shard.to_raw(),
+        started.elapsed()
+    );
+}
+
+/// Mine through the slash pass that prices the closed shard, so a compact
+/// join onto it is admissible, and read the watermark back.
+pub(super) async fn price_closed_shard(
+    daemon: &RegtestDaemon,
+    closed: &Closed,
+    schedule: RegtestSchedule,
+) -> ClosedShard {
+    use shekyl_archival_retention::{SettlementEpochBlocks, SettlementSchedule};
+    let Closed {
+        shard,
+        close_height,
+        spends,
+        archival_bytes,
+        cap,
+        started,
+    } = *closed;
+    let sched = SettlementSchedule::new(
+        SettlementEpochBlocks::new(schedule.seb).expect("a schedule's epoch is non-zero"),
+    );
     // Priced: the first pass whose parent sees the shard final, then the
     // watermark read back. The block at the deadline runs the pass
     // (`scan_slashes`: the count after it exceeds the deadline), so the

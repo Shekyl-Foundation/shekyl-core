@@ -423,6 +423,12 @@ pub fn run(
                 chain::cmd_shard_list_mine(&rpc),
                 |_| {},
             ),
+            ResolvedCommand::ShardAlarm => present(
+                &presentation,
+                "shard alarm",
+                chain::cmd_shard_alarm(&rpc),
+                chain::show_shard_alarm,
+            ),
             ResolvedCommand::ShardShow { shard_id } => present(
                 &presentation,
                 "shard show",

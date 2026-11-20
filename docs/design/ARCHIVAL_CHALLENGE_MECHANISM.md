@@ -2014,8 +2014,8 @@ after a 720-block gate would have released.
 It bites at the pin rather than one layer up because
 `StoreShardProvider` is **serve-set-blind**: it holds only a read route to
 `P`'s body store (`HeldShardSource`, a message to the store's owning actor;
-`CURVE_TREE_CLIENT.md` §11.1) and answers for any shard whose bytes are in
-the store. So the leak is
+`CURVE_TREE_CLIENT.md` §11.1), and a report back to it of a body that did
+not read back, and answers for any shard whose bytes are in the store. So the leak is
 currently what *keeps the obligation met* — a dropped-but-still-pinned shard
 is still served. Releasing on a reorg depth would have converted a disk leak
 into a miss, then a slash: §9.7's own asymmetry pointed the wrong way.

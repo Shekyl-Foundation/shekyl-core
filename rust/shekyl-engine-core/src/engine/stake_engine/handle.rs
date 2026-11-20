@@ -11,8 +11,8 @@ use std::sync::Arc;
 use kameo::actor::{ActorRef, Spawn, WeakActorRef};
 
 use super::body_store_actor::{BodyStoreHandle, WeakBodyStoreHandle};
+use crate::engine::holdings_fill::FilledHoldings;
 use kameo::error::SendError;
-use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_scanner::ScannableBlock;
@@ -336,7 +336,7 @@ impl StakeEngineHandle {
         &self,
         handle: PersonaHandle,
         ticket: crate::engine::stake_persist::PersistedBondTicket,
-        holdings: HoldingsDescriptor,
+        holdings: FilledHoldings,
     ) -> Result<BondPostPlacement, StakeEngineError> {
         self.actor
             .ask(PlanBondPost {
@@ -357,7 +357,7 @@ impl StakeEngineHandle {
         &self,
         handle: PersonaHandle,
         ticket: crate::engine::stake_persist::PersistedBondTicket,
-        holdings: HoldingsDescriptor,
+        holdings: FilledHoldings,
         funding: Vec<FundingInputContext>,
         tree_ctx: TreeContext,
         fee: u64,

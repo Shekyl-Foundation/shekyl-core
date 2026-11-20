@@ -18,8 +18,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_primitives::Commitment;
-use shekyl_types::{BlockHeight, Timelock, TxHash};
-use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, BoundTx, Ct, Transaction};
+use shekyl_types::{ArchivalLength, BlockHeight, Timelock, TxHash};
+use shekyl_wire::{
+    transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, BoundTx, Ct, Transaction, TxidParts,
+};
 
 use shekyl_crypto_pq::{
     kem::{HybridCiphertext, HYBRID_KEM_CT_LEN, ML_KEM_768_CT_LEN, X25519_KEM_CT_LEN},
@@ -134,6 +136,48 @@ pub struct ScannableBlock {
     pub transactions: Vec<BoundTx>,
     /// Global index of the block's first output, or `None` if unindexed.
     pub first_output_index: Option<u64>,
+    /// The chain's cumulative archival length through this block, as the
+    /// daemon reported it (`archival_cumulative`, RPC 4.8; `WSS-Q16`). The
+    /// block's identity does not bind it: a consumer that relies on it
+    /// checks it against the running total it already holds plus
+    /// [`Self::archival_increment`], which every transaction's txid binds.
+    pub archival_cumulative: ArchivalLength,
+}
+
+impl ScannableBlock {
+    /// This block's archival length, as the chain folds it
+    /// (`shekyl-chain-store` `connect.rs`): the coinbase's, measured on its
+    /// whole body (zero), then each listed transaction's, bound through its
+    /// txid ([`BoundTx::parts`]). `None` on overflow.
+    #[must_use]
+    pub fn archival_increment(&self) -> Option<ArchivalLength> {
+        self.transactions.iter().try_fold(
+            self.block.miner_transaction.txid_parts().archival_len,
+            |sum, tx| sum.checked_add(tx.parts().archival_len),
+        )
+    }
+
+    /// Each listed transaction with the cumulative archival length before
+    /// it, in the order the chain folds them, given `before`, the total
+    /// through the previous block. The coinbase comes first in the fold and
+    /// carries no archival good, so it is counted and not listed. A
+    /// transaction is in shard `k` iff `shard_of(cum_before) == k` and it
+    /// carries archival good (`SHT-Q2`; `shekyl-chain-store`
+    /// `shard_reads.rs`). `None` on overflow.
+    #[must_use]
+    pub fn archival_placements(
+        &self,
+        before: ArchivalLength,
+    ) -> Option<Vec<(ArchivalLength, TxidParts)>> {
+        let mut cum = before.checked_add(self.block.miner_transaction.txid_parts().archival_len)?;
+        let mut placed = Vec::with_capacity(self.transactions.len());
+        for tx in &self.transactions {
+            let parts = tx.parts();
+            placed.push((cum, parts));
+            cum = cum.checked_add(parts.archival_len)?;
+        }
+        Some(placed)
+    }
 }
 
 /// Split a `shekyl-wire` `enc_amount` / `enc_label` (`[u8; 9]` = an 8-byte
@@ -872,10 +916,12 @@ impl InternalScanner {
         block: ScannableBlock,
         is_cancelled: &mut dyn FnMut() -> bool,
     ) -> Result<ScanOutcome, ScanError> {
+        // The archival total is the P-scan's, not the output scan's.
         let ScannableBlock {
             block,
             transactions,
             first_output_index,
+            archival_cumulative: _,
         } = block;
         if block.transaction_hashes.len() != transactions.len() {
             Err(ScanError::InvalidScannableBlock(
@@ -1714,6 +1760,7 @@ mod cancel_tests {
             block,
             transactions: vec![],
             first_output_index: Some(0),
+            archival_cumulative: ArchivalLength::ZERO,
         };
 
         let (mut closure, counter) = cancel_on_nth_call(1);
@@ -1784,6 +1831,7 @@ mod cancel_tests {
             },
             transactions: vec![],
             first_output_index: Some(u64::MAX),
+            archival_cumulative: ArchivalLength::ZERO,
         };
 
         let mut never = || false;
