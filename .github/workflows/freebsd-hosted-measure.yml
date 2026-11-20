@@ -1,0 +1,159 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# SCRATCH MEASUREMENT, not a gate. It runs only on a push to its own
+# scratch branch and never lands on `dev`.
+#
+# The question it answers: what does the workspace test run cost, and does
+# it pass, on FreeBSD in a VM on a GitHub-hosted runner? The answer is
+# compared with a scheduled run on an estate FreeBSD host that reports by
+# issue. The commands are the Linux Rust job's own
+# (scripts/ci/rust_scoped_tests.sh with RUST_TESTS=all: the nextest `ci`
+# profile, `--locked`, the same exclusion), on the pinned toolchain.
+#
+# The VM image's disk is about 6 GB with no resize input, and a debug test
+# target is larger than that, so the workspace (and the target inside it)
+# is the runner's disk shared into the VM over NFS. Timings are stamped
+# per phase into fbsd-results/timings.txt and uploaded with the logs.
+
+name: FreeBSD hosted measurement (scratch)
+
+on:
+  push:
+    branches: ['ci-scratch/freebsd-hosted-measure']
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: FreeBSD 14.4 VM, workspace tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - name: the runner
+        run: |
+          echo "nproc: $(nproc)"
+          awk -F': ' '/^model name/ { print "cpu: " $2; exit }' /proc/cpuinfo
+          awk '/^MemTotal/ { print "memory: " $2 " " $3; exit }' /proc/meminfo
+          ls -l /dev/kvm
+          df -h /
+          date -u +"runner-start %Y-%m-%dT%H:%M:%SZ %s"
+
+      - name: free runner disk for the shared target
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: the forged test chain, fetched on the runner
+        # scripts/ci/fetch_test_chain.py maps only Linux and macOS, and the
+        # oras pin has no freebsd_amd64 checksum, so inside the VM it
+        # refuses. It writes into the tree, which the VM shares over NFS.
+        run: python3 scripts/ci/fetch_test_chain.py shard-fill
+
+      - name: stamp before the VM
+        run: |
+          mkdir -p fbsd-results
+          echo "vm-step-start $(date -u +%Y-%m-%dT%H:%M:%SZ) $(date +%s)" >> fbsd-results/timings.txt
+
+      - name: FreeBSD VM
+        # v1.6.0, pinned by commit.
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b
+        with:
+          release: '14.4'
+          mem: 12288
+          sync: nfs
+          sync-time: true
+          disable-cache: true
+          prepare: |
+            pkg install -y bash curl git python3
+          run: |
+            set -u
+            W=$(pwd)
+            R="$W/fbsd-results"
+            mkdir -p "$R"
+            stamp() { echo "$1 $(date -u +%Y-%m-%dT%H:%M:%SZ) $(date +%s)" >> "$R/timings.txt"; }
+            stamp vm-run-start
+            {
+              uname -a
+              sysctl kern.vm_guest hw.ncpu hw.physmem hw.usermem hw.model
+              df -h
+              mount
+            } > "$R/vm-facts.txt" 2>&1
+            cat "$R/vm-facts.txt"
+            vmstat -w 30 > "$R/vmstat.log" 2>&1 &
+            sampler=$!
+
+            git config --global --add safe.directory '*'
+            export CARGO_TARGET_DIR="$W/.fbsd-target"
+            avail_kb=$(df -k "$HOME" | awk 'NR==2 { print $4 }')
+            if [ "$avail_kb" -lt 4000000 ]; then
+              export CARGO_HOME="$W/.fbsd-cargo" RUSTUP_HOME="$W/.fbsd-rustup"
+              echo "toolchain home: shared workspace ($avail_kb KB free on the VM disk)" >> "$R/vm-facts.txt"
+            else
+              export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
+              echo "toolchain home: VM disk ($avail_kb KB free)" >> "$R/vm-facts.txt"
+            fi
+            export PATH="$CARGO_HOME/bin:$PATH"
+
+            stamp toolchain-start
+            curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-all-errors -o /tmp/rustup-init.sh https://sh.rustup.rs
+            sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --no-modify-path > "$R/toolchain.log" 2>&1
+            tc_rc=$?
+            nx=cargo-nextest-0.9.138-x86_64-unknown-freebsd.tar.gz
+            curl -sSfL --retry 3 --retry-all-errors -o "/tmp/$nx" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/$nx"
+            if [ "$(sha256 -q "/tmp/$nx")" != 406f4372a1dce83774c47970687c06556781c078cd7c69c193bb617b265e7daf ]; then
+              echo "nextest tarball hash mismatch" | tee -a "$R/toolchain.log"
+              tc_rc=1
+            fi
+            tar -xzf "/tmp/$nx" -C "$CARGO_HOME/bin"
+            stamp toolchain-end
+            echo "toolchain rc=$tc_rc" >> "$R/timings.txt"
+            [ "$tc_rc" -eq 0 ] || { kill "$sampler"; exit "$tc_rc"; }
+
+            cd "$W/rust"
+            stamp build-start
+            cargo nextest run --locked --profile ci --no-run --workspace --exclude shekyl-randomx-differential > "$R/build.log" 2>&1
+            build_rc=$?
+            stamp build-end
+            echo "build rc=$build_rc" >> "$R/timings.txt"
+            du -sk "$CARGO_TARGET_DIR" >> "$R/vm-facts.txt" 2>&1
+
+            test_rc=skipped
+            doc_rc=skipped
+            if [ "$build_rc" -eq 0 ]; then
+              stamp test-start
+              # rust_scoped_tests.sh's `nextest` with RUST_TESTS=all, minus
+              # its chain fetch (done on the runner, above).
+              cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential > "$R/test.log" 2>&1
+              test_rc=$?
+              stamp test-end
+              cp "$CARGO_TARGET_DIR/nextest/ci/junit.xml" "$R/junit.xml" 2>> "$R/vm-facts.txt"
+              stamp doctest-start
+              RUST_TESTS=all bash ../scripts/ci/rust_scoped_tests.sh doctests > "$R/doctest.log" 2>&1
+              doc_rc=$?
+              stamp doctest-end
+            fi
+            echo "test rc=$test_rc doctest rc=$doc_rc" >> "$R/timings.txt"
+            kill "$sampler"
+            cat "$R/timings.txt"
+            [ "$build_rc" -eq 0 ] && [ "$test_rc" = 0 ] && [ "$doc_rc" = 0 ]
+
+      - name: stamp after the VM
+        if: always()
+        run: echo "vm-step-end $(date -u +%Y-%m-%dT%H:%M:%SZ) $(date +%s)" >> fbsd-results/timings.txt
+
+      - name: results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: freebsd-hosted-measure
+          path: fbsd-results/
+          retention-days: 14
