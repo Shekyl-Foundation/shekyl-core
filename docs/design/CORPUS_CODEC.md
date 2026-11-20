@@ -1,10 +1,12 @@
 # The corpus codec (`shekyl-corpus`)
 
-**Status: OPEN** — design and build, one round (`CF-4a` PR 2; Rick,
-2026-11-18: "Corpus codec crate: yes, in its own PR under rule 26. Codec
-only: magic, version, encode and decode. The five committed corpora must
-round-trip byte for byte. Classify the crate in the production graph
-check."). Becomes a living contract when the PR lands.
+**Status: LIVING CONTRACT** — built in #1434 (`CF-4a` PR 2, merged
+2026-11-19 as `f5e5cd7908`); last verified 2026-11-20 at
+`dev@7a249e462c`, where the chain store's tests read the forged
+shard-fill chain's corpus through it. Ruled by Rick, 2026-11-18: "Corpus
+codec crate: yes, in its own PR under rule 26. Codec only: magic, version,
+encode and decode. The five committed corpora must round-trip byte for
+byte. Classify the crate in the production graph check."
 
 ## 1. Why the crate exists
 
