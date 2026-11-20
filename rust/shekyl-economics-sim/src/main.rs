@@ -645,6 +645,8 @@ mod tests {
                 "--seed-spread",
                 "--control-flat-fee",
                 "--control-steady-traffic",
+                "--economies",
+                "--economies-slice",
             ]
         );
         for flag in GROWTH_TRACE_CONFLICTS {

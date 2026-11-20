@@ -922,13 +922,13 @@ fn write_report(out: &mut impl Write, rows: &[Row], scope: Scope) -> fmt::Result
             )?;
             last = Some(key);
         }
-        write_row(out, row)?;
+        write_row(out, row, scope)?;
     }
     Ok(())
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn write_row(out: &mut impl Write, row: &Row) -> fmt::Result {
+fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
     let fig = |year: u64, f: &dyn Fn(&YearFig) -> f64, digits: usize| -> String {
         let v: Vec<f64> = at_year(row, year).map(f).collect();
         mr(&v, digits)
@@ -956,10 +956,22 @@ fn write_row(out: &mut impl Write, row: &Row) -> fmt::Result {
         )?;
     }
     writeln!(out, "{security}")?;
-    // Every year, not the sample: STD-5 could not be graded because no
-    // report carried these means (§5.35.1).
-    let mut release = String::from("   release and burn (yearly means, every year):");
-    for year in 1..=HORIZON_YEARS {
+    // Every year in the nightly slice and in the JSON summary: STD-5 could
+    // not be graded because no report carried these means (§5.35.1). The
+    // full table prints the sample years, which keeps its narration near
+    // 1.6 MB instead of 8 MB; every year of every cell is in its JSON.
+    let years: Vec<u64> = match scope {
+        Scope::Nightly => (1..=HORIZON_YEARS).collect(),
+        Scope::Full => SAMPLE_YEARS.to_vec(),
+    };
+    let mut release = format!(
+        "   release and burn (yearly means, {}):",
+        match scope {
+            Scope::Nightly => "every year",
+            Scope::Full => "sample years; every year in the JSON",
+        }
+    );
+    for year in years {
         write!(
             release,
             " | y{year} M_r {} burn {}",
