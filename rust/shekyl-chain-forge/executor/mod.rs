@@ -22,9 +22,11 @@
 //! tests) with `#[path]`: it compiles against the dev-dependencies, which
 //! the library never sees.
 //!
-//! The chain is written as corpus layout 4 (`CORPUS_FORMAT_VERSION`): a
-//! reorg is a rewind record and the branch after it. Layout 5's `offer`
-//! record is `CF-3`'s.
+//! The chain is written as corpus layout 5 (`CORPUS_FORMAT_VERSION`): a
+//! reorg is the competing branch written as `offer` records after the
+//! blocks it competes with. No record says the chain switched; the replay
+//! that produces the trace derives the switch through the fork choice,
+//! and the manifest records where it did (`CHAIN_FORGE.md` §7.1, §7.2).
 
 mod built;
 pub mod claim;
@@ -42,7 +44,7 @@ use std::sync::Arc;
 
 use shekyl_chain_forge::{
     close_event, sha256_hex, Action, BlocksTxt, Branch, Difference, EpochBlocks, EventRecord, Line,
-    Manifest, Plan, PlanRef, ScheduleRecord, MANIFEST_FORMAT_VERSION,
+    Manifest, Plan, PlanRef, ScheduleRecord, SwitchRecord, MANIFEST_FORMAT_VERSION,
 };
 use shekyl_chain_ingest::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use shekyl_chain_ingest::archival_driver::{ENDPOINT, FEE};
@@ -145,12 +147,80 @@ pub enum ForgeFault {
     /// The trace's replay of the corpus failed.
     #[error("trace: {0}")]
     Replay(#[from] ReplayFault),
+    /// A forged trace did not read back.
+    #[error("trace file: {0}")]
+    Trace(#[from] shekyl_chain_ingest::trace::TraceFault),
     /// The trace's hasher did not start.
     #[error("hasher: {0}")]
     Hasher(String),
     /// The plan asks for what the chain cannot do.
     #[error("plan: {0}")]
     Plan(String),
+}
+
+/// The rules `plan`'s chain is forged and replayed under: regtest at the
+/// plan's settlement epoch and reorg cap, at difficulty 1.
+///
+/// # Errors
+///
+/// [`ForgeFault::Plan`] for a schedule regtest's levers refuse.
+pub fn rules_for(plan: &Plan) -> Result<(ChainRules, CappedEpoch), ForgeFault> {
+    let epoch_blocks = match plan.schedule.settlement_epoch_blocks {
+        EpochBlocks::Settled => settled_epoch_blocks(),
+        EpochBlocks::Blocks(blocks) => blocks,
+    };
+    let capped = CappedEpoch::new(
+        SettlementEpochBlocks::new(epoch_blocks)
+            .ok_or_else(|| ForgeFault::Plan("a settlement epoch of zero blocks".into()))?,
+        BlockCount::from_raw(plan.schedule.reorg_cap_blocks),
+    )
+    .map_err(|refused| ForgeFault::Plan(format!("the schedule: {refused:?}")))?;
+    let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), capped)
+        .map_err(|refused| ForgeFault::Plan(format!("regtest's levers: {refused}")))?;
+    Ok((rules, capped))
+}
+
+/// Replay the forged chain in `out` against its own trace on a fresh
+/// store, as `shekyl-chain-replay replay` does: every connected and
+/// promoted height's facts held to the trace's, the covered tip's
+/// checkpoint compared, and every switch derived by the fork choice from
+/// the corpus's offers.
+///
+/// # Errors
+///
+/// [`ForgeFault`].
+pub async fn replay(
+    out: &Path,
+    plan: &Plan,
+    hashers: NonZeroUsize,
+) -> Result<shekyl_chain_ingest::pipeline::RunReport, ForgeFault> {
+    let (rules, _) = rules_for(plan)?;
+    let trace = Arc::new(shekyl_chain_ingest::trace::Trace::read(
+        std::io::BufReader::new(File::open(out.join(TRACE_FILE))?),
+    )?);
+    let store = tempfile::Builder::new()
+        .prefix("shekyl-chain-forge-replay-")
+        .tempdir()?;
+    let metrics = Arc::new(Metrics::new());
+    let (hasher, owner) = shekyl_hasher::Hasher::start(shekyl_hash_budget::Budget::new(hashers))
+        .map_err(|fault| ForgeFault::Hasher(format!("{fault:?}")))?;
+    let pow = Arc::new(ProductionPow::new(hasher, Arc::clone(&metrics)));
+    let replayed = shekyl_chain_ingest::rebaseline::replay_corpus(
+        &out.join(CORPUS_FILE),
+        &store.path().join("replay.redb"),
+        rules,
+        PipelineConfig {
+            window: PipelineConfig::DEFAULT_WINDOW,
+            hashers,
+            digest_each_commit: false,
+        },
+        pow,
+        metrics,
+        trace,
+    )
+    .await;
+    owner.stop();
+    Ok(replayed?)
 }
 
 /// Forge `plan` (read from `plan_ref.path`) into `out`: the corpus, the
@@ -251,7 +321,14 @@ pub struct Forge {
     written: usize,
     corpus: CorpusWriter<BufWriter<File>>,
     ledger: BlocksTxt,
-    /// Corpus records written, blocks and rewinds.
+    /// The branch new blocks are written on: [`Branch::Main`] as `extend`
+    /// records, an alternative as `offer` records.
+    branch: Branch,
+    /// Alternative branches written so far; the next is `alt:<n + 1>`.
+    alternatives: u32,
+    /// The switches the plan's reorgs expect the fork choice to make.
+    expected: Vec<SwitchRecord>,
+    /// Corpus records written, blocks, rewinds and offers.
     records: u64,
     /// Transactions listed, coinbases excluded.
     transactions: u64,
@@ -287,18 +364,7 @@ impl Forge {
         let seed = plan
             .seed()
             .map_err(|fault| ForgeFault::Plan(fault.to_string()))?;
-        let epoch_blocks = match plan.schedule.settlement_epoch_blocks {
-            EpochBlocks::Settled => settled_epoch_blocks(),
-            EpochBlocks::Blocks(blocks) => blocks,
-        };
-        let capped = CappedEpoch::new(
-            SettlementEpochBlocks::new(epoch_blocks)
-                .ok_or_else(|| ForgeFault::Plan("a settlement epoch of zero blocks".into()))?,
-            BlockCount::from_raw(plan.schedule.reorg_cap_blocks),
-        )
-        .map_err(|refused| ForgeFault::Plan(format!("the schedule: {refused:?}")))?;
-        let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), capped)
-            .map_err(|refused| ForgeFault::Plan(format!("regtest's levers: {refused}")))?;
+        let (rules, capped) = rules_for(plan)?;
 
         std::fs::create_dir_all(out)?;
         let corpus = CorpusWriter::create(
@@ -317,6 +383,9 @@ impl Forge {
             written: 0,
             corpus,
             ledger: BlocksTxt::new(),
+            branch: Branch::Main,
+            alternatives: 0,
+            expected: Vec::new(),
             records: 0,
             transactions: 0,
             events: Vec::new(),
@@ -358,10 +427,16 @@ impl Forge {
             }
             if let Some(name) = &step.event {
                 let tip = self.chain.last().expect("genesis at least");
+                let branch = self
+                    .ledger
+                    .lines()
+                    .last()
+                    .expect("genesis is written at open")
+                    .branch;
                 self.events.push(EventRecord {
                     name: name.clone(),
                     height: tip.height.to_raw(),
-                    branch: Branch::Main.to_string(),
+                    branch: branch.to_string(),
                     record: self.records - 1,
                 });
             }
@@ -498,8 +573,13 @@ impl Forge {
                 .iter()
                 .map(|body| body.as_bytes().to_vec())
                 .collect();
-            self.corpus
-                .append_carrying(&block, &listed, &references, &bodies)?;
+            match self.branch {
+                Branch::Main => {
+                    self.corpus
+                        .append_carrying(&block, &listed, &references, &bodies)?
+                }
+                Branch::Alt(_) => self.corpus.offer(&block, &listed, &references, &bodies)?,
+            }
             let record = self.records;
             self.records += 1;
             written_blocks.push(WrittenBlock {
@@ -509,7 +589,7 @@ impl Forge {
             self.transactions += u64::try_from(listed.len()).expect("a block's list fits");
             let line = Line {
                 height: mined.height.to_raw(),
-                branch: Branch::Main,
+                branch: self.branch,
                 id: *mined.hash.as_bytes(),
             };
             self.ledger.push(line);
@@ -718,9 +798,20 @@ impl Forge {
         Ok(())
     }
 
-    /// Pop the last `depth` blocks and mine `depth + 1` on the fork, the
-    /// first listing a spend of a kept coinbase the popped branch did not
-    /// list: a rewind record, then the branch.
+    /// A competing branch of `depth + 1` blocks from `depth` below the tip,
+    /// the first listing a spend of a kept coinbase the branch it competes
+    /// with did not list, written as `offer` records on a new alternative
+    /// branch after the blocks it competes with.
+    ///
+    /// The scenario pops to the fork and mines the branch there, so every
+    /// block of it is built on its own chain's facts and is the block a
+    /// rival miner would have sent. The forge's own chain takes the branch
+    /// by that pop; the replay that produces the trace meets it as a node
+    /// does, as blocks that arrive and do not extend its tip, and switches
+    /// through the fork choice once the branch is heavier. At a fixed
+    /// difficulty that is its last block, `depth + 1` against `depth`: the
+    /// switch the plan expects, which [`Forge::finish`] holds the replay's
+    /// derived switch to.
     async fn reorg(&mut self, depth: u64) -> Result<(), ForgeFault> {
         let tip = self.chain.last().expect("genesis at least").height;
         let fork = tip
@@ -730,14 +821,21 @@ impl Forge {
             .rewind_to(fork)
             .await
             .unwrap_or_else(|fault| panic!("the rewind to {fork}: {fault:?}"));
-        self.corpus.rewind(fork)?;
-        self.records += 1;
         self.chain
             .truncate(usize::try_from(fork.to_raw() + 1).expect("a height fits"));
         self.written = self.chain.len();
+        self.alternatives += 1;
+        self.branch = Branch::Alt(self.alternatives);
         self.spend(1).await?;
         let rest = self.scenario().mine(depth).await;
         self.chain.extend(rest);
+        self.write_new()?;
+        self.branch = Branch::Main;
+        self.expected.push(SwitchRecord {
+            at_record: self.records - 1,
+            fork_height: fork.to_raw(),
+            depth,
+        });
         Ok(())
     }
 
@@ -790,6 +888,26 @@ impl Forge {
             Some(tip_height),
             "the replay connects the forged chain to its tip"
         );
+        // The switches are the replay's: derived by the fork choice from
+        // the corpus, never written by the forge (`CHAIN_FORGE.md` §7.1).
+        // The forge's own expectation from the plan is held to them here,
+        // so a forging whose replay switched elsewhere, or not at all, is
+        // refused rather than recorded.
+        let derived: Vec<SwitchRecord> = report
+            .switches
+            .iter()
+            .map(|switch| SwitchRecord {
+                at_record: switch.record.to_raw(),
+                fork_height: switch.fork.to_raw(),
+                depth: switch.depth,
+            })
+            .collect();
+        if derived != self.expected {
+            return Err(ForgeFault::Plan(format!(
+                "the replay's fork choice switched at {derived:?}, the plan expects {:?}",
+                self.expected
+            )));
+        }
 
         let manifest = Manifest {
             format_version: MANIFEST_FORMAT_VERSION,
@@ -811,7 +929,7 @@ impl Forge {
             corpus_sha256: sha256_hex(&std::fs::read(&corpus_path)?),
             trace_sha256: sha256_hex(&std::fs::read(&trace_path)?),
             events: self.events,
-            switches: Vec::new(),
+            switches: derived,
         };
         std::fs::write(out.join(MANIFEST_FILE), manifest.render())?;
         std::fs::write(out.join(BLOCKS_FILE), self.ledger.render())?;

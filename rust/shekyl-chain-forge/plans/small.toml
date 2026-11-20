@@ -18,10 +18,10 @@
 #   S1-S3, S5        again on the claim's fee side, and on the reorg's spend
 #
 # Event names are the catalogue's (§3) where the event is one;
-# `first-spend-2in` and `rewound-depth-2` are this plan's own. The reorg
-# is a rewind and a heavier branch (corpus layout 4); CF-E22's
-# `reorg-shallow`, an alternative branch the fork choice switches to, is
-# CF-3's.
+# `first-spend-2in` is this plan's own. The reorg is CF-E22's
+# `reorg-shallow`: a branch of three blocks from two below the tip,
+# written as offers (corpus layout 5), which the replay's fork choice
+# switches to at its last block.
 #
 # The seed is SHA-256("shekyl/chain-forge/small-plan-v1").
 
@@ -68,6 +68,6 @@ do = "mine"
 blocks = 3
 
 [[step]]
-event = "rewound-depth-2"
+event = "reorg-shallow"
 do = "reorg"
 depth = 2
