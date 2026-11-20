@@ -336,16 +336,20 @@ ARMED_SLOW=(
 # (embargo_quiet_wait_secs). Neither walk has run on the shared timer yet:
 # the figures below are from the fixed origin interval they stood under.
 #   origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
-#     — origin and sink: the first fire has no alternate and fluffs (W3b).
-#     Red before the embargo landed: the origin held its transaction in
-#     stem past 600 s (2026-10-29). On the fixed 1,148 s origin interval
-#     it then stood under: broadcast at 1 148.6 s, mined, 1 230 s,
-#     2026-10-30.
+#     — the origin and one simulated Levin peer, its only successor: the
+#     peer hears one stem and then, at the first fire, a fluff (W3b), read
+#     from the peer's record whenever the fire comes. Red before the
+#     embargo landed: the origin held its transaction in stem past 600 s
+#     (2026-10-29). On the fixed 1,148 s origin interval it then stood
+#     under, against a second daemon as the sink: broadcast at 1 148.6 s,
+#     mined, 1 230 s, 2026-10-30.
 #   origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
 #     — the origin and three simulated Levin peers (regtest_e2e_peer.rs):
 #     two take its stem slots and swallow stems, one dials in and fluffs
 #     the transaction back. Re-stem to the alternate, disarmed by the
-#     return, no fluff through the quiet wait, mined. On the fixed
+#     return, no fluff through the quiet wait, mined. A second fire that
+#     beats the return is a legal race: the walk detects it and tries a
+#     fresh transaction, three attempts in all. On the fixed
 #     interval: re-stem at 1 148.0 s; 2 497 s, 2026-10-30. No daemon
 #     option drops stems (Rick, 2026-10-29: the adversary belongs in the
 #     test). Red seen 2026-10-30 on a daemon built to fluff on every fire
