@@ -5020,6 +5020,9 @@ a named arm, set on the run's parameters and read nowhere else.
   - **C together:** C1 at each destination, with C2 and C3 at the middle
     knee.
 
+  That is fifteen economies: A-honest, A-stuffed, B, C1 at four
+  destinations, C2, C3 at three knees, and C together at four.
+
 **The template rule.** Production's `Fill::admit` compares the gross
 coinbase: the penalised reward plus every fee, before the staker split
 and the burn. Its header leaves the net case to the fee design.
@@ -5028,15 +5031,19 @@ and the burn. Its header leaves the net case to the fee design.
   of the penalty is paid outside the coinbase, so the gross coinbase is
   the same on every destination and the rule is production's on each.
 - **Miner's net** (a named arm, on every economy): a body is listed only
-  while the miner's own coinbase does not fall: the miner's leg of the
-  penalised reward (`EmissionSplit`'s miner leg) plus the miner's fee
-  income (`BurnSplit::miner_fee_income`), both from production's split at
-  that height, with the cell's own burn (the count's, `Fixed`'s or
-  C2's). Below the penalty-free weight the reward does not move, so both
-  rules list every body and the arm uses production's fill there. Past
-  it, the arm's cohort form bisects on the miner's net coinbase, as
-  `admit_up_to` does on the gross one (§3.2 b of the umbrella plan,
-  §5.28), and is held to a single-offer walk of the same rule on drawn
+  while the miner's share of its fee covers the miner's share of the
+  reward it costs, `(S − b)·fee ≥ (S − σ)·δ`: σ the staker emission share
+  and `b` the burn, the shares production's split takes at that height,
+  with the cell's own burn (the count's, `Fixed`'s or C2's). The rule
+  compares the shares, not the split's floored legs, which differ from
+  them by at most one atomic unit a leg. Because `δ` is an integer, the
+  test is exactly `δ ≤ ⌊fee·(S − b)/(S − σ)⌋`, so the arm offers each
+  body to production's own fill at that fee
+  (`economy::TemplateRule::offered_fee`): `admit_up_to`'s closed form and
+  its bisection (§3.2 b of the umbrella plan, §5.28) run unchanged, the
+  factor is the same for every body of a block so the fee order and the
+  stop rule hold, and the block still records and pays the bodies' own
+  fees. A unit test holds it to a single-offer walk of the rule on drawn
   cases. On C1 the stakers' part of the penalty is never the miner's, so
   the net rule is the same on every destination too: what changes on C1
   is what a miner that also stakes recovers, which is the adversary's
@@ -5069,9 +5076,11 @@ narration moves.
   umbrella plan). **Sustained growth stops at its supply break**, the
   year its cumulative fee burn passes everything emitted and the fold's
   supply invariant refuses it (§5.28.1: y114 on production on `steady`).
-  The break's year depends on each economy's burn. The table prints the
-  year each economy's growth fold stops and reads nothing past it. What
-  the schedule does past the break is Rick's (umbrella plan §3).
+  The break's year depends on each economy's burn. The table's probe asks
+  the fold to stop there instead of refusing (`FoldProbe::stops_at_supply_break`,
+  false on every other probe), at the last whole year before it; the
+  table prints that year and reads nothing past it. What the schedule
+  does past the break is Rick's (umbrella plan §3).
 
 **The columns** (measures, never verdicts). One row per economy, template
 rule and scenario; every reader takes what it prints from the fold and
@@ -5142,18 +5151,18 @@ changes nothing.
   year. Its cost is those fees (less what it recovers if it mines); its
   gain is the escalation's extra pool share over the year, on C3.
 
-**Cost.** Thirteen economies (A-honest, A-stuffed, B, C1 at four
-destinations, C2, C3, and C together at four), two template rules, four
-scenarios, eight zone points and three seeds: 2 496 folds to 135 years,
-growth to its break. A 135-year production fold took 62–130 s on
-`steady` (§5.28.1). Standard traffic and the readers cost more, so take
-100 s: about 69 CPU-hours, near nine hours on a fleet host's eight
-threads. The draw's cost does not grow with demand (#1424's transformed
+**Cost.** Fifteen economies, two template rules, four scenarios, eight
+zone points and three seeds: 2 880 folds to 135 years, growth to its
+break. A 135-year production fold took 62–130 s on `steady` (§5.28.1).
+Standard traffic and the readers cost more, so take 100 s: about 80
+CPU-hours, near ten hours on a fleet host's eight threads. The draw's cost does not grow with demand (#1424's transformed
 rejection). One timed fold per new arm on a claimed fleet host replaces
-this estimate before the table runs, and the table runs on demand. **The
-nightly slice:** the baseline at N = 90 and the inherited zone, `w_ref`
-3 000, seed 1, every economy and both rules: 52 folds, about 90
-CPU-minutes.
+this estimate before the table runs, and the table runs on demand
+(`--economies`). **The nightly slice** (`--economies-slice`): the
+baseline at `w_ref` 3 000 and seed 1, every economy under both rules at
+N = 90, and A-honest and B under both rules in the inherited zone (the
+template predictions and their corollary): 34 folds, about an hour of
+CPU.
 
 #### The predictions
 
@@ -5310,8 +5319,8 @@ the existing folds' figures where both read them (EI-1's and EI-2's rows
 on the baseline).
 
 **WE-12. The full table's runtime.** It is the estimate above, replaced by
-a measured fold per new arm before the table runs: about 69 CPU-hours,
-the nightly slice about 90 CPU-minutes.
+a measured fold per new arm before the table runs: about 80 CPU-hours,
+the nightly slice about an hour of CPU.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
