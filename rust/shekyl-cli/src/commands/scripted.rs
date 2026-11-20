@@ -94,16 +94,16 @@ fn local(error: impl std::fmt::Display) -> CommandFailed {
 pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> CommandResult<CreatedWallet> {
     let password = read_password_source(args.password_file.as_deref(), args.password_stdin)?;
 
+    // The wallet directory first: the seed-out file may be named inside it
+    // (`--seed-out <wallet-dir>/seed.txt`), and a failure here leaves no
+    // reserved file to clean up while its handle is open.
+    rpc.make_wallet_dir()?;
     // Reserve the seed-out file BEFORE creating the wallet (O_EXCL, 0600): if
     // this fails we have created nothing, so there is no wallet whose backup we
     // then cannot store. If create_wallet later fails, the empty file is
     // removed on the error path below.
     let mut seed_file = open_seed_out(&args.seed_out).map_err(local)?;
 
-    if let Err(e) = rpc.make_wallet_dir() {
-        drop(std::fs::remove_file(&args.seed_out));
-        return Err(e);
-    }
     let result = rpc.call(
         "create_wallet",
         params::NamedPassword {

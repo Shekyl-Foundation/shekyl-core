@@ -510,26 +510,36 @@ fn build_session(
             cli.proxy.as_deref(),
             cli.debug,
         )?),
-        Endpoints::SelfHosted { network, daemon } => {
-            let wallet_dir = cli.resolved_wallet_dir(*network)?;
-            // The per-account root is made first, as the daemon makes it,
-            // so whatever is made in it after has the root's protections.
-            // The wallet directory, the per-network default or an explicit
-            // --wallet-dir, is made only when a wallet is created or
-            // restored in it (`RpcSession::make_wallet_dir`): a word that
-            // makes no wallet makes no folder.
-            if let Some(root) = shekyl_os_account::per_account_root() {
-                shekyl_os_account::ensure_per_account_root(&root)
-                    .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
-            }
-            Ok(rpc_client::RpcSession::host_in_process(
-                wallet_dir,
-                *network,
-                daemon.target.clone(),
-                cli.debug,
-            )?)
-        }
+        Endpoints::SelfHosted { network, daemon } => host_session(
+            cli.resolved_wallet_dir(*network)?,
+            *network,
+            daemon.target.clone(),
+            cli.debug,
+            shekyl_os_account::per_account_root().as_deref(),
+        ),
     }
+}
+
+/// A self-hosted session's start, everything `build_session` does past
+/// reading the flags: the per-account root `root` is made first, as the
+/// daemon makes it, so whatever is made in it after has the root's
+/// protections (`None`: the account has no home). The wallet directory, the
+/// per-network default or an explicit `--wallet-dir`, is not made here: it
+/// is made only when a wallet is created or restored in it
+/// (`RpcSession::make_wallet_dir`), so a word that makes no wallet makes no
+/// folder.
+fn host_session(
+    wallet_dir: std::path::PathBuf,
+    network: Network,
+    daemon: DaemonTarget,
+    debug: bool,
+    root: Option<&std::path::Path>,
+) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
+    if let Some(root) = root {
+        shekyl_os_account::ensure_per_account_root(root)
+            .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
+    }
+    rpc_client::RpcSession::host_in_process(wallet_dir, network, daemon, debug)
 }
 
 /// Run one non-interactive subcommand against a fresh session and translate a
@@ -922,6 +932,34 @@ mod tests {
             dir_of(&["shekyl-cli", "--engine-dir", "/tmp/wallets"]),
             std::path::PathBuf::from("/tmp/wallets")
         );
+    }
+
+    /// A self-hosted session's start makes the per-account root and not the
+    /// wallet directory: an `rpc` enrollment word, which makes no wallet,
+    /// left an empty `wallets/<network>` (finding on #1482's Windows run).
+    /// This is `build_session`'s own start past the flags, with a root in a
+    /// scratch directory, so the test makes nothing in the home of the
+    /// account it runs under. Red edit: `create_dir_all(&wallet_dir)` back in
+    /// `host_session` (where `build_session` had it) fails here.
+    #[test]
+    fn a_session_start_makes_the_root_and_not_the_wallet_dir() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let root = scratch.path().join("root");
+        let wallets = root.join("wallets").join("regtest");
+        let rpc = host_session(
+            wallets.clone(),
+            Network::Regtest,
+            DaemonTarget::address("http://127.0.0.1:1"),
+            false,
+            Some(&root),
+        )
+        .expect("the session starts");
+        assert!(root.is_dir(), "the root is made at the start");
+        assert!(
+            !wallets.exists(),
+            "a session that makes no wallet makes no wallet folder"
+        );
+        rpc.shutdown();
     }
 
     /// The daemon-down hint (F1) fires for this machine only, this computer
