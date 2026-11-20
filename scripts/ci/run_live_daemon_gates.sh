@@ -19,8 +19,8 @@
 # (21 lines, 17 attributes) and would silently disagree with the runner.
 #
 # The accounting is the load-bearing ratchet: every ignored test is on
-# exactly one of the four lists below (ARMED, ARMED_SLOW, ACCEPTANCE,
-# DECIDED_DARK),
+# exactly one of the five lists below (ARMED, ARMED_SLOW, ARMED_EMBARGO,
+# ACCEPTANCE, DECIDED_DARK),
 # so the undecided set is empty by construction.
 #
 # The work splits, and the split is deliberate. The per-name existence checks
@@ -31,7 +31,7 @@
 # direction only and its message is written for that case. Verified by
 # biting it: deleting an armed gate reports the name, not a count mismatch.
 #
-# Two lanes share this script (GATE_LANE, default "pr"):
+# Four lanes share this script (GATE_LANE, default "pr"):
 #   pr    — ARMED, per-PR in build.yml (each gate <= ~3.5 min, measured
 #           2026-09-08 local Release; sum ~20 min).
 #   slow  — ARMED_SLOW, the nightly live-daemon workflow (depth-3 spend
@@ -39,6 +39,13 @@
 #           gates — too heavy per-PR, still consensus gates; four bonded
 #           walks since the DRS-X flip, two of which close and price an
 #           archival shard with real spends before they stake).
+#   embargo — ARMED_EMBARGO, its own leg of the nightly live-daemon
+#           workflow: the relay embargo's two live walks. Each waits for
+#           a real embargo fire, which is a random draw (mean 194 s on
+#           the clearnet connector the walks use), so their run time has
+#           no fixed bound and would time the slow lane out on a long
+#           draw. A leg of their own keeps a long draw from reddening the
+#           consensus gates.
 #   acceptance — ACCEPTANCE, run by hand on a quiet fleet VM under a
 #           USAGE.md claim (Rick, 2026-11-14): the emission walk over Tor,
 #           about six hours, on the public Tor network with the pinned
@@ -50,7 +57,7 @@
 #           coverage is the vector's replay in the Rust job. Needs
 #           SHEKYL_TEST_TOR_BINARY, the pinned bundle's tor
 #           (scripts/release/tor_bundle.py stage).
-# Both lanes name-check ALL lists, so a rename is caught in every run.
+# Every lane name-checks ALL lists, so a rename is caught in every run.
 #
 # PR #660 ruled against a cost tier on the grounds that a nightly tier
 # without a route by which a human sees its reds joins a silence. That
@@ -292,22 +299,6 @@ ARMED=(
 #     e2e_release_accepted_and_connected — 1 385 s (SEB 32, cap 8).
 #     e2e_unstake_collect_retire_composed_arc — 1 348 s (SEB 8, cap 2;
 #       the 248-block claim window included).
-#   The relay embargo's two live walks (RX-1, Rick 2026-10-29), each
-#   waiting out the origin's 1,148 s retry, so slow lane, not PR lane:
-#     origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
-#       — origin and sink: the first fire has no alternate and fluffs (W3b);
-#       broadcast at 1 148.6 s, mined, 1 230 s, 2026-10-30. Red before the
-#       embargo landed: the origin held its transaction in stem past 600 s
-#       (2026-10-29).
-#     origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
-#       — the origin and three simulated Levin peers (regtest_e2e_peer.rs):
-#       two take its stem slots and swallow stems, one dials in and fluffs
-#       the transaction back. Re-stem to the alternate at 1 148.0 s, disarmed
-#       by the return, no fluff through a second interval, mined; 2 497 s,
-#       2026-10-30. No daemon option drops stems (Rick, 2026-10-29: the
-#       adversary belongs in the test). Red seen 2026-10-30 on a daemon
-#       built to fluff on every fire (the C++ behaviour §14 rejected): the
-#       first fire reached the alternate as a fluff, "the re-stem is a stem".
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
@@ -316,8 +307,6 @@ ARMED_SLOW=(
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
-  engine::regtest_e2e::origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
-  engine::regtest_e2e::origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
   # Observed red 2026-10-30 (the handed-over span removed from the queue
   # before the door connected it): the joiner stood at one height with the
   # door reporting no room, as the F-B subjects did at 724 of 762.
@@ -336,6 +325,35 @@ ARMED_SLOW=(
   # wait timed out, "pscan did not observe the finality horizon".
   engine::regtest_e2e::body_fill::e2e_complete_tree_bond_fills_serves_pulls_and_reconciles
   engine::regtest_e2e::body_fill::e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves
+)
+
+# The relay embargo's two live walks (RX-1, Rick 2026-10-29), in a lane of
+# their own (GATE_LANE=embargo). Once sent, the origin's transaction draws
+# the embargo a relayed one draws (Rick, 2026-11-18), so each walk waits
+# for a random fire: it polls up to the timer's 1-in-1000 quantile
+# (shekyl_relay::embargo_fire_wait_secs), and the second then watches the
+# 1-in-10 quantile for a fire that must not come
+# (embargo_quiet_wait_secs). Neither walk has run on the shared timer yet:
+# the figures below are from the fixed origin interval they stood under.
+#   origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+#     — origin and sink: the first fire has no alternate and fluffs (W3b).
+#     Red before the embargo landed: the origin held its transaction in
+#     stem past 600 s (2026-10-29). On the fixed 1,148 s origin interval
+#     it then stood under: broadcast at 1 148.6 s, mined, 1 230 s,
+#     2026-10-30.
+#   origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+#     — the origin and three simulated Levin peers (regtest_e2e_peer.rs):
+#     two take its stem slots and swallow stems, one dials in and fluffs
+#     the transaction back. Re-stem to the alternate, disarmed by the
+#     return, no fluff through the quiet wait, mined. On the fixed
+#     interval: re-stem at 1 148.0 s; 2 497 s, 2026-10-30. No daemon
+#     option drops stems (Rick, 2026-10-29: the adversary belongs in the
+#     test). Red seen 2026-10-30 on a daemon built to fluff on every fire
+#     (the C++ behaviour §14 rejected): the first fire reached the
+#     alternate as a fluff, "the re-stem is a stem".
+ARMED_EMBARGO=(
+  engine::regtest_e2e::origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+  engine::regtest_e2e::origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
 )
 
 # Deliberately never run here, with the reason recorded (rule 23: a decided
@@ -387,7 +405,7 @@ ACCEPTANCE=(
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
 
-for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}"; do
+for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ARMED_EMBARGO[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}"; do
   grep -qx "$a: test" "$ignored" || {
     echo "FATAL: listed gate '$a' names no ignored test — it was renamed or deleted, and its disposition is now dangling" >&2
     exit 1
@@ -405,9 +423,9 @@ done
 # its gate twice, and on this step that is minutes of CI spent re-proving one
 # result; a name on two run lanes is run twice across lanes the same way.
 # The name is the thing to delete, so the message says so.
-repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}" | sort | uniq -d)
+repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ARMED_EMBARGO[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}" | sort | uniq -d)
 [ -z "$repeated" ] || {
-  echo "FATAL: repeated across ARMED/ARMED_SLOW/ACCEPTANCE/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
+  echo "FATAL: repeated across ARMED/ARMED_SLOW/ARMED_EMBARGO/ACCEPTANCE/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
   echo "A repeat inflates the accounting by one and lets an undecided gate balance against it; delete the duplicate line." >&2
   exit 1
 }
@@ -424,10 +442,10 @@ repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ACCEPTANCE[@]}" "${
 # It sums list LENGTHS, which equals the number of distinct names only
 # because the repeat check above rejects duplicates. That check is
 # load-bearing for this arithmetic, not housekeeping.
-accounted=$(( ${#ARMED[@]} + ${#ARMED_SLOW[@]} + ${#ACCEPTANCE[@]} + ${#DECIDED_DARK[@]} ))
+accounted=$(( ${#ARMED[@]} + ${#ARMED_SLOW[@]} + ${#ARMED_EMBARGO[@]} + ${#ACCEPTANCE[@]} + ${#DECIDED_DARK[@]} ))
 if [ "$regtest_ignored" -ne "$accounted" ]; then
-  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#ARMED_SLOW[@]} slow + ${#ACCEPTANCE[@]} acceptance + ${#DECIDED_DARK[@]} dark = $accounted." >&2
-  echo "A new #[ignore]d test must be armed (observe it red first), added to ARMED_SLOW, or decided dark with its reason recorded here." >&2
+  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#ARMED_SLOW[@]} slow + ${#ARMED_EMBARGO[@]} embargo + ${#ACCEPTANCE[@]} acceptance + ${#DECIDED_DARK[@]} dark = $accounted." >&2
+  echo "A new #[ignore]d test must be armed (observe it red first), added to ARMED_SLOW or ARMED_EMBARGO, or decided dark with its reason recorded here." >&2
   exit 1
 fi
 
@@ -447,6 +465,7 @@ case "$GATE_LANE" in
     }
     ;;
   slow) LANE_GATES=("${ARMED_SLOW[@]}") ;;
+  embargo) LANE_GATES=("${ARMED_EMBARGO[@]}") ;;
   acceptance)
     LANE_GATES=("${ACCEPTANCE[@]}")
     # The walks read over Tor through the pinned bundle; without it the
@@ -459,7 +478,7 @@ case "$GATE_LANE" in
     }
     ;;
   *)
-    echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr', 'slow' or 'acceptance')" >&2
+    echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr', 'slow', 'embargo' or 'acceptance')" >&2
     exit 1
     ;;
 esac
