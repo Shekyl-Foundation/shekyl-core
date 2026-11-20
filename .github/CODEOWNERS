@@ -46,4 +46,8 @@ docs/V3_WALLET_DECISION_LOG.md         @Shekyl-Foundation/maintainers
 # -----------------------------------------------------------------
 .github/CODEOWNERS                     @Shekyl-Foundation/maintainers
 .github/workflows/**                   @Shekyl-Foundation/maintainers
+# The scripts that post the required `merge-ready` status with a write
+# token: a pull request runs its own copy, as it runs its own workflows.
+scripts/ci/merge_ready.py              @Shekyl-Foundation/maintainers
+scripts/ci/merge_ready_overlap.py      @Shekyl-Foundation/maintainers
 .cursor/rules/**                       @Shekyl-Foundation/maintainers
