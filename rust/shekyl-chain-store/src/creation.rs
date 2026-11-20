@@ -299,7 +299,7 @@ pub(crate) fn creation_lock_path(store: &Path) -> PathBuf {
 
 /// An unfinished file moved aside, and the empty file now at the path,
 /// claimed with `create_new` and not yet locked. The caller hands `file`
-/// to `create_file`. A second lock on it would make that open fail: the
+/// to `create_with_backend`. A second lock on it would make that open fail: the
 /// engine locks the descriptor it is given, and [`PathGuard`] already
 /// covers the path until that lock is held.
 pub(crate) struct Replaced {
