@@ -145,15 +145,22 @@ pub fn cmd_shard_alarm(rpc: &RpcSession) -> CommandResult {
     }
 }
 
-/// What `shard alarm` says when the session has recorded none. An empty list
-/// is also what the wallet reports before its first check and while a check
-/// cannot run, so this says only what is known: no alarm, and when the wallet
-/// looks.
-const NO_SHARD_ALARMS: &str =
-    "No shard alarms this session. The wallet checks that its body store \
-     holds every shard your bond owes when the chain advances after it opens, at each settlement \
-     epoch and after it fills a shard; a check that finds a shard missing or damaged is listed \
-     here.";
+/// What `shard alarm` says before any check of the body store has completed
+/// this session: the reply carries no `last_check`, so an empty alarm list
+/// says nothing about the shards.
+const NO_CHECK_YET: &str =
+    "No check of the body store has completed this session, so nothing here says your shards \
+     are held. The wallet checks that it holds every shard your bond owes when the chain \
+     advances after it opens, at each settlement epoch and after it fills a shard.";
+
+/// The line after a completed check, when the check found nothing wrong.
+const NO_SHARD_ALARMS: &str = "No shard alarms this session.";
+
+/// What a check height means, and when it is stale.
+const CHECK_CADENCE: &str =
+    "A check runs at least once each settlement epoch; a check height more than an epoch \
+     behind the chain means checks are not completing (the node unreachable, or the scan \
+     state unreadable).";
 
 pub(crate) fn show_shard_alarm(val: &Value) {
     for line in shard_alarm_lines(val) {
@@ -163,13 +170,38 @@ pub(crate) fn show_shard_alarm(val: &Value) {
 
 /// `shard alarm`'s lines for the wallet's reply.
 fn shard_alarm_lines(val: &Value) -> Vec<String> {
-    let Some(alarms) = val.as_array() else {
-        return vec!["(the wallet's answer was not a list)".to_owned()];
+    let Some(alarms) = val.get("alarms").and_then(Value::as_array) else {
+        return vec!["(the wallet's answer carried no alarm list)".to_owned()];
     };
-    if alarms.is_empty() {
-        return vec![NO_SHARD_ALARMS.to_owned()];
+    let mut lines = Vec::new();
+    match val.get("last_check") {
+        None | Some(Value::Null) => lines.push(NO_CHECK_YET.to_owned()),
+        Some(check) => {
+            let height = check.get("height").and_then(Value::as_u64);
+            let shards = check.get("shards").and_then(Value::as_u64);
+            lines.push(match (height, shards) {
+                (Some(height), Some(0)) => {
+                    format!("The last check ran at height {height}: your bond owes no shards.")
+                }
+                (Some(height), Some(1)) => {
+                    format!("The last check ran at height {height} and read the 1 shard your bond owes.")
+                }
+                (Some(height), Some(shards)) => format!(
+                    "The last check ran at height {height} and read the {shards} shards your bond \
+                     owes."
+                ),
+                _ => "(the wallet's answer named a check it did not describe)".to_owned(),
+            });
+            lines.push(CHECK_CADENCE.to_owned());
+            if alarms.is_empty() {
+                lines.push(NO_SHARD_ALARMS.to_owned());
+            }
+        }
     }
-    let mut lines = vec!["Shards your bond owes that needed attention:".to_owned()];
+    if alarms.is_empty() {
+        return lines;
+    }
+    lines.push("Shards your bond owes that needed attention:".to_owned());
     for alarm in alarms {
         let shard = alarm.get("shard").and_then(Value::as_u64).map_or_else(
             || "(a shard the answer did not name)".to_owned(),
@@ -318,7 +350,7 @@ fn coverage_row_line(row: &CoverageShard) -> String {
 mod tests {
     use super::{
         connections_line, coverage_row_line, difficulty_line, shard_alarm_lines, sync_line,
-        tx_count_line, NO_SHARD_ALARMS,
+        tx_count_line, CHECK_CADENCE, NO_CHECK_YET, NO_SHARD_ALARMS,
     };
     use serde_json::{json, Value};
     use shekyl_rpc_client::{wire, RpcMethod};
@@ -538,34 +570,61 @@ mod tests {
     }
 
     #[test]
-    fn no_shard_alarm_claims_nothing_was_checked() {
-        let lines = shard_alarm_lines(&json!([]));
-        assert_eq!(lines, [NO_SHARD_ALARMS]);
-        // Empty is also the answer before the first check and while a check
-        // cannot run: the line may not say a shard is held or checks out.
-        assert!(!lines[0].contains("is held"));
-        assert!(!lines[0].contains("checks out"));
+    fn no_completed_check_says_nothing_about_the_shards() {
+        let lines = shard_alarm_lines(&json!({"alarms": []}));
+        assert_eq!(lines, [NO_CHECK_YET]);
+        assert!(!lines[0].contains("No shard alarms"));
+    }
+
+    #[test]
+    fn a_completed_check_names_its_height_and_its_shards() {
+        let lines = shard_alarm_lines(&json!({
+            "last_check": {"height": 3001, "shards": 2},
+            "alarms": [],
+        }));
+        assert_eq!(
+            lines,
+            [
+                "The last check ran at height 3001 and read the 2 shards your bond owes.",
+                CHECK_CADENCE,
+                NO_SHARD_ALARMS,
+            ]
+        );
+        let none_owed = shard_alarm_lines(&json!({
+            "last_check": {"height": 40, "shards": 0},
+            "alarms": [],
+        }));
+        assert_eq!(
+            none_owed[0],
+            "The last check ran at height 40: your bond owes no shards."
+        );
     }
 
     #[test]
     fn each_shard_alarm_names_its_shard_its_loss_and_its_refill() {
-        let lines = shard_alarm_lines(&json!([
-            {"shard": 3, "alarm": "missing", "refill": "refilled"},
-            {"shard": 7, "alarm": "corrupt", "refill": "discarded"},
-        ]));
-        assert_eq!(lines.len(), 3);
+        let lines = shard_alarm_lines(&json!({
+            "last_check": {"height": 3001, "shards": 2},
+            "alarms": [
+                {"shard": 3, "alarm": "missing", "refill": "refilled"},
+                {"shard": 7, "alarm": "corrupt", "refill": "discarded"},
+            ],
+        }));
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[2], "Shards your bond owes that needed attention:");
         assert_eq!(
-            lines[1],
+            lines[3],
             "  Shard 3 was not in the body store: refilled from your node and checked."
         );
-        assert!(lines[2].starts_with("  Shard 7 did not check out in the body store: "));
-        assert!(lines[2].contains("recovery fetch"));
+        assert!(lines[4].starts_with("  Shard 7 did not check out in the body store: "));
+        assert!(lines[4].contains("recovery fetch"));
     }
 
     #[test]
     fn a_shard_alarm_without_its_shard_is_not_shard_zero() {
-        let lines = shard_alarm_lines(&json!([{"alarm": "missing", "refill": "pending"}]));
-        assert!(!lines[1].contains("Shard 0"));
-        assert!(lines[1].contains("(a shard the answer did not name)"));
+        let lines = shard_alarm_lines(&json!({
+            "alarms": [{"alarm": "missing", "refill": "pending"}],
+        }));
+        assert!(!lines[2].contains("Shard 0"));
+        assert!(lines[2].contains("(a shard the answer did not name)"));
     }
 }

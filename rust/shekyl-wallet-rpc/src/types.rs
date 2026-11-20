@@ -707,6 +707,28 @@ pub struct ShardAlarmView {
     pub refill: ShardRefillView,
 }
 
+/// The last check of the body store that completed this session
+/// (`shard_alarm`): every shard the bond owed, read and verified.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShardCheckView {
+    /// The chain height the check ran at.
+    pub height: u64,
+    /// How many shards the bond owed, every one of them read.
+    pub shards: u64,
+}
+
+/// `shard_alarm` result (`WSS-Q17`): the last completed check and the
+/// session's alarms. An empty `alarms` says nothing on its own; `last_check`
+/// says whether a check has completed and when.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShardAlarmResult {
+    /// Absent until a check completes this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_check: Option<ShardCheckView>,
+    /// The alarms, ascending by shard.
+    pub alarms: Vec<ShardAlarmView>,
+}
+
 /// `discard_pending_tx` result (empty object).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DiscardPendingTxResult {}

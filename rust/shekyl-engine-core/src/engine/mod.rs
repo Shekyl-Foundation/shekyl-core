@@ -494,7 +494,7 @@ pub use submit::SubmitReceipt;
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
-pub use body_reconcile::{ShardAlarm, ShardAlarmCause, ShardRefill};
+pub use body_reconcile::{ShardAlarm, ShardAlarmCause, ShardAlarmReport, ShardCheck, ShardRefill};
 pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome, StakePosture};
 pub use holdings_fill::{CompleteTreeFillError, FillFailure};
 // F-D2 aggregate drain-balance read error: two-armed (transient "syncing" vs.

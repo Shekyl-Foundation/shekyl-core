@@ -34,7 +34,8 @@ use shekyl_wire::shard_frame::frame_rows_digest;
 use shekyl_wire::{carries_archival_good, TxidParts};
 
 use super::super::body_reconcile::{
-    ReconcileState, ShardAlarm, ShardAlarmCause, ShardAlarms, ShardRefill,
+    ReconcileState, ShardAlarm, ShardAlarmCause, ShardAlarmReport, ShardAlarms, ShardCheck,
+    ShardRefill,
 };
 use super::super::holdings_fill::{CompleteTreeFillError, FillFailure, MarketFillError};
 use super::super::stake_engine::body_store_actor::StoredFrame;
@@ -162,17 +163,19 @@ async fn scan_to_the_horizon(daemon: &RegtestDaemon, arc: &Shared, pscan_seal: &
     .await;
 }
 
-/// One reconcile pass, as the body-store leg runs it.
+/// One reconcile pass, as the body-store leg runs it, at the daemon's
+/// height, which it returns.
 async fn reconcile(
     daemon: &RegtestDaemon,
     arc: &Shared,
     state: &mut ReconcileState,
     alarms: &ShardAlarms,
-) {
-    let epoch = shekyl_archival_retention::settlement_epoch_at_height(daemon.height().await);
-    super::super::Engine::reconcile_bodies(arc.clone(), &daemon.target(), epoch, state, alarms)
+) -> u64 {
+    let tip = daemon.height().await;
+    super::super::Engine::reconcile_bodies(arc.clone(), &daemon.target(), tip, state, alarms)
         .await
         .unwrap_or_else(|e| daemon.panic_with_log("reconcile the persona body store", e));
+    tip
 }
 
 fn proving_timeouts() -> Timeouts {
@@ -334,11 +337,18 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
     // opens.
     let alarms = ShardAlarms::default();
     let mut state = ReconcileState::default();
-    reconcile(&daemon, &arc, &mut state, &alarms).await;
+    assert_eq!(alarms.report().last_check, None, "no check before a pass");
+    let first = reconcile(&daemon, &arc, &mut state, &alarms).await;
     assert_eq!(
-        alarms.list(),
-        [],
-        "everything owed is held at the first pass"
+        alarms.report(),
+        ShardAlarmReport {
+            last_check: Some(ShardCheck {
+                height: first,
+                shards: 1,
+            }),
+            alarms: Vec::new(),
+        },
+        "the first pass checks the one owed shard, and everything owed is held"
     );
     let one = close_shard(
         &daemon,
@@ -360,12 +370,22 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
         !holds(&arc, shard(1)).await,
         "nothing has filled shard 1 yet"
     );
-    reconcile(&daemon, &arc, &mut state, &alarms).await;
+    let pulled = reconcile(&daemon, &arc, &mut state, &alarms).await;
     assert!(
         holds_verified(&arc, shard(1)).await,
         "the pass pulled the newly final shard"
     );
-    assert_eq!(alarms.list(), [], "a routine pull is not an alarm");
+    assert_eq!(
+        alarms.report(),
+        ShardAlarmReport {
+            last_check: Some(ShardCheck {
+                height: pulled,
+                shards: 2,
+            }),
+            alarms: Vec::new(),
+        },
+        "a routine pull is not an alarm, and the pass that filled checks both shards"
+    );
     let tip = daemon.height().await - 1;
     assert!(
         tip < SEB,
@@ -394,7 +414,7 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
     let alarms = ShardAlarms::default();
     reconcile(&daemon, &arc, &mut ReconcileState::default(), &alarms).await;
     assert_eq!(
-        alarms.list(),
+        alarms.report().alarms,
         [ShardAlarm {
             shard: 0,
             alarm: ShardAlarmCause::Corrupt,
@@ -445,7 +465,10 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
         alarm: ShardAlarmCause::Missing,
         refill: ShardRefill::Refilled,
     };
-    assert_eq!(alarms.list(), [missing_refilled(0), missing_refilled(1)]);
+    assert_eq!(
+        alarms.report().alarms,
+        [missing_refilled(0), missing_refilled(1)]
+    );
     assert!(holds_verified(&arc, shard(0)).await && holds_verified(&arc, shard(1)).await);
 
     // (6) Past the boundary: the node has discarded both shards' bodies.
@@ -489,7 +512,10 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
         alarm: ShardAlarmCause::Missing,
         refill: ShardRefill::Discarded,
     };
-    assert_eq!(alarms.list(), [missing_discarded(0), missing_discarded(1)]);
+    assert_eq!(
+        alarms.report().alarms,
+        [missing_discarded(0), missing_discarded(1)]
+    );
     eprintln!(
         "complete-tree body fill: shards 0 and 1 (closed at {} and {}) filled, served, pulled, \
          repaired and refused past the boundary; principal {principal}",

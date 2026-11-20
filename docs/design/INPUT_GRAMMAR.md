@@ -608,7 +608,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `shard list`, `shard list all`, `shard list mine` | `shard list`, `shard list all`, `shard list held` | | | R (IG-Q22) |
 | `shard show <id>` | same | integer | | K |
 | `shard fetch <id> [--png p] [--size n]` | same | integer | `--png-file <path>`; `--png-pixels` integer | R (IG-Q22) |
-| — | `shard alarm` | | | N (WSS-Q17, 2026-11-19): the shards this wallet's bond owes that its body store did not hold or could not verify this session, and what each refill did — `shard_alarm`'s reply |
+| — | `shard alarm` | | | N (WSS-Q17, 2026-11-19): the shards this wallet's bond owes that its body store did not hold or could not verify this session, what each refill did, and the last check that completed (its height and how many shards it read) — `shard_alarm`'s reply |
 | `mine start [threads\|auto]`, `mine stop`, `mine status` | same | integer or `auto` | | K (IG-Q21) |
 | `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | hash, address, text; amount, text | | K; views (IG-Q34) |
 | `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; views (IG-Q34) |
@@ -793,7 +793,7 @@ The body-store fill (`WALLET_SIDE_STORE.md` `WSS-Q4`, `WSS-Q17`; Rick, 2026-11-1
 
 | Method | Path | Parameters | Reply | Notes |
 |---|---|---|---|---|
-| `shard_alarm` | `shard alarm` (§12.3) | — | a list (IG-Q53) of `{shard, alarm, refill}` | a view, in `tx_alarm`'s shape: re-derived each open, nothing stored; `shard` is the shard's id (integer), `alarm` one keyword (IG-Q86): `missing`, `corrupt`; `refill` one keyword: `pending`, `refilled`, `discarded`, `failed` |
+| `shard_alarm` | `shard alarm` (§12.3) | — | `{last_check, alarms}`: `last_check` is `{height, shards}`, absent until a check completes; `alarms` a list (IG-Q53) of `{shard, alarm, refill}` | a view, in `tx_alarm`'s shape: re-derived each open, nothing stored; `last_check` is the last pass that read every owed shard (the chain height it ran at, how many shards), so an empty `alarms` before the first check is not read as a clean store (WSS-Q17, 2026-11-20); `shard` is the shard's id (integer), `alarm` one keyword (IG-Q86): `missing`, `corrupt`; `refill` one keyword: `pending`, `refilled`, `discarded`, `failed` |
 
 `stake` gains seven refusals, each W1-clean: `-29538 STAKE_SCAN_BEHIND` (`data`: `scanned`, `needed`, heights), `-29539 STAKE_SHARD_DISCARDED` (`data`: `shard`), `-29540 STAKE_DAEMON_MISMATCH` (`data`: `shard`, `detail`), `-29541 STAKE_LOCAL_NODE_REQUIRED` (`data`: `detail`), `-29542 STAKE_BODY_STORE_FAILED` (`data`: `shard`, `detail`), `-29543 STAKE_DAEMON_SYNCING`, and `-29544 STAKE_DAEMON_UNREACHABLE` (`data`: `detail`). Value keywords added: `missing`, `corrupt` (shard alarm); `pending`, `refilled`, `discarded`, `failed` (refill). `refill` joins the glossary under `shard`.
 

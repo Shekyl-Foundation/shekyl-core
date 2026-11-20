@@ -300,15 +300,15 @@ impl Tenant {
             .and_then(CadenceHandle::serving_status)
     }
 
-    /// This session's shard alarms (`WSS-Q17`, `shard_alarm`): what the
-    /// persona's bond owes that its body store did not hold or could not
-    /// verify, from the cadence driver's body-store leg. Empty when no
-    /// driver runs.
-    pub(crate) fn shard_alarms(&self) -> Vec<shekyl_engine_core::ShardAlarm> {
+    /// This session's `shard_alarm` read (`WSS-Q17`): the last check the
+    /// cadence driver's body-store leg completed, and what the persona's
+    /// bond owes that its body store did not hold or could not verify. No
+    /// check and no alarm when no driver runs.
+    pub(crate) fn shard_alarm_report(&self) -> shekyl_engine_core::ShardAlarmReport {
         self.tasks
             .cadence
             .as_ref()
-            .map(CadenceHandle::shard_alarms)
+            .map(CadenceHandle::shard_alarm_report)
             .unwrap_or_default()
     }
 }

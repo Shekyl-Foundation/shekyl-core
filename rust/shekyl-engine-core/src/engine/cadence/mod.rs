@@ -69,7 +69,7 @@ use super::Engine;
 use self::body_store::BodyStoreLeg;
 use self::serving::ServingLivenessLeg;
 use self::submit::SubmitLifecycleLeg;
-use super::body_reconcile::{ShardAlarm, ShardAlarms};
+use super::body_reconcile::{ShardAlarmReport, ShardAlarms};
 
 pub(crate) use self::claim::EpochClaimLeg;
 #[cfg(test)]
@@ -274,13 +274,14 @@ impl CadenceHandle {
         self.serving_status().and_then(|status| status.posture)
     }
 
-    /// The shard alarms this session's body-store passes have raised
-    /// (`WSS-Q17`, the `shard_alarm` read): what the persona's bond owes
-    /// that its body store did not hold or could not verify, and what the
-    /// refill did about it. Re-derived each open; never persisted.
+    /// The `shard_alarm` read (`WSS-Q17`): the last check this session's
+    /// body-store passes completed, and the alarms they raised — what the
+    /// persona's bond owes that its body store did not hold or could not
+    /// verify, and what the refill did about it. Re-derived each open;
+    /// never persisted.
     #[must_use]
-    pub fn shard_alarms(&self) -> Vec<ShardAlarm> {
-        self.shard_alarms.list()
+    pub fn shard_alarm_report(&self) -> ShardAlarmReport {
+        self.shard_alarms.report()
     }
 
     /// Fire the cancel token. Idempotent. The task observes it at the next

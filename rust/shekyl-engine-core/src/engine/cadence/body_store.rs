@@ -147,10 +147,9 @@ where
                 let Some(engine) = weak.upgrade() else {
                     return;
                 };
-                let epoch = shekyl_archival_retention::settlement_epoch_at_height(tip);
                 let mut state = state.lock().await;
                 if let Err(e) =
-                    Engine::reconcile_bodies(engine, &daemon, epoch, &mut state, &alarms).await
+                    Engine::reconcile_bodies(engine, &daemon, tip, &mut state, &alarms).await
                 {
                     tracing::warn!(
                         error = %e,

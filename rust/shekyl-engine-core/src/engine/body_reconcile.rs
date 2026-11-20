@@ -36,6 +36,14 @@
 //! re-derived from the store and the chain by each session's passes. An entry
 //! stays for the session once raised, carrying its refill's outcome, so a
 //! loss that was repaired is still visible until the next open.
+//!
+//! **The last check is read beside the alarms** ([`ShardAlarmReport`]). An
+//! empty alarm list is what a session shows before its first check and
+//! while no check can run, as well as after a check that found nothing
+//! wrong; the [`ShardCheck`] is what tells those apart. It is the height of
+//! the last pass that read every owed shard, and how many that was. A check
+//! runs at least once each settlement epoch, so a check height more than an
+//! epoch behind the chain says the checks are not completing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -93,26 +101,54 @@ pub struct ShardAlarm {
     pub refill: ShardRefill,
 }
 
-/// This session's shard alarms, shared by the reconcile that writes them and
-/// the read that shows them. Re-derived each session; never persisted.
+/// The last check of the body store that completed this session: a pass
+/// that read every shard the bond owed and verified it, or found the bond
+/// owes none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardCheck {
+    /// The chain height the pass ran at.
+    pub height: u64,
+    /// How many shards the bond owed, every one of them read.
+    pub shards: u64,
+}
+
+/// What the `shard_alarm` read shows: the last completed check and this
+/// session's alarms, taken together.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShardAlarmReport {
+    /// The last check that completed; `None` before the first.
+    pub last_check: Option<ShardCheck>,
+    /// The alarms, ascending by shard.
+    pub alarms: Vec<ShardAlarm>,
+}
+
+/// This session's shard alarms and last check, shared by the reconcile that
+/// writes them and the read that shows them. Re-derived each session; never
+/// persisted.
 #[derive(Debug, Clone, Default)]
-pub struct ShardAlarms(Arc<std::sync::Mutex<BTreeMap<u64, ShardAlarm>>>);
+pub struct ShardAlarms(Arc<std::sync::Mutex<Board>>);
+
+#[derive(Debug, Default)]
+struct Board {
+    alarms: BTreeMap<u64, ShardAlarm>,
+    last_check: Option<ShardCheck>,
+}
 
 impl ShardAlarms {
-    /// The alarms, ascending by shard.
+    /// The last completed check and the alarms, under one lock, so the two
+    /// are from the same moment.
     #[must_use]
-    pub fn list(&self) -> Vec<ShardAlarm> {
-        self.0
-            .lock()
-            .expect("shard alarms lock")
-            .values()
-            .copied()
-            .collect()
+    pub fn report(&self) -> ShardAlarmReport {
+        let board = self.0.lock().expect("shard alarms lock");
+        ShardAlarmReport {
+            last_check: board.last_check,
+            alarms: board.alarms.values().copied().collect(),
+        }
     }
 
     fn raise(&self, shard: ShardId, alarm: ShardAlarmCause) {
         let shard = shard.to_raw();
-        self.0.lock().expect("shard alarms lock").insert(
+        self.0.lock().expect("shard alarms lock").alarms.insert(
             shard,
             ShardAlarm {
                 shard,
@@ -127,6 +163,7 @@ impl ShardAlarms {
             .0
             .lock()
             .expect("shard alarms lock")
+            .alarms
             .get_mut(&shard.to_raw())
         {
             entry.refill = refill;
@@ -138,7 +175,14 @@ impl ShardAlarms {
         self.0
             .lock()
             .expect("shard alarms lock")
+            .alarms
             .retain(|shard, _| owed.contains(&ShardId::from_raw(*shard)));
+    }
+
+    /// Record a completed check: at `height`, of `shards` owed shards.
+    fn checked(&self, height: u64, shards: usize) {
+        let shards = u64::try_from(shards).expect("a shard count fits u64");
+        self.0.lock().expect("shard alarms lock").last_check = Some(ShardCheck { height, shards });
     }
 }
 
@@ -177,9 +221,10 @@ where
     P: PendingTxEngine,
     Self: Send + Sync,
 {
-    /// One pass: pull what became owed, then — at a session's first pass,
-    /// at the first pass of each settlement epoch, and after a pull that
-    /// filled — check every owed shard and refill what is lost.
+    /// One pass at chain height `tip`: pull what became owed, then — at a
+    /// session's first pass, at the first pass of each settlement epoch, and
+    /// after a pull that filled — check every owed shard, refill what is
+    /// lost, and record the check.
     ///
     /// # Errors
     ///
@@ -188,23 +233,26 @@ where
     pub(crate) async fn reconcile_bodies(
         self_arc: Arc<RwLock<Self>>,
         daemon: &DaemonTarget,
-        epoch: u64,
+        tip: u64,
         state: &mut ReconcileState,
         alarms: &ShardAlarms,
     ) -> Result<(), ReconcileError> {
+        let epoch = shekyl_archival_retention::settlement_epoch_at_height(tip);
         let (stake, bonded) = {
             let g = self_arc.read().await;
             (g.stake_handle(), g.ledger.bonded_slots())
         };
-        let Some(stake) = stake else {
-            return Ok(());
+        let stake = match stake {
+            Some(stake) if !bonded.is_empty() => stake,
+            // No persona, or none bonded: nothing is owed, and that is the
+            // whole check.
+            _ => {
+                alarms.retain_owed(&BTreeSet::new());
+                alarms.checked(tip, 0);
+                state.owed = Some(BTreeSet::new());
+                return Ok(());
+            }
         };
-        if bonded.is_empty() {
-            // No bonded persona owes anything.
-            alarms.retain_owed(&BTreeSet::new());
-            state.owed = Some(BTreeSet::new());
-            return Ok(());
-        }
 
         let ctx = Self::fill_context(self_arc, daemon).await?;
         // What every bonded persona's connected record owes, whether or not
@@ -290,6 +338,9 @@ where
                 alarms.settle(shard, refill);
             }
             state.swept_in_epoch = Some(epoch);
+            // Every owed shard was either pulled just now, by the fill that
+            // verifies it, or read and checked above.
+            alarms.checked(tip, owed.len());
         }
 
         alarms.retain_owed(&owed);
@@ -339,7 +390,7 @@ mod tests {
         let alarms = ShardAlarms::default();
         alarms.raise(shard(4), ShardAlarmCause::Missing);
         assert_eq!(
-            alarms.list(),
+            alarms.report().alarms,
             [ShardAlarm {
                 shard: 4,
                 alarm: ShardAlarmCause::Missing,
@@ -349,7 +400,7 @@ mod tests {
         );
         alarms.settle(shard(4), ShardRefill::Refilled);
         assert_eq!(
-            alarms.list()[0].refill,
+            alarms.report().alarms[0].refill,
             ShardRefill::Refilled,
             "a repaired loss stays on the read for the session"
         );
@@ -362,7 +413,12 @@ mod tests {
         alarms.raise(shard(2), ShardAlarmCause::Missing);
         alarms.retain_owed(&[shard(2)].into_iter().collect());
         assert_eq!(
-            alarms.list().iter().map(|a| a.shard).collect::<Vec<_>>(),
+            alarms
+                .report()
+                .alarms
+                .iter()
+                .map(|a| a.shard)
+                .collect::<Vec<_>>(),
             [2]
         );
     }
@@ -371,7 +427,49 @@ mod tests {
     fn settling_a_shard_with_no_alarm_raises_none() {
         let alarms = ShardAlarms::default();
         alarms.settle(shard(9), ShardRefill::Failed);
-        assert!(alarms.list().is_empty());
+        assert!(alarms.report().alarms.is_empty());
+    }
+
+    #[test]
+    fn no_alarm_before_the_first_check_carries_no_check() {
+        let alarms = ShardAlarms::default();
+        assert_eq!(
+            alarms.report(),
+            ShardAlarmReport {
+                last_check: None,
+                alarms: Vec::new(),
+            },
+            "before a check completes the read says so, rather than an empty list alone"
+        );
+        alarms.raise(shard(2), ShardAlarmCause::Missing);
+        assert_eq!(
+            alarms.report().last_check,
+            None,
+            "a raised alarm is not a completed check"
+        );
+    }
+
+    #[test]
+    fn a_completed_check_is_read_with_the_alarms_it_left() {
+        let alarms = ShardAlarms::default();
+        alarms.checked(1_200, 3);
+        alarms.raise(shard(1), ShardAlarmCause::Corrupt);
+        alarms.checked(1_500, 4);
+        assert_eq!(
+            alarms.report(),
+            ShardAlarmReport {
+                last_check: Some(ShardCheck {
+                    height: 1_500,
+                    shards: 4,
+                }),
+                alarms: vec![ShardAlarm {
+                    shard: 1,
+                    alarm: ShardAlarmCause::Corrupt,
+                    refill: ShardRefill::Pending,
+                }],
+            },
+            "the latest check replaces the last, and the session's alarms stay"
+        );
     }
 
     #[test]

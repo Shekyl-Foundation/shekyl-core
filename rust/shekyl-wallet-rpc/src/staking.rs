@@ -70,25 +70,22 @@ pub(crate) async fn get_staked_outputs(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_staked_outputs: {e}")))
 }
 
-/// `shard_alarm` (`WSS-Q17`): the shards the persona's bond owes that its
-/// body store did not hold or could not verify this session, and what the
-/// refill did. A view, in the `tx_alarm` shape: re-derived each open by the
-/// cadence driver's body-store leg, never persisted.
+/// `shard_alarm` (`WSS-Q17`): the last check of the persona's body store
+/// that completed this session, and the shards the bond owes that the store
+/// did not hold or could not verify, with what the refill did. A view, in
+/// the `tx_alarm` shape: re-derived each open by the cadence driver's
+/// body-store leg, never persisted.
 pub(crate) async fn shard_alarm(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "shard_alarm")?;
-    let alarms = {
+    let report = {
         let state = tenants.lock().await;
         state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        state.tenant.shard_alarms()
+        state.tenant.shard_alarm_report()
     };
-    let views: Vec<_> = alarms
-        .iter()
-        .map(crate::project::shard_alarm_view)
-        .collect();
-    serde_json::to_value(views)
+    serde_json::to_value(crate::project::shard_alarm_result(&report))
         .map_err(|e| WalletRpcError::InternalError(format!("serialize shard_alarm: {e}")))
 }
 

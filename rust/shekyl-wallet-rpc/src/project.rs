@@ -20,9 +20,9 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletRpcError;
 use crate::types::{
     BuildPendingTxResult, GetBalanceResult, ReceiveAttributionKind, ReceiveAttributionView,
-    RefreshResult, RescanBlockchainResult, ShardAlarmCauseView, ShardAlarmView, ShardRefillView,
-    SubmitPendingTxResult, SubmitVerdictView, TransferDirection, TransferState, TransferView,
-    TxAlarmCause, TxAlarmView,
+    RefreshResult, RescanBlockchainResult, ShardAlarmCauseView, ShardAlarmResult, ShardAlarmView,
+    ShardCheckView, ShardRefillView, SubmitPendingTxResult, SubmitVerdictView, TransferDirection,
+    TransferState, TransferView, TxAlarmCause, TxAlarmView,
 };
 
 /// Serialize the engine's one-glance balance ([`BalanceView`]) as the
@@ -319,6 +319,17 @@ pub fn submit_pending_tx_result(receipt: &SubmitReceipt) -> SubmitPendingTxResul
     }
 }
 
+/// Project the body store's report to `shard_alarm`'s result.
+pub fn shard_alarm_result(report: &shekyl_engine_core::ShardAlarmReport) -> ShardAlarmResult {
+    ShardAlarmResult {
+        last_check: report.last_check.map(|check| ShardCheckView {
+            height: check.height,
+            shards: check.shards,
+        }),
+        alarms: report.alarms.iter().map(shard_alarm_view).collect(),
+    }
+}
+
 /// Project one shard alarm to `shard_alarm`'s element. Exhaustive, so a
 /// new cause or refill outcome cannot reach the wire unnamed.
 pub fn shard_alarm_view(alarm: &shekyl_engine_core::ShardAlarm) -> ShardAlarmView {
@@ -546,6 +557,43 @@ mod tests {
         assert_eq!(
             wire(ShardAlarmCause::Missing, ShardRefill::Failed)["refill"],
             "failed"
+        );
+    }
+
+    #[test]
+    fn shard_alarm_before_the_first_check_carries_no_check() {
+        use shekyl_engine_core::ShardAlarmReport;
+        assert_eq!(
+            serde_json::to_value(shard_alarm_result(&ShardAlarmReport::default()))
+                .expect("serialize"),
+            serde_json::json!({"alarms": []}),
+            "an empty reply before a check completes has no last_check, so it cannot be read \
+             as a clean store"
+        );
+    }
+
+    #[test]
+    fn shard_alarm_carries_the_last_check_beside_the_alarms() {
+        use shekyl_engine_core::{
+            ShardAlarm, ShardAlarmCause, ShardAlarmReport, ShardCheck, ShardRefill,
+        };
+        let report = ShardAlarmReport {
+            last_check: Some(ShardCheck {
+                height: 3_001,
+                shards: 2,
+            }),
+            alarms: vec![ShardAlarm {
+                shard: 1,
+                alarm: ShardAlarmCause::Corrupt,
+                refill: ShardRefill::Refilled,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(shard_alarm_result(&report)).expect("serialize"),
+            serde_json::json!({
+                "last_check": {"height": 3_001, "shards": 2},
+                "alarms": [{"shard": 1, "alarm": "corrupt", "refill": "refilled"}],
+            })
         );
     }
 

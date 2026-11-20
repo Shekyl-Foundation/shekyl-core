@@ -581,7 +581,9 @@ info:
   # STAKE_DAEMON_UNREACHABLE (data.detail). Each is W1-clean: nothing was
   # written. shard_alarm (WSS-Q17) lists, in the tx_alarm shape, the
   # shards the bond owes that the body store did not hold or could not
-  # verify this session, and what the refill did. api_version stays 1.
+  # verify this session, and what the refill did, beside the last check
+  # that completed (its height and how many shards it read), absent until
+  # one does. api_version stays 1.
   version: 0.22.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -2538,20 +2540,51 @@ components:
         `shard_alarm` (WSS-Q17) takes no parameters.
 
     ShardAlarmResult:
-      type: array
+      type: object
+      required: [alarms]
       description: >
-        The shards the persona's bond owes that its body store did not hold,
-        or held with a body that did not verify against the rows the
-        persona scan sealed, this session, ascending by shard, each with
-        what its refill from the wallet's own node did. Re-derived by each
-        open's reconcile passes (at open, at each settlement epoch, and
-        after a fill); nothing about the alarm is stored. A shard the bond
-        no longer owes leaves the list. Empty when no pass this session has
-        found a loss, which includes before the first pass and while a pass
-        cannot run (the node unreachable, the scan state unreadable): an
-        empty list is not evidence that any shard was checked.
-      items:
-        $ref: "#/components/schemas/ShardAlarmEntry"
+        The last check of the persona's body store that completed this
+        session, and the session's alarms. Re-derived by each open's
+        reconcile passes (at open, at each settlement epoch, and after a
+        fill); nothing about the alarm is stored. An empty alarms list says
+        nothing on its own: it is also the answer before the first check
+        and while a check cannot run (the node unreachable, the scan state
+        unreadable). last_check is what tells those apart.
+      properties:
+        last_check:
+          $ref: "#/components/schemas/ShardCheck"
+        alarms:
+          type: array
+          description: >
+            The shards the bond owes that the body store did not hold, or
+            held with a body that did not verify against the rows the
+            persona scan sealed, this session, ascending by shard, each with
+            what its refill from the wallet's own node did. A shard the bond
+            no longer owes leaves the list.
+          items:
+            $ref: "#/components/schemas/ShardAlarmEntry"
+
+    ShardCheck:
+      type: object
+      required: [height, shards]
+      description: >
+        The last check that completed: a pass that read every shard the
+        bond owed and verified it, or found the bond owes none. Absent until
+        a check completes this session. A check runs at least once each
+        settlement epoch, so between epochs the height trails the chain by
+        up to an epoch; a height further behind than that means the checks
+        are not completing.
+      properties:
+        height:
+          type: integer
+          format: int64
+          description: The chain height the check ran at.
+        shards:
+          type: integer
+          format: int64
+          description: >
+            How many shards the bond owed, every one of them read. For a
+            CompleteTree bond it grows as shards become final.
 
     ShardAlarmEntry:
       type: object
