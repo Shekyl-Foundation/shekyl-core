@@ -1,10 +1,9 @@
 # `CBS-E1` link texture: what does a node's link look like to a watcher, and does a transaction stand out on it? Registration, 2026-11-20
 
-**State of this record: REGISTERED 2026-11-20, not started, WITH ONE
-PART OPEN: the low and typical rates of the load cycle and its 120-minute
-segment length (below) stand as proposed until Rick confirms or changes
-them; that is recorded here with its date before any figure is read. Nothing has been collected. The run is approved (Rick, 2026-11-20)
-and starts after `v3.1.0-alpha.12` is deployed to the fleet.** Everything under "Registered before the run" is fixed from the
+**State of this record: REGISTERED 2026-11-20, not started. Nothing has
+been collected. The run is approved (Rick, 2026-11-20) and starts after
+`v3.1.0-alpha.12` is deployed to the fleet.**
+Everything under "Registered before the run" is fixed from the
 moment this record is pushed. A change after that is a dated amendment
 that says what had been read by then. Results are added below.
 
@@ -92,9 +91,15 @@ reports synced. **The 72 hours count from the first accepted logged
 send.** What is captured before that is the `resync` segment.
 
 **The sends.** TRC-1's wallet send loop
-(`infrastructure/trc1/send_loop.py`) on the measured transactors, logging
-each send's times, started once mined coins mature and the sending
-wallets are funded. The record states which nodes ran a loop.
+(`infrastructure/trc1/send_loop.py`) on the two measured transactors,
+logging each send's times. The record states which nodes ran a loop.
+
+- **Gap.** Each loop waits a uniform 240 to 360 seconds between sends,
+  TRC-1's range, on both hosts, through every segment. The floor device
+  keeps the same range: if one of its sends takes longer than its gap,
+  the next starts late, and the record reports the gaps it achieved.
+- **Earliest start.** Mined coins unlock after 60 blocks and an ordinary
+  output after 10, so the loops begin some hours after mining starts.
 
 **The load (Rick, 2026-11-20).** The stressnet transaction generator
 (`shekyl-dev` `stressnet/`, `config/cbs_e1_load.yaml`, transfers only),
@@ -115,7 +120,13 @@ loop.
 - **`idle` is captured on purpose:** the quiet network is the hardest case
   for the design.
 - **`high` is the design load:** `DESIGN_NETWORK_MILLI_TX_PER_SEC` = 199.
-- **OPEN (Rick):** the low and typical rates, and the 120-minute length.
+- The low and typical rates and the 120-minute length are confirmed
+  (Rick, 2026-11-20).
+- **Stakes** are 1 SKL each.
+- **Funding.** Each load host is funded at the start with about twice the
+  fees its sends are expected to cost, and topped up daily from the mining
+  wallet. A send skipped for want of funds is logged by the generator and
+  counted in the achieved rate's table.
 - **Arrivals.** A Poisson process at the segment's rate.
 - **Mix.** 70 % payments, 15 % multi-output (3 to 8 recipients), 10 %
   consolidations, 5 % stakes.
@@ -151,8 +162,11 @@ host. Its definitions:
 - **Segments.** Named from what was happening, fixed before reading:
   - `resync`: from the capture's start until the first accepted logged
     send;
-  - `idle`, `low`, `typical` and `high`: the generator's four, read from
-    its own segment log, each pooled over the nine cycles.
+  - `idle`, `low`, `typical` and `high`: the generator's four, each
+    pooled over the nine cycles. Every boundary is computed from the
+    generator's config, the shared epoch and the cycle. The load hosts'
+    segment logs only confirm it; a logged change that is not on a
+    computed boundary is reported.
   A window belongs to the segment its first slot is in.
 - **Median split (secondary).** A clock hour is busy when its sent bytes
   on that connector are at or above the median hour's, else quiet. The
