@@ -5,9 +5,9 @@
 # BSD-3-Clause
 #
 # The Rust job's scoped tests, in one place: rust-audit-test.yml's
-# "cargo nextest" and "doctests" steps run it, and so does the freshness
-# re-test (freshness.yml), so a pull request re-tested against a newer `dev`
-# runs exactly the tests its own CI ran.
+# "cargo nextest" and "doctests" steps run it, and so does the merge-ready
+# re-test (merge-ready-retest.yml), so a pull request re-tested against a
+# newer `dev` runs exactly the tests its own CI ran.
 #
 #   rust_scoped_tests.sh install-nextest
 #                                  the pinned cargo-nextest (idempotent on a

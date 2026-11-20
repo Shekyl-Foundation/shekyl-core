@@ -63,9 +63,11 @@ LONG = (
 # Workflows that push on `dev` with no concurrency group: no run of theirs
 # is ever cancelled or replaced.
 UNGROUPED = {
-    # Each push's run judges that push's own diff against the open pull
-    # requests; a replaced run would leave its merge unjudged. Seconds each.
-    "freshness.yml",
+    # Each push's run judges that push's own diff against the labelled pull
+    # requests; a replaced run would leave its merge unjudged. Seconds each,
+    # plus the re-tests it calls, one per pull request at a time
+    # (merge-ready-retest.yml, a called workflow that pushes on nothing).
+    "merge-ready-dev.yml",
 }
 # Workflows read as pushing on `dev`, 2026-11-19: 20.
 MIN_SUBJECTS = 15
@@ -229,8 +231,8 @@ def selftest() -> int:
         ),
         ("not a mapping", ["a"], 1),
         ("an ungrouped workflow", {k: v for k, v in doc(CANCEL_ONLY_PRS).items() if k != "concurrency"}, 0,
-         "freshness.yml"),
-        ("an ungrouped workflow that takes a group", doc(CANCEL_ONLY_PRS), 1, "freshness.yml"),
+         "merge-ready-dev.yml"),
+        ("an ungrouped workflow that takes a group", doc(CANCEL_ONLY_PRS), 1, "merge-ready-dev.yml"),
     ]
     failed = 0
     for label, fixture, want, *name in cases:
