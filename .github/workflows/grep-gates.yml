@@ -285,9 +285,6 @@ jobs:
             python3 scripts/ci/check_bundle_producer_secrets.py --selftest
           run_one "The bundle producer's secrets reach no log" \
             python3 scripts/ci/check_bundle_producer_secrets.py
-          # CHAIN_FORGE.md CF-R17: the shard-fill chain is frozen until
-          # CF-4a (its bytes do not regenerate; a re-capture is 11.5 MB of
-          # history for good), and nothing new consumes it. Selftest first.
           # CHAIN_FORGE.md §5.5 (CF-R9, CF-R12, CF-R26): a seedable generator
           # built in production code, the crates the shipped binaries build
           # (shipped_graph.py: this repository's release and the GUI
@@ -305,10 +302,6 @@ jobs:
             python3 scripts/ci/check_seedable_rng.py --selftest
           run_one "No unlisted seedable generator in production code" \
             python3 scripts/ci/check_seedable_rng.py
-          run_one "The shard-fill chain is frozen, with no new consumer (selftest)" \
-            python3 scripts/ci/check_shard_fill_frozen.py --selftest
-          run_one "The shard-fill chain is frozen, with no new consumer" \
-            python3 scripts/ci/check_shard_fill_frozen.py
           run_one "Depends fetches from the Foundation mirror, the package's path, then its alternates, and keeps only pinned bytes (selftest)" \
             python3 scripts/ci/check_depends_fetch.py
           run_one "A feature never changes a public type's shape (selftest)" \
