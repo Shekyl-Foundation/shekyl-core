@@ -146,7 +146,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages and the record after one rekey in each direction. The transport keys and their rekey (`ck'`, `k'`) are pinned from that transcript's chaining key in `shekyl-noise` (`split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys`); the initial chaining key is the hash of the protocol name, pinned beside `SymmetricState`. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis, recorded in `rust/shekyl-node/src/genesis.rs` (`each_genesis_derives_its_recorded_id_and_prefix`; in `shekyl-ffi`'s `network_id_ffi.rs` until 2026-11-05) | No — follows T1 |
 | **B1** rate limiting adopted | **PARTIAL** (as of 2026-11-05): the pre-handshake guard, the invoke correlation and the per-session read permit are held by the session layer; the per-connection token bucket is NOT IMPLEMENTED | **UPDATE 2026-11-05 (the p2p remnant cutover, `P2P_3_REMNANT_CUTOVER_BRIEF.md` §2 rule 2, rule 6).** The four C++ invoke routes and the nine `HANDLE_NOTIFY_T2` entries are deleted with their files; every command now enters through `shekyl-p2p-session`'s one exhaustive `match` over `shekyl-levin`'s `Command`. What that layer holds **by type**: nothing but a 1001 request reaches a session before its handshake (`Established` has no constructor an owner can reach, and every owner handler takes `&Established`); one 1002 outstanding per session, a response with no request a form failure; one unread frame per session (`SESSION_QUEUE_DEPTH = 1`), the owner's `Taken` being the permit to read the next, so a slow owner holds the peer's reads rather than growing memory. What it does **not** hold: a per-connection rate on known commands after the handshake — a peer may still send admitted 2002 batches as fast as the per-session permit cycles. That token bucket is this row's remaining work, and its surface is now one place (the dispatch table), not thirteen. **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | **IMPLEMENTED** (as of 2026-11-05; the `min`/`jitter` split is an `Assumption` awaiting Rick's ruling) | **UPDATE 2026-11-05 (the p2p remnant cutover).** Timed sync is per session: `shekyl-p2p-session` `timing.rs` draws `TIMED_SYNC_MIN + U(0, TIMED_SYNC_JITTER)` = `45 s + U(0, 30 s)` (mean 60 s, the ruled constraint), re-drawn only when that session's own 1002 fires, `0` a valid draw (`the_timed_sync_draw_is_min_plus_a_bounded_jitter_with_the_pwd_b2_mean`, `a_zero_min_and_zero_jitter_draw_zero`). The split's basis is `P2P_3_REMNANT_CUTOVER_BRIEF.md` §7.6 (F2): posed as an `Assumption` under Ruling B, not a derivation. The purely local timers this row left fixed (the idle-peer kick, the standby check, the protocol handler's three) are deleted with the C++ host; the Rust owners' wakes are each a timing-engine owner with its own cadence. *Records-was:* all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
-| **B3** per-command caps | **IMPLEMENTED** | the one 13-arm `Command` enum in `rust/shekyl-levin/src/ingress.rs`, each arm's `payload_cap` applied with the packet limit at ingress (2001, 1003, 1007, 2003, 2004, 2006 and 2007 are unknown dispatch; sole block-announce path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`; sync is 2011–2014 and the bundle transport 2015–2017, both owned by chain sync through the session layer's dispatch table); handshake derived from `DISCLOSE_COUNT`; 2008/2009/2010 keep inherited envelopes (4/1/4 MiB); 2002 takes the packet limit until PWD-B12; 2015 and 2017 take the packet limit because a bundle's size grows with the drawable pairs `D`, and 2016 is derived from `W₂`'s ruled upper edge (below) | **YES** — with B3a and B4, as one unit |
+| **B3** per-command caps | **IMPLEMENTED** | the one 13-arm `Command` enum in `rust/shekyl-levin/src/ingress.rs`, each arm's `payload_cap` applied with the packet limit at ingress (2001, 1003, 1007, 2003, 2004, 2006 and 2007 are unknown dispatch; sole block-announce path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`; sync is 2011–2014 and the bundle transport 2015–2017, both owned by chain sync through the session layer's dispatch table); handshake derived from `DISCLOSE_COUNT`; 2008/2009/2010 keep inherited envelopes (4/1/4 MiB); 2002 takes PWD-B12's release cap, `CAP_NEW_TRANSACTIONS` = 1 000 044 bytes, a notice of one `MAX_TX_SIZE` transaction (as of 2026-11-20; it took the packet limit before); 2015 and 2017 take the packet limit because a bundle's size grows with the drawable pairs `D`, and 2016 is derived from `W₂`'s ruled upper edge (below) | **YES** — with B3a and B4, as one unit |
 | **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted; a Q/S-flagged 2001 is unknown input, same class as ping 1003 | **YES** — with B3 and B4, as one unit |
 | **B4** places B3a's ingress check | **IMPLEMENTED** | `shekyl_levin_ingress_admit` + `get_max_bytes(command, flags)` on outer and inner header parse; decompress uses the cached cap; codec still round-trips unknown bits (PWC-A6) | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** `return_code` deleted | **IMPLEMENTED** | `HEADER_SIZE = 29` in `rust/shekyl-levin/src/header.rs`, the one Levin header codec: flags follow the command, with no `return_code` field. | **YES** — delete before nodes exist; cheaper than carrying four dead bytes into the Rust rewrite |
@@ -156,7 +156,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present: the dialer's candidate filter refuses a host that already holds a session in either direction (`host_occupied`, `rust/shekyl-dialer/src/candidate.rs`), from #643's PWD-I1 amendment; a host that dialed in is not dialed back, and a retry that comes due while that host is in session stays waiting (Rick, 2026-11-09); the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
 | **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; 1003 is no `Command` arm, and `Command::from_wire(1003)` is `None` (`the_command_set_has_ten_arms`, `rust/shekyl-levin/src/ingress.rs`). *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
 | **B11** `sanitize_peerlist` port-0 | **IMPLEMENTED in PR-3 (2026-10-13)** | **RULED 2026-10-11 (Rick).** A network-learned address with port 0 is refused at `admit_gray` on every address type, so `tor_address::unknown()` never enters from the network. The check is `shekyl-peerlist`'s refused set; `sanitize_peerlist` is deleted in the same PR (Rick, 2026-10-13; *records-was* it stays until slice 4, and the status was NOT IMPLEMENTED). *Records-was:* deferred, named blocker the tor port-0 semantics were disputed | No — not an alpha.8 wire item; the check is in flight for PR-3 |
-| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/graph/mod.rs:864` | No — hardening; but see the note below |
+| **B12** bound the fluff batch | **PARTIAL** (as of 2026-11-20): the release bound is IMPLEMENTED at 1 000 044 bytes; the held bound is NOT IMPLEMENTED, blocked on B1 charging notify dispatch | `Relay::flush_fluff` (`rust/shekyl-relay/src/graph/mod.rs`) releases whole transactions in arrival order up to `CAP_NEW_TRANSACTIONS` (`rust/shekyl-levin/src/payload/notifies.rs`), at least one, and re-arms a peer that keeps a remainder; the receiver caps 2002 at the same constant; `peer.queued` itself is still a `Vec` with no bound at either end | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `BasicNodeData` carries `network_id` alone (`rust/shekyl-levin/src/payload/types.rs`), and an unknown key decodes ignored | done |
 | **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
 | **I3** tenure by address, never serialized | **SUPERSEDED** | its mechanism *was* the anchor list, deleted by #637 (`net_peerlist.cpp:82`, `p2p_protocol_defs.h:76`); body retained as records-was | n/a |
@@ -260,10 +260,12 @@ and which is recorded here so no reader mistakes it for something nobody
 noticed.
 
 
-**Note on B12.** Ruled not-required because it does not change the wire, but
-it is an unbounded release of accumulated transactions to a peer, and "not
-required for alpha.8" is not the same as "safe to ship indefinitely". Flagged
-rather than filed.
+**Note on B12 (as of 2026-11-20).** Ruled not-required for alpha.8. The
+release is bounded since 2026-11-20, and that half **does** show on the wire:
+a `NOTIFY_NEW_TRANSACTIONS` above 1 000 044 bytes is refused at its header and
+the session closes, where the packet limit admitted it before. What is still
+unbounded is what a peer's queue **holds**; that half waits on PWD-B1 (§3.7,
+PWD-B12) and is filed in `docs/FOLLOWUPS.md`.
 
 **Two findings that are not statuses.** PWD-B5 was dispatched and never
 dispositioned until 2026-09-10 — it existed in the brief and nowhere else.
@@ -4407,16 +4409,59 @@ field must express the largest value the command table can produce, and
 > `:235`). **So this round is not introducing randomised timing to a tree that
 > has none; it is asking why one layer has it and the layer above does not.**
 
-### PWD-B12 — the fluff batch is unbounded, and the census could not see it
+### PWD-B12 — the fluff batch is unbounded, and the census could not see it — RULED; release bound IMPLEMENTED 2026-11-20 (1 000 044 bytes); held bound NOT IMPLEMENTED (blocked on PWD-B1)
 
 **RULED. Minted here rather than routed**, because "cluster B owns it" is not
 an owner if no row names it (rule 22).
 
+**As built (2026-11-20). The ruling below is two bounds; one is built.**
+
+- **Release bound: IMPLEMENTED 2026-11-20.** A flush releases at most
+  `CAP_NEW_TRANSACTIONS` = **1 000 044 bytes** to a peer. The figure is derived,
+  not chosen: the encoded size of a `NOTIFY_NEW_TRANSACTIONS` that carries one
+  transaction of `MAX_TX_SIZE` (1 000 000 bytes, `rust/shekyl-wire/src/transaction.rs`)
+  as a stem. That is 1 000 000 of transaction, 4 of its length varint, and 40
+  of envelope: 9 storage header, 1 member count, 4 for the empty padding
+  member, 6 for the `txs` key, tag and count, 20 for the flag member a stem
+  writes. So a notice of one transaction always fits and nothing a node may
+  relay is refused for size. The constant and the size count
+  (`NewTransactionsSize`) live in `rust/shekyl-levin/src/payload/notifies.rs`,
+  tied to `MAX_TX_SIZE` by compile-time checks and to the encoder by
+  `rust/shekyl-levin/tests/new_transactions_bound.rs`. The sender
+  (`Relay::flush_fluff`, `rust/shekyl-relay/src/graph/mod.rs`) takes whole
+  transactions from the front of the queue, in arrival order, while the notice
+  stays within the cap, and always at least one; a peer that keeps a remainder
+  draws a fresh deadline from the fluff scheduler, so the remainder leaves on a
+  later flush with no arrival needed. The receiver's cap for 2002 is the same
+  constant (`Command::payload_cap`, `rust/shekyl-levin/src/ingress.rs`).
+- **Held bound: NOT IMPLEMENTED (as of 2026-11-20). Blocked on PWD-B1.** A
+  byte cap on what a zone holds, with admission refused at the source, is a
+  bound only if the source pays for what it sends. PWD-B1's per-connection
+  token bucket is not implemented (§0.5, B1 row), so a
+  `NOTIFY_NEW_TRANSACTIONS` still spends no token. Until B1 charges notify
+  dispatch, `peer.queued` is unbounded as it was: the release bound limits what
+  leaves a queue, not what it holds. The row is in `docs/FOLLOWUPS.md`.
+- **Fragment trains: IMPLEMENTED 2026-11-20.** The same holding, on the
+  receive side: an unfinished fragment train could hold the packet limit. The
+  reader (`rust/shekyl-levin/src/reader.rs`) judges a train's inner header
+  when its last byte arrives, refuses an inner length over its command's cap
+  there, refuses a fragment that does not end the train and would leave the
+  whole inner message buffered, and refuses an inner message that is not a
+  request or a response. Each refusal has its own error and its own close
+  cause (`InnerMessageOversize`, `FragmentTrainOverrun`,
+  `InnerMessageNotDispatch`; `P2P_TRANSPORT_LAYER.md` D12). **Not bounded by
+  this:** one bucket of the noise / fragment class, a dummy or a single
+  fragment, may still claim a body up to the packet limit (PWD-B3a's class
+  rule), and a train whose inner command takes the packet limit (2014, 2015,
+  2017) is bounded by that limit.
+
+*The description that follows is the tree as ruled on 2026-09-04, at this
+document's pin; the release it describes is the one the bound above replaced.*
 `Zone::queue_fluff` appends **every** transaction to each peer's queue, and
 `flush_fluff` releases the whole accumulation — `std::mem::take(&mut
 peer.queued)` — with no cardinality or byte cap
-(`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`). The receive side
-checks no cardinality either.
+(`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`, at the pin). The
+receive side checks no cardinality either.
 
 > **Why no census row covers it, which is a finding about the instrument.**
 > P2P-1's frontier was **the p2p wire and the connection management around
@@ -4469,10 +4514,17 @@ rather than adding a new observable.
 at the design transaction rate** — that would mean the bound is shaping
 ordinary traffic rather than catching a flood, and its value is wrong.
 
+**Reopening criterion for the bound as built (2026-11-20): reopen if the cap,
+1 000 044 bytes, is reached in normal operation at the design rate.** Not
+tested by the change that built it. A measurement run's high-load segments
+show how large flush batches get at that rate; a flush that fills the cap
+there, with no flood in progress, is the observation that reopens this row.
+
 > **This is the input PWC-A2 needs.** With it, `NOTIFY_NEW_TRANSACTIONS` has a
 > derivable cap and the "largest value the table can produce" question becomes
-> answerable. **The value itself is still owed**, with `margin` and the
-> response byte budget, in the FOLLOWUPS item PWD-B3 re-opened.
+> answerable. **The 2002 value exists as of 2026-11-20: 1 000 044 bytes.**
+> `margin` and the response byte budget are still owed, in the FOLLOWUPS item
+> PWD-B3 re-opened.
 
 ### PWD-B1 — rate limiting: adopted, and it is the mechanism PWD-T5 routed here
 
