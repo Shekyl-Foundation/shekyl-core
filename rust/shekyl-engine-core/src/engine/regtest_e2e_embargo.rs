@@ -15,15 +15,16 @@
 
 use super::super::*;
 use super::*;
-/// RX-1 on two live daemons: the origin's only peer is the sink, so it has
-/// no alternate, and its first embargo fire, at the derived retry interval
-/// (the relay's `origin_retry_secs`), fluffs as the last resort (W3b): the transaction is shown at
-/// the origin and the next block mines it. Red on the flip binary before
+/// On two live daemons: the origin's only peer is the sink, so it has no
+/// alternate, and its first embargo fire, a draw of the shared timer (waited
+/// for up to the relay's `embargo_fire_wait_secs`), fluffs as the last
+/// resort (W3b): the transaction is shown at the origin and the next block
+/// mines it. Red on the flip binary before
 /// the relay embargo landed: the origin's transaction stayed in its stem
 /// phase for 600 s and nothing would ever have published it (2026-10-29,
 /// the probe recorded in `DRS_X_STORE_FLIP.md`'s register).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): two live daemons and the origin's retry"]
+#[ignore = "embargo lane (run_live_daemon_gates.sh ARMED_EMBARGO): two live daemons and one embargo fire"]
 async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
     use shekyl_units::AtomicUnits;
 
@@ -54,7 +55,7 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
         "fixture: the origin stems its own transaction to the sink"
     );
 
-    let shown_by = submitted + origin_retry() + Duration::from_secs(120);
+    let shown_by = submitted + embargo_fire_wait() + Duration::from_secs(120);
     let mut state = pair.stem_held(txid).await;
     while state == StemHold::Stem && Instant::now() < shown_by {
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -67,11 +68,6 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
         StemHold::Broadcast,
         "the first fire with no alternate fluffs and the origin shows it"
     );
-    assert!(
-        waited + Duration::from_secs(5) >= origin_retry(),
-        "it was published at the retry interval, not before: {waited:?} against {:?}",
-        origin_retry()
-    );
 
     let height = assert_tx_confirmed(origin, txid).await;
     eprintln!("mined at height {height}");
@@ -83,17 +79,18 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
 /// simulated peer dials in. Every assertion is on the origin, which is all
 /// production code:
 ///
-/// - its first stem goes to one slot, and at its first embargo fire, the
-///   derived retry interval later, it re-stems to the other, as a stem;
+/// - its first stem goes to one slot, and at its first embargo fire, a draw
+///   of the shared timer later, it re-stems to the other, as a stem;
 /// - when the transaction comes back from a peer other than the one it was
 ///   re-stemmed to, it disarms and shows it;
-/// - it never fluffs: no peer hears the transaction as a fluff from the
-///   origin through a full second interval, and the next block mines it.
+/// - disarmed, it does not fluff: no peer hears the transaction as a fluff
+///   from the origin through the quiet wait (the timer's 1-in-10 quantile),
+///   and the next block mines it.
 ///
 /// Red under fluff on expiry (the C++ behaviour §14 rejected): the first
 /// fire reaches every peer as a fluff, and the re-stem assertion fails.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): a live daemon, three simulated peers and two origin-retry intervals"]
+#[ignore = "embargo lane (run_live_daemon_gates.sh ARMED_EMBARGO): a live daemon, three simulated peers, one embargo fire and the quiet wait"]
 async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs() {
     use super::super::peer::{Heard, TestPeer};
     use shekyl_units::AtomicUnits;
@@ -235,8 +232,8 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     );
     let first_at = first[0].at;
 
-    // The first fire: the re-stem to the alternate, at the retry interval.
-    let fired_by = first_at + origin_retry() + SLACK;
+    // The first fire: the re-stem to the alternate, on the timer's draw.
+    let fired_by = first_at + embargo_fire_wait() + SLACK;
     while of(&droppers[alternate]).is_empty() && Instant::now() < fired_by {
         assert!(
             !fluffed(&everyone),
@@ -255,10 +252,6 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     assert!(!restem[0].fluff, "the re-stem is a stem");
     let waited = restem[0].at.duration_since(first_at);
     eprintln!("re-stemmed to the alternate {waited:?} after the first stem");
-    assert!(
-        waited + Duration::from_secs(5) >= origin_retry(),
-        "the re-stem came at the retry interval, not before: {waited:?}"
-    );
     assert!(!fluffed(&everyone), "the first fire does not fluff");
 
     // The transaction comes back from a peer other than the alternate.
@@ -286,8 +279,8 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
-    // Disarmed: no second fire, so no fluff, through a full interval.
-    let quiet_until = first_at + 2 * origin_retry() + SLACK;
+    // Disarmed: no second fire, so no fluff, through the quiet wait.
+    let quiet_until = restem[0].at + embargo_quiet_wait() + SLACK;
     while Instant::now() < quiet_until {
         assert!(
             !fluffed(&everyone),

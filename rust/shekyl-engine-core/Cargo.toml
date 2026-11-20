@@ -327,9 +327,9 @@ shekyl-p-serve = { path = "../shekyl-p-serve" }
 # normal dependencies of shekyl-chain-ingest (rule 17).
 shekyl-block-template = { path = "../shekyl-block-template" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
-# The embargo walks wait the origin's real first fire
-# (`shekyl_relay::origin_retry_secs`). The harness does not spell the
-# seconds. Dev edge only: the wallet does not link the relay.
+# The embargo walks wait for a real embargo fire
+# (`shekyl_relay::embargo_fire_wait_secs`, `embargo_quiet_wait_secs`). The
+# harness does not spell the seconds. Dev edge only: the wallet does not link the relay.
 shekyl-relay = { path = "../shekyl-relay" }
 # The lib test image both serves `WalletTorControl` and spawns
 # (`engine::regtest_e2e`). Those spawns share an address space with a managed

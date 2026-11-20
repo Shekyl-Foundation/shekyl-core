@@ -114,15 +114,22 @@ pub enum Effect {
         /// Channel index. Positional: channel `i` follows stem slot `i`.
         channel: usize,
     },
-    /// Stem these blobs to `peer` on the ordinary wire: an embargo's reshape
-    /// to the alternate (§12.2), or a held origin's first send (RX-2). The
-    /// bytes are the transaction's own; no relay or retry state rides them
-    /// (§12.2 item 5).
+    /// Stem this transaction to `peer` on the ordinary wire: an embargo's
+    /// reshape to the alternate (§12.2), or a held origin's first send
+    /// (RX-2).
+    ///
+    /// The zone has armed nothing for it: the caller records the stem when
+    /// the write lands. The bytes are the transaction's own; no relay or
+    /// retry state rides them (§12.2 item 5).
     Stem {
         /// The successor.
         peer: ConnectionId,
-        /// The transaction blobs.
-        blobs: Vec<TxBlob>,
+        /// The transaction, by hash.
+        tx: crate::TxId,
+        /// Its bytes.
+        blob: TxBlob,
+        /// The session it arrived on; `None` for this node's own.
+        source: Option<ConnectionId>,
     },
     /// The zone fluffed these transactions as the last resort, or saw them
     /// circulate: the pool's shown bit is set for each (criterion 2, Q9).
@@ -229,10 +236,12 @@ impl Driver {
         let unsent = self.zone.due_unsent(now, rng);
         let mut published = fired.published;
         published.extend(unsent.published);
-        for (peer, blob) in fired.stems.into_iter().chain(unsent.stems) {
+        for stem in fired.stems.into_iter().chain(unsent.stems) {
             effects.push(Effect::Stem {
-                peer,
-                blobs: vec![blob],
+                peer: stem.peer,
+                tx: stem.tx,
+                blob: stem.blob,
+                source: stem.source,
             });
         }
         if !published.is_empty() {
