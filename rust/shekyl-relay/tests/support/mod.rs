@@ -292,6 +292,8 @@ impl ProbeSink for Others {
 pub struct Build {
     pub noise: bool,
     pub node_sync: NodeSync,
+    /// Build the relay with no connector: a node with no network.
+    pub offline: bool,
     /// Each channel's send-queue cap. A message larger than this closes
     /// the session it is sent on.
     pub send_cap: usize,
@@ -302,6 +304,7 @@ impl Default for Build {
         Self {
             noise: false,
             node_sync: NodeSync::Synchronised,
+            offline: false,
             send_cap: SEND_CAP,
         }
     }
@@ -348,7 +351,14 @@ impl Rig {
         let pool = FakePool::new();
         let (node_sync, node_sync_rx) = watch::channel(build.node_sync);
         let Started { port, handle } = start(RelayParts {
-            config: RelayConfig::inherited(vec![ConnectorId::Clearnet], build.noise),
+            config: RelayConfig::inherited(
+                if build.offline {
+                    Vec::new()
+                } else {
+                    vec![ConnectorId::Clearnet]
+                },
+                build.noise,
+            ),
             pool: pool.clone(),
             node_sync: node_sync_rx,
             timing: timing.clone(),

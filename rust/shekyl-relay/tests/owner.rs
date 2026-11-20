@@ -226,6 +226,31 @@ fn a_held_origin_that_departs_is_not_sent_after_sync() {
     );
 }
 
+/// **A node built with no connector shows its own transaction at once.** It
+/// has no network: there is no stem to send and no peer to hide it from, and
+/// its own blocks can carry the transaction only once it is shown. The
+/// clock does not move in this test, so no retry or embargo shows it.
+///
+/// What edit reds this: hold a local origin whose plan is still `NoRoute`
+/// after `dispatch`'s refresh, where it fluffs today (the transaction is
+/// held and never shown).
+#[test]
+fn a_node_with_no_connector_shows_its_own_transaction_at_once() {
+    let rig = Rig::build(Build {
+        offline: true,
+        ..Build::default()
+    });
+    let tx = id_of(&blob(4));
+    assert!(rig.relay.relay_local(tx, blob(4)), "the owner took it");
+    support::wait_until("its own transaction was shown", || {
+        rig.pool.shown().contains(&tx)
+    });
+    assert!(
+        rig.relay.snapshot().stem_in_flight == 0,
+        "nothing was stemmed: there is nowhere to send it"
+    );
+}
+
 #[test]
 fn stopping_the_owner_refuses_a_local_origin() {
     let rig = Rig::build(Build::default());
